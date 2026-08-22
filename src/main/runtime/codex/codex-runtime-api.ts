@@ -49,7 +49,12 @@ type CodexChatBlockBase = {
 }
 
 export type CodexChatBlock =
-  | (CodexChatBlockBase & { kind: 'user'; text: string; displayText?: string })
+  | (CodexChatBlockBase & {
+      kind: 'user'
+      text: string
+      displayText?: string
+      meta?: Record<string, unknown>
+    })
   | (CodexChatBlockBase & { kind: 'assistant'; text: string; snapshot?: boolean })
   | (CodexChatBlockBase & { kind: 'reasoning'; text: string; meta?: Record<string, unknown> })
   | (CodexChatBlockBase & {
@@ -92,6 +97,7 @@ export type CodexThreadEventPayload = {
     createdAt?: string
     text: string
     displayText?: string
+    metadata?: Record<string, unknown>
   }
   tool?: {
     itemId: string
@@ -245,6 +251,7 @@ export type CodexTurnStartPayload = {
   threadId: string
   text: string
   displayText?: string
+  metadata?: Record<string, unknown>
   workspace?: string
   model?: string
   reasoningEffort?: string

@@ -11,6 +11,7 @@ import {
   humanRequestIdSchema,
   installationIdSchema,
   localItemIdSchema,
+  managedContainerIdSchema,
   nonEmptyTextSchema,
   participantIdSchema,
   projectIdSchema,
@@ -28,7 +29,12 @@ import {
   turnIdSchema,
   userIdSchema
 } from './core.js'
-import { providerIdentitySchema, providerLocatorSchema } from './provider.js'
+import {
+  providerIdentitySchema,
+  providerLocatorSchema,
+  providerManagedContainerPolicySchema,
+  providerManagedContainerRefSchema
+} from './provider.js'
 
 function uniqueStrings(values: readonly string[]): boolean {
   return new Set(values).size === values.length
@@ -70,6 +76,34 @@ export const humanEndpointBindingSchema = z.object({
   }
 })
 export type HumanEndpointBinding = z.infer<typeof humanEndpointBindingSchema>
+
+export const managedProviderContainerSchema = z.object({
+  ...entityMetadataShape,
+  type: z.literal('managed_provider_container'),
+  managedContainerId: managedContainerIdSchema,
+  ownerUserId: userIdSchema,
+  humanEndpointId: humanEndpointIdSchema,
+  provider: z.string().regex(/^[a-z][a-z0-9.-]{0,63}$/u),
+  realmId: z.string().trim().min(1).max(512),
+  stableKey: z.string().trim().min(1).max(512),
+  displayName: displayNameSchema,
+  container: providerManagedContainerRefSchema.nullable(),
+  policy: providerManagedContainerPolicySchema,
+  checks: z.object({
+    private: z.boolean(),
+    protectedHistory: z.boolean(),
+    exactMembership: z.boolean(),
+    ownerCanSend: z.boolean(),
+    messageBotCanSend: z.boolean(),
+    ownerCanCreateTopics: z.boolean(),
+    memberManagementRestricted: z.boolean(),
+    channelManagementRestricted: z.boolean()
+  }).strict().nullable(),
+  status: z.enum(['requested', 'provisioning', 'active', 'drifted', 'suspended', 'archived', 'failed']),
+  lastVerifiedAt: timestampSchema.nullable(),
+  safeErrorCode: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u).nullable()
+}).strict()
+export type ManagedProviderContainer = z.infer<typeof managedProviderContainerSchema>
 
 export const endpointChallengeStatusSchema = z.enum(['pending', 'consumed', 'expired', 'cancelled'])
 export const endpointChallengeSchema = z.object({

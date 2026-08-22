@@ -131,6 +131,7 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
         threadId: input.threadId,
         text: input.text,
         displayText: input.displayText,
+        metadata: codexUserMessageMetadata(input.metadata),
         workspace: input.workspace,
         model: input.model,
         reasoningEffort: input.reasoningEffort,
@@ -701,18 +702,20 @@ function mapCodexBlock(
   options: { stalePendingRequests?: boolean; activePendingRequestIds?: ReadonlySet<string> } = {}
 ): AgentRuntimeItem | null {
   if (block.kind === 'user') {
+      const meta = {
+        ...(block.meta ?? {}),
+        ...(requiresExecutionIntegrityValidation(block.text)
+          ? {
+              [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]:
+                EXECUTION_INTEGRITY_POLICY_VERSION
+            }
+          : {})
+      }
       return {
         id: block.id,
         kind: 'user_message',
         text: block.displayText?.trim() || block.text,
-        ...(requiresExecutionIntegrityValidation(block.text)
-          ? {
-              meta: {
-                [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]:
-                  EXECUTION_INTEGRITY_POLICY_VERSION
-              }
-            }
-          : {}),
+        ...(Object.keys(meta).length > 0 ? { meta } : {}),
         ...(block.turnId ? { turnId: block.turnId } : {}),
         createdAt: block.createdAt
       }
@@ -1316,6 +1319,7 @@ function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[
       itemId: event.userMessage.itemId,
       text: event.userMessage.text,
       ...(event.userMessage.displayText ? { displayText: event.userMessage.displayText } : {}),
+      ...(event.userMessage.metadata ? { meta: event.userMessage.metadata } : {}),
       createdAt: event.userMessage.createdAt
     })
   }
@@ -1778,4 +1782,17 @@ function numberValue(value: unknown): number | undefined {
 
 function recordValue(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function codexUserMessageMetadata(
+  metadata: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
+  if (!metadata) return undefined
+  const source = typeof metadata.source === 'string' ? metadata.source.trim() : ''
+  const sourceLabel = typeof metadata.sourceLabel === 'string' ? metadata.sourceLabel.trim() : ''
+  if (!source && !sourceLabel) return undefined
+  return {
+    ...(source ? { source } : {}),
+    ...(sourceLabel ? { sourceLabel } : {})
+  }
 }

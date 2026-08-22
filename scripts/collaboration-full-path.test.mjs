@@ -82,6 +82,33 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
     topicId: 'full-path-stable-topic',
     topicDisplayName: '固定个人 Session'
   }
+  await repository.insertManagedContainer({
+    managedContainerId: 'mco-full-path',
+    ownerUserId: participant.userId,
+    humanEndpointId: participant.humanEndpointId,
+    provider: 'fake-im',
+    realmId: 'fake-realm',
+    ownerProviderUserId: 'full-path-provider-user',
+    stableKey: 'managed-full-path',
+    displayName: 'managed-full-path',
+    externalContainerId: locator.containerId,
+    policy: {
+      version: 1,
+      visibility: 'private',
+      history: 'protected',
+      membership: 'owner_and_message_bot',
+      memberManagement: 'provisioning_service_only',
+      channelManagement: 'provisioning_service_only',
+      ownerCanSend: true,
+      ownerCanCreateTopics: true,
+      messageBotCanSend: true,
+      messageBotCreatesProjectTopics: false
+    },
+    status: 'active',
+    revision: 1,
+    createdAt: clock.now().toISOString(),
+    updatedAt: clock.now().toISOString()
+  })
   const projection = await service.createProjection(participant.userActor, {
     agentId: registered.agent.agentId,
     humanEndpointId: participant.humanEndpointId,
@@ -169,7 +196,7 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
   assert.equal(provider.outbound.length, 1)
   assert.equal(provider.outbound[0].type, 'projection.message.outbound')
   assert.equal(provider.outbound[0].projectionId, projection.projectionId)
-  assert.equal(provider.outbound[0].text, 'Agent 回复返回手机')
+  assert.equal(provider.outbound[0].text, '【SciForge Agent】\nAgent 回复返回手机')
 
   await coordinator.mirrorDesktopEvent({
     runtimeId: 'codex',
@@ -188,6 +215,6 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
   await desktopDelivery.drain()
   assert.equal(provider.outbound.length, 2)
   assert.equal(provider.outbound[1].kind, 'user_message')
-  assert.equal(provider.outbound[1].text, '桌面消息也同步到手机')
+  assert.equal(provider.outbound[1].text, '【电脑端】\n桌面消息也同步到手机')
   assert.equal(agentExecution.requests.length, 1)
 })

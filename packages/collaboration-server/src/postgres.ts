@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module'
 
 import { CollaborationServiceError } from './errors.js'
+import { newId, safeAuditMetadata } from './crypto.js'
 import type {
   InboxRecipient,
   StoredAgent,
@@ -21,7 +22,9 @@ import type {
   StoredTask,
   StoredUser,
   StoredHumanRequest,
-  StoredHumanAnswer
+  StoredHumanAnswer,
+  StoredManagedContainer,
+  StoredManagedContainerJob
 } from './model.js'
 import type {
   CollaborationReadRepository,
@@ -127,6 +130,13 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     return this.read().getProjectionByLocator(provider, realmId, containerId, topicId)
   }
   listProjectionsForOwner(userId: string): Promise<StoredProjection[]> { return this.read().listProjectionsForOwner(userId) }
+  getManagedContainer(id: string): Promise<StoredManagedContainer | null> { return this.read().getManagedContainer(id) }
+  getManagedContainerForOwner(ownerUserId: string, provider: string, realmId: string): Promise<StoredManagedContainer | null> {
+    return this.read().getManagedContainerForOwner(ownerUserId, provider, realmId)
+  }
+  listManagedContainersForOwner(ownerUserId: string): Promise<StoredManagedContainer[]> {
+    return this.read().listManagedContainersForOwner(ownerUserId)
+  }
   getProjectEndpointBinding(projectId: string): Promise<StoredProjectEndpointBinding | null> { return this.read().getProjectEndpointBinding(projectId) }
   getProjectEndpointBindingById(id: string): Promise<StoredProjectEndpointBinding | null> {
     return this.read().getProjectEndpointBindingById(id)
@@ -160,6 +170,100 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
   getInboxCursor(recipient: InboxRecipient): Promise<StoredInboxCursor | null> { return this.read().getInboxCursor(recipient) }
   pullInbox(recipient: InboxRecipient, after: number, limit: number, now: string): Promise<StoredInboxMessage[]> {
     return this.read().pullInbox(recipient, after, limit, now)
+  }
+
+  async claimManagedContainerJobs(
+    workerId: string,
+    now: string,
+    leaseExpiresAt: string,
+    limit: number
+  ): Promise<StoredManagedContainerJob[]> {
+    return this.transaction(async (tx) => {
+      const sql = (tx as PostgresTransaction).sql
+      const result = await sql.query(
+        `WITH candidates AS (
+           SELECT job_id
+           FROM sciforge_collaboration.managed_provider_container_jobs
+           WHERE state IN ('queued', 'retry_wait', 'running')
+             AND next_attempt_at <= $2
+             AND (state <> 'running' OR lease_expires_at <= $2)
+           ORDER BY next_attempt_at, created_at
+           FOR UPDATE SKIP LOCKED
+           LIMIT $4
+         )
+         UPDATE sciforge_collaboration.managed_provider_container_jobs AS jobs
+         SET state = 'running', lease_owner = $1, lease_expires_at = $3,
+             attempt_count = jobs.attempt_count + 1, updated_at = $2
+         FROM candidates
+         WHERE jobs.job_id = candidates.job_id
+         RETURNING jobs.*`,
+        [workerId, now, leaseExpiresAt, limit]
+      )
+      return result.rows.map(mapManagedContainerJob)
+    })
+  }
+
+  async completeManagedContainerJob(input: {
+    jobId: string
+    workerId: string
+    expectedAttemptCount: number
+    container: StoredManagedContainer
+    expectedContainerRevision: number
+    completedAt: string
+  }): Promise<void> {
+    await this.transaction(async (tx) => {
+      await tx.updateManagedContainer(input.container, input.expectedContainerRevision)
+      const sql = (tx as PostgresTransaction).sql
+      const result = await sql.query(
+        `UPDATE sciforge_collaboration.managed_provider_container_jobs
+         SET state = 'succeeded', lease_owner = NULL, lease_expires_at = NULL,
+             safe_error_code = NULL, updated_at = $3
+         WHERE job_id = $1 AND state = 'running' AND lease_owner = $2 AND attempt_count = $4`,
+        [input.jobId, input.workerId, input.completedAt, input.expectedAttemptCount]
+      )
+      if (result.rowCount !== 1) throw new CollaborationServiceError('revision_conflict', 'Managed container job lease was lost.')
+      await tx.insertAudit({
+        auditEventId: newId('audit'), actorKind: 'system', action: 'managed_container.job.succeeded',
+        resourceKind: 'managed_provider_container', resourceId: input.container.managedContainerId,
+        outcome: 'accepted', metadata: safeAuditMetadata({ jobId: input.jobId }), createdAt: input.completedAt
+      })
+    })
+  }
+
+  async failManagedContainerJob(input: {
+    jobId: string
+    workerId: string
+    expectedAttemptCount: number
+    safeErrorCode: string
+    retryAt?: string
+    failedAt: string
+    container?: StoredManagedContainer
+    expectedContainerRevision?: number
+  }): Promise<void> {
+    await this.transaction(async (tx) => {
+      if (input.container && input.expectedContainerRevision !== undefined) {
+        await tx.updateManagedContainer(input.container, input.expectedContainerRevision)
+      }
+      const sql = (tx as PostgresTransaction).sql
+      const result = await sql.query(
+        `UPDATE sciforge_collaboration.managed_provider_container_jobs
+         SET state = $3, next_attempt_at = COALESCE($4, next_attempt_at),
+             lease_owner = NULL, lease_expires_at = NULL, safe_error_code = $5, updated_at = $6
+         WHERE job_id = $1 AND state = 'running' AND lease_owner = $2 AND attempt_count = $7`,
+        [input.jobId, input.workerId, input.retryAt ? 'retry_wait' : 'failed', input.retryAt ?? null,
+          input.safeErrorCode, input.failedAt, input.expectedAttemptCount]
+      )
+      if (result.rowCount !== 1) throw new CollaborationServiceError('revision_conflict', 'Managed container job lease was lost.')
+      await tx.insertAudit({
+        auditEventId: newId('audit'), actorKind: 'system', action: input.retryAt
+          ? 'managed_container.job.retry_scheduled'
+          : 'managed_container.job.failed',
+        resourceKind: 'managed_provider_container', resourceId: input.container?.managedContainerId,
+        outcome: input.retryAt ? 'accepted' : 'rejected',
+        metadata: safeAuditMetadata({ jobId: input.jobId, errorCode: input.safeErrorCode }),
+        createdAt: input.failedAt
+      })
+    })
   }
 }
 
@@ -227,6 +331,36 @@ class PostgresReadRepository implements CollaborationReadRepository {
   async listProjectionsForOwner(userId: string): Promise<StoredProjection[]> {
     const result = await this.sql.query(`SELECT * FROM sciforge_collaboration.remote_session_projections WHERE owner_user_id=$1 ORDER BY created_at,projection_id`, [userId])
     return result.rows.map(mapProjection)
+  }
+
+  async getManagedContainer(managedContainerId: string): Promise<StoredManagedContainer | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.managed_provider_containers WHERE managed_container_id=$1`,
+      [managedContainerId]
+    )
+    return result.rows[0] ? mapManagedContainer(result.rows[0]) : null
+  }
+
+  async getManagedContainerForOwner(
+    ownerUserId: string,
+    provider: string,
+    realmId: string
+  ): Promise<StoredManagedContainer | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.managed_provider_containers
+       WHERE owner_user_id=$1 AND provider=$2 AND realm_id=$3`,
+      [ownerUserId, provider, realmId]
+    )
+    return result.rows[0] ? mapManagedContainer(result.rows[0]) : null
+  }
+
+  async listManagedContainersForOwner(ownerUserId: string): Promise<StoredManagedContainer[]> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.managed_provider_containers
+       WHERE owner_user_id=$1 ORDER BY created_at,managed_container_id`,
+      [ownerUserId]
+    )
+    return result.rows.map(mapManagedContainer)
   }
 
   async getProjectBindingByLocator(provider: string, realmId: string, containerId: string, topicId: string): Promise<StoredProjectEndpointBinding | null> {
@@ -580,6 +714,50 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     expectRevision(result.rowCount)
   }
 
+  async insertManagedContainer(container: StoredManagedContainer): Promise<void> {
+    await this.sql.query(
+      `INSERT INTO sciforge_collaboration.managed_provider_containers
+       (managed_container_id,owner_user_id,human_endpoint_id,provider,realm_id,owner_provider_user_id,
+        stable_key,display_name,external_container_id,policy,observed_checks,status,last_verified_at,safe_error_code,revision,
+        created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16,$17)`,
+      [container.managedContainerId, container.ownerUserId, container.humanEndpointId, container.provider,
+        container.realmId, container.ownerProviderUserId, container.stableKey, container.displayName,
+        container.externalContainerId ?? null, JSON.stringify(container.policy),
+        container.observedChecks ? JSON.stringify(container.observedChecks) : null, container.status,
+        container.lastVerifiedAt ?? null, container.safeErrorCode ?? null, container.revision,
+        container.createdAt, container.updatedAt]
+    )
+  }
+
+  async updateManagedContainer(container: StoredManagedContainer, expectedRevision: number): Promise<void> {
+    const result = await this.sql.query(
+      `UPDATE sciforge_collaboration.managed_provider_containers
+       SET human_endpoint_id=$2,owner_provider_user_id=$3,display_name=$4,external_container_id=$5,
+           policy=$6::jsonb,observed_checks=$7::jsonb,status=$8,last_verified_at=$9,safe_error_code=$10,
+           revision=$11,updated_at=$12
+       WHERE managed_container_id=$1 AND revision=$13`,
+      [container.managedContainerId, container.humanEndpointId, container.ownerProviderUserId,
+        container.displayName, container.externalContainerId ?? null, JSON.stringify(container.policy),
+        container.observedChecks ? JSON.stringify(container.observedChecks) : null,
+        container.status, container.lastVerifiedAt ?? null, container.safeErrorCode ?? null,
+        container.revision, container.updatedAt, expectedRevision]
+    )
+    expectRevision(result.rowCount)
+  }
+
+  async insertManagedContainerJob(job: StoredManagedContainerJob): Promise<void> {
+    await this.sql.query(
+      `INSERT INTO sciforge_collaboration.managed_provider_container_jobs
+       (job_id,managed_container_id,operation,desired_revision,state,attempt_count,next_attempt_at,
+        lease_owner,lease_expires_at,safe_error_code,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [job.jobId, job.managedContainerId, job.operation, job.desiredRevision, job.state,
+        job.attemptCount, job.nextAttemptAt, job.leaseOwner ?? null, job.leaseExpiresAt ?? null,
+        job.safeErrorCode ?? null, job.createdAt, job.updatedAt]
+    )
+  }
+
   async upsertProjectEndpointBinding(binding: StoredProjectEndpointBinding, expectedRevision: number | null): Promise<void> {
     if (expectedRevision === null) {
       await this.sql.query(
@@ -898,6 +1076,45 @@ function mapProjection(row: SqlRow): StoredProjection {
     locatorRevision: number(row.locator_revision), displayName: string(row, 'display_name'), status: string(row, 'status') as StoredProjection['status'],
     allowedSenderUserIds: jsonStrings(row.allowed_sender_user_ids), lastErrorCode: optionalString(row, 'last_error_code'),
     revision: number(row.revision), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) }
+}
+function mapManagedContainer(row: SqlRow): StoredManagedContainer {
+  return {
+    managedContainerId: string(row, 'managed_container_id'),
+    ownerUserId: string(row, 'owner_user_id'),
+    humanEndpointId: string(row, 'human_endpoint_id'),
+    provider: string(row, 'provider'),
+    realmId: string(row, 'realm_id'),
+    ownerProviderUserId: string(row, 'owner_provider_user_id'),
+    stableKey: string(row, 'stable_key'),
+    displayName: string(row, 'display_name'),
+    externalContainerId: optionalString(row, 'external_container_id'),
+    policy: jsonRecord(row.policy) as StoredManagedContainer['policy'],
+    observedChecks: row.observed_checks == null
+      ? undefined
+      : jsonRecord(row.observed_checks) as StoredManagedContainer['observedChecks'],
+    status: string(row, 'status') as StoredManagedContainer['status'],
+    lastVerifiedAt: optionalIso(row.last_verified_at),
+    safeErrorCode: optionalString(row, 'safe_error_code'),
+    revision: number(row.revision),
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at)
+  }
+}
+function mapManagedContainerJob(row: SqlRow): StoredManagedContainerJob {
+  return {
+    jobId: string(row, 'job_id'),
+    managedContainerId: string(row, 'managed_container_id'),
+    operation: string(row, 'operation') as StoredManagedContainerJob['operation'],
+    desiredRevision: number(row.desired_revision),
+    state: string(row, 'state') as StoredManagedContainerJob['state'],
+    attemptCount: number(row.attempt_count),
+    nextAttemptAt: iso(row.next_attempt_at),
+    leaseOwner: optionalString(row, 'lease_owner'),
+    leaseExpiresAt: optionalIso(row.lease_expires_at),
+    safeErrorCode: optionalString(row, 'safe_error_code'),
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at)
+  }
 }
 function mapProjectBinding(row: SqlRow): StoredProjectEndpointBinding {
   return { projectEndpointBindingId: string(row, 'project_endpoint_binding_id'), projectId: string(row, 'project_id'),

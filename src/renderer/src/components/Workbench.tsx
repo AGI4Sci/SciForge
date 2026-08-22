@@ -2891,6 +2891,7 @@ export function Workbench(): ReactElement {
                 onCollapse: closeOwnerRightPanel,
                 session: {
                   id: ownerSessionId,
+                  ...(ownerThread?.title ? { title: ownerThread.title } : {}),
                   ...(ownerThread?.runtimeId ? { runtimeId: ownerThread.runtimeId } : {}),
                   ...(ownerWorkspaceRoot ? { workspaceRoot: ownerWorkspaceRoot } : {})
                 },
@@ -3052,6 +3053,7 @@ export function Workbench(): ReactElement {
           className: 'fixed inset-0',
           session: {
             id: globalOverlay?.sessionId || rightPanelOwnerId!,
+            ...(activeThread?.title ? { title: activeThread.title } : {}),
             ...(activeThread?.runtimeId ? { runtimeId: activeThread.runtimeId } : {}),
             ...(activeWorkspaceReferenceRoot
               ? { workspaceRoot: activeWorkspaceReferenceRoot }
@@ -3358,6 +3360,7 @@ export function Workbench(): ReactElement {
                         onCollapse: closeBottomPanel,
                         session: {
                           id: rightPanelOwnerId,
+                          ...(activeThread?.title ? { title: activeThread.title } : {}),
                           ...(activeThread?.runtimeId
                             ? { runtimeId: activeThread.runtimeId }
                             : {}),

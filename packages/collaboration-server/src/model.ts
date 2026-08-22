@@ -188,6 +188,63 @@ export type StoredProjection = {
   updatedAt: string
 }
 
+export type ManagedContainerPolicyValue = {
+  version: 1
+  visibility: 'private'
+  history: 'protected'
+  membership: 'owner_and_message_bot'
+  memberManagement: 'provisioning_service_only'
+  channelManagement: 'provisioning_service_only'
+  ownerCanSend: true
+  ownerCanCreateTopics: true
+  messageBotCanSend: true
+  messageBotCreatesProjectTopics: false
+}
+
+export type StoredManagedContainer = {
+  managedContainerId: string
+  ownerUserId: string
+  humanEndpointId: string
+  provider: string
+  realmId: string
+  ownerProviderUserId: string
+  stableKey: string
+  displayName: string
+  externalContainerId?: string
+  policy: ManagedContainerPolicyValue
+  observedChecks?: {
+    private: boolean
+    protectedHistory: boolean
+    exactMembership: boolean
+    ownerCanSend: boolean
+    messageBotCanSend: boolean
+    ownerCanCreateTopics: boolean
+    memberManagementRestricted: boolean
+    channelManagementRestricted: boolean
+  }
+  status: 'requested' | 'provisioning' | 'active' | 'drifted' | 'suspended' | 'archived' | 'failed'
+  lastVerifiedAt?: string
+  safeErrorCode?: string
+  revision: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type StoredManagedContainerJob = {
+  jobId: string
+  managedContainerId: string
+  operation: 'ensure' | 'inspect' | 'reconcile' | 'archive'
+  desiredRevision: number
+  state: 'queued' | 'running' | 'retry_wait' | 'succeeded' | 'failed'
+  attemptCount: number
+  nextAttemptAt: string
+  leaseOwner?: string
+  leaseExpiresAt?: string
+  safeErrorCode?: string
+  createdAt: string
+  updatedAt: string
+}
+
 export type StoredProjectEndpointBinding = {
   projectEndpointBindingId: string
   projectId: string

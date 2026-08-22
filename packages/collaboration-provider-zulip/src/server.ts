@@ -46,6 +46,15 @@ function requiredConfiguration(context: HumanEndpointProviderFactoryContext, key
   return value.trim()
 }
 
+function optionalConfiguration(context: HumanEndpointProviderFactoryContext, key: string): string | undefined {
+  const value = context.configuration[key]
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new ZulipProviderError('invalid_payload', `Invalid Zulip provider configuration: ${key}.`)
+  }
+  return value.trim()
+}
+
 function factoryNow(context: HumanEndpointProviderFactoryContext): Date {
   const now = new Date(context.now())
   if (!Number.isFinite(now.valueOf())) throw new TypeError('Provider clock returned an invalid timestamp.')
@@ -99,6 +108,7 @@ function wrapWithDurableProviderServices(
     },
     listLocators: (request) => provider.listLocators(request),
     updateLocator: (request) => provider.updateLocator(request),
+    manageContainer: (request) => provider.manageContainer!(request),
     lifecycle: (request) => provider.lifecycle(request),
     diagnose: () => provider.diagnose()
   }
@@ -111,6 +121,17 @@ export const createHumanEndpointProvider: HumanEndpointProviderFactory = async (
   const realmUrl = requiredConfiguration(context, 'realmUrl')
   const botEmail = requiredConfiguration(context, 'botEmail')
   const credentialSecretReference = requiredConfiguration(context, 'credentialSecretReference')
+  const provisioningEmail = optionalConfiguration(context, 'provisioningEmail')
+  const provisioningCredentialSecretReference = optionalConfiguration(
+    context,
+    'provisioningCredentialSecretReference'
+  )
+  if (Boolean(provisioningEmail) !== Boolean(provisioningCredentialSecretReference)) {
+    throw new ZulipProviderError(
+      'invalid_payload',
+      'Zulip provisioningEmail and provisioningCredentialSecretReference must be configured together.'
+    )
+  }
   const deliveryRequests = new Map<string, ProviderSendRequest>()
   const deliveryLedger = new InMemoryDeliveryLedger()
 
@@ -129,10 +150,21 @@ export const createHumanEndpointProvider: HumanEndpointProviderFactory = async (
     return { status: result.retryable ? 'unknown' : 'not_sent' }
   }
 
-  const core = createZulipHumanEndpointProvider({ realmUrl, botEmail }, {
+  const core = createZulipHumanEndpointProvider({
+    realmUrl,
+    botEmail,
+    ...(provisioningEmail ? { provisioningEmail } : {})
+  }, {
     resolveCredential: async () => ({
       apiKey: await context.secretReader.readSecret(credentialSecretReference)
     }),
+    ...(provisioningCredentialSecretReference
+      ? {
+          resolveProvisioningCredential: async () => ({
+            apiKey: await context.secretReader.readSecret(provisioningCredentialSecretReference)
+          })
+        }
+      : {}),
     fetch: async (input, init) => {
       const headers = Object.fromEntries(new Headers(init?.headers).entries())
       const body = init?.body instanceof URLSearchParams

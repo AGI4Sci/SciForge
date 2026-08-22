@@ -7,6 +7,7 @@ import {
   idempotencyKeySchema,
   inboxMessageIdSchema,
   localItemIdSchema,
+  managedContainerIdSchema,
   nonEmptyTextSchema,
   projectIdSchema,
   projectEndpointBindingIdSchema,
@@ -36,6 +37,7 @@ import {
   humanAnswerSchema,
   humanEndpointBindingSchema,
   humanNeededSchema,
+  managedProviderContainerSchema,
   localSessionProjectionBindingSchema,
   orderedProjectionItemSchema,
   participantProfileSchema,
@@ -51,7 +53,8 @@ import {
 import { collaborationErrorSchema } from './errors.js'
 import {
   humanEndpointProviderContractSchema,
-  providerLocatorSchema
+  providerLocatorSchema,
+  providerManagedContainerPolicySchema
 } from './provider.js'
 
 export const PAIRING_BIND_CODE_VERSION = 'SF1' as const
@@ -389,6 +392,12 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...protocolEnvelopeShape, type: z.literal('participant.get'), userId: userIdSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('endpoint.catalog.get'), provider: providerIdSchema.optional() }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('endpoint.locator.list'), humanEndpointId: humanEndpointIdSchema, query: z.string().trim().max(200).optional(), cursor: z.string().min(1).max(2_048).optional(), limit: z.number().int().min(1).max(500) }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('managed_container.ensure'), humanEndpointId: humanEndpointIdSchema, displayName: z.string().trim().min(1).max(200).optional(), policy: providerManagedContainerPolicySchema }).strict(),
+  z.object({ ...protocolEnvelopeShape, type: z.literal('managed_container.get'), managedContainerId: managedContainerIdSchema }).strict(),
+  z.object({ ...protocolEnvelopeShape, type: z.literal('managed_container.list') }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('managed_container.inspect'), managedContainerId: managedContainerIdSchema, expectedRevision: revisionSchema }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('managed_container.reconcile'), managedContainerId: managedContainerIdSchema, expectedRevision: revisionSchema }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('managed_container.archive'), managedContainerId: managedContainerIdSchema, expectedRevision: revisionSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('participant.update_primary'), userId: userIdSchema, expectedRevision: revisionSchema, primaryHumanEndpointId: humanEndpointIdSchema.nullable(), primaryAgentId: agentIdSchema.nullable() }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('projection.create'), ownerUserId: userIdSchema, agentId: agentIdSchema, humanEndpointId: humanEndpointIdSchema, locator: providerLocatorSchema, displayName: z.string().trim().min(1).max(200), allowedSenderUserIds: z.array(userIdSchema).min(1).max(100) }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('projection.get'), projectionId: projectionIdSchema }).strict(),
@@ -419,6 +428,7 @@ export type RestRequest = z.infer<typeof restRequestSchema>
 export const restEntitySchema = z.union([
   userPrincipalSchema,
   humanEndpointBindingSchema,
+  managedProviderContainerSchema,
   endpointChallengeSchema,
   agentNodeSchema,
   participantProfileSchema,

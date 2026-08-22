@@ -65,6 +65,36 @@ async function bindUser(rig, slot, providerUserId = `provider-user-${slot.toLowe
   }
 }
 
+async function activatePersonalContainer(rig, owner, containerId) {
+  await rig.repository.insertManagedContainer({
+    managedContainerId: `mco-test-${owner.userId}`,
+    ownerUserId: owner.userId,
+    humanEndpointId: owner.endpointId,
+    provider: 'fake-im',
+    realmId: 'fake-realm',
+    ownerProviderUserId: owner.providerUserId,
+    stableKey: `managed-${owner.userId}`,
+    displayName: `managed-${owner.userId}`,
+    externalContainerId: containerId,
+    policy: {
+      version: 1,
+      visibility: 'private',
+      history: 'protected',
+      membership: 'owner_and_message_bot',
+      memberManagement: 'provisioning_service_only',
+      channelManagement: 'provisioning_service_only',
+      ownerCanSend: true,
+      ownerCanCreateTopics: true,
+      messageBotCanSend: true,
+      messageBotCreatesProjectTopics: false
+    },
+    status: 'active',
+    revision: 1,
+    createdAt: rig.clock.now().toISOString(),
+    updatedAt: rig.clock.now().toISOString()
+  })
+}
+
 async function registerAgent(rig, participant, slot) {
   const registered = await rig.service.registerAgent(participant.actor, {
     installationId: `installation-${slot.toLowerCase()}`,
@@ -444,13 +474,14 @@ test('8.3 and 10.2 canonical human gateway binds source endpoint to user for per
     topicId: 'stable-personal-topic',
     topicDisplayName: '个人 Session'
   }
+  await activatePersonalContainer(rig, a, personalLocator.containerId)
   const projection = await rig.service.createProjection(a.actor, {
     agentId: agentA.agent.agentId,
     humanEndpointId: a.endpointId,
     locator: personalLocator,
-    displayName: 'A 显式共享给 B 的 Session',
-    allowedSenderUserIds: [b.userId],
-    idempotencyKey: 'create-shared-projection'
+    displayName: 'A 的个人 Session',
+    allowedSenderUserIds: [],
+    idempotencyKey: 'create-personal-projection'
   })
   const remoteA = await rig.service.acceptPersonalProviderMessage(endpointA, {
     locator: personalLocator,
@@ -467,13 +498,13 @@ test('8.3 and 10.2 canonical human gateway binds source endpoint to user for per
     occurredAt: rig.clock.now().toISOString(),
     providerEventId: 'personal-provider-event-A'
   }), remoteA)
-  await rig.service.acceptPersonalProviderMessage(endpointB, {
+  await expectCode('permission_denied', () => rig.service.acceptPersonalProviderMessage(endpointB, {
     locator: personalLocator,
     providerMessageId: 'personal-provider-message-B',
-    text: 'B 通过显式 allowlist 发言',
+    text: 'B 不能控制 A 的个人 Session',
     occurredAt: rig.clock.now().toISOString(),
     providerEventId: 'personal-provider-event-B'
-  })
+  }))
   await expectCode('permission_denied', () => rig.service.acceptPersonalProviderMessage(endpointC, {
     locator: personalLocator,
     providerMessageId: 'personal-provider-message-C',
@@ -483,9 +514,9 @@ test('8.3 and 10.2 canonical human gateway binds source endpoint to user for per
   }))
   const personalInbox = await rig.service.pullInbox(agentA.actor, { afterSequence: 0, limit: 20 })
   const personalMessages = personalInbox.messages.filter((message) => message.messageType === 'personal.message.received')
-  assert.equal(personalMessages.length, 2)
-  assert.deepEqual(personalMessages.map((message) => message.payload.senderUserId), [a.userId, b.userId])
-  assert.deepEqual(personalMessages.map((message) => message.payload.humanEndpointId), [a.endpointId, b.endpointId])
+  assert.equal(personalMessages.length, 1)
+  assert.deepEqual(personalMessages.map((message) => message.payload.senderUserId), [a.userId])
+  assert.deepEqual(personalMessages.map((message) => message.payload.humanEndpointId), [a.endpointId])
   assert.ok(personalMessages.every((message) => message.payload.projectionId === projection.projectionId))
 
   let project = await rig.service.createProject(a.actor, {

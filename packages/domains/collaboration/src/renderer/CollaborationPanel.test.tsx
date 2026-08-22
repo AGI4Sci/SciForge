@@ -12,18 +12,26 @@ import {
   buildAgentRegistrationInput,
   buildEndpointChallengeInput,
   buildProjectionLinkInput,
+  CurrentSessionBindingSummary,
   ExplicitError,
+  filterProjectionLocatorsForManagedContainer,
+  groupProjectionsForSession,
   InlineConfirmationEditor,
   InlineTextActionEditor,
+  ManagedChannelSection,
   PairingCopyFeedback,
   PairingStatus,
   ParticipantSection,
   ProjectionLocatorSelector,
   ProjectionCard,
+  ProjectionGroup,
   ProjectsSection,
   RecoverySection,
-  SessionDisplayNameField,
   nextPairingPollDelayMilliseconds,
+  orderProjectionsForSession,
+  projectionMatchesLocator,
+  projectionMatchesSession,
+  projectionTopicDisplayName,
   projectionLocatorKey,
   reconcileProjectionLocatorSelection,
   writePairingCommandToClipboard
@@ -200,12 +208,6 @@ test('renders controlled first-binding inputs and builds typed commands without 
   assert.match(pairing, /data-collaboration-user-name="true"/u)
   assert.match(pairing, /value="研究员甲"/u)
 
-  const session = renderToStaticMarkup(
-    <SessionDisplayNameField value="细胞分析" disabled={false} onChange={NOOP} />
-  )
-  assert.match(session, /data-collaboration-session-name="true"/u)
-  assert.match(session, /value="细胞分析"/u)
-
   assert.deepEqual(buildEndpointChallengeInput({
     providerKey: 'provider.fixture',
     requestedDisplayName: ' 研究员甲 ',
@@ -259,7 +261,7 @@ test('copies the complete pairing command only through the renderer Clipboard AP
   assert.match(failed, /role="alert"/u)
 })
 
-test('shows stable Session mapping, explicit owner, sharing, status, and every lifecycle action', () => {
+test('shows a compact personal Topic card with diagnostics folded and no sharing controls', () => {
   const projection = collaborationProjectionViewSchema.parse({
     projectionId: 'projection-1',
     ownerUserId: 'user-a',
@@ -281,34 +283,379 @@ test('shows stable Session mapping, explicit owner, sharing, status, and every l
   const html = renderToStaticMarkup(
     <ProjectionCard
       projection={projection}
-      agentName="Laptop A"
-      ownerName="Researcher A"
+      currentSession={{ id: 'thread-current', runtimeId: 'codex' }}
       busy={false}
       onUpdate={NOOP}
-      onShare={NOOP}
       onRetry={NOOP}
     />
   )
 
   assert.match(html, /data-projection-id="projection-1"/u)
   assert.match(html, /data-projection-status="error"/u)
-  assert.match(html, /data-execution-agent="agent-a"/u)
-  assert.match(html, /data-execution-owner="user-a"/u)
-  assert.match(html, /Researcher A · Laptop A/u)
+  assert.match(html, /collaborationDesktopSession.*细胞分析/u)
+  assert.match(html, /collaborationPersonalControlOnly/u)
   assert.match(html, /codex\/thread-stable/u)
-  assert.match(html, /SciForge \/ 细胞分析/u)
-  assert.match(html, /user-b/u)
-  assert.match(html, /collaborationSharedExecutionNotice/u)
+  assert.match(html, /<details/u)
+  assert.doesNotMatch(html, /Researcher A|Laptop A|user-b|collaborationSharedExecutionNotice/u)
+  assert.doesNotMatch(html, /collaborationRename|collaborationSaveAllowlist|collaborationAdvancedPermissions/u)
   for (const action of [
-    'collaborationRename',
     'collaborationPause',
     'collaborationClose',
-    'collaborationRelink',
-    'collaborationSaveAllowlist',
     'collaborationRetry'
   ]) {
     assert.match(html, new RegExp(action, 'u'))
   }
+  assert.doesNotMatch(html, /collaborationRelink/u)
+
+  const paused = renderToStaticMarkup(
+    <ProjectionCard
+      projection={{ ...projection, status: 'paused', lastError: undefined }}
+      currentSession={{ id: 'thread-current', runtimeId: 'codex' }}
+      busy={false}
+      onUpdate={NOOP}
+      onRetry={NOOP}
+    />
+  )
+  assert.match(paused, /collaborationRelink/u)
+
+  const closed = renderToStaticMarkup(
+    <ProjectionCard
+      projection={{ ...projection, status: 'closed', lastError: undefined }}
+      currentSession={{ id: 'thread-current', runtimeId: 'codex' }}
+      busy={false}
+      onUpdate={NOOP}
+      onRetry={NOOP}
+    />
+  )
+  assert.match(closed, /collaborationRestoreToCurrent/u)
+
+  const occupied = renderToStaticMarkup(
+    <ProjectionCard
+      projection={{ ...projection, status: 'closed', lastError: undefined }}
+      currentSession={{ id: 'thread-current', runtimeId: 'codex' }}
+      currentSessionOccupied
+      busy={false}
+      onUpdate={NOOP}
+      onRetry={NOOP}
+    />
+  )
+  assert.doesNotMatch(occupied, /collaborationRestoreToCurrent|collaborationRelink/u)
+})
+
+test('makes the current Session binding compact, personal, and first-class', () => {
+  const locator = {
+    type: 'provider_locator' as const,
+    provider: 'provider.fixture',
+    realmId: 'realm-a',
+    containerId: 'private-a',
+    topicId: 'topic-a',
+    containerDisplayName: '私人 Channel',
+    topicDisplayName: '项目 A'
+  }
+  const current = collaborationProjectionViewSchema.parse({
+    projectionId: 'projection-current', ownerUserId: 'user-a', agentId: 'agent-a',
+    agentOwnerUserId: 'user-a', humanEndpointId: 'endpoint-a', runtimeId: 'codex',
+    threadId: 'thread-current', displayName: '项目 A 映射', remoteDisplay: '私人 Channel / 项目 A',
+    remoteLocator: locator, status: 'active', allowUserIds: [], revision: 1, queueDepth: 0
+  })
+  const closed = collaborationProjectionViewSchema.parse({
+    ...current, projectionId: 'projection-closed', threadId: 'thread-old', status: 'closed'
+  })
+  const session = { id: 'thread-current', title: '左侧项目 A', runtimeId: 'codex' }
+
+  assert.equal(projectionMatchesSession(current, session), true)
+  assert.equal(projectionMatchesLocator(current, locator), true)
+  assert.deepEqual(orderProjectionsForSession([closed, current], session).map((item) => item.projectionId), [
+    'projection-current', 'projection-closed'
+  ])
+  assert.deepEqual(groupProjectionsForSession([closed, current], session), {
+    current,
+    other: [],
+    closed: [closed]
+  })
+
+  const summary = renderToStaticMarkup(
+    <CurrentSessionBindingSummary session={session} projection={current} />
+  )
+  assert.match(summary, /data-current-session-binding="bound"/u)
+  assert.match(summary, /collaborationCurrentDesktopSession.*左侧项目 A/u)
+  assert.match(summary, /collaborationPhoneLocation.*私人 Channel \/ 项目 A/u)
+  assert.equal((summary.match(/font-semibold/gu) ?? []).length, 2)
+  assert.match(summary, /collaborationMappingStatus/u)
+  assert.match(summary, /collaborationPersonalControlOnly/u)
+  assert.match(summary, /私人 Channel \/ 项目 A/u)
+  assert.match(summary, /左侧项目 A/u)
+  assert.match(summary, /<details/u)
+  assert.doesNotMatch(summary, /user-a|collaborationSaveAllowlist|collaborationAdvancedPermissions/u)
+
+  const selector = renderToStaticMarkup(
+    <ProjectionLocatorSelector locators={[locator]} projections={[current]} session={session}
+      selectedKey="" busy={false} onSelect={NOOP} />
+  )
+  assert.doesNotMatch(selector, /<option[^>]+disabled/u)
+  assert.match(selector, /collaborationBoundToCurrentSession/u)
+})
+
+test('keeps other and closed mappings collapsed by default', () => {
+  const other = renderToStaticMarkup(
+    <ProjectionGroup kind="other" label="其他 Session 映射（2）">
+      <div>details</div>
+    </ProjectionGroup>
+  )
+  const closed = renderToStaticMarkup(
+    <ProjectionGroup kind="closed" label="已关闭映射（1）">
+      <div>closed details</div>
+    </ProjectionGroup>
+  )
+  assert.match(other, /<details[^>]+data-projection-group="other"/u)
+  assert.match(other, /<summary[^>]*>其他 Session 映射（2）/u)
+  assert.doesNotMatch(other, /<details[^>]+open/u)
+  assert.match(closed, /<details[^>]+data-projection-group="closed"/u)
+  assert.match(closed, /<summary[^>]*>已关闭映射（1）/u)
+  assert.doesNotMatch(closed, /<details[^>]+open/u)
+})
+
+test('uses the remote Topic as the only visible mapping title and follows rename', () => {
+  const projection = collaborationProjectionViewSchema.parse({
+    projectionId: 'projection-topic-title', ownerUserId: 'user-a', agentId: 'agent-a',
+    agentOwnerUserId: 'user-a', humanEndpointId: 'endpoint-a', runtimeId: 'codex',
+    threadId: 'thread-a', displayName: '左侧 Session A',
+    remoteDisplay: '私人 Channel / 原 Topic',
+    remoteLocator: {
+      type: 'provider_locator', provider: 'provider.fixture', realmId: 'realm-a',
+      containerId: 'private-a', topicId: 'topic-a', topicDisplayName: '原 Topic'
+    },
+    status: 'active', allowUserIds: [], revision: 1, queueDepth: 0
+  })
+  assert.equal(projectionTopicDisplayName(projection), '原 Topic')
+  assert.equal(projectionTopicDisplayName({
+    ...projection,
+    remoteDisplay: '私人 Channel / 新 Topic',
+    remoteLocator: { ...projection.remoteLocator!, topicDisplayName: '新 Topic' }
+  }), '新 Topic')
+})
+
+test('keeps a Topic bound to another Session selectable for explicit relink', () => {
+  const locator = {
+    type: 'provider_locator' as const,
+    provider: 'provider.fixture',
+    realmId: 'realm-cn',
+    containerId: 'private-channel',
+    topicId: 'topic-22',
+    containerDisplayName: '私人 Channel',
+    topicDisplayName: 'Topic 22'
+  }
+  const projection = collaborationProjectionViewSchema.parse({
+    projectionId: 'projection-topic-22', ownerUserId: 'user-a', agentId: 'agent-a',
+    agentOwnerUserId: 'user-a', humanEndpointId: 'endpoint-a', runtimeId: 'codex',
+    threadId: 'thread-old', displayName: '旧 Session', remoteDisplay: '私人 Channel / Topic 22',
+    remoteLocator: locator, status: 'active', allowUserIds: [], revision: 3, queueDepth: 0
+  })
+  const html = renderToStaticMarkup(
+    <ProjectionLocatorSelector
+      locators={[locator]}
+      projections={[projection]}
+      session={{ id: 'thread-current', title: '当前 Session', runtimeId: 'codex' }}
+      selectedKey={projectionLocatorKey(locator)}
+      busy={false}
+      onSelect={NOOP}
+    />
+  )
+  assert.match(html, /Topic 22 — collaborationBoundToSession/u)
+  assert.doesNotMatch(html, /<option[^>]+disabled/u)
+})
+
+test('shows a closed Topic as restorable instead of unbound', () => {
+  const locator = {
+    type: 'provider_locator' as const,
+    provider: 'provider.fixture',
+    realmId: 'realm-cn',
+    containerId: 'private-channel',
+    topicId: 'topic-22',
+    containerDisplayName: '私人 Channel',
+    topicDisplayName: 'Topic 22'
+  }
+  const projection = collaborationProjectionViewSchema.parse({
+    projectionId: 'projection-topic-22', ownerUserId: 'user-a', agentId: 'agent-a',
+    agentOwnerUserId: 'user-a', humanEndpointId: 'endpoint-a', runtimeId: 'codex',
+    threadId: 'thread-old', displayName: 'Topic 22', remoteDisplay: '私人 Channel / Topic 22',
+    remoteLocator: locator, status: 'closed', allowUserIds: [], revision: 4, queueDepth: 0
+  })
+  const html = renderToStaticMarkup(
+    <ProjectionLocatorSelector
+      locators={[locator]}
+      projections={[projection]}
+      session={{ id: 'thread-current', title: '当前 Session', runtimeId: 'codex' }}
+      selectedKey={projectionLocatorKey(locator)}
+      busy={false}
+      onSelect={NOOP}
+    />
+  )
+  assert.match(html, /Topic 22 — collaborationClosedTopic/u)
+  assert.doesNotMatch(html, /collaborationUnboundTopic/u)
+})
+
+test('renders managed Channel verification and counts only Sessions in the exact Channel', () => {
+  const fixture = statusFixture()
+  const containerLocator = {
+    type: 'provider_managed_container_ref' as const,
+    provider: 'provider.fixture',
+    realmId: 'realm-a',
+    containerId: 'managed-channel-1'
+  }
+  const snapshot = collaborationStatusSnapshotSchema.parse({
+    ...fixture,
+    participant: {
+      ...fixture.participant,
+      userId: 'usr_123456789012',
+      endpoints: fixture.participant.endpoints.map((endpoint) => ({
+        ...endpoint,
+        humanEndpointId: 'hep_123456789012'
+      }))
+    },
+    providerOptions: [{ ...fixture.providerOptions[0], managedContainers: true }],
+    managedContainers: [{
+      type: 'managed_provider_container',
+      schemaVersion: 1,
+      managedContainerId: 'mco_123456789012',
+      ownerUserId: 'usr_123456789012',
+      humanEndpointId: 'hep_123456789012',
+      provider: 'provider.fixture',
+      realmId: 'realm-a',
+      stableKey: 'managed-owner-realm-a',
+      container: containerLocator,
+      displayName: 'sciforge-user-a',
+      policy: {
+        version: 1, visibility: 'private', history: 'protected', membership: 'owner_and_message_bot',
+        memberManagement: 'provisioning_service_only', channelManagement: 'provisioning_service_only',
+        ownerCanSend: true, ownerCanCreateTopics: true, messageBotCanSend: true,
+        messageBotCreatesProjectTopics: false
+      },
+      checks: {
+        private: true, protectedHistory: true, exactMembership: true, ownerCanSend: true,
+        messageBotCanSend: true, ownerCanCreateTopics: true, memberManagementRestricted: true,
+        channelManagementRestricted: true
+      },
+      status: 'drifted',
+      lastVerifiedAt: '2026-08-20T01:00:00.000Z',
+      safeErrorCode: null,
+      revision: 3,
+      createdAt: '2026-08-20T00:00:00.000Z',
+      updatedAt: '2026-08-20T01:00:00.000Z'
+    }],
+    projections: [{
+      projectionId: 'projection-managed', ownerUserId: 'user-a', agentId: 'agent-a',
+      agentOwnerUserId: 'user-a', humanEndpointId: 'hep_123456789012', runtimeId: 'codex',
+      threadId: 'thread-managed', displayName: 'Project A', remoteDisplay: 'sciforge-user-a / Project A',
+      remoteLocator: { ...containerLocator, type: 'provider_locator', topicId: 'topic-a' },
+      status: 'active', allowUserIds: ['user-a'], revision: 1, queueDepth: 0
+    }, {
+      projectionId: 'projection-other', ownerUserId: 'user-a', agentId: 'agent-a',
+      agentOwnerUserId: 'user-a', humanEndpointId: 'hep_123456789012', runtimeId: 'codex',
+      threadId: 'thread-other', displayName: 'Other', remoteDisplay: 'Other / Topic',
+      remoteLocator: { type: 'provider_locator', provider: 'provider.fixture', realmId: 'realm-a',
+        containerId: 'other-channel', topicId: 'topic-b' },
+      status: 'active', allowUserIds: ['user-a'], revision: 1, queueDepth: 0
+    }]
+  })
+  const html = renderToStaticMarkup(<ManagedChannelSection snapshot={snapshot} busy={false}
+    onEnsure={NOOP} onRefreshStatus={NOOP} onRefreshTopics={NOOP} onReconcile={NOOP} onArchive={NOOP} />)
+  assert.match(html, /collaborationManagedChannelVerified/u)
+  assert.match(html, /collaborationManagedChannelMemberManagement/u)
+  assert.match(html, /collaborationManagedChannelAdministration/u)
+  assert.match(html, /Fixture IM/u)
+  assert.match(html, /Phone A/u)
+  assert.match(html, />1<\/dd>/u)
+  assert.match(html, /collaborationManagedChannelRepair/u)
+
+  const failedSnapshot = collaborationStatusSnapshotSchema.parse({
+    ...snapshot,
+    managedContainers: [{
+      ...snapshot.managedContainers[0],
+      container: null,
+      checks: null,
+      status: 'failed',
+      lastVerifiedAt: null,
+      safeErrorCode: 'invalid_payload',
+      revision: 4
+    }]
+  })
+  const failedHtml = renderToStaticMarkup(<ManagedChannelSection snapshot={failedSnapshot} busy={false}
+    onEnsure={NOOP} onRefreshStatus={NOOP} onRefreshTopics={NOOP} onReconcile={NOOP} onArchive={NOOP} />)
+  assert.match(failedHtml, /collaborationManagedChannelRetry/u)
+  assert.doesNotMatch(failedHtml, /collaborationManagedChannelRepair/u)
+  assert.match(failedHtml, />\?</u)
+})
+
+test('keeps locator discovery inside the authenticated user managed container', () => {
+  const owned = {
+    type: 'provider_locator' as const,
+    provider: 'provider.fixture',
+    realmId: 'realm-a',
+    containerId: 'managed-channel-1',
+    topicId: 'owned-topic',
+    topicDisplayName: '本人 Topic'
+  }
+  const crossUser = {
+    ...owned,
+    containerId: 'managed-channel-other',
+    topicId: 'other-topic',
+    topicDisplayName: '其他用户 Topic'
+  }
+  const fixture = statusFixture()
+  const managed = collaborationStatusSnapshotSchema.parse({
+    ...fixture,
+    providerOptions: [{ ...fixture.providerOptions[0], managedContainers: true }],
+    managedContainers: [{
+      type: 'managed_provider_container',
+      schemaVersion: 1,
+      managedContainerId: 'mco_123456789012',
+      ownerUserId: 'usr_123456789012',
+      humanEndpointId: 'hep_123456789012',
+      provider: 'provider.fixture',
+      realmId: 'realm-a',
+      stableKey: 'managed-owner-realm-a',
+      container: {
+        type: 'provider_managed_container_ref',
+        provider: 'provider.fixture',
+        realmId: 'realm-a',
+        containerId: 'managed-channel-1'
+      },
+      displayName: 'sciforge-user-a',
+      policy: {
+        version: 1, visibility: 'private', history: 'protected',
+        membership: 'owner_and_message_bot', memberManagement: 'provisioning_service_only',
+        channelManagement: 'provisioning_service_only', ownerCanSend: true,
+        ownerCanCreateTopics: true, messageBotCanSend: true,
+        messageBotCreatesProjectTopics: false
+      },
+      checks: {
+        private: true, protectedHistory: true, exactMembership: true, ownerCanSend: true,
+        messageBotCanSend: true, ownerCanCreateTopics: true,
+        memberManagementRestricted: true, channelManagementRestricted: true
+      },
+      status: 'active', lastVerifiedAt: null, safeErrorCode: null, revision: 1,
+      createdAt: '2026-08-20T00:00:00.000Z', updatedAt: '2026-08-20T00:00:00.000Z'
+    }]
+  }).managedContainers
+
+  const filtered = filterProjectionLocatorsForManagedContainer(
+    [owned, crossUser],
+    managed,
+    'hep_123456789012'
+  )
+  assert.deepEqual(filtered, [owned])
+  assert.deepEqual(
+    filterProjectionLocatorsForManagedContainer([owned, crossUser], [], 'hep_123456789012'),
+    []
+  )
+  const html = renderToStaticMarkup(
+    <ProjectionLocatorSelector locators={filtered} projections={[]}
+      session={{ id: 'thread-a', runtimeId: 'codex' }} selectedKey="" busy={false}
+      onSelect={NOOP} />
+  )
+  assert.match(html, /本人 Topic/u)
+  assert.doesNotMatch(html, /其他用户 Topic/u)
 })
 
 test('renders Project Coordinator, Task assignee state, ordered queue, and explicit recovery errors', () => {
@@ -352,7 +699,7 @@ test('keeps the challenge poll handle out of render state and has no provider br
   assert.match(source, /challengeHandleRef = useRef<string \| null>/u)
   assert.doesNotMatch(source, /data-[^=]*(?:challenge|secret|token)/iu)
   assert.doesNotMatch(source, /\bzulip\b/iu)
-  assert.doesNotMatch(source, /promptValue|confirmAction|globalThis\.(?:prompt|confirm)/u)
+  assert.doesNotMatch(source, /promptValue|confirmAction|(?:globalThis|window)\.(?:prompt|confirm)/u)
 })
 
 test('renders accessible controlled editors for projection mutations', () => {
@@ -434,6 +781,8 @@ test('requires an explicit Topic choice and links the selected opaque locator', 
   const html = renderToStaticMarkup(
     <ProjectionLocatorSelector
       locators={locators}
+      projections={[]}
+      session={{ id: 'thread-a', runtimeId: 'codex' }}
       selectedKey={selectedKey}
       busy={false}
       onSelect={NOOP}
@@ -441,7 +790,7 @@ test('requires an explicit Topic choice and links the selected opaque locator', 
   )
   assert.match(html, /协作空间 \/ 第一个主题/u)
   assert.match(html, /协作空间 \/ 第二个主题/u)
-  assert.match(html, /第二个主题<\/option>/u)
+  assert.match(html, /第二个主题 — collaborationUnboundTopic<\/option>/u)
 })
 
 test('keeps locator selection across display-name refreshes without changing identity', () => {
@@ -489,13 +838,18 @@ function statusFixture() {
     providerOptions: [{
       providerKey: 'provider.fixture',
       label: 'Fixture IM',
+      realmLabel: 'Realm',
+      containerLabel: 'Channel',
+      topicLabel: 'Topic',
       locatorFields: [{
         key: 'realm',
         label: 'Realm',
         required: true,
         placeholder: 'https://im.example.com'
-      }]
+        }],
+        managedContainers: false
     }],
+    managedContainers: [],
     participant: {
       userId: 'user-a',
       displayName: 'Researcher A',

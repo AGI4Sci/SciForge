@@ -45,6 +45,79 @@ export const providerLocatorSchema = z.object({
 }).strict()
 export type ProviderLocator = z.infer<typeof providerLocatorSchema>
 
+export const providerManagedContainerRefSchema = z.object({
+  type: z.literal('provider_managed_container_ref'),
+  provider: providerIdSchema,
+  realmId: providerOpaqueIdSchema,
+  containerId: providerOpaqueIdSchema
+}).strict()
+export type ProviderManagedContainerRef = z.infer<typeof providerManagedContainerRefSchema>
+
+export const providerManagedContainerPolicySchema = z.object({
+  version: z.literal(1),
+  visibility: z.literal('private'),
+  history: z.literal('protected'),
+  membership: z.literal('owner_and_message_bot'),
+  memberManagement: z.literal('provisioning_service_only'),
+  channelManagement: z.literal('provisioning_service_only'),
+  ownerCanSend: z.literal(true),
+  ownerCanCreateTopics: z.literal(true),
+  messageBotCanSend: z.literal(true),
+  messageBotCreatesProjectTopics: z.literal(false)
+}).strict()
+export type ProviderManagedContainerPolicy = z.infer<typeof providerManagedContainerPolicySchema>
+
+const providerManagedContainerTargetSchema = z.object({
+  protocolVersion: protocolVersionSchema,
+  realmId: providerOpaqueIdSchema,
+  ownerIdentity: providerIdentitySchema,
+  policy: providerManagedContainerPolicySchema
+}).strict()
+
+export const providerManagedContainerRequestSchema = z.discriminatedUnion('type', [
+  providerManagedContainerTargetSchema.extend({
+    type: z.literal('provider.managed_container.ensure'),
+    stableKey: providerOpaqueIdSchema,
+    displayName: displayNameSchema
+  }).strict(),
+  providerManagedContainerTargetSchema.extend({
+    type: z.literal('provider.managed_container.inspect'),
+    container: providerManagedContainerRefSchema
+  }).strict(),
+  providerManagedContainerTargetSchema.extend({
+    type: z.literal('provider.managed_container.reconcile'),
+    container: providerManagedContainerRefSchema,
+    displayName: displayNameSchema
+  }).strict(),
+  providerManagedContainerTargetSchema.extend({
+    type: z.literal('provider.managed_container.archive'),
+    container: providerManagedContainerRefSchema
+  }).strict()
+])
+export type ProviderManagedContainerRequest = z.infer<typeof providerManagedContainerRequestSchema>
+
+export const providerManagedContainerResultSchema = z.object({
+  protocolVersion: protocolVersionSchema,
+  type: z.literal('provider.managed_container.result'),
+  container: providerManagedContainerRefSchema,
+  displayName: displayNameSchema,
+  status: z.enum(['active', 'drifted', 'archived']),
+  policyVersion: z.literal(1),
+  checks: z.object({
+    private: z.boolean(),
+    protectedHistory: z.boolean(),
+    exactMembership: z.boolean(),
+    ownerCanSend: z.boolean(),
+    messageBotCanSend: z.boolean(),
+    ownerCanCreateTopics: z.boolean(),
+    memberManagementRestricted: z.boolean(),
+    channelManagementRestricted: z.boolean()
+  }).strict(),
+  safeIssueCodes: z.array(z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u)).max(32),
+  observedAt: timestampSchema
+}).strict()
+export type ProviderManagedContainerResult = z.infer<typeof providerManagedContainerResultSchema>
+
 const providerEventEnvelopeShape = {
   protocolVersion: protocolVersionSchema,
   provider: providerIdSchema,
@@ -222,6 +295,8 @@ export const providerLocatorListRequestSchema = z.object({
   protocolVersion: protocolVersionSchema,
   type: z.literal('provider.locator.list'),
   realmId: providerOpaqueIdSchema,
+  container: providerManagedContainerRefSchema.optional(),
+  containerDisplayName: displayNameSchema.optional(),
   query: z.string().trim().max(200).optional(),
   cursor: providerCursorSchema.optional(),
   limit: z.number().int().min(1).max(500)
@@ -311,7 +386,8 @@ export const humanEndpointProviderContractSchema = z.object({
     locatorMove: z.boolean(),
     locatorDiscovery: z.boolean(),
     identityChallenge: z.literal(true),
-    directMessages: z.literal(true)
+    directMessages: z.literal(true),
+    managedContainers: z.boolean().optional()
   }).strict(),
   onboarding: z.object({
     realmLabel: displayNameSchema,
@@ -333,6 +409,7 @@ export interface HumanEndpointProvider {
   send(request: ProviderSendRequest): Promise<ProviderSendResult>
   listLocators(request: ProviderLocatorListRequest): Promise<ProviderLocatorListResult>
   updateLocator(request: ProviderLocatorMutationRequest): Promise<ProviderLocatorMutationResult>
+  manageContainer?(request: ProviderManagedContainerRequest): Promise<ProviderManagedContainerResult>
   lifecycle(request: ProviderLifecycleRequest): Promise<ProviderLifecycleResult>
   diagnose(): Promise<ProviderDiagnostic>
 }
