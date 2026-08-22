@@ -42,10 +42,10 @@ test('renderer entry owns panel, command, toolbar, and translations', () => {
     focused: true,
     onCollapse: () => undefined,
     surfaceId: 'surface-collaboration-a',
-    session: { id: 'thread-1', runtimeId: 'codex' }
+    session: { id: 'thread-1', title: '项目 A', runtimeId: 'codex' }
   }) as ReactElement<Record<string, unknown>>
   assert.equal(rendered.props.className, 'fixture-panel')
-  assert.deepEqual(rendered.props.session, { id: 'thread-1', runtimeId: 'codex' })
+  assert.deepEqual(rendered.props.session, { id: 'thread-1', title: '项目 A', runtimeId: 'codex' })
   assert.equal(typeof rendered.props.client, 'object')
 
   const toolbar = entry.contributions.find(({ id }) =>

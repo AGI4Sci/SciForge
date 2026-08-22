@@ -3,6 +3,7 @@ import {
   humanAnswerSchema,
   humanEndpointBindingSchema,
   humanNeededSchema,
+  managedProviderContainerSchema,
   inboxMessageSchema,
   participantProfileSchema,
   projectInputSchema,
@@ -16,6 +17,7 @@ import {
   type HumanAnswer,
   type HumanEndpointBinding,
   type HumanNeeded,
+  type ManagedProviderContainer,
   type InboxMessage,
   type ParticipantProfile,
   type Project,
@@ -33,6 +35,7 @@ import type {
   StoredEndpoint,
   StoredHumanAnswer,
   StoredHumanRequest,
+  StoredManagedContainer,
   StoredInboxMessage,
   StoredParticipant,
   StoredProject,
@@ -82,6 +85,36 @@ export function toParticipant(participant: StoredParticipant): ParticipantProfil
 export function toProjection(projection: StoredProjection): RemoteSessionProjection {
   return remoteSessionProjectionSchema.parse({ schemaVersion: 1, type: 'remote_session_projection',
     ...projection })
+}
+
+export function toManagedContainer(container: StoredManagedContainer): ManagedProviderContainer {
+  return managedProviderContainerSchema.parse({
+    schemaVersion: 1,
+    type: 'managed_provider_container',
+    managedContainerId: container.managedContainerId,
+    ownerUserId: container.ownerUserId,
+    humanEndpointId: container.humanEndpointId,
+    provider: container.provider,
+    realmId: container.realmId,
+    stableKey: container.stableKey,
+    displayName: container.displayName,
+    container: container.externalContainerId
+      ? {
+          type: 'provider_managed_container_ref',
+          provider: container.provider,
+          realmId: container.realmId,
+          containerId: container.externalContainerId
+        }
+      : null,
+    policy: container.policy,
+    checks: container.observedChecks ?? null,
+    status: container.status,
+    lastVerifiedAt: container.lastVerifiedAt ?? null,
+    safeErrorCode: container.safeErrorCode ?? null,
+    revision: container.revision,
+    createdAt: container.createdAt,
+    updatedAt: container.updatedAt
+  })
 }
 
 export function toProject(project: StoredProject, members: StoredProjectMember[]): Project {

@@ -4,6 +4,7 @@ import { z } from 'zod'
 import {
   agentNodeSchema,
   humanEndpointBindingSchema,
+  managedProviderContainerSchema,
   participantProfileSchema,
   projectSchema,
   providerLocatorSchema,
@@ -161,6 +162,7 @@ export const collaborationLocalStateSchema = z.object({
     humanEndpointId: humanEndpointBindingSchema.shape.humanEndpointId,
     locator: providerLocatorSchema
   }).strict()).max(10_000),
+  managedContainers: z.array(managedProviderContainerSchema).max(64).default([]),
   agents: z.array(agentNodeSchema).max(64),
   participant: participantProfileSchema.optional(),
   projections: z.array(collaborationLocalProjectionSchema).max(10_000),
@@ -186,6 +188,7 @@ export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.f
   lastInboxSequence: 0,
   endpoints: [],
   endpointLocators: [],
+  managedContainers: [],
   agents: [],
   projections: [],
   projects: [],

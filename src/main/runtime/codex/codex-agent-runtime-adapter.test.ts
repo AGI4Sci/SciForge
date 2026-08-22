@@ -119,13 +119,22 @@ describe('createCodexAgentRuntimeAdapter', () => {
     }, {
       runtimeId: 'codex',
       threadId: 'thread-1',
-      text: 'capture the exact figure'
+      text: 'capture the exact figure',
+      metadata: {
+        source: 'collaboration.remote-session-projection',
+        sourceLabel: '手机 Zulip · 私人 Channel / Topic 22',
+        privateField: 'must-not-cross-runtime-boundary'
+      }
     })).resolves.toMatchObject({ turnId: 'turn-1' })
 
     expect(startTurn).toHaveBeenCalledWith({
       threadId: 'thread-1',
       text: 'capture the exact figure',
       displayText: undefined,
+      metadata: {
+        source: 'collaboration.remote-session-projection',
+        sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+      },
       workspace: undefined,
       model: undefined,
       reasoningEffort: undefined,
@@ -795,6 +804,10 @@ describe('createCodexAgentRuntimeAdapter', () => {
             turnId: 'turn-1',
             text: 'expanded runtime prompt',
             displayText: 'short user prompt',
+            metadata: {
+              source: 'collaboration.remote-session-projection',
+              sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+            },
             createdAt: '2026-06-11T00:00:00.000Z'
           }
         }
@@ -815,7 +828,11 @@ describe('createCodexAgentRuntimeAdapter', () => {
         kind: 'user_message',
         itemId: 'user-1',
         text: 'expanded runtime prompt',
-        displayText: 'short user prompt'
+        displayText: 'short user prompt',
+        meta: {
+          source: 'collaboration.remote-session-projection',
+          sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+        }
       })
     ])
   })

@@ -18,7 +18,9 @@ import type {
   StoredTask,
   StoredUser,
   StoredHumanRequest,
-  StoredHumanAnswer
+  StoredHumanAnswer,
+  StoredManagedContainer,
+  StoredManagedContainerJob
 } from './model.js'
 
 export interface CollaborationReadRepository {
@@ -33,6 +35,9 @@ export interface CollaborationReadRepository {
   getProjection(projectionId: string): Promise<StoredProjection | null>
   getProjectionByLocator(provider: string, realmId: string, containerId: string, topicId: string): Promise<StoredProjection | null>
   listProjectionsForOwner(userId: string): Promise<StoredProjection[]>
+  getManagedContainer(managedContainerId: string): Promise<StoredManagedContainer | null>
+  getManagedContainerForOwner(ownerUserId: string, provider: string, realmId: string): Promise<StoredManagedContainer | null>
+  listManagedContainersForOwner(ownerUserId: string): Promise<StoredManagedContainer[]>
   getProjectEndpointBinding(projectId: string): Promise<StoredProjectEndpointBinding | null>
   getProjectEndpointBindingById(projectEndpointBindingId: string): Promise<StoredProjectEndpointBinding | null>
   getProjectBindingByLocator(provider: string, realmId: string, containerId: string, topicId: string): Promise<StoredProjectEndpointBinding | null>
@@ -74,6 +79,9 @@ export interface CollaborationTransaction extends CollaborationReadRepository {
   upsertParticipant(participant: StoredParticipant, expectedRevision: number | null): Promise<void>
   insertProjection(projection: StoredProjection): Promise<void>
   updateProjection(projection: StoredProjection, expectedRevision: number): Promise<void>
+  insertManagedContainer(container: StoredManagedContainer): Promise<void>
+  updateManagedContainer(container: StoredManagedContainer, expectedRevision: number): Promise<void>
+  insertManagedContainerJob(job: StoredManagedContainerJob): Promise<void>
   upsertProjectEndpointBinding(binding: StoredProjectEndpointBinding, expectedRevision: number | null): Promise<void>
   insertProjectInput(input: Omit<StoredProjectInput, 'sequence'>): Promise<StoredProjectInput>
   insertHumanRequest(request: StoredHumanRequest): Promise<void>
@@ -94,5 +102,24 @@ export interface CollaborationTransaction extends CollaborationReadRepository {
 export interface CollaborationRepository extends CollaborationReadRepository {
   transaction<T>(work: (tx: CollaborationTransaction) => Promise<T>): Promise<T>
   pruneExpired(now: string): Promise<{ inboxMessages: number; receipts: number; challenges: number }>
+  claimManagedContainerJobs(workerId: string, now: string, leaseExpiresAt: string, limit: number): Promise<StoredManagedContainerJob[]>
+  completeManagedContainerJob(input: {
+    jobId: string
+    workerId: string
+    expectedAttemptCount: number
+    container: StoredManagedContainer
+    expectedContainerRevision: number
+    completedAt: string
+  }): Promise<void>
+  failManagedContainerJob(input: {
+    jobId: string
+    workerId: string
+    expectedAttemptCount: number
+    safeErrorCode: string
+    retryAt?: string
+    failedAt: string
+    container?: StoredManagedContainer
+    expectedContainerRevision?: number
+  }): Promise<void>
   close(): Promise<void>
 }

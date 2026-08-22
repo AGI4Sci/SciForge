@@ -5,6 +5,49 @@ import { PostgresCollaborationRepository, type SqlConnection, type SqlPool } fro
 import { CollaborationService } from './service.js'
 
 describe('PostgreSQL production transaction path', () => {
+  it('fences stale managed-container completions by claim attempt inside one transaction', async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = []
+    const connection: SqlConnection = {
+      query: async (text, values = []) => {
+        queries.push({ text, values })
+        if (text.includes('UPDATE sciforge_collaboration.managed_provider_container_jobs')) {
+          return { rows: [], rowCount: 0 }
+        }
+        return { rows: [], rowCount: 1 }
+      },
+      release: () => undefined
+    }
+    const pool: SqlPool = {
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => connection,
+      end: async () => undefined
+    }
+    const repository = new PostgresCollaborationRepository(pool)
+    const at = '2026-08-15T02:00:00.000Z'
+    await expect(repository.completeManagedContainerJob({
+      jobId: 'mcj_123456789012', workerId: 'mcw_123456789012', expectedAttemptCount: 2,
+      container: {
+        managedContainerId: 'mco_123456789012', ownerUserId: 'usr_123456789012',
+        humanEndpointId: 'hep_123456789012', provider: 'fake', realmId: 'realm-1',
+        ownerProviderUserId: '42', stableKey: 'managed-owner-realm', displayName: 'sciforge-owner',
+        externalContainerId: 'owner-channel', policy: {
+          version: 1, visibility: 'private', history: 'protected', membership: 'owner_and_message_bot',
+          memberManagement: 'provisioning_service_only', channelManagement: 'provisioning_service_only',
+          ownerCanSend: true, ownerCanCreateTopics: true, messageBotCanSend: true,
+          messageBotCreatesProjectTopics: false
+        },
+        status: 'active', revision: 3, createdAt: at, updatedAt: at
+      },
+      expectedContainerRevision: 2,
+      completedAt: at
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+
+    const fenced = queries.find(({ text }) => text.includes('managed_provider_container_jobs'))
+    expect(fenced?.text).toContain('attempt_count = $4')
+    expect(fenced?.values).toEqual(['mcj_123456789012', 'mcw_123456789012', at, 2])
+    expect(queries.at(-1)?.text).toBe('ROLLBACK')
+  })
+
   it('binds inbox expiry before LIMIT using PostgreSQL-compatible parameter types', async () => {
     const captured: Array<{ text: string; values: readonly unknown[] }> = []
     const pool: SqlPool = {

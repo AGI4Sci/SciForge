@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **236**
+Registered actions: **239**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -63,6 +63,9 @@ Registered actions: **236**
 | `collaboration.connection.connect` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.endpoint.challenge.poll` | 1.0.0 | ui | read | none | global |
 | `collaboration.endpoint.challenge.start` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.managed-container.archive` | 1.0.0 | ui | destructive | confirmation | global |
+| `collaboration.managed-container.inspect` | 1.0.0 | ui | read | none | global |
+| `collaboration.managed-container.provision` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.participant.primary-agent.select` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.link` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.share` | 1.0.0 | ui | external-write | confirmation | global |
@@ -17301,6 +17304,1048 @@ Starts a short-lived provider identity challenge without returning its polling s
 }
 ```
 
+## `collaboration.managed-container.archive`
+
+Destructively archives the authenticated user managed Channel and pauses its fixed Sessions.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `destructive`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "action": {
+        "const": "archive",
+        "type": "string"
+      },
+      "expectedRevision": {
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991,
+        "type": "integer"
+      },
+      "managedContainerId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "action",
+      "managedContainerId",
+      "expectedRevision"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "locatorCount": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "managedContainer": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "checks": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "channelManagementRestricted": {
+                        "type": "boolean"
+                      },
+                      "exactMembership": {
+                        "type": "boolean"
+                      },
+                      "memberManagementRestricted": {
+                        "type": "boolean"
+                      },
+                      "messageBotCanSend": {
+                        "type": "boolean"
+                      },
+                      "ownerCanCreateTopics": {
+                        "type": "boolean"
+                      },
+                      "ownerCanSend": {
+                        "type": "boolean"
+                      },
+                      "private": {
+                        "type": "boolean"
+                      },
+                      "protectedHistory": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "private",
+                      "protectedHistory",
+                      "exactMembership",
+                      "ownerCanSend",
+                      "messageBotCanSend",
+                      "ownerCanCreateTopics",
+                      "memberManagementRestricted",
+                      "channelManagementRestricted"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "container": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "containerId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "provider": {
+                        "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                        "type": "string"
+                      },
+                      "realmId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "provider_managed_container_ref",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "provider",
+                      "realmId",
+                      "containerId"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "displayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "humanEndpointId": {
+                "pattern": "^hep_[A-Za-z0-9]{12,64}$",
+                "type": "string"
+              },
+              "lastVerifiedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "managedContainerId": {
+                "pattern": "^mco_[A-Za-z0-9]{12,64}$",
+                "type": "string"
+              },
+              "ownerUserId": {
+                "pattern": "^usr_[A-Za-z0-9]{12,64}$",
+                "type": "string"
+              },
+              "policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "channelManagement": {
+                    "const": "provisioning_service_only",
+                    "type": "string"
+                  },
+                  "history": {
+                    "const": "protected",
+                    "type": "string"
+                  },
+                  "memberManagement": {
+                    "const": "provisioning_service_only",
+                    "type": "string"
+                  },
+                  "membership": {
+                    "const": "owner_and_message_bot",
+                    "type": "string"
+                  },
+                  "messageBotCanSend": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "messageBotCreatesProjectTopics": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "ownerCanCreateTopics": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "ownerCanSend": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "version": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "visibility": {
+                    "const": "private",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "version",
+                  "visibility",
+                  "history",
+                  "membership",
+                  "memberManagement",
+                  "channelManagement",
+                  "ownerCanSend",
+                  "ownerCanCreateTopics",
+                  "messageBotCanSend",
+                  "messageBotCreatesProjectTopics"
+                ],
+                "type": "object"
+              },
+              "provider": {
+                "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                "type": "string"
+              },
+              "realmId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "revision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "safeErrorCode": {
+                "anyOf": [
+                  {
+                    "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "stableKey": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "requested",
+                  "provisioning",
+                  "active",
+                  "drifted",
+                  "suspended",
+                  "archived",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              "type": {
+                "const": "managed_provider_container",
+                "type": "string"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "revision",
+              "createdAt",
+              "updatedAt",
+              "type",
+              "managedContainerId",
+              "ownerUserId",
+              "humanEndpointId",
+              "provider",
+              "realmId",
+              "stableKey",
+              "displayName",
+              "container",
+              "policy",
+              "checks",
+              "status",
+              "lastVerifiedAt",
+              "safeErrorCode"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "managedContainer"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Archive private collaboration Channel"
+}
+```
+
+## `collaboration.managed-container.inspect`
+
+Reads or refreshes the authenticated user managed Channel and locator status.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "refresh-locators",
+            "type": "string"
+          },
+          "humanEndpointId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "humanEndpointId"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "refresh-status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "locatorCount": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "managedContainer": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "checks": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "channelManagementRestricted": {
+                        "type": "boolean"
+                      },
+                      "exactMembership": {
+                        "type": "boolean"
+                      },
+                      "memberManagementRestricted": {
+                        "type": "boolean"
+                      },
+                      "messageBotCanSend": {
+                        "type": "boolean"
+                      },
+                      "ownerCanCreateTopics": {
+                        "type": "boolean"
+                      },
+                      "ownerCanSend": {
+                        "type": "boolean"
+                      },
+                      "private": {
+                        "type": "boolean"
+                      },
+                      "protectedHistory": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "private",
+                      "protectedHistory",
+                      "exactMembership",
+                      "ownerCanSend",
+                      "messageBotCanSend",
+                      "ownerCanCreateTopics",
+                      "memberManagementRestricted",
+                      "channelManagementRestricted"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "container": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "containerId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "provider": {
+                        "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                        "type": "string"
+                      },
+                      "realmId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "provider_managed_container_ref",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "provider",
+                      "realmId",
+                      "containerId"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "displayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "humanEndpointId": {
+                "pattern": "^hep_[A-Za-z0-9]{12,64}$",
+                "type": "string"
+              },
+              "lastVerifiedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "managedContainerId": {
+                "pattern": "^mco_[A-Za-z0-9]{12,64}$",
+                "type": "string"
+              },
+              "ownerUserId": {
+                "pattern": "^usr_[A-Za-z0-9]{12,64}$",
+                "type": "string"
+              },
+              "policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "channelManagement": {
+                    "const": "provisioning_service_only",
+                    "type": "string"
+                  },
+                  "history": {
+                    "const": "protected",
+                    "type": "string"
+                  },
+                  "memberManagement": {
+                    "const": "provisioning_service_only",
+                    "type": "string"
+                  },
+                  "membership": {
+                    "const": "owner_and_message_bot",
+                    "type": "string"
+                  },
+                  "messageBotCanSend": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "messageBotCreatesProjectTopics": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "ownerCanCreateTopics": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "ownerCanSend": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "version": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "visibility": {
+                    "const": "private",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "version",
+                  "visibility",
+                  "history",
+                  "membership",
+                  "memberManagement",
+                  "channelManagement",
+                  "ownerCanSend",
+                  "ownerCanCreateTopics",
+                  "messageBotCanSend",
+                  "messageBotCreatesProjectTopics"
+                ],
+                "type": "object"
+              },
+              "provider": {
+                "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                "type": "string"
+              },
+              "realmId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "revision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "safeErrorCode": {
+                "anyOf": [
+                  {
+                    "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "stableKey": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "requested",
+                  "provisioning",
+                  "active",
+                  "drifted",
+                  "suspended",
+                  "archived",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              "type": {
+                "const": "managed_provider_container",
+                "type": "string"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "revision",
+              "createdAt",
+              "updatedAt",
+              "type",
+              "managedContainerId",
+              "ownerUserId",
+              "humanEndpointId",
+              "provider",
+              "realmId",
+              "stableKey",
+              "displayName",
+              "container",
+              "policy",
+              "checks",
+              "status",
+              "lastVerifiedAt",
+              "safeErrorCode"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "managedContainer"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Inspect private collaboration Channel"
+}
+```
+
+## `collaboration.managed-container.provision`
+
+Creates or repairs the authenticated user managed Channel through the durable provisioning path.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "ensure",
+            "type": "string"
+          },
+          "humanEndpointId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "humanEndpointId"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "reconcile",
+            "type": "string"
+          },
+          "expectedRevision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "managedContainerId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "managedContainerId",
+          "expectedRevision"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "locatorCount": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "managedContainer": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "checks": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "channelManagementRestricted": {
+                        "type": "boolean"
+                      },
+                      "exactMembership": {
+                        "type": "boolean"
+                      },
+                      "memberManagementRestricted": {
+                        "type": "boolean"
+                      },
+                      "messageBotCanSend": {
+                        "type": "boolean"
+                      },
+                      "ownerCanCreateTopics": {
+                        "type": "boolean"
+                      },
+                      "ownerCanSend": {
+                        "type": "boolean"
+                      },
+                      "private": {
+                        "type": "boolean"
+                      },
+                      "protectedHistory": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "private",
+                      "protectedHistory",
+                      "exactMembership",
+                      "ownerCanSend",
+                      "messageBotCanSend",
+                      "ownerCanCreateTopics",
+                      "memberManagementRestricted",
+                      "channelManagementRestricted"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "container": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "containerId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "provider": {
+                        "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                        "type": "string"
+                      },
+                      "realmId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "provider_managed_container_ref",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "provider",
+                      "realmId",
+                      "containerId"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "displayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "humanEndpointId": {
+                "pattern": "^hep_[A-Za-z0-9]{12,64}$",
+                "type": "string"
+              },
+              "lastVerifiedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "managedContainerId": {
+                "pattern": "^mco_[A-Za-z0-9]{12,64}$",
+                "type": "string"
+              },
+              "ownerUserId": {
+                "pattern": "^usr_[A-Za-z0-9]{12,64}$",
+                "type": "string"
+              },
+              "policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "channelManagement": {
+                    "const": "provisioning_service_only",
+                    "type": "string"
+                  },
+                  "history": {
+                    "const": "protected",
+                    "type": "string"
+                  },
+                  "memberManagement": {
+                    "const": "provisioning_service_only",
+                    "type": "string"
+                  },
+                  "membership": {
+                    "const": "owner_and_message_bot",
+                    "type": "string"
+                  },
+                  "messageBotCanSend": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "messageBotCreatesProjectTopics": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "ownerCanCreateTopics": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "ownerCanSend": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "version": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "visibility": {
+                    "const": "private",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "version",
+                  "visibility",
+                  "history",
+                  "membership",
+                  "memberManagement",
+                  "channelManagement",
+                  "ownerCanSend",
+                  "ownerCanCreateTopics",
+                  "messageBotCanSend",
+                  "messageBotCreatesProjectTopics"
+                ],
+                "type": "object"
+              },
+              "provider": {
+                "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                "type": "string"
+              },
+              "realmId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "revision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "safeErrorCode": {
+                "anyOf": [
+                  {
+                    "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "stableKey": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "requested",
+                  "provisioning",
+                  "active",
+                  "drifted",
+                  "suspended",
+                  "archived",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              "type": {
+                "const": "managed_provider_container",
+                "type": "string"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "revision",
+              "createdAt",
+              "updatedAt",
+              "type",
+              "managedContainerId",
+              "ownerUserId",
+              "humanEndpointId",
+              "provider",
+              "realmId",
+              "stableKey",
+              "displayName",
+              "container",
+              "policy",
+              "checks",
+              "status",
+              "lastVerifiedAt",
+              "safeErrorCode"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "managedContainer"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Provision private collaboration Channel"
+}
+```
+
 ## `collaboration.participant.primary-agent.select`
 
 Selects an active Agent owned by the current user without guessing from presence.
@@ -17859,6 +18904,52 @@ Creates a stable personal Topic projection for an explicit existing or new local
             "maxLength": 512,
             "type": "string"
           },
+          "remoteLocator": {
+            "additionalProperties": false,
+            "properties": {
+              "containerDisplayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "containerId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "provider": {
+                "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                "type": "string"
+              },
+              "realmId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "topicDisplayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "topicId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "const": "provider_locator",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "provider",
+              "realmId",
+              "containerId",
+              "topicId"
+            ],
+            "type": "object"
+          },
           "revision": {
             "maximum": 9007199254740991,
             "minimum": 0,
@@ -18035,6 +19126,52 @@ Updates the explicit sender user allowlist while retaining the original executin
           "remoteDisplay": {
             "maxLength": 512,
             "type": "string"
+          },
+          "remoteLocator": {
+            "additionalProperties": false,
+            "properties": {
+              "containerDisplayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "containerId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "provider": {
+                "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                "type": "string"
+              },
+              "realmId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "topicDisplayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "topicId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "const": "provider_locator",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "provider",
+              "realmId",
+              "containerId",
+              "topicId"
+            ],
+            "type": "object"
           },
           "revision": {
             "maximum": 9007199254740991,
@@ -18222,6 +19359,48 @@ Explicitly renames, pauses, resumes, closes, or relinks a stable projection.
           "expectedRevision"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "restore",
+            "type": "string"
+          },
+          "expectedRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "projectionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "runtimeId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "threadId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "workspaceRoot": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "projectionId",
+          "runtimeId",
+          "threadId",
+          "expectedRevision"
+        ],
+        "type": "object"
       }
     ]
   },
@@ -18288,6 +19467,52 @@ Explicitly renames, pauses, resumes, closes, or relinks a stable projection.
           "remoteDisplay": {
             "maxLength": 512,
             "type": "string"
+          },
+          "remoteLocator": {
+            "additionalProperties": false,
+            "properties": {
+              "containerDisplayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "containerId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "provider": {
+                "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                "type": "string"
+              },
+              "realmId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "topicDisplayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "topicId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "const": "provider_locator",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "provider",
+              "realmId",
+              "containerId",
+              "topicId"
+            ],
+            "type": "object"
           },
           "revision": {
             "maximum": 9007199254740991,
@@ -18479,6 +19704,267 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
           "type": "object"
         },
         "maxItems": 256,
+        "type": "array"
+      },
+      "managedContainers": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "checks": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "channelManagementRestricted": {
+                      "type": "boolean"
+                    },
+                    "exactMembership": {
+                      "type": "boolean"
+                    },
+                    "memberManagementRestricted": {
+                      "type": "boolean"
+                    },
+                    "messageBotCanSend": {
+                      "type": "boolean"
+                    },
+                    "ownerCanCreateTopics": {
+                      "type": "boolean"
+                    },
+                    "ownerCanSend": {
+                      "type": "boolean"
+                    },
+                    "private": {
+                      "type": "boolean"
+                    },
+                    "protectedHistory": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "private",
+                    "protectedHistory",
+                    "exactMembership",
+                    "ownerCanSend",
+                    "messageBotCanSend",
+                    "ownerCanCreateTopics",
+                    "memberManagementRestricted",
+                    "channelManagementRestricted"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "container": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "containerId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "provider": {
+                      "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                      "type": "string"
+                    },
+                    "realmId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": {
+                      "const": "provider_managed_container_ref",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "provider",
+                    "realmId",
+                    "containerId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "displayName": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "humanEndpointId": {
+              "pattern": "^hep_[A-Za-z0-9]{12,64}$",
+              "type": "string"
+            },
+            "lastVerifiedAt": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "managedContainerId": {
+              "pattern": "^mco_[A-Za-z0-9]{12,64}$",
+              "type": "string"
+            },
+            "ownerUserId": {
+              "pattern": "^usr_[A-Za-z0-9]{12,64}$",
+              "type": "string"
+            },
+            "policy": {
+              "additionalProperties": false,
+              "properties": {
+                "channelManagement": {
+                  "const": "provisioning_service_only",
+                  "type": "string"
+                },
+                "history": {
+                  "const": "protected",
+                  "type": "string"
+                },
+                "memberManagement": {
+                  "const": "provisioning_service_only",
+                  "type": "string"
+                },
+                "membership": {
+                  "const": "owner_and_message_bot",
+                  "type": "string"
+                },
+                "messageBotCanSend": {
+                  "const": true,
+                  "type": "boolean"
+                },
+                "messageBotCreatesProjectTopics": {
+                  "const": false,
+                  "type": "boolean"
+                },
+                "ownerCanCreateTopics": {
+                  "const": true,
+                  "type": "boolean"
+                },
+                "ownerCanSend": {
+                  "const": true,
+                  "type": "boolean"
+                },
+                "version": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "visibility": {
+                  "const": "private",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "version",
+                "visibility",
+                "history",
+                "membership",
+                "memberManagement",
+                "channelManagement",
+                "ownerCanSend",
+                "ownerCanCreateTopics",
+                "messageBotCanSend",
+                "messageBotCreatesProjectTopics"
+              ],
+              "type": "object"
+            },
+            "provider": {
+              "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+              "type": "string"
+            },
+            "realmId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "safeErrorCode": {
+              "anyOf": [
+                {
+                  "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "stableKey": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "requested",
+                "provisioning",
+                "active",
+                "drifted",
+                "suspended",
+                "archived",
+                "failed"
+              ],
+              "type": "string"
+            },
+            "type": {
+              "const": "managed_provider_container",
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "revision",
+            "createdAt",
+            "updatedAt",
+            "type",
+            "managedContainerId",
+            "ownerUserId",
+            "humanEndpointId",
+            "provider",
+            "realmId",
+            "stableKey",
+            "displayName",
+            "container",
+            "policy",
+            "checks",
+            "status",
+            "lastVerifiedAt",
+            "safeErrorCode"
+          ],
+          "type": "object"
+        },
+        "maxItems": 64,
         "type": "array"
       },
       "participant": {
@@ -18766,6 +20252,52 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
               "maxLength": 512,
               "type": "string"
             },
+            "remoteLocator": {
+              "additionalProperties": false,
+              "properties": {
+                "containerDisplayName": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "containerId": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "provider": {
+                  "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                  "type": "string"
+                },
+                "realmId": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "topicDisplayName": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "topicId": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": {
+                  "const": "provider_locator",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "provider",
+                "realmId",
+                "containerId",
+                "topicId"
+              ],
+              "type": "object"
+            },
             "revision": {
               "maximum": 9007199254740991,
               "minimum": 0,
@@ -18946,6 +20478,11 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
         "items": {
           "additionalProperties": false,
           "properties": {
+            "containerLabel": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
             "label": {
               "maxLength": 256,
               "minLength": 1,
@@ -18984,7 +20521,20 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
               "maxItems": 32,
               "type": "array"
             },
+            "managedContainers": {
+              "type": "boolean"
+            },
             "providerKey": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "realmLabel": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "topicLabel": {
               "maxLength": 256,
               "minLength": 1,
               "type": "string"
@@ -18993,7 +20543,11 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
           "required": [
             "providerKey",
             "label",
-            "locatorFields"
+            "realmLabel",
+            "containerLabel",
+            "topicLabel",
+            "locatorFields",
+            "managedContainers"
           ],
           "type": "object"
         },
@@ -19095,6 +20649,7 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
       "revision",
       "connection",
       "providerOptions",
+      "managedContainers",
       "projections",
       "projects",
       "queue",

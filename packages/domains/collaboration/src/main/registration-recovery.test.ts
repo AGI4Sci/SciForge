@@ -544,6 +544,7 @@ function initialState(user: UserPrincipal = userPrincipalFixture): Collaboration
     },
     endpoints: [{ ...humanEndpointBindingFixture, userId: user.userId }],
     endpointLocators: [],
+    managedContainers: [],
     agents: [],
     projections: [],
     projects: [],

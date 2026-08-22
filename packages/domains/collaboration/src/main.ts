@@ -17,6 +17,10 @@ import {
   collaborationEndpointChallengePollResultSchema,
   collaborationEndpointChallengeStartInputSchema,
   collaborationEndpointChallengeStartResultSchema,
+  collaborationManagedContainerManageResultSchema,
+  collaborationManagedContainerInspectInputSchema,
+  collaborationManagedContainerProvisionInputSchema,
+  collaborationManagedContainerArchiveInputSchema,
   collaborationPrimaryAgentSelectInputSchema,
   collaborationPrimaryAgentSelectResultSchema,
   collaborationProjectionLinkInputSchema,
@@ -36,6 +40,7 @@ import {
   type CollaborationConnectionConnectInput,
   type CollaborationEndpointChallengePollInput,
   type CollaborationEndpointChallengeStartInput,
+  type CollaborationManagedContainerManageInput,
   type CollaborationPrimaryAgentSelectInput,
   type CollaborationProjectionLinkInput,
   type CollaborationProjectionShareInput,
@@ -65,7 +70,7 @@ export {
 } from './main/store.js'
 export type { CollaborationStateBackend } from './main/store.js'
 
-type CapabilityEffect = 'read' | 'external-write'
+type CapabilityEffect = 'read' | 'external-write' | 'destructive'
 
 export type CollaborationCapabilityOptions = Readonly<{
   id: string
@@ -217,10 +222,10 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
     title,
     description,
     effect,
-    approval: effect === 'external-write' ? 'confirmation' : 'none',
+    approval: effect === 'read' ? 'none' : 'confirmation',
     concurrency: {
       revision: 'none',
-      idempotency: effect === 'external-write' ? 'required' : 'none'
+      idempotency: effect === 'read' ? 'none' : 'required'
     },
     inputSchema,
     outputSchema,
@@ -393,6 +398,45 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
               collaborationTaskListInputSchema.parse(raw) as CollaborationTaskListInput
             )
           }
+        })
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.managedContainerInspect,
+        'Inspect private collaboration Channel',
+        'Reads or refreshes the authenticated user managed Channel and locator status.',
+        'read',
+        collaborationManagedContainerInspectInputSchema,
+        collaborationManagedContainerManageResultSchema,
+        async (raw) => ({
+          output: await options.getRuntime().manageContainer(
+            collaborationManagedContainerInspectInputSchema.parse(raw) as CollaborationManagedContainerManageInput
+          )
+        })
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.managedContainerProvision,
+        'Provision private collaboration Channel',
+        'Creates or repairs the authenticated user managed Channel through the durable provisioning path.',
+        'external-write',
+        collaborationManagedContainerProvisionInputSchema,
+        collaborationManagedContainerManageResultSchema,
+        async (raw) => ({
+          output: await options.getRuntime().manageContainer(
+            collaborationManagedContainerProvisionInputSchema.parse(raw) as CollaborationManagedContainerManageInput
+          )
+        })
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.managedContainerArchive,
+        'Archive private collaboration Channel',
+        'Destructively archives the authenticated user managed Channel and pauses its fixed Sessions.',
+        'destructive',
+        collaborationManagedContainerArchiveInputSchema,
+        collaborationManagedContainerManageResultSchema,
+        async (raw) => ({
+          output: await options.getRuntime().manageContainer(
+            collaborationManagedContainerArchiveInputSchema.parse(raw) as CollaborationManagedContainerManageInput
+          )
         })
       )
     ]

@@ -13,6 +13,10 @@ import {
   collaborationEndpointChallengePollResultSchema,
   collaborationEndpointChallengeStartInputSchema,
   collaborationEndpointChallengeStartResultSchema,
+  collaborationManagedContainerManageResultSchema,
+  collaborationManagedContainerInspectInputSchema,
+  collaborationManagedContainerProvisionInputSchema,
+  collaborationManagedContainerArchiveInputSchema,
   collaborationPrimaryAgentSelectInputSchema,
   collaborationPrimaryAgentSelectResultSchema,
   collaborationProjectionLinkInputSchema,
@@ -32,6 +36,7 @@ import {
   type CollaborationConnectionConnectInput,
   type CollaborationEndpointChallengePollInput,
   type CollaborationEndpointChallengeStartInput,
+  type CollaborationManagedContainerManageInput,
   type CollaborationPrimaryAgentSelectInput,
   type CollaborationProjectionLinkInput,
   type CollaborationProjectionShareInput,
@@ -52,6 +57,7 @@ type ProjectionUpdateResult = z.infer<typeof collaborationProjectionUpdateResult
 type ProjectionShareResult = z.infer<typeof collaborationProjectionShareResultSchema>
 type SynchronizationRetryResult = z.infer<typeof collaborationSynchronizationRetryResultSchema>
 type TaskListResult = z.infer<typeof collaborationTaskListResultSchema>
+type ManagedContainerManageResult = z.infer<typeof collaborationManagedContainerManageResultSchema>
 
 const contracts = Object.freeze({
   statusRead: Object.freeze({
@@ -125,6 +131,24 @@ const contracts = Object.freeze({
     effect: 'read' as const,
     inputSchema: collaborationTaskListInputSchema,
     outputSchema: collaborationTaskListResultSchema
+  }),
+  managedContainerInspect: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.managedContainerInspect,
+    effect: 'read' as const,
+    inputSchema: collaborationManagedContainerInspectInputSchema,
+    outputSchema: collaborationManagedContainerManageResultSchema
+  }),
+  managedContainerProvision: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.managedContainerProvision,
+    effect: 'external-write' as const,
+    inputSchema: collaborationManagedContainerProvisionInputSchema,
+    outputSchema: collaborationManagedContainerManageResultSchema
+  }),
+  managedContainerArchive: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.managedContainerArchive,
+    effect: 'destructive' as const,
+    inputSchema: collaborationManagedContainerArchiveInputSchema,
+    outputSchema: collaborationManagedContainerManageResultSchema
   })
 })
 
@@ -143,6 +167,7 @@ export type CollaborationRendererClient = Readonly<{
   shareProjection(input: CollaborationProjectionShareInput): Promise<ProjectionShareResult>
   retrySynchronization(input: CollaborationSynchronizationRetryInput): Promise<SynchronizationRetryResult>
   listTasks(input?: CollaborationTaskListInput): Promise<TaskListResult>
+  manageContainer(input: CollaborationManagedContainerManageInput): Promise<ManagedContainerManageResult>
 }>
 
 export function createCollaborationRendererClient(
@@ -183,7 +208,16 @@ export function createCollaborationRendererClient(
       input,
       CONFIRMED
     ),
-    listTasks: (input = {}) => invoker.invoke(contracts.taskList, input)
+    listTasks: (input = {}) => invoker.invoke(contracts.taskList, input),
+    manageContainer: (input) => {
+      if (input.action === 'refresh-status' || input.action === 'refresh-locators') {
+        return invoker.invoke(contracts.managedContainerInspect, input)
+      }
+      if (input.action === 'archive') {
+        return invoker.invoke(contracts.managedContainerArchive, input, CONFIRMED)
+      }
+      return invoker.invoke(contracts.managedContainerProvision, input, CONFIRMED)
+    }
   })
 }
 

@@ -19,6 +19,7 @@ import {
   toHumanAnswer,
   toHumanNeeded,
   toInboxMessage,
+  toManagedContainer,
   toParticipant,
   toProject,
   toProjectEndpointBinding,
@@ -210,6 +211,27 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
       const page = await options.providers.listLocators({ actor: requiredActor(actor), humanEndpointId: command.humanEndpointId,
         query: command.query, cursor: command.cursor, limit: command.limit })
       return response(command, { type: 'endpoint.locator_page', ...page })
+    }
+    case 'managed_container.ensure': {
+      const user = requiredUser(actor)
+      return entityResponse(command, toManagedContainer(await service.ensureManagedContainer(user, command)))
+    }
+    case 'managed_container.get': {
+      return entityResponse(command, toManagedContainer(
+        await service.getManagedContainer(requiredActor(actor), command.managedContainerId)
+      ))
+    }
+    case 'managed_container.list': {
+      return collectionResponse(command, (await service.listManagedContainers(requiredUser(actor))).map(toManagedContainer))
+    }
+    case 'managed_container.inspect': {
+      return entityResponse(command, toManagedContainer(await service.inspectManagedContainer(requiredUser(actor), command)))
+    }
+    case 'managed_container.reconcile': {
+      return entityResponse(command, toManagedContainer(await service.reconcileManagedContainer(requiredUser(actor), command)))
+    }
+    case 'managed_container.archive': {
+      return entityResponse(command, toManagedContainer(await service.archiveManagedContainer(requiredUser(actor), command)))
     }
     case 'participant.update_primary': return entityResponse(command, toParticipant(await service.selectPrimary(requiredUser(actor), {
       primaryHumanEndpointId: command.primaryHumanEndpointId,

@@ -563,15 +563,20 @@ export function dispatchAgentRuntimeEvent(event: AgentRuntimeEvent, sink: Thread
     case 'runtime_status':
       sink.onRuntimeStatus?.(runtimeStatusFromEvent(event))
       return
-    case 'user_message':
+    case 'user_message': {
+      const meta = runtimeDisclosureMetaFromRecord({
+        ...(event.meta ?? {}),
+        ...(event.displayText !== undefined ? { displayText: event.displayText } : {})
+      })
       sink.onUserMessage({
         itemId: event.itemId,
         turnId: event.turnId,
         createdAt: event.createdAt,
         text: event.text,
-        ...(event.displayText !== undefined ? { meta: { displayText: event.displayText } } : {})
+        ...(meta ? { meta } : {})
       })
       return
+    }
     case 'assistant_delta':
       sink.onDeltas([{ kind: 'agent_message', itemId: event.itemId, text: event.text, seq: event.seq }])
       return

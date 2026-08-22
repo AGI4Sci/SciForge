@@ -20,6 +20,10 @@
 当前手机端就是官方 Zulip App，不是 SciForge 仓库内开发或打包的自研手机 App；用户无需编译、安装
 仓库中的任何移动端工程。
 
+启用“托管私人 Channel”的组织还可以由管理员为每位用户配置一个私人、受保护历史的 Channel。Channel
+只有该用户与 SciForge Bot；用户在手机中手工创建项目 Topic，再在 Desktop 中分别把每个 Topic 连接到
+不同的固定 Session。普通 Bot 私聊仍只用于 `/bind`，不能控制 Desktop Agent。
+
 ## 版本与发布关系
 
 桌面协作域与云端协作服务的源码可追溯到同一个 `gui` commit，以保证通信契约一致；但桌面安装包与
@@ -79,6 +83,21 @@ Coordinator，不是任何成员的私人 Session，也不会广播唤醒全部 
 同一 Zulip 身份不能同时绑定到两个 active User。手机丢失、账号异常或人员变更时，应立即断开本机
 协作连接并联系管理员按端点管理流程撤销绑定；如 Bot 服务凭据也可能泄漏，再由管理员单独轮换。
 
+### 3.1 私人 Channel 与多个固定 Session（启用后）
+
+1. 在协作面板的“托管私人 Channel”中确认状态为 active，隐私、历史、成员、发言和 Topic 检查均通过。
+2. 在手机 Zulip 的该 Channel 中手工创建项目 Topic；SciForge Bot 不会主动创建项目 Topic。
+3. 回到 Desktop 点击“刷新手机 Topic”。下拉列表会标明每个 Topic 是“未绑定”还是已经绑定到某个
+   Session；为每个未绑定 Topic 分别选择当前或新 Session。系统会阻止同一 Topic 重复绑定。
+4. 在每个 Topic 发一条无敏感内容的测试消息，确认回复回到原 Topic；当前 Session 顶部应持续显示
+   对应的 Channel / Topic。内部 runtimeId/threadId 仅在“技术详情”中提供给诊断人员。
+5. “检查状态”执行真实只读核验；发现 drifted 时不要自行改权限，联系管理员使用受控的“修复”操作。
+
+Topic 名称可以调整，但不要删除后以同名 Topic 代替原 Topic；路由依据稳定 locator，不是显示名称。私人
+Channel 只隔离普通未授权用户，不是端到端加密。Channel 内所有 Topic 共享同一阅读权限；需要不同成员
+权限的项目必须使用不同私人 Channel。详细管理员流程见
+[每用户私人 Zulip Channel 运维说明](./operations/zulip-private-channel-provisioning.zh-CN.md)。
+
 ## 4. 注册并选择主要 Agent
 
 手机端点验证后：
@@ -90,22 +109,26 @@ Coordinator，不是任何成员的私人 Session，也不会广播唤醒全部 
 主要 Agent 离线时，消息会保持有界等待或返回明确离线状态。系统不会选择最近在线机器，也不会
 把工作交给其他用户的 Agent。
 
-## 5. 把现有 Session 分享到手机
+## 5. 把现有 Session 绑定到手机 Topic
 
 1. 切到要继续使用的本地 Session。
-2. 在“个人 Session”中点击“分享当前 Session”。也可以选择“新建并分享 Session”。
+2. 先核对“当前 Session”摘要，再点击“绑定当前 Session”。也可以选择“新建并绑定 Session”。
 3. 在“请选择容器 / Topic”中选择目标手机 Topic；发现多个 Topic 时必须显式选择，系统不会默认提交
-   第一项。再核对卡片上的 projection ID、执行 Agent、Agent owner 和本地 Session。
+   第一项。已绑定 Topic 会显示其目标 Session且不能重复选择；再核对卡片上的手机 Topic、执行 Agent
+   和 Agent owner。内部 ID 默认折叠在“技术详情”中。
 4. 默认保持“仅所有者”。只有确需共享时才编辑允许发送者 userId 列表。
+
+绑定已有 Session 会同步其中已有的用户文本和 Agent 最终回复；工具过程、执行状态、附件和文件不会
+因此同步。界面会在绑定前明确显示这一边界。
 
 建立映射后，切换桌面焦点、打开其他 Project 或修改 Topic 中文标题，都不会改变该映射。一个 Topic
 只投影一个固定 Session；需要另一个上下文时应建立另一个 projection。
 
 可用操作：
 
-- “重命名”只改显示名，不改变 projection ID；
+- “修改映射名称”只改 SciForge 中的显示名，不会重命名手机 Topic或改变 projection ID；
 - “暂停/恢复”控制新消息处理；
-- “重新链接”必须填写准确的 runtime/thread，不根据桌面焦点猜测；
+- “绑定到当前 Session”会明确显示目标手机 Topic和当前 Desktop Session，确认后才更新固定映射；
 - “关闭”终止该远端入口，之后的消息不得继续触发执行；
 - “编辑允许发送者”不会改变实际执行 Agent，界面会持续显示 Agent owner。
 
@@ -113,6 +136,11 @@ Coordinator，不是任何成员的私人 Session，也不会广播唤醒全部 
 
 手机发消息时，云端先验证 User、手机端点和稳定 locator，再把消息加入 projection 顺序队列。同一
 projection 同时只运行一个 turn，后到消息可见地排队；不同 projection 可以并行。
+
+手机中由 Generic Bot 发送的投影文本会增加来源前缀：Desktop 用户文本显示为“【电脑端】”，Agent
+最终回复显示为“【SciForge Agent】”。手机用户本人发送的消息仍使用 Zulip 原生用户身份。Desktop
+收到手机消息时会显示“手机 Zulip · Channel / Topic”来源标签。来源标签只用于展示；身份验证、权限
+和路由始终使用结构化 User、Endpoint、Projection 与 locator，不解析这些文字前缀。
 
 桌面发消息时，本地 Session 先接受消息，再将同一逻辑 user message 和最终 assistant reply 投影到
 手机。首期仅同步 append-only 文本、明确状态和最终回复，不同步流式 token、编辑、删除、reaction、

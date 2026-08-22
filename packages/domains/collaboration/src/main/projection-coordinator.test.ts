@@ -18,6 +18,7 @@ import type {
 import {
   ProjectionCoordinator,
   localProjectionFromRemote,
+  projectedOutboundText,
   type ProjectionCloudOutbox
 } from './projection-coordinator.js'
 import {
@@ -83,11 +84,21 @@ test('projection.updated refreshes the remote revision before the next message e
   assert.equal(executions[0]?.workspaceRoot, '/workspace/fixed')
   assert.deepEqual(executions[0]?.metadata, {
     source: 'collaboration.remote-session-projection',
+    sourceLabel: '手机 Zulip · 科研协作 / 重命名后的会话',
     projectionId: TEST_IDS.projectionId,
     senderUserId: TEST_IDS.userId,
     senderHumanEndpointId: TEST_IDS.humanEndpointId,
     providerMessageId: 'provider-message-after-rename'
   })
+})
+
+test('labels Generic Bot outbound text by its real Desktop or Agent origin without double-prefixing', () => {
+  assert.equal(projectedOutboundText('user-message', 'hello'), '【电脑端】\nhello')
+  assert.equal(projectedOutboundText('assistant-reply', 'answer'), '【SciForge Agent】\nanswer')
+  assert.equal(
+    projectedOutboundText('user-message', '【电脑端】\nalready labeled'),
+    '【电脑端】\nalready labeled'
+  )
 })
 
 test('projection.updated fails closed for an unknown projection or changed security identity', async () => {
@@ -149,6 +160,10 @@ test('startup transcript reconciliation preserves an existing receipt when histo
 
   await coordinator.mirrorDesktopEvent(original)
   assert.equal(deliveries.length, 1)
+  assert.equal(
+    (deliveries[0]?.command as { text?: string } | undefined)?.text,
+    '【SciForge Agent】\noriginal delivered reply'
+  )
   assert.equal(store.snapshot().queue.length, 1)
   await store.transact((draft) => {
     draft.queue[0]!.state = 'completed'

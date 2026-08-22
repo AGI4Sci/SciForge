@@ -7,13 +7,71 @@ const successEnvelope = {
   result: z.literal('success').optional(),
   msg: z.string().max(4_096).optional()
 }
-const zulipGroupSettingSchema = z.union([
+export const zulipGroupSettingSchema = z.union([
   eventNumericIdSchema,
   z.strictObject({
     direct_members: z.array(eventNumericIdSchema).max(100_000),
     direct_subgroups: z.array(eventNumericIdSchema).max(100_000)
   })
 ])
+export type ZulipGroupSetting = z.infer<typeof zulipGroupSettingSchema>
+
+const zulipChannelShape = {
+  stream_id: numericIdSchema,
+  name: z.string().trim().min(1).max(512),
+  description: z.string().max(100_000).optional(),
+  invite_only: z.boolean(),
+  history_public_to_subscribers: z.boolean(),
+  is_archived: z.boolean().optional(),
+  topics_policy: z.enum([
+    'inherit',
+    'allow_empty_topic',
+    'disable_empty_topic',
+    'empty_topic_only'
+  ]).optional(),
+  can_add_subscribers_group: zulipGroupSettingSchema,
+  can_administer_channel_group: zulipGroupSettingSchema,
+  can_create_topic_group: zulipGroupSettingSchema,
+  can_send_message_group: zulipGroupSettingSchema,
+  can_remove_subscribers_group: zulipGroupSettingSchema,
+  can_subscribe_group: zulipGroupSettingSchema
+} as const
+
+export const zulipCreateChannelResponseSchema = z.object({
+  ...successEnvelope,
+  id: numericIdSchema.optional(),
+  stream_id: numericIdSchema.optional()
+}).refine((response) => response.id !== undefined || response.stream_id !== undefined, {
+  message: 'Zulip create Channel response requires an id.'
+})
+
+export const zulipChannelIdResponseSchema = z.object({
+  ...successEnvelope,
+  stream_id: numericIdSchema
+})
+
+export const zulipChannelResponseSchema = z.object({
+  ...successEnvelope,
+  stream: z.object(zulipChannelShape)
+})
+
+export const zulipChannelMembersResponseSchema = z.object({
+  ...successEnvelope,
+  subscribers: z.array(eventNumericIdSchema).max(100_000)
+})
+
+export const zulipUserGroupsResponseSchema = z.object({
+  ...successEnvelope,
+  user_groups: z.array(z.object({
+    id: eventNumericIdSchema,
+    name: z.string().trim().min(1).max(512),
+    is_system_group: z.boolean()
+  })).max(100_000)
+})
+
+export const zulipSubscriptionMutationResponseSchema = z.object({
+  ...successEnvelope
+})
 
 export const zulipRecipientSchema = z.strictObject({
   id: numericIdSchema.optional(),

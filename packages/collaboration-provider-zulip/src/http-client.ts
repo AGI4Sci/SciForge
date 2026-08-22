@@ -89,6 +89,9 @@ function statusError(
   if (status === 400 && providerCode === 'BAD_EVENT_QUEUE_ID') {
     return new ZulipProviderError('queue_expired', 'Zulip event queue expired.', { status })
   }
+  if (status === 400 && providerCode === 'STREAM_DOES_NOT_EXIST') {
+    return new ZulipProviderError('not_found', 'The Zulip Channel was not found.', { status })
+  }
   if (status === 401) {
     return new ZulipProviderError('authentication_failed', 'Zulip rejected the provider credential.', { status })
   }

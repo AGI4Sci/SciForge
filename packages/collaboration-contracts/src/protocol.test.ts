@@ -16,6 +16,9 @@ import {
   providerDiagnosticSchema,
   providerDirectRecipientSchema,
   providerEventSchema,
+  providerLocatorListRequestSchema,
+  providerManagedContainerRequestSchema,
+  providerManagedContainerResultSchema,
   providerSendRequestSchema
 } from './provider.js'
 import {
@@ -83,6 +86,70 @@ describe('discriminated transport unions', () => {
 })
 
 describe('canonical pairing and bidirectional Session commands', () => {
+  it('defines a strict provider-neutral managed private container contract', () => {
+    const policy = {
+      version: 1 as const,
+      visibility: 'private' as const,
+      history: 'protected' as const,
+      membership: 'owner_and_message_bot' as const,
+      memberManagement: 'provisioning_service_only' as const,
+      channelManagement: 'provisioning_service_only' as const,
+      ownerCanSend: true as const,
+      ownerCanCreateTopics: true as const,
+      messageBotCanSend: true as const,
+      messageBotCreatesProjectTopics: false as const
+    }
+    expect(providerManagedContainerRequestSchema.parse({
+      protocolVersion: '1.0',
+      type: 'provider.managed_container.ensure',
+      realmId: 'realm-hong-kong',
+      ownerIdentity: providerIdentityFixture,
+      stableKey: 'managed-owner-realm',
+      displayName: 'sciforge-user123',
+      policy
+    }).type).toBe('provider.managed_container.ensure')
+    expect(restRequestSchema.parse({
+      protocolVersion: '1.0',
+      requestId: 'req_ManagedInspect001',
+      type: 'managed_container.inspect',
+      idempotencyKey: 'idem_managed_inspect_01',
+      managedContainerId: 'mco_123456789012',
+      expectedRevision: 2
+    }).type).toBe('managed_container.inspect')
+    expect(providerManagedContainerResultSchema.parse({
+      protocolVersion: '1.0',
+      type: 'provider.managed_container.result',
+      container: { type: 'provider_managed_container_ref', provider: providerIdentityFixture.provider,
+        realmId: providerIdentityFixture.realmId, containerId: '123' },
+      displayName: 'sciforge-user123', status: 'active', policyVersion: 1,
+      checks: { private: true, protectedHistory: true, exactMembership: true, ownerCanSend: true,
+        messageBotCanSend: true, ownerCanCreateTopics: true, memberManagementRestricted: true,
+        channelManagementRestricted: true },
+      safeIssueCodes: [], observedAt: TEST_TIMESTAMP
+    }).status).toBe('active')
+    expect(providerLocatorListRequestSchema.parse({
+      protocolVersion: '1.0',
+      type: 'provider.locator.list',
+      realmId: providerIdentityFixture.realmId,
+      container: {
+        type: 'provider_managed_container_ref',
+        provider: providerIdentityFixture.provider,
+        realmId: providerIdentityFixture.realmId,
+        containerId: '123'
+      },
+      containerDisplayName: 'sciforge-user123',
+      limit: 50
+    }).container?.containerId).toBe('123')
+    expect(providerLocatorListRequestSchema.safeParse({
+      protocolVersion: '1.0', type: 'provider.locator.list',
+      realmId: providerIdentityFixture.realmId, limit: 50
+    }).success).toBe(true)
+    expect(providerManagedContainerRequestSchema.safeParse({
+      protocolVersion: '1.0', type: 'provider.managed_container.ensure', realmId: 'realm-hong-kong',
+      ownerIdentity: providerIdentityFixture, stableKey: 'managed-owner-realm', displayName: 'sciforge-user123',
+      policy: { ...policy, visibility: 'public' }
+    }).success).toBe(false)
+  })
   it('supports unauthenticated pairing begin without bootstrap identity', () => {
     const request = restRequestSchema.parse({
       protocolVersion: '1.0',
@@ -233,7 +300,8 @@ describe('provider-neutral contract', () => {
         locatorMove: true,
         locatorDiscovery: true,
         identityChallenge: true,
-        directMessages: true
+        directMessages: true,
+        managedContainers: false
       },
       onboarding: {
         realmLabel: '组织',
@@ -244,6 +312,11 @@ describe('provider-neutral contract', () => {
       limits: { maxTextLength: 10_000, maxLocatorDisplayLength: 200 }
     }
     expect(humanEndpointProviderContractSchema.safeParse(contract).success).toBe(true)
+    const { managedContainers: _managedContainers, ...legacyCapabilities } = contract.capabilities
+    expect(humanEndpointProviderContractSchema.parse({
+      ...contract,
+      capabilities: legacyCapabilities
+    }).capabilities.managedContainers).toBeUndefined()
     expect(humanEndpointProviderContractSchema.safeParse({
       ...contract,
       capabilities: { ...contract.capabilities, directMessages: false }

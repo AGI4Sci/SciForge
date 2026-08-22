@@ -23,14 +23,14 @@ import {
 import type { ProviderDirectory } from './api.js'
 import type { AuthContext, HumanEndpointActor } from './auth.js'
 import { AuthenticationService } from './auth.js'
-import { stableDigest } from './crypto.js'
+import { newId, stableDigest } from './crypto.js'
 import { CollaborationServiceError } from './errors.js'
 import {
   createInstalledHumanEndpointProviders,
   installedHumanEndpointProviderDefinitions,
   type InstalledHumanEndpointProviderDefinition
 } from './generated/installed-human-endpoint-providers.js'
-import type { StoredEndpoint, StoredInboxMessage } from './model.js'
+import type { StoredEndpoint, StoredInboxMessage, StoredManagedContainer, StoredManagedContainerJob } from './model.js'
 import type { SqlPool } from './postgres.js'
 import type { CollaborationRepository } from './repository.js'
 import { ProviderRuntimeStore, type ProviderDeliveryState } from './provider-runtime-store.js'
@@ -40,6 +40,19 @@ const MAX_PROVIDER_CONFIG_BYTES = 256 * 1024
 const MAX_SECRET_BYTES = 64 * 1024
 const MAX_HTTP_RESPONSE_BYTES = 16 * 1024 * 1024
 const DEFAULT_OUTBOX_POLL_MS = 1_000
+const MANAGED_CONTAINER_JOB_LEASE_MS = 10 * 60_000
+
+function managedContainerRef(container: StoredManagedContainer) {
+  if (!container.externalContainerId) {
+    throw new CollaborationServiceError('validation_failed', 'Managed Channel has no external container ID.')
+  }
+  return {
+    type: 'provider_managed_container_ref' as const,
+    provider: container.provider,
+    realmId: container.realmId,
+    containerId: container.externalContainerId
+  }
+}
 
 export type ProviderConfiguration = Readonly<{
   providers: Readonly<Record<string, Readonly<Record<string, string | number | boolean>>>>
@@ -80,7 +93,15 @@ type ProviderRuntimeService = Pick<CollaborationService,
   | 'recordRejectedBoundary'
 >
 
-type ProviderRuntimeRepository = Pick<CollaborationRepository, 'getEndpoint' | 'getInboxCursor'>
+type ProviderRuntimeRepository = Pick<CollaborationRepository,
+  | 'getEndpoint'
+  | 'getInboxCursor'
+  | 'getManagedContainer'
+  | 'getManagedContainerForOwner'
+  | 'claimManagedContainerJobs'
+  | 'completeManagedContainerJob'
+  | 'failManagedContainerJob'
+>
 type ProviderRuntimeAuthentication = Pick<AuthenticationService, 'resolveProviderIdentity'>
 
 export type ProviderRuntimeOptions = Readonly<{
@@ -104,6 +125,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
   private readonly now: () => Date
   private readonly outboxPollMs: number
   private readonly pumpTasks = new Set<Promise<void>>()
+  private readonly managedContainerWorkerId = newId('mcw')
   private abortController: AbortController | undefined
 
   constructor(options: ProviderRuntimeOptions) {
@@ -139,14 +161,44 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
     }
     const provider = this.providers.get(endpoint.provider)
     if (!provider) throw new CollaborationServiceError('resource_offline', 'The endpoint provider is not installed or configured.')
+    const container = await this.repository.getManagedContainerForOwner(
+      input.actor.userId,
+      endpoint.provider,
+      endpoint.realmId
+    )
+    const requiresManagedContainer = provider.contract.capabilities.managedContainers === true
+    if (requiresManagedContainer && (
+      !container ||
+      container.humanEndpointId !== endpoint.humanEndpointId ||
+      container.status !== 'active' ||
+      !container.externalContainerId
+    )) {
+      throw new CollaborationServiceError(
+        'permission_denied',
+        'Locator discovery requires the authenticated user\'s active managed Channel.'
+      )
+    }
     const result = await provider.listLocators({
       protocolVersion: CURRENT_PROTOCOL_VERSION,
       type: 'provider.locator.list',
       realmId: endpoint.realmId,
+      ...(container?.externalContainerId
+        ? { container: managedContainerRef(container), containerDisplayName: container.displayName }
+        : {}),
       ...(input.query === undefined ? {} : { query: input.query }),
       ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
       limit: input.limit
     })
+    if (result.locators.some((locator) => (
+      locator.provider !== endpoint.provider ||
+      locator.realmId !== endpoint.realmId ||
+      (requiresManagedContainer && locator.containerId !== container?.externalContainerId)
+    ))) {
+      throw new CollaborationServiceError(
+        'permission_denied',
+        'Provider locator discovery returned a target outside the authenticated user\'s managed Channel.'
+      )
+    }
     return {
       locators: result.locators,
       ...(result.nextCursor === undefined ? {} : { nextCursor: result.nextCursor })
@@ -161,6 +213,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       this.track(this.runEventPump(provider, abortController.signal))
     }
     this.track(this.runOutboxPump(abortController.signal))
+    this.track(this.runManagedContainerPump(abortController.signal))
   }
 
   async stop(): Promise<void> {
@@ -382,6 +435,164 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       }
       await abortableDelay(this.outboxPollMs, signal)
     }
+  }
+
+  private async runManagedContainerPump(signal: AbortSignal): Promise<void> {
+    while (!signal.aborted) {
+      try {
+        const now = this.timestamp()
+        const jobs = await this.repository.claimManagedContainerJobs(
+          this.managedContainerWorkerId,
+          now,
+          new Date(new Date(now).getTime() + MANAGED_CONTAINER_JOB_LEASE_MS).toISOString(),
+          10
+        )
+        for (const job of jobs) {
+          if (signal.aborted) break
+          await this.executeManagedContainerJob(job)
+        }
+      } catch (error) {
+        if (!signal.aborted) await this.recordRuntimeFailure('gateway', error)
+      }
+      await abortableDelay(this.outboxPollMs, signal)
+    }
+  }
+
+  private async executeManagedContainerJob(job: StoredManagedContainerJob): Promise<void> {
+    const current = await this.repository.getManagedContainer(job.managedContainerId)
+    if (!current) {
+      await this.repository.failManagedContainerJob({
+        jobId: job.jobId,
+        workerId: this.managedContainerWorkerId,
+        expectedAttemptCount: job.attemptCount,
+        safeErrorCode: 'managed_container_missing',
+        failedAt: this.timestamp()
+      })
+      return
+    }
+    if (current.revision !== job.desiredRevision) {
+      await this.repository.failManagedContainerJob({
+        jobId: job.jobId,
+        workerId: this.managedContainerWorkerId,
+        expectedAttemptCount: job.attemptCount,
+        safeErrorCode: 'managed_container_job_superseded',
+        failedAt: this.timestamp()
+      })
+      return
+    }
+    const endpoint = await this.repository.getEndpoint(current.humanEndpointId)
+    if (
+      !endpoint || endpoint.status !== 'active' || endpoint.userId !== current.ownerUserId ||
+      endpoint.provider !== current.provider || endpoint.realmId !== current.realmId ||
+      endpoint.providerUserId !== current.ownerProviderUserId
+    ) {
+      await this.failManagedContainerJob(job, current, 'managed_container_owner_endpoint_invalid', false)
+      return
+    }
+    const provider = this.providers.get(current.provider)
+    if (!provider || !provider.contract.capabilities.managedContainers || !provider.manageContainer) {
+      await this.failManagedContainerJob(job, current, 'managed_container_provider_unavailable', false)
+      return
+    }
+    const ownerIdentity = {
+      type: 'provider_identity' as const,
+      provider: current.provider,
+      realmId: current.realmId,
+      providerUserId: current.ownerProviderUserId
+    }
+    try {
+      const result = await provider.manageContainer(job.operation === 'ensure'
+        ? {
+            protocolVersion: CURRENT_PROTOCOL_VERSION,
+            type: 'provider.managed_container.ensure',
+            realmId: current.realmId,
+            ownerIdentity,
+            policy: current.policy,
+            stableKey: current.stableKey,
+            displayName: current.displayName
+          }
+        : job.operation === 'inspect'
+          ? {
+              protocolVersion: CURRENT_PROTOCOL_VERSION,
+              type: 'provider.managed_container.inspect',
+              realmId: current.realmId,
+              ownerIdentity,
+              policy: current.policy,
+              container: managedContainerRef(current)
+            }
+          : job.operation === 'reconcile'
+          ? {
+              protocolVersion: CURRENT_PROTOCOL_VERSION,
+              type: 'provider.managed_container.reconcile',
+              realmId: current.realmId,
+              ownerIdentity,
+              policy: current.policy,
+              container: managedContainerRef(current),
+              displayName: current.displayName
+            }
+          : {
+              protocolVersion: CURRENT_PROTOCOL_VERSION,
+              type: 'provider.managed_container.archive',
+              realmId: current.realmId,
+              ownerIdentity,
+              policy: current.policy,
+              container: managedContainerRef(current)
+            })
+      const completedAt = this.timestamp()
+      const updated: StoredManagedContainer = {
+        ...current,
+        externalContainerId: result.container.containerId,
+        displayName: result.displayName,
+        status: result.status,
+        observedChecks: result.checks,
+        lastVerifiedAt: result.observedAt,
+        ...(result.safeIssueCodes[0]
+          ? { safeErrorCode: result.safeIssueCodes[0] }
+          : { safeErrorCode: undefined }),
+        revision: current.revision + 1,
+        updatedAt: completedAt
+      }
+      await this.repository.completeManagedContainerJob({
+        jobId: job.jobId,
+        workerId: this.managedContainerWorkerId,
+        expectedAttemptCount: job.attemptCount,
+        container: updated,
+        expectedContainerRevision: current.revision,
+        completedAt
+      })
+    } catch (error) {
+      const classification = classifyProviderRuntimeError(error)
+      const retry = isRetryableProviderRuntimeError(error) && job.attemptCount < 5
+      await this.failManagedContainerJob(job, current, classification.errorCode, retry)
+    }
+  }
+
+  private async failManagedContainerJob(
+    job: StoredManagedContainerJob,
+    current: StoredManagedContainer,
+    safeErrorCode: string,
+    retry: boolean
+  ): Promise<void> {
+    const failedAt = this.timestamp()
+    const retryAt = retry
+      ? new Date(new Date(failedAt).getTime() + Math.min(60_000, 1_000 * 2 ** Math.min(job.attemptCount, 6))).toISOString()
+      : undefined
+    const updated: StoredManagedContainer | undefined = retry ? undefined : {
+      ...current,
+      status: 'failed',
+      safeErrorCode,
+      revision: current.revision + 1,
+      updatedAt: failedAt
+    }
+    await this.repository.failManagedContainerJob({
+      jobId: job.jobId,
+      workerId: this.managedContainerWorkerId,
+      expectedAttemptCount: job.attemptCount,
+      safeErrorCode,
+      ...(retryAt ? { retryAt } : {}),
+      failedAt,
+      ...(updated ? { container: updated, expectedContainerRevision: current.revision } : {})
+    })
   }
 
   private async flushEndpoint(endpointId: string): Promise<void> {

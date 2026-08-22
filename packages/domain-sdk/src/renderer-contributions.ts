@@ -293,6 +293,7 @@ export type DomainRendererWorkbenchSurfaceContract = z.infer<
 
 export type DomainRendererWorkbenchSession = Readonly<{
   id: string
+  title?: string
   runtimeId?: string
   workspaceRoot?: string
   resources?: readonly DomainRendererSessionResource[]

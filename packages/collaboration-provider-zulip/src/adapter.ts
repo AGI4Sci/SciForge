@@ -7,6 +7,7 @@ import {
   providerLifecycleResultSchema,
   providerLocatorListResultSchema,
   providerLocatorMutationResultSchema,
+  providerManagedContainerResultSchema,
   providerSendResultSchema,
   providerVerifyIdentityResultSchema,
   type HumanEndpointProvider,
@@ -21,6 +22,8 @@ import {
   type ProviderLocatorListResult,
   type ProviderLocatorMutationRequest,
   type ProviderLocatorMutationResult,
+  type ProviderManagedContainerRequest,
+  type ProviderManagedContainerResult,
   type ProviderSendRequest,
   type ProviderSendResult,
   type ProviderVerifyIdentityRequest,
@@ -35,12 +38,18 @@ import { ZulipProviderRateLimiter } from './rate-limit.js'
 import { redactZulipDiagnostic } from './redaction.js'
 import {
   zulipEventsResponseSchema,
+  zulipChannelMembersResponseSchema,
+  zulipChannelIdResponseSchema,
+  zulipChannelResponseSchema,
+  zulipCreateChannelResponseSchema,
   zulipMessagesResponseSchema,
   zulipRegisterResponseSchema,
   zulipSendResponseSchema,
   zulipSubscriptionsResponseSchema,
   zulipTopicsResponseSchema,
+  zulipSubscriptionMutationResponseSchema,
   zulipUpdateMessageResponseSchema,
+  zulipUserGroupsResponseSchema,
   zulipUserResponseSchema,
   type ZulipMessage,
   type ZulipMessageEvent,
@@ -55,11 +64,13 @@ const DEFAULT_EVENT_TIMEOUT_SECONDS = 60
 export type ZulipProviderConfig = {
   realmUrl: string
   botEmail: string
+  provisioningEmail?: string
 }
 
 export type ZulipProviderDependencies = {
   fetch?: ZulipFetch
   resolveCredential: ZulipCredentialResolver
+  resolveProvisioningCredential?: ZulipCredentialResolver
   deliveryLedger: ZulipDeliveryLedger
   reconcileDelivery: ZulipDeliveryReconciler
   resolveLocator: ZulipStableLocatorResolver
@@ -114,6 +125,14 @@ type ZulipLocatorCoordinates = {
 
 type ZulipLocatorOverlay = Map<string, ProviderLocator | null>
 
+type ZulipProvisioningContext = {
+  provisioningUserId: string
+  botUserId: string
+  ownerUserId: string
+  everyoneGroupId: number
+  nobodyGroupId: number
+}
+
 export const ZULIP_HUMAN_ENDPOINT_PROVIDER_CONTRACT: HumanEndpointProviderContract = {
   protocolVersion: CURRENT_PROTOCOL_VERSION,
   type: 'human_endpoint_provider_contract',
@@ -127,7 +146,8 @@ export const ZULIP_HUMAN_ENDPOINT_PROVIDER_CONTRACT: HumanEndpointProviderContra
     locatorMove: true,
     locatorDiscovery: true,
     identityChallenge: true,
-    directMessages: true
+    directMessages: true,
+    managedContainers: false
   },
   onboarding: {
     realmLabel: 'Zulip server URL',
@@ -197,6 +217,39 @@ function stableDiscoveredTopicId(realmId: string, streamId: string, topicName: s
 
 function normalizedTopic(value: string): string {
   return value.normalize('NFC').trim().toLocaleLowerCase('und')
+}
+
+function numericProviderId(value: string, label: string): number {
+  if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) {
+    throw new ZulipProviderError('invalid_payload', `${label} requires a numeric Zulip user ID.`)
+  }
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed)) throw new ZulipProviderError('invalid_payload', `${label} is outside the supported range.`)
+  return parsed
+}
+
+function anonymousGroup(directMembers: readonly number[]): { direct_members: number[]; direct_subgroups: number[] } {
+  return {
+    direct_members: [...directMembers].sort((left, right) => left - right),
+    direct_subgroups: []
+  }
+}
+
+function groupSettingEquals(
+  observed: number | { direct_members: number[]; direct_subgroups: number[] },
+  expected: number | { direct_members: number[]; direct_subgroups: number[] }
+): boolean {
+  if (typeof observed === 'number' || typeof expected === 'number') return observed === expected
+  return (
+    [...observed.direct_members].sort((left, right) => left - right).join(',') ===
+      [...expected.direct_members].sort((left, right) => left - right).join(',') &&
+    [...observed.direct_subgroups].sort((left, right) => left - right).join(',') ===
+      [...expected.direct_subgroups].sort((left, right) => left - right).join(',')
+  )
+}
+
+function managedMarker(stableKey: string): string {
+  return `sciforge-managed:${createHash('sha256').update(stableKey, 'utf8').digest('hex').slice(0, 32)}`
 }
 
 function locatorCoordinatesKey(coordinates: ZulipLocatorCoordinates): string {
@@ -295,9 +348,10 @@ function canonicalOccurredAt(message: ZulipMessage, fallback: Date): string {
 
 export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
   readonly provider = 'zulip' as const
-  readonly contract = ZULIP_HUMAN_ENDPOINT_PROVIDER_CONTRACT
+  readonly contract: HumanEndpointProviderContract
   readonly realmId: string
   private readonly client: ZulipHttpClient
+  private readonly provisioningClient: ZulipHttpClient | null
   private readonly delivery: ZulipDeliveryCoordinator
   private readonly resolveStableLocator: ZulipStableLocatorResolver
   private readonly verifyProviderIdentity: ZulipIdentityVerifier
@@ -306,6 +360,7 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
   private readonly rateLimiter: ZulipProviderRateLimiter
   private readonly sleep: (milliseconds: number) => Promise<void>
   private botIdentity: ZulipBotIdentity | null = null
+  private botOwnerId: string | null = null
   private lifecycleAbort: AbortController | null = null
   private lifecycleStatus: 'connected' | 'disconnected' | 'degraded' = 'disconnected'
   private lifecycleCursor: string | undefined
@@ -321,6 +376,30 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       ...(dependencies.sleep ? { sleep: dependencies.sleep } : {}),
       ...(dependencies.logger ? { logger: dependencies.logger } : {})
     })
+    const hasProvisioningIdentity = Boolean(config.provisioningEmail && dependencies.resolveProvisioningCredential)
+    if (Boolean(config.provisioningEmail) !== Boolean(dependencies.resolveProvisioningCredential)) {
+      throw new TypeError('Zulip provisioning email and credential resolver must be configured together.')
+    }
+    if (config.provisioningEmail?.trim() === config.botEmail.trim()) {
+      throw new TypeError('Zulip provisioning identity must be separate from the Generic Bot.')
+    }
+    this.provisioningClient = hasProvisioningIdentity
+      ? new ZulipHttpClient({
+          realmUrl: config.realmUrl,
+          botEmail: config.provisioningEmail!,
+          resolveCredential: dependencies.resolveProvisioningCredential!,
+          ...(dependencies.fetch ? { fetch: dependencies.fetch } : {}),
+          ...(dependencies.sleep ? { sleep: dependencies.sleep } : {}),
+          ...(dependencies.logger ? { logger: dependencies.logger } : {})
+        })
+      : null
+    this.contract = {
+      ...ZULIP_HUMAN_ENDPOINT_PROVIDER_CONTRACT,
+      capabilities: {
+        ...ZULIP_HUMAN_ENDPOINT_PROVIDER_CONTRACT.capabilities,
+        managedContainers: hasProvisioningIdentity
+      }
+    }
     this.realmId = this.client.realmId
     this.delivery = new ZulipDeliveryCoordinator({
       ledger: dependencies.deliveryLedger,
@@ -350,6 +429,9 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       botEmail: user.email.trim(),
       displayName: user.full_name.trim()
     }
+    this.botOwnerId = user.bot_owner_id === undefined || user.bot_owner_id === null
+      ? null
+      : stableId(user.bot_owner_id)
     this.botIdentity = identity
     return identity
   }
@@ -366,6 +448,298 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       }
     }
     return providerVerifyIdentityResultSchema.parse(await this.verifyProviderIdentity(request))
+  }
+
+  async manageContainer(request: ProviderManagedContainerRequest): Promise<ProviderManagedContainerResult> {
+    if (!this.provisioningClient || !this.contract.capabilities.managedContainers) {
+      throw new ZulipProviderError('permission_denied', 'Zulip managed Channel provisioning is not configured.')
+    }
+    if (
+      request.realmId !== this.realmId ||
+      request.ownerIdentity.provider !== 'zulip' ||
+      request.ownerIdentity.realmId !== this.realmId
+    ) {
+      throw new ZulipProviderError('invalid_payload', 'Managed Channel identity does not belong to this Zulip provider.')
+    }
+    if (request.type !== 'provider.managed_container.ensure') {
+      if (request.container.provider !== 'zulip' || request.container.realmId !== this.realmId) {
+        throw new ZulipProviderError('invalid_locator', 'Managed Channel does not belong to this Zulip provider.')
+      }
+    }
+    const context = await this.provisioningContext(request.ownerIdentity.providerUserId)
+    if (request.type === 'provider.managed_container.ensure') {
+      const marker = managedMarker(request.stableKey)
+      let containerId = await this.findChannelId(request.displayName)
+      if (containerId) {
+        const existing = await this.readChannel(containerId)
+        if (!existing.description?.includes(marker)) {
+          throw new ZulipProviderError('permission_denied', 'A Channel with this name exists but is not managed by SciForge.')
+        }
+      } else {
+        const response = await this.provisioningClient.request('api/v1/channels/create', {
+          method: 'POST',
+          body: this.channelCreateBody(request.displayName, marker, context),
+          schema: zulipCreateChannelResponseSchema,
+          retry: 'never'
+        })
+        const createdId = response.id ?? response.stream_id
+        if (createdId === undefined) {
+          throw new ZulipProviderError('invalid_payload', 'Zulip create Channel response lacks an ID.')
+        }
+        containerId = stableId(createdId)
+      }
+      return this.inspectManagedContainer(containerId, context)
+    }
+    if (request.type === 'provider.managed_container.inspect') {
+      return this.inspectManagedContainer(request.container.containerId, context)
+    }
+    if (request.type === 'provider.managed_container.archive') {
+      const channel = await this.readChannel(request.container.containerId)
+      if (channel.is_archived !== true) {
+        await this.archiveChannel(request.container.containerId)
+      }
+      await this.setSubscriptions(channel.name, [], [context.ownerUserId, context.botUserId])
+      return this.inspectManagedContainer(request.container.containerId, context)
+    }
+    await this.reconcileManagedContainer(
+      request.container.containerId,
+      request.displayName,
+      context
+    )
+    return this.inspectManagedContainer(request.container.containerId, context)
+  }
+
+  private async provisioningContext(ownerProviderUserId: string): Promise<ZulipProvisioningContext> {
+    if (!this.provisioningClient) throw new ZulipProviderError('permission_denied', 'Provisioning is unavailable.')
+    const provisioning = await this.provisioningClient.request('api/v1/users/me', {
+      schema: zulipUserResponseSchema,
+      retry: 'safe'
+    })
+    if (provisioning.is_bot) {
+      throw new ZulipProviderError('permission_denied', 'Zulip provisioning identity must be a user, not a Bot.')
+    }
+    const bot = this.botIdentity ?? await this.authenticate()
+    const provisioningUserId = stableId(provisioning.user_id)
+    if (!this.botOwnerId || provisioningUserId !== this.botOwnerId) {
+      throw new ZulipProviderError(
+        'permission_denied',
+        'Zulip provisioning identity must own the Generic Bot so Bot send permissions are explicit.'
+      )
+    }
+    const groups = await this.provisioningClient.request('api/v1/user_groups', {
+      schema: zulipUserGroupsResponseSchema,
+      retry: 'safe'
+    })
+    const systemGroupId = (name: string): number => {
+      const group = groups.user_groups.find((candidate) => candidate.is_system_group && candidate.name === name)
+      if (!group) throw new ZulipProviderError('provider_unavailable', `Zulip system group ${name} is unavailable.`)
+      return group.id
+    }
+    return {
+      provisioningUserId,
+      botUserId: bot.providerUserId,
+      ownerUserId: ownerProviderUserId,
+      everyoneGroupId: systemGroupId('role:everyone'),
+      nobodyGroupId: systemGroupId('role:nobody')
+    }
+  }
+
+  private channelCreateBody(
+    name: string,
+    marker: string,
+    context: ZulipProvisioningContext
+  ): URLSearchParams {
+    const provisionerOnly = anonymousGroup([numericProviderId(context.provisioningUserId, 'Provisioning identity')])
+    const senders = anonymousGroup([
+      numericProviderId(context.ownerUserId, 'Channel owner'),
+      numericProviderId(context.provisioningUserId, 'Provisioning identity')
+    ])
+    return new URLSearchParams({
+      name,
+      description: `SciForge managed private Channel (${marker}).`,
+      subscribers: JSON.stringify([
+        numericProviderId(context.ownerUserId, 'Channel owner'),
+        numericProviderId(context.botUserId, 'Generic Bot')
+      ]),
+      announce: 'false',
+      invite_only: 'true',
+      history_public_to_subscribers: 'false',
+      can_add_subscribers_group: JSON.stringify(provisionerOnly),
+      can_remove_subscribers_group: JSON.stringify(provisionerOnly),
+      can_administer_channel_group: JSON.stringify(provisionerOnly),
+      can_subscribe_group: String(context.nobodyGroupId),
+      can_send_message_group: JSON.stringify(senders),
+      can_create_topic_group: String(context.everyoneGroupId)
+    })
+  }
+
+  private async findChannelId(name: string): Promise<string | undefined> {
+    if (!this.provisioningClient) return undefined
+    try {
+      const response = await this.provisioningClient.request('api/v1/get_stream_id', {
+        query: new URLSearchParams({ stream: name }),
+        schema: zulipChannelIdResponseSchema,
+        retry: 'safe'
+      })
+      return stableId(response.stream_id)
+    } catch (error) {
+      if (isZulipProviderError(error) && error.code === 'not_found') return undefined
+      // Zulip 12.2 returns 400 BAD_REQUEST from get_stream_id when the
+      // requested private Channel is absent or not visible to this user.
+      // The name is generated and bounded by SciForge; creation remains the
+      // authoritative collision check and will reject an inaccessible name.
+      if (isZulipProviderError(error) && error.code === 'invalid_payload' && error.status === 400) {
+        return undefined
+      }
+      throw error
+    }
+  }
+
+  private async readChannel(containerId: string) {
+    if (!this.provisioningClient) throw new ZulipProviderError('permission_denied', 'Provisioning is unavailable.')
+    const response = await this.provisioningClient.request(`api/v1/streams/${encodeURIComponent(containerId)}`, {
+      schema: zulipChannelResponseSchema,
+      retry: 'safe'
+    })
+    return response.stream
+  }
+
+  private async inspectManagedContainer(
+    containerId: string,
+    context: ZulipProvisioningContext
+  ): Promise<ProviderManagedContainerResult> {
+    if (!this.provisioningClient) throw new ZulipProviderError('permission_denied', 'Provisioning is unavailable.')
+    const [channel, membersResponse] = await Promise.all([
+      this.readChannel(containerId),
+      this.provisioningClient.request(`api/v1/streams/${encodeURIComponent(containerId)}/members`, {
+        schema: zulipChannelMembersResponseSchema,
+        retry: 'safe'
+      })
+    ])
+    const provisionerOnly = anonymousGroup([numericProviderId(context.provisioningUserId, 'Provisioning identity')])
+    const senders = anonymousGroup([
+      numericProviderId(context.ownerUserId, 'Channel owner'),
+      numericProviderId(context.provisioningUserId, 'Provisioning identity')
+    ])
+    const expectedMembers = [context.ownerUserId, context.botUserId].sort()
+    const observedMembers = membersResponse.subscribers.map(String).sort()
+    const checks = {
+      private: channel.invite_only,
+      protectedHistory: channel.history_public_to_subscribers === false,
+      exactMembership: observedMembers.join(',') === expectedMembers.join(','),
+      ownerCanSend: groupSettingEquals(channel.can_send_message_group, senders),
+      messageBotCanSend: this.botOwnerId === context.provisioningUserId &&
+        groupSettingEquals(channel.can_send_message_group, senders),
+      ownerCanCreateTopics: groupSettingEquals(channel.can_create_topic_group, context.everyoneGroupId),
+      memberManagementRestricted:
+        groupSettingEquals(channel.can_add_subscribers_group, provisionerOnly) &&
+        groupSettingEquals(channel.can_remove_subscribers_group, provisionerOnly) &&
+        groupSettingEquals(channel.can_subscribe_group, context.nobodyGroupId),
+      channelManagementRestricted: groupSettingEquals(channel.can_administer_channel_group, provisionerOnly)
+    }
+    const safeIssueCodes = Object.entries(checks)
+      .filter(([, value]) => !value)
+      .map(([name]) => `policy.${name.replace(/[A-Z]/gu, (match) => `_${match.toLowerCase()}`)}`)
+    const archived = channel.is_archived === true
+    return providerManagedContainerResultSchema.parse({
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.managed_container.result',
+      container: {
+        type: 'provider_managed_container_ref',
+        provider: 'zulip',
+        realmId: this.realmId,
+        containerId
+      },
+      displayName: channel.name.slice(0, 200),
+      status: archived ? 'archived' : safeIssueCodes.length === 0 ? 'active' : 'drifted',
+      policyVersion: 1,
+      checks,
+      safeIssueCodes,
+      observedAt: this.now().toISOString()
+    })
+  }
+
+  private async reconcileManagedContainer(
+    containerId: string,
+    displayName: string,
+    context: ZulipProvisioningContext
+  ): Promise<void> {
+    const channel = await this.readChannel(containerId)
+    const membersResponse = await this.provisioningClient!.request(
+      `api/v1/streams/${encodeURIComponent(containerId)}/members`,
+      { schema: zulipChannelMembersResponseSchema, retry: 'safe' }
+    )
+    const expected = new Set([context.ownerUserId, context.botUserId])
+    const observed = new Set(membersResponse.subscribers.map(String))
+    await this.setSubscriptions(
+      channel.name,
+      [...expected].filter((id) => !observed.has(id)),
+      [...observed].filter((id) => !expected.has(id))
+    )
+    const provisionerOnly = anonymousGroup([numericProviderId(context.provisioningUserId, 'Provisioning identity')])
+    const senders = anonymousGroup([
+      numericProviderId(context.ownerUserId, 'Channel owner'),
+      numericProviderId(context.provisioningUserId, 'Provisioning identity')
+    ])
+    await this.updateChannel(containerId, new URLSearchParams({
+      new_name: displayName,
+      is_private: 'true',
+      history_public_to_subscribers: 'false',
+      can_add_subscribers_group: JSON.stringify({ new: provisionerOnly }),
+      can_remove_subscribers_group: JSON.stringify({ new: provisionerOnly }),
+      can_administer_channel_group: JSON.stringify({ new: provisionerOnly }),
+      can_subscribe_group: JSON.stringify({ new: context.nobodyGroupId }),
+      can_send_message_group: JSON.stringify({ new: senders }),
+      can_create_topic_group: JSON.stringify({ new: context.everyoneGroupId }),
+      is_archived: 'false'
+    }))
+  }
+
+  private async setSubscriptions(channelName: string, add: readonly string[], remove: readonly string[]): Promise<void> {
+    if (!this.provisioningClient) throw new ZulipProviderError('permission_denied', 'Provisioning is unavailable.')
+    const subscriptions = JSON.stringify([{ name: channelName }])
+    if (add.length > 0) {
+      await this.provisioningClient.request('api/v1/users/me/subscriptions', {
+        method: 'POST',
+        body: new URLSearchParams({
+          subscriptions,
+          principals: JSON.stringify(add.map((id) => numericProviderId(id, 'Subscriber'))),
+          authorization_errors_fatal: 'true'
+        }),
+        schema: zulipSubscriptionMutationResponseSchema,
+        retry: 'never'
+      })
+    }
+    if (remove.length > 0) {
+      await this.provisioningClient.request('api/v1/users/me/subscriptions', {
+        method: 'DELETE',
+        body: new URLSearchParams({
+          subscriptions,
+          principals: JSON.stringify(remove.map((id) => numericProviderId(id, 'Subscriber')))
+        }),
+        schema: zulipSubscriptionMutationResponseSchema,
+        retry: 'never'
+      })
+    }
+  }
+
+  private async updateChannel(containerId: string, body: URLSearchParams): Promise<void> {
+    if (!this.provisioningClient) throw new ZulipProviderError('permission_denied', 'Provisioning is unavailable.')
+    await this.provisioningClient.request(`api/v1/streams/${encodeURIComponent(containerId)}`, {
+      method: 'PATCH',
+      body,
+      schema: zulipUpdateMessageResponseSchema,
+      retry: 'never'
+    })
+  }
+
+  private async archiveChannel(containerId: string): Promise<void> {
+    if (!this.provisioningClient) throw new ZulipProviderError('permission_denied', 'Provisioning is unavailable.')
+    await this.provisioningClient.request(`api/v1/streams/${encodeURIComponent(containerId)}`, {
+      method: 'DELETE',
+      schema: zulipUpdateMessageResponseSchema,
+      retry: 'never'
+    })
   }
 
   async *events(
@@ -439,6 +813,9 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
     if (request.realmId !== this.realmId) {
       throw new ZulipProviderError('invalid_locator', 'Requested realm does not match this Zulip provider.')
     }
+    if (!request.container || request.container.provider !== 'zulip' || request.container.realmId !== this.realmId) {
+      throw new ZulipProviderError('invalid_locator', 'Requested managed Channel does not match this Zulip provider.')
+    }
     let offset = 0
     if (request.cursor) {
       const decoded = Buffer.from(request.cursor, 'base64url').toString('utf8')
@@ -449,32 +826,33 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
     }
     const query = request.query?.normalize('NFC').trim().toLocaleLowerCase('und') ?? ''
     const discovered: ProviderLocator[] = []
-    for (const stream of await this.listStreams()) {
-      for (const topic of await this.listTopics(stream.id)) {
-        if (query && !`${stream.name}\n${topic.name}`.normalize('NFC').toLocaleLowerCase('und').includes(query)) {
-          continue
-        }
-        const coordinates = {
-          provider: 'zulip' as const,
-          realmId: this.realmId,
-          containerId: stream.id,
-          topicDisplayName: topic.name
-        }
-        const existing = await this.resolveStableLocator(coordinates)
-          .catch((error) => {
-            if (isZulipProviderError(error) && error.code === 'locator_missing') return undefined
-            throw error
-          })
-        discovered.push(existing ?? {
-          type: 'provider_locator',
-          provider: 'zulip',
-          realmId: this.realmId,
-          containerId: stream.id,
-          topicId: stableDiscoveredTopicId(this.realmId, stream.id, topic.name),
-          containerDisplayName: stream.name.slice(0, 200),
-          topicDisplayName: topic.name.slice(0, 200)
-        })
+    const containerId = request.container.containerId
+    for (const topic of await this.listTopics(containerId)) {
+      if (query && !`${request.containerDisplayName ?? ''}\n${topic.name}`.normalize('NFC').toLocaleLowerCase('und').includes(query)) {
+        continue
       }
+      const coordinates = {
+        provider: 'zulip' as const,
+        realmId: this.realmId,
+        containerId,
+        topicDisplayName: topic.name
+      }
+      const existing = await this.resolveStableLocator(coordinates)
+        .catch((error) => {
+          if (isZulipProviderError(error) && error.code === 'locator_missing') return undefined
+          throw error
+        })
+      discovered.push(existing ?? {
+        type: 'provider_locator',
+        provider: 'zulip',
+        realmId: this.realmId,
+        containerId,
+        topicId: stableDiscoveredTopicId(this.realmId, containerId, topic.name),
+        ...(request.containerDisplayName
+          ? { containerDisplayName: request.containerDisplayName.slice(0, 200) }
+          : {}),
+        topicDisplayName: topic.name.slice(0, 200)
+      })
     }
     const locators = discovered.slice(offset, offset + request.limit)
     const nextOffset = offset + locators.length

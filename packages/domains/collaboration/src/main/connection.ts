@@ -6,6 +6,8 @@ import {
   type AgentInboxMessage,
   type AgentNode,
   type HumanEndpointBinding,
+  type ManagedProviderContainer,
+  type ProviderLocator,
   type ParticipantProfile,
   type RestRequest,
   type UserPrincipal
@@ -138,6 +140,9 @@ export class CollaborationConnection {
           if (endpoint.status === 'active') {
             await this.refreshEndpointLocators(endpoint.humanEndpointId)
           }
+        }
+        if (this.providerOptions.some((provider) => provider.managedContainers)) {
+          await this.refreshManagedContainers()
         }
       } catch (error) {
         // Cached collaboration state remains usable while offline. A later
@@ -476,6 +481,10 @@ export class CollaborationConnection {
     this.providerOptions = response.providers.map((provider) => ({
       providerKey: provider.provider,
       label: provider.displayName,
+      realmLabel: provider.onboarding.realmLabel,
+      containerLabel: provider.onboarding.containerLabel,
+      topicLabel: provider.onboarding.topicLabel,
+      managedContainers: provider.capabilities.managedContainers === true,
       locatorFields: [{
         key: 'realmId',
         label: 'Organization / realm ID',
@@ -485,24 +494,53 @@ export class CollaborationConnection {
     }))
   }
 
-  private async refreshEndpointLocators(humanEndpointId: string): Promise<void> {
-    const response = await this.requireClient().execute(restRequestSchema.parse({
-      protocolVersion: '1.0',
-      requestId: collaborationRequestId(),
-      type: 'endpoint.locator.list',
-      humanEndpointId,
-      limit: 100
-    }), await this.requireUserCredential())
-    if (response.type === 'rest.error') throw new Error(response.error.message)
-    if (response.type !== 'endpoint.locator_page') {
-      throw new Error(`Endpoint locator query returned unexpected ${response.type}.`)
-    }
+  async refreshEndpointLocators(humanEndpointId: string): Promise<number> {
+    const credential = await this.requireUserCredential()
+    const locators: Array<{ humanEndpointId: string; locator: ProviderLocator }> = []
+    let cursor: string | undefined
+    let pageCount = 0
+    do {
+      const response = await this.requireClient().execute(restRequestSchema.parse({
+        protocolVersion: '1.0',
+        requestId: collaborationRequestId(),
+        type: 'endpoint.locator.list',
+        humanEndpointId,
+        ...(cursor ? { cursor } : {}),
+        limit: 500
+      }), credential)
+      if (response.type === 'rest.error') throw new Error(response.error.message)
+      if (response.type !== 'endpoint.locator_page') {
+        throw new Error(`Endpoint locator query returned unexpected ${response.type}.`)
+      }
+      locators.push(...response.locators.map((locator) => ({ humanEndpointId, locator })))
+      cursor = response.nextCursor
+      pageCount += 1
+      if (pageCount > 1_000) throw new Error('Endpoint locator pagination exceeded the safe page limit.')
+    } while (cursor)
     await this.options.store.transact((draft) => {
       draft.endpointLocators = [
         ...draft.endpointLocators.filter((item) => item.humanEndpointId !== humanEndpointId),
-        ...response.locators.map((locator) => ({ humanEndpointId, locator }))
+        ...locators
       ]
     })
+    return locators.length
+  }
+
+  async refreshManagedContainers(): Promise<readonly ManagedProviderContainer[]> {
+    const response = await this.executeAsUser(restRequestSchema.parse({
+      protocolVersion: '1.0',
+      requestId: collaborationRequestId(),
+      type: 'managed_container.list'
+    }))
+    if (response.type === 'rest.error') throw new Error(response.error.message)
+    if (response.type !== 'rest.collection' || response.items.some((item) => item.type !== 'managed_provider_container')) {
+      throw new Error(`Managed Channel query returned unexpected ${response.type}.`)
+    }
+    const managedContainers = response.items.filter((item): item is ManagedProviderContainer => (
+      item.type === 'managed_provider_container'
+    ))
+    await this.options.store.transact((draft) => { draft.managedContainers = managedContainers })
+    return managedContainers
   }
 
   private async pollLoop(credential: Readonly<{ value: string }>, signal: AbortSignal): Promise<void> {

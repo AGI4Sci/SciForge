@@ -85,6 +85,130 @@ function rawMessage(input: {
 }
 
 describe('ZulipHumanEndpointProvider', () => {
+  it('provisions a private protected Channel with a separate least-privilege identity and creates no Topic', async () => {
+    const mutations: Array<{ path: string; method: string; body: URLSearchParams }> = []
+    let userLookup = 0
+    let archived = false
+    const fetch = async (input: string, init?: RequestInit) => {
+      const url = new URL(input)
+      const method = init?.method ?? 'GET'
+      const body = init?.body instanceof URLSearchParams
+        ? init.body
+        : new URLSearchParams(typeof init?.body === 'string' ? init.body : '')
+      if (method !== 'GET') mutations.push({ path: url.pathname, method, body })
+      if (url.pathname.endsWith('/api/v1/users/me')) {
+        userLookup += 1
+        return userLookup % 2 === 1
+          ? json({ result: 'success', user_id: 7, email: 'provisioner@example.invalid',
+              full_name: 'Provisioner', is_bot: false })
+          : json({ result: 'success', user_id: 99, email: 'service-bot@example.invalid',
+              full_name: 'Service Bot', is_bot: true, bot_owner_id: 7 })
+      }
+      if (url.pathname.endsWith('/api/v1/user_groups')) return json({
+        result: 'success',
+        user_groups: [
+          { id: 1, name: 'role:everyone', is_system_group: true },
+          { id: 2, name: 'role:nobody', is_system_group: true }
+        ]
+      })
+      if (url.pathname.endsWith('/api/v1/get_stream_id')) {
+        return json({
+          result: 'error',
+          msg: 'Invalid channel name',
+          code: 'BAD_REQUEST'
+        }, { status: 400 })
+      }
+      if (url.pathname.endsWith('/api/v1/channels/create')) return json({ result: 'success', id: 123 })
+      if (url.pathname.endsWith('/api/v1/users/me/subscriptions') && method === 'DELETE') {
+        return json({ result: 'success' })
+      }
+      if (url.pathname.endsWith('/api/v1/streams/123/members')) {
+        return json({ result: 'success', subscribers: [42, 99] })
+      }
+      if (url.pathname.endsWith('/api/v1/streams/123') && method === 'DELETE') {
+        archived = true
+        return json({ result: 'success' })
+      }
+      if (url.pathname.endsWith('/api/v1/streams/123')) return json({
+        result: 'success',
+        stream: {
+          stream_id: 123,
+          name: 'sciforge-user123',
+          description: 'SciForge managed private Channel.',
+          invite_only: true,
+          history_public_to_subscribers: false,
+          is_archived: archived,
+          topics_policy: 'disable_empty_topic',
+          can_add_subscribers_group: { direct_members: [7], direct_subgroups: [] },
+          can_administer_channel_group: { direct_members: [7], direct_subgroups: [] },
+          can_create_topic_group: 1,
+          can_send_message_group: { direct_members: [7, 42], direct_subgroups: [] },
+          can_remove_subscribers_group: { direct_members: [7], direct_subgroups: [] },
+          can_subscribe_group: 2
+        }
+      })
+      throw new Error(`unexpected route: ${method} ${url.pathname}`)
+    }
+    const provider = createZulipHumanEndpointProvider({
+      realmUrl: 'https://example.invalid/team-chat/',
+      botEmail: 'service-bot@example.invalid',
+      provisioningEmail: 'provisioner@example.invalid'
+    }, {
+      resolveCredential: async () => ({ apiKey: randomUUID() }),
+      resolveProvisioningCredential: async () => ({ apiKey: randomUUID() }),
+      deliveryLedger: new MemoryLedger(),
+      reconcileDelivery: async () => ({ status: 'not_sent' }),
+      resolveLocator,
+      verifyIdentity: rejectIdentity,
+      fetch,
+      now: () => new Date('2026-08-15T00:00:00.000Z')
+    })
+    assert.equal(provider.contract.capabilities.managedContainers, true)
+    const result = await provider.manageContainer({
+      protocolVersion: '1.0',
+      type: 'provider.managed_container.ensure',
+      realmId: 'https://example.invalid/team-chat',
+      ownerIdentity: { type: 'provider_identity', provider: 'zulip',
+        realmId: 'https://example.invalid/team-chat', providerUserId: '42' },
+      stableKey: 'managed-owner-realm',
+      displayName: 'sciforge-user123',
+      policy: { version: 1, visibility: 'private', history: 'protected',
+        membership: 'owner_and_message_bot', memberManagement: 'provisioning_service_only',
+        channelManagement: 'provisioning_service_only', ownerCanSend: true,
+        ownerCanCreateTopics: true, messageBotCanSend: true, messageBotCreatesProjectTopics: false }
+    })
+    assert.equal(result.status, 'active')
+    assert.deepEqual(result.safeIssueCodes, [])
+    const create = mutations.find((entry) => entry.path.endsWith('/api/v1/channels/create'))
+    assert.ok(create)
+    assert.equal(create.body.get('invite_only'), 'true')
+    assert.equal(create.body.get('history_public_to_subscribers'), 'false')
+    assert.equal(create.body.has('topics_policy'), false)
+    assert.deepEqual(JSON.parse(create.body.get('subscribers')!), [42, 99])
+    assert.equal(mutations.some((entry) => entry.path.endsWith('/api/v1/messages')), false)
+    const archivedResult = await provider.manageContainer!({
+      protocolVersion: '1.0', type: 'provider.managed_container.archive',
+      realmId: 'https://example.invalid/team-chat',
+      ownerIdentity: { type: 'provider_identity', provider: 'zulip',
+        realmId: 'https://example.invalid/team-chat', providerUserId: '42' },
+      container: { type: 'provider_managed_container_ref', provider: 'zulip',
+        realmId: 'https://example.invalid/team-chat', containerId: '123' },
+      policy: { version: 1, visibility: 'private', history: 'protected',
+        membership: 'owner_and_message_bot', memberManagement: 'provisioning_service_only',
+        channelManagement: 'provisioning_service_only', ownerCanSend: true,
+        ownerCanCreateTopics: true, messageBotCanSend: true, messageBotCreatesProjectTopics: false }
+    })
+    assert.equal(archivedResult.status, 'archived')
+    const archiveIndex = mutations.findIndex((entry) => (
+      entry.path.endsWith('/api/v1/streams/123') && entry.method === 'DELETE'
+    ))
+    const unsubscribeIndex = mutations.findIndex((entry) => (
+      entry.path.endsWith('/api/v1/users/me/subscriptions') && entry.method === 'DELETE'
+    ))
+    assert.ok(archiveIndex >= 0)
+    assert.ok(unsubscribeIndex > archiveIndex)
+    assert.equal(mutations.some((entry) => entry.method === 'PATCH' && entry.body.has('is_archived')), false)
+  })
   it('accepts the strict Zulip 12.2 register and events response envelopes', async () => {
     const seenPaths: string[] = []
     const provider = createZulipHumanEndpointProvider({
@@ -393,6 +517,7 @@ describe('ZulipHumanEndpointProvider', () => {
 
   it('keeps an unbound Chinese topic discovery locator stable as new messages arrive', async () => {
     let latestMessageId = 100
+    const requestedPaths: string[] = []
     const provider = createZulipHumanEndpointProvider({
       realmUrl: 'https://chat.example.invalid/team',
       botEmail: 'service-bot@example.invalid'
@@ -406,6 +531,7 @@ describe('ZulipHumanEndpointProvider', () => {
       verifyIdentity: rejectIdentity,
       fetch: async (input) => {
         const pathname = new URL(input).pathname
+        requestedPaths.push(pathname)
         if (pathname === '/team/api/v1/users/me/subscriptions') {
           return json({
             result: 'success',
@@ -455,6 +581,13 @@ describe('ZulipHumanEndpointProvider', () => {
       protocolVersion: '1.0' as const,
       type: 'provider.locator.list' as const,
       realmId: provider.realmId,
+      container: {
+        type: 'provider_managed_container_ref' as const,
+        provider: 'zulip',
+        realmId: provider.realmId,
+        containerId: '12'
+      },
+      containerDisplayName: '研究协作',
       limit: 50
     }
 
@@ -466,6 +599,11 @@ describe('ZulipHumanEndpointProvider', () => {
     assert.equal(after.locators.length, 1)
     assert.equal(before.locators[0]?.topicId, after.locators[0]?.topicId)
     assert.equal(before.locators[0]?.topicDisplayName, '蛋白质结构')
+    assert.equal(requestedPaths.includes('/team/api/v1/users/me/subscriptions'), false)
+    assert.deepEqual(requestedPaths, [
+      '/team/api/v1/users/me/12/topics',
+      '/team/api/v1/users/me/12/topics'
+    ])
   })
 
   it('keeps one stable topic identity across a real-shape external rename, move, and following message', async () => {

@@ -51,7 +51,8 @@ test('global collaboration mutations satisfy the production broker contract with
   const status: CollaborationStatusSnapshot = {
     revision: 1,
     connection,
-    providerOptions: [],
+        providerOptions: [],
+        managedContainers: [],
     participant,
     projections: [projection],
     projects: [],
@@ -81,6 +82,7 @@ test('global collaboration mutations satisfy the production broker contract with
     updateProjection: async () => projection,
     shareProjection: async () => projection,
     retrySynchronization: async () => undefined,
+    manageContainer: async () => ({ managedContainer: null }),
     status: async () => status
   } as unknown as CollaborationRuntime
   const definitions = createCollaborationCapabilityFactory<CollaborationCapabilityOptions>({
@@ -125,11 +127,18 @@ test('global collaboration mutations satisfy the production broker contract with
       allowUserIds: [TEST_IDS.userId],
       expectedRevision: 1
     },
-    [COLLABORATION_CAPABILITY_IDS.synchronizationRetry]: { scope: 'connection' }
+    [COLLABORATION_CAPABILITY_IDS.synchronizationRetry]: { scope: 'connection' },
+    [COLLABORATION_CAPABILITY_IDS.managedContainerInspect]: { action: 'refresh-status' },
+    [COLLABORATION_CAPABILITY_IDS.managedContainerProvision]: {
+      action: 'ensure', humanEndpointId: TEST_IDS.humanEndpointId
+    },
+    [COLLABORATION_CAPABILITY_IDS.managedContainerArchive]: {
+      action: 'archive', managedContainerId: 'mco_123456789012', expectedRevision: 1
+    }
   }
   const mutations = definitions.filter((definition) => definition.effect === 'external-write')
 
-  assert.equal(mutations.length, 9)
+  assert.equal(mutations.length, 10)
   for (const definition of mutations) {
     assert.equal(definition.scope, 'global')
     assert.equal(Object.hasOwn(inputs, definition.id), true, `missing input fixture for ${definition.id}`)
@@ -141,4 +150,10 @@ test('global collaboration mutations satisfy the production broker contract with
       `${definition.id} must still return its valid UI result`
     )
   }
+  assert.equal(definitions.find(({ id }) => (
+    id === COLLABORATION_CAPABILITY_IDS.managedContainerInspect
+  ))?.effect, 'read')
+  assert.equal(definitions.find(({ id }) => (
+    id === COLLABORATION_CAPABILITY_IDS.managedContainerArchive
+  ))?.effect, 'destructive')
 })

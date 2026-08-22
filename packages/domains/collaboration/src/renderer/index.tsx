@@ -1,4 +1,4 @@
-import { lazy, type ReactElement } from 'react'
+import React, { lazy, type ReactElement } from 'react'
 import { UsersRound } from 'lucide-react'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
