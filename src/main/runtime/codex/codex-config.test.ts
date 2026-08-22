@@ -198,6 +198,7 @@ describe('codex config launch helpers', () => {
     await mkdir(bin, { recursive: true })
     await writeFile(join(bin, 'codex'), 'platform-neutral binary', 'utf8')
     await writeFile(nativeCommand, 'native Windows binary', 'utf8')
+    await writeFile(join(bin, 'codex-code-mode-host.exe'), 'code mode host', 'utf8')
 
     await expect(resolveCodexCommand('codex', {
       env: { PATH: bin },
@@ -208,6 +209,10 @@ describe('codex config launch helpers', () => {
       join(home, '.sciforge', 'codex-runtime', 'codex.exe'),
       'utf8'
     )).resolves.toBe('native Windows binary')
+    await expect(readFile(
+      join(home, '.sciforge', 'codex-runtime', 'codex-code-mode-host.exe'),
+      'utf8'
+    )).resolves.toBe('code mode host')
   })
 
   it('materializes the runtime bundled with the Windows Codex app', async () => {
@@ -223,6 +228,11 @@ describe('codex config launch helpers', () => {
     )
     await mkdir(join(source, '..'), { recursive: true })
     await writeFile(source, 'packaged-codex-runtime', 'utf8')
+    await writeFile(
+      join(source, '..', 'codex-code-mode-host.exe'),
+      'packaged-code-mode-host',
+      'utf8'
+    )
 
     const resolved = await resolveCodexCommand('codex', {
       env: { Path: 'C:\\Windows\\System32', ProgramFiles: programFiles },
@@ -232,6 +242,39 @@ describe('codex config launch helpers', () => {
 
     expect(resolved).toBe(join(home, '.sciforge', 'codex-runtime', 'codex.exe'))
     await expect(readFile(resolved, 'utf8')).resolves.toBe('packaged-codex-runtime')
+    await expect(readFile(
+      join(home, '.sciforge', 'codex-runtime', 'codex-code-mode-host.exe'),
+      'utf8'
+    )).resolves.toBe('packaged-code-mode-host')
+  })
+
+  it('repairs a missing code-mode companion when the managed Codex exe is current', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-companion-repair-'))
+    const programFiles = join(home, 'Program Files')
+    const resources = join(
+      programFiles,
+      'WindowsApps',
+      'OpenAI.Codex_26.818.5229.0_x64__test',
+      'app',
+      'resources'
+    )
+    const source = join(resources, 'codex.exe')
+    const managedDirectory = join(home, '.sciforge', 'codex-runtime')
+    await mkdir(resources, { recursive: true })
+    await mkdir(managedDirectory, { recursive: true })
+    await writeFile(source, 'same-runtime', 'utf8')
+    await writeFile(join(resources, 'codex-code-mode-host.exe'), 'repaired-host', 'utf8')
+    await writeFile(join(managedDirectory, 'codex.exe'), 'same-runtime', 'utf8')
+
+    await expect(resolveCodexCommand('codex', {
+      env: { Path: 'C:\\Windows\\System32', ProgramFiles: programFiles },
+      homeDir: home,
+      platform: 'win32'
+    })).resolves.toBe(join(managedDirectory, 'codex.exe'))
+    await expect(readFile(
+      join(managedDirectory, 'codex-code-mode-host.exe'),
+      'utf8'
+    )).resolves.toBe('repaired-host')
   })
 
   it('expands and validates an explicit Codex executable path', async () => {
