@@ -252,6 +252,48 @@ test('mirrors visible assistant progress as collapsible delivery before the fina
   assert.equal(new Set(deliveries.map(({ idempotencyKey }) => idempotencyKey)).size, 2)
 })
 
+test('deduplicates live and canonical assistant identities for the same turn content', async () => {
+  const store = await projectionStore()
+  const deliveries: Array<{ command: { kind: string; text: string }; idempotencyKey: string }> = []
+  const coordinator = new ProjectionCoordinator({
+    store,
+    agentExecution: {
+      run: async () => { throw new Error('Transcript mirroring must not execute an Agent turn.') }
+    },
+    cloudOutbox: {
+      enqueueProjectionDelivery: async (command, idempotencyKey) => {
+        deliveries.push({ command, idempotencyKey })
+      }
+    },
+    localAgentId: () => TEST_IDS.agentId
+  })
+
+  await coordinator.mirrorDesktopEvent({
+    runtimeId: 'codex',
+    threadId: 'fixed-thread-1',
+    turnId: 'turn-progress',
+    itemId: 'live-snapshot-identity',
+    kind: 'assistant-progress',
+    text: '已完成代码核查。',
+    occurredAt: '2026-08-22T08:00:00.000Z'
+  })
+  await coordinator.reconcileCanonicalTurn({
+    runtimeId: 'codex',
+    threadId: 'fixed-thread-1',
+    turnId: 'turn-progress',
+    messages: [{
+      itemId: 'canonical-delta-identity',
+      turnId: 'turn-progress',
+      kind: 'assistant-progress',
+      text: '已完成代码核查。'
+    }]
+  })
+
+  assert.equal(deliveries.length, 1)
+  assert.equal(store.snapshot().queue.length, 1)
+  assert.equal(store.snapshot().receipts.length, 1)
+})
+
 const NOOP_OUTBOX: ProjectionCloudOutbox = {
   enqueueProjectionDelivery: async () => undefined
 }

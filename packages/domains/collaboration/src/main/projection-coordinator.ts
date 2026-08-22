@@ -286,6 +286,9 @@ export class ProjectionCoordinator {
         return null
       }
       const local = requireLocalProjection(draft, projection.projection.projectionId)
+      if (hasEquivalentAssistantReceipt(draft, local.projection.projectionId, event, hash)) {
+        return null
+      }
       const now = this.now().toISOString()
       const queueItemId = localOpaqueId('lqi')
       const kind = event.kind === 'user-message'
@@ -678,6 +681,27 @@ function transcriptLocalItemId(event: DesktopTranscriptEvent): string {
 
 function desktopReceiptKey(event: Pick<DesktopTranscriptEvent, 'runtimeId' | 'threadId' | 'itemId'>): string {
   return `desktop:${event.runtimeId}:${event.threadId}:${event.itemId}`
+}
+
+function hasEquivalentAssistantReceipt(
+  state: CollaborationLocalState,
+  projectionId: string,
+  event: DesktopTranscriptEvent,
+  contentHash: string
+): boolean {
+  if (event.kind === 'user-message' || !event.turnId) return false
+  const expectedKind = event.kind === 'assistant-progress'
+    ? 'assistant-progress'
+    : 'assistant-reply'
+  return state.receipts.some((receipt) => {
+    if (
+      receipt.projectionId !== projectionId ||
+      receipt.turnId !== event.turnId ||
+      receipt.contentHash !== contentHash
+    ) return false
+    const item = state.queue.find((candidate) => candidate.queueItemId === receipt.queueItemId)
+    return item?.direction === 'outbound' && item.kind === expectedKind
+  })
 }
 
 function localOpaqueId(prefix: string): string {
