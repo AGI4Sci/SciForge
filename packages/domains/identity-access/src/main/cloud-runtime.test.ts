@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LocalCloudIdentityLinkService } from './cloud-link-service.js'
+import { resolveDesktopIdentityRuntimeConfig } from './cloud-runtime-config.js'
 import { CloudIdentityRuntime } from './cloud-runtime.js'
 import { DesktopDeviceService } from './device-service.js'
 import { DesktopIdentityService } from './oidc-service.js'
@@ -12,10 +13,75 @@ const roots: string[] = []
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
 describe('CloudIdentityRuntime', () => {
+  it('uses the real HTTP client only when both endpoints are explicitly configured', () => {
+    expect(resolveDesktopIdentityRuntimeConfig({
+      oidcIssuer: 'https://identity.example.test/realms/SciForge',
+      cloudBaseUrl: 'https://cloud.example.test'
+    })).toEqual({
+      mode: 'http',
+      issuer: 'https://identity.example.test/realms/SciForge',
+      cloudBaseUrl: 'https://cloud.example.test'
+    })
+    expect(resolveDesktopIdentityRuntimeConfig({
+      oidcIssuer: 'http://127.0.0.1:8080/realms/SciForge',
+      cloudBaseUrl: 'http://localhost:8787'
+    })).toEqual({
+      mode: 'http',
+      issuer: 'http://127.0.0.1:8080/realms/SciForge',
+      cloudBaseUrl: 'http://localhost:8787'
+    })
+  })
+
+  it.each([
+    ['missing issuer', { SCIFORGE_CLOUD_BASE_URL: 'http://127.0.0.1:8787' }],
+    ['missing Cloud URL', { SCIFORGE_OIDC_ISSUER: 'http://127.0.0.1:8080/realms/SciForge' }],
+    ['both endpoints missing', {}],
+    ['invalid issuer', {
+      SCIFORGE_OIDC_ISSUER: 'http://identity.example.test/realms/SciForge',
+      SCIFORGE_CLOUD_BASE_URL: 'http://127.0.0.1:8787'
+    }],
+    ['invalid Cloud URL', {
+      SCIFORGE_OIDC_ISSUER: 'https://identity.example.test/realms/SciForge',
+      SCIFORGE_CLOUD_BASE_URL: 'http://cloud.example.test'
+    }]
+  ])('fails closed without network access when %s', async (_label, environment) => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-cloud-runtime-'))
+    roots.push(root)
+    const fetchImpl = vi.fn()
+    vi.stubGlobal('fetch', fetchImpl)
+    const runtime = await CloudIdentityRuntime.create({
+      userDataDir: root,
+      appRoot: root,
+      appVersion: '1.0.0',
+      environment,
+      installationId: 'installation-1',
+      packageSecrets: memorySecrets(),
+      externalNavigation: {
+        issueTarget: vi.fn(() => ({
+          handle: 'navigation-handle',
+          expiresAt: new Date(Date.now() + 60_000).toISOString()
+        })),
+        openTarget: vi.fn(async () => undefined)
+      }
+    })
+
+    try {
+      await expect(runtime.initialize()).resolves.toMatchObject({
+        identity: { state: 'signed-out' },
+        device: { state: 'signed-out' },
+        error: { source: 'identity', code: 'OIDC_CONFIGURATION_ERROR' }
+      })
+      expect(fetchImpl).not.toHaveBeenCalled()
+    } finally {
+      runtime.close()
+    }
+  })
+
   it('keeps a projection failure visible after a successful identity action', async () => {
     const root = mkdtempSync(join(tmpdir(), 'sciforge-cloud-runtime-'))
     roots.push(root)
@@ -25,7 +91,6 @@ describe('CloudIdentityRuntime', () => {
       userDataDir: blockedUserDataDir,
       appRoot: root,
       appVersion: '1.0.0',
-      isPackaged: false,
       environment: {},
       installationId: 'installation-1',
       packageSecrets: memorySecrets(),
@@ -58,7 +123,6 @@ describe('CloudIdentityRuntime', () => {
       userDataDir: root,
       appRoot: root,
       appVersion: '1.0.0',
-      isPackaged: false,
       environment: {},
       installationId: 'installation-1',
       packageSecrets: memorySecrets()
@@ -89,7 +153,6 @@ describe('CloudIdentityRuntime', () => {
     await expect(CloudIdentityRuntime.create({
       userDataDir: root,
       appRoot: root,
-      isPackaged: false,
       environment: {},
       installationId: 'installation-1',
       packageSecrets: memorySecrets()
@@ -106,7 +169,6 @@ describe('CloudIdentityRuntime', () => {
       userDataDir: root,
       appRoot: packagedAppRoot,
       appVersion: '9.8.7-packaged',
-      isPackaged: true,
       environment: {},
       installationId: 'installation-1',
       packageSecrets: memorySecrets()
@@ -136,7 +198,6 @@ describe('CloudIdentityRuntime', () => {
       userDataDir: root,
       appRoot: root,
       appVersion: '1.0.0',
-      isPackaged: false,
       environment: {},
       installationId: 'installation-1',
       packageSecrets: memorySecrets()

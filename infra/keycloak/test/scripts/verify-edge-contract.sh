@@ -11,11 +11,11 @@ trap 'rm -rf "$tmp_dir"' EXIT
 case "$verify_mode" in
   local-edge)
     verify_route="LOCAL_EDGE_TLS"
-    curl_route=(--resolve 'login-test.sciforge.cn:443:127.0.0.1')
+    curl_resolve='login-test.sciforge.cn:443:127.0.0.1'
     ;;
   external-public)
     verify_route="EXTERNAL_PUBLIC"
-    curl_route=()
+    curl_resolve=''
     ;;
   *)
     echo "VERIFY_MODE_INVALID=true" >&2
@@ -23,20 +23,28 @@ case "$verify_mode" in
     ;;
 esac
 
+run_curl() {
+  if [[ -n "$curl_resolve" ]]; then
+    curl --resolve "$curl_resolve" "$@"
+    return
+  fi
+
+  curl "$@"
+}
+
 fetch_public_json() {
   local path="$1"
   local output="$2"
   local status
 
   if ! status="$(
-    curl \
+    run_curl \
       --silent \
       --show-error \
       --fail \
       --proto '=https' \
       --proto-redir '=https' \
       --max-redirs 0 \
-      "${curl_route[@]}" \
       --connect-timeout 10 \
       --max-time 30 \
       --header 'Accept: application/json' \

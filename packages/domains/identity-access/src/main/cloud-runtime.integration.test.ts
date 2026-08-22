@@ -180,7 +180,6 @@ describe('CloudIdentityRuntime HTTP integration', () => {
     const runtime = await CloudIdentityRuntime.create({
       userDataDir,
       appRoot: userDataDir,
-      isPackaged: true,
       environment: {
         SCIFORGE_OIDC_ISSUER: issuer,
         SCIFORGE_CLOUD_BASE_URL: baseUrl
@@ -292,7 +291,6 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       const restartedRuntime = await CloudIdentityRuntime.create({
         userDataDir,
         appRoot: userDataDir,
-        isPackaged: true,
         environment: {
           SCIFORGE_OIDC_ISSUER: issuer,
           SCIFORGE_CLOUD_BASE_URL: baseUrl
@@ -338,7 +336,6 @@ describe('CloudIdentityRuntime HTTP integration', () => {
         const rejectedRuntime = await CloudIdentityRuntime.create({
           userDataDir,
           appRoot: userDataDir,
-          isPackaged: true,
           environment: {
             SCIFORGE_OIDC_ISSUER: issuer,
             SCIFORGE_CLOUD_BASE_URL: baseUrl

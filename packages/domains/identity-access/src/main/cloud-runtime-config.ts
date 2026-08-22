@@ -5,45 +5,38 @@ import {
 
 export type DesktopIdentityRuntimeConfig =
   | Readonly<{ mode: 'http'; issuer: string; cloudBaseUrl: string }>
-  | Readonly<{ mode: 'development-memory'; issuer: string }>
   | Readonly<{ mode: 'disabled'; issuer: string | null; error: string }>
 
 export function resolveDesktopIdentityRuntimeConfig(input: Readonly<{
-  isPackaged: boolean
   oidcIssuer?: string
   cloudBaseUrl?: string
 }>): DesktopIdentityRuntimeConfig {
   const configuredIssuer = trimmed(input.oidcIssuer)
   const configuredCloudBaseUrl = trimmed(input.cloudBaseUrl)
-  if (input.isPackaged) {
+  if (!configuredIssuer || !configuredCloudBaseUrl) {
     const missing = [
       ...(configuredIssuer ? [] : ['SCIFORGE_OIDC_ISSUER']),
       ...(configuredCloudBaseUrl ? [] : ['SCIFORGE_CLOUD_BASE_URL'])
     ]
-    if (missing.length > 0) {
-      return {
-        mode: 'disabled',
-        issuer: configuredIssuer ?? null,
-        error: `Packaged cloud identity is disabled because ${missing.join(' and ')} is not configured.`
-      }
-    }
-  }
-
-  const issuer = configuredIssuer ?? 'http://127.0.0.1:8080/realms/SciForge'
-  try {
-    validateIdentityUrl(issuer, 'OIDC issuer')
-    if (configuredCloudBaseUrl) validateIdentityUrl(configuredCloudBaseUrl, 'SciForge Cloud base URL')
-  } catch (error) {
     return {
       mode: 'disabled',
       issuer: configuredIssuer ?? null,
+      error: `Cloud identity is disabled because ${missing.join(' and ')} is not configured.`
+    }
+  }
+
+  try {
+    validateIdentityUrl(configuredIssuer, 'OIDC issuer')
+    validateIdentityUrl(configuredCloudBaseUrl, 'SciForge Cloud base URL')
+  } catch (error) {
+    return {
+      mode: 'disabled',
+      issuer: null,
       error: error instanceof Error ? error.message : 'Cloud identity configuration is invalid.'
     }
   }
 
-  return configuredCloudBaseUrl
-    ? { mode: 'http', issuer, cloudBaseUrl: configuredCloudBaseUrl }
-    : { mode: 'development-memory', issuer }
+  return { mode: 'http', issuer: configuredIssuer, cloudBaseUrl: configuredCloudBaseUrl }
 }
 
 export function createUnavailableCollaborationIdentityClient(

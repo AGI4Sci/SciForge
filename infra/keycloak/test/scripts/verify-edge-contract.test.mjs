@@ -18,6 +18,7 @@ import test from 'node:test'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const wrapperPath = join(scriptDirectory, 'verify-edge-contract.sh')
+const bashExecutable = process.env.SCIFORGE_TEST_BASH?.trim() || 'bash'
 const tempRoot = mkdtempSync(join(tmpdir(), 'sciforge-edge-wrapper-'))
 const resolvedTempBase = `${resolve(tmpdir())}${sep}`
 
@@ -82,7 +83,7 @@ chmodSync(fakeCurlPath, 0o755)
 
 function runWrapper(status = '200', mode = 'local-edge') {
   writeFileSync(fakeCurlLogPath, '')
-  const result = spawnSync('bash', [wrapperPath], {
+  const result = spawnSync(bashExecutable, [wrapperPath], {
     encoding: 'utf8',
     env: {
       ...process.env,

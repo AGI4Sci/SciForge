@@ -148,7 +148,6 @@ export function createDomainMainEntry(
           userDataDir: context.userDataDir,
           appRoot: context.appRoot,
           appVersion,
-          isPackaged: host.isPackaged?.() ?? false,
           environment: context.environment,
           installationId: requireDeviceId(host),
           packageSecrets: host.packageSecrets!,

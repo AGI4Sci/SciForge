@@ -9,11 +9,18 @@ on:
       - "packages/domains/identity-access/**"
       - "packages/domain-sdk/**"
       - "infra/keycloak/**"
+      - "docs/adr/**"
+      - "docs/contexts/identity-access/**"
+      - "docs/identity-access-pr78-acceptance-receipt.md"
+      - "openspec/changes/README.md"
+      - "openspec/changes/unify-user-device-collaboration/specs/user-device-identity/spec.md"
       - "scripts/collaboration-*.mjs"
       - "scripts/domain-package-tarball-smoke.test.mjs"
       - "scripts/domain-packages.mjs"
       - "scripts/fixtures/identity-package-secrets-process.mjs"
+      - "scripts/identity-access-docs.test.mjs"
       - "scripts/keycloak-*.mjs"
+      - "scripts/publishable-package-version-audit.mjs"
       - "src/main/domain-*.ts"
       - "src/main/index.ts"
       - "src/main/principal-context*"
@@ -40,11 +47,18 @@ on:
       - "packages/domains/identity-access/**"
       - "packages/domain-sdk/**"
       - "infra/keycloak/**"
+      - "docs/adr/**"
+      - "docs/contexts/identity-access/**"
+      - "docs/identity-access-pr78-acceptance-receipt.md"
+      - "openspec/changes/README.md"
+      - "openspec/changes/unify-user-device-collaboration/specs/user-device-identity/spec.md"
       - "scripts/collaboration-*.mjs"
       - "scripts/domain-package-tarball-smoke.test.mjs"
       - "scripts/domain-packages.mjs"
       - "scripts/fixtures/identity-package-secrets-process.mjs"
+      - "scripts/identity-access-docs.test.mjs"
       - "scripts/keycloak-*.mjs"
+      - "scripts/publishable-package-version-audit.mjs"
       - "src/main/domain-*.ts"
       - "src/main/index.ts"
       - "src/main/principal-context*"
@@ -74,6 +88,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -82,6 +98,14 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Audit publishable package versions
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin \
+            "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          node scripts/publishable-package-version-audit.mjs \
+            --base "origin/${{ github.base_ref }}"
 
       - name: Check contracts and package boundaries
         run: npm run collaboration:typecheck
@@ -137,3 +161,20 @@ jobs:
 
       - name: Verify server package contents
         run: npm pack --workspace @sciforge/collaboration-server --dry-run
+
+  keycloak-macos-bash32:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify Keycloak contract with macOS system Bash 3.2
+        shell: /bin/bash {0}
+        run: |
+          printf 'macOS system Bash: %s\n' "$BASH_VERSION"
+          [[ "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}" == "3.2" ]]
+          export SCIFORGE_TEST_BASH=/bin/bash
+          npm run identity:keycloak:check

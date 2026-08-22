@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { HttpCollaborationIdentityClient } from '@sciforge/collaboration-identity'
-import { InMemoryCollaborationIdentityClient } from '@sciforge/collaboration-identity/testing'
 import type {
   DomainMainExternalNavigationHost,
   DomainMainPackageSecretStoreHost
@@ -32,7 +31,6 @@ type CloudIdentityLinks = Pick<
 export type CloudIdentityRuntimeOptions = Readonly<{
   userDataDir: string
   appRoot: string
-  isPackaged: boolean
   environment: Readonly<Record<string, string | undefined>>
   installationId: string
   packageSecrets: DomainMainPackageSecretStoreHost
@@ -76,15 +74,12 @@ export class CloudIdentityRuntime {
 
   static async create(options: CloudIdentityRuntimeOptions): Promise<CloudIdentityRuntime> {
     const identityConfig = resolveDesktopIdentityRuntimeConfig({
-      isPackaged: options.isPackaged,
       oidcIssuer: options.environment.SCIFORGE_OIDC_ISSUER,
       cloudBaseUrl: options.environment.SCIFORGE_CLOUD_BASE_URL
     })
     const identityClient = identityConfig.mode === 'http'
       ? new HttpCollaborationIdentityClient({ baseUrl: identityConfig.cloudBaseUrl })
-      : identityConfig.mode === 'development-memory'
-        ? new InMemoryCollaborationIdentityClient()
-        : createUnavailableCollaborationIdentityClient(identityConfig.error)
+      : createUnavailableCollaborationIdentityClient(identityConfig.error)
     const appVersion = options.appVersion ?? await readApplicationVersion(options.appRoot)
     const linkResult = createCloudIdentityLinks(options.userDataDir)
     const links = linkResult.links

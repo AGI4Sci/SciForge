@@ -209,7 +209,7 @@ test('publishable domain packages resolve every public export from independent t
       join(identity.root, 'sciforge.domain.json'),
       'utf8'
     ))
-    assert.equal(sdkPackage.version, '0.2.1')
+    assert.equal(sdkPackage.version, '0.2.2')
     assert.equal(sdkPackage.exports['./external-navigation'], './src/external-navigation.ts')
     assert.equal(sdkPackage.exports['./file-transfer'], './src/file-transfer.ts')
     assert.equal(
@@ -233,8 +233,8 @@ test('publishable domain packages resolve every public export from independent t
       '1.0.0'
     )
     assert.equal(contentMockPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
-    assert.equal(identityPackage.version, '1.0.0')
-    assert.equal(identityManifest.module.version, '1.0.0')
+    assert.equal(identityPackage.version, '1.1.0')
+    assert.equal(identityManifest.module.version, '1.1.0')
     assert.equal(identityManifest.module.hostApi.minimum, '1.4.0')
     assert.equal(
       identityPackage.dependencies['@sciforge/collaboration-contracts'],

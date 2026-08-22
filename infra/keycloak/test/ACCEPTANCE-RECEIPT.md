@@ -5,6 +5,19 @@
 - Keycloak release: `kc-26.7.0-oidc-r1-20260820`
 - A live edge/identity release: `7ad6d48c3bd4c6eba23c90dda370c912e6950f49`
 
+## Evidence sources
+
+- Repository-managed Keycloak delivery: PR 78 commit
+  `983b6afd9f26a8eb24b6bee0c9fcc2e65b6af44c` and the hashed files under this
+  directory.
+- Keycloak operations evidence: the controlled deployment, restart,
+  backup/restore, network, TLS, Discovery, JWKS, and non-disclosing fresh-token
+  checks summarized below.
+- External A-side evidence: release `7ad6d48c3bd4c6eba23c90dda370c912e6950f49`
+  supplied the Cloud edge and service used for integration. Its service
+  implementation is not part of PR 78 and is not represented as independently
+  reproduced by this receipt.
+
 ## Result
 
 1. **READY** - Keycloak 26.7.0 runs `start --optimized` from a digest-pinned official base; PostgreSQL is digest pinned.
