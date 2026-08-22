@@ -1123,6 +1123,52 @@ describe('provider runtime', () => {
     expect(fallbackCount).toBe(1)
   })
 
+  it('recovers a missing fallback from a terminal edit delivery after restart', async () => {
+    const failed: ProviderSendResult = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION, type: 'provider.send.failed',
+      clientMessageId: 'msg-approval-update-crashed', retryable: false,
+      providerErrorCode: 'message_not_editable', safeMessage: 'The provider rejected the edit.'
+    }
+    const provider = new FakeProvider([], [], undefined, [])
+    const ledger = new FakeRuntimeStore()
+    await ledger.recordDelivery('fake', failed.clientMessageId, failed)
+    let ackedSequence = 0
+    let fallbackCount = 0
+    let fallbackIdempotencyKey: string | undefined
+    ledger.pendingEndpointIds = () => ackedSequence ? [] : ['hep_1']
+    const message = inboxMessage(1, failed.clientMessageId, 'provider.message.update.outbound', {
+      protocolVersion: CURRENT_PROTOCOL_VERSION, type: 'provider.message.update.outbound',
+      remoteApprovalId: 'rap_abcdefghijkl', locator: LOCATOR, providerMessageId: '27182',
+      text: '本次权限已拒绝。', fallbackText: '本次权限已拒绝。'
+    })
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider], store: ledger, outboxPollMs: 20,
+      repository: {
+        getEndpoint: async () => ({ humanEndpointId: 'hep_1', userId: 'usr_1', provider: 'fake',
+          realmId: 'realm-1', providerUserId: 'remote-user-1', assurance: 'verified' as const,
+          status: 'active' as const, revision: 1, verifiedAt: '2026-08-15T00:00:00.000Z',
+          updatedAt: '2026-08-15T00:00:00.000Z' }),
+        getInboxCursor: async () => ({ recipient: { kind: 'human_endpoint' as const, id: 'hep_1' },
+          nextSequence: 2, ackedSequence, updatedAt: '2026-08-15T00:00:00.000Z' })
+      },
+      authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
+      service: { ...emptyService(),
+        pullInbox: async () => ({ messages: ackedSequence ? [] : [message], ackedSequence, nextSequence: 2 }),
+        enqueueRemoteApprovalFallback: async (input) => {
+          fallbackCount += 1
+          fallbackIdempotencyKey = input.idempotencyKey
+        },
+        ackInboxMessage: async () => { ackedSequence = 1; return { ackedSequence, nextSequence: 2 } }
+      }
+    })
+    await runtime.start()
+    await waitUntil(() => ackedSequence === 1, 1_500)
+    await runtime.stop()
+    expect(provider.updateRequests).toHaveLength(0)
+    expect(fallbackCount).toBe(1)
+    expect(fallbackIdempotencyKey).toMatch(/^idem_remote_fallback_[a-f0-9]{64}$/u)
+  })
+
   it('uses the canonical crashed claim id when the same dedupe key is replayed with a new event id', async () => {
     const event = messageEvent('event-replayed-new', 'cursor-replayed-new', 'same-remote-message')
     const provider = new FakeProvider(event)

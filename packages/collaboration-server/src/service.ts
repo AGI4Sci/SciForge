@@ -226,10 +226,20 @@ export class CollaborationService {
       if (approval.expiresAt <= at) {
         const expired = { ...approval, status: 'expired' as const, revision: approval.revision + 1, updatedAt: at }
         await tx.updateRemoteApproval(expired, approval.revision)
+        const notifications = approval.providerCardMessageId
+          ? [await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+              'provider.message.update.outbound', {
+                protocolVersion: '1.0', type: 'provider.message.update.outbound',
+                remoteApprovalId: approval.remoteApprovalId, locator: approval.locator,
+                providerMessageId: approval.providerCardMessageId,
+                text: remoteApprovalTerminalText('expired'), fallbackText: remoteApprovalTerminalText('expired')
+              }, at)]
+          : []
         return {
           response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(expired) },
           resourceKind: 'remote_capability_approval',
-          resourceId: approval.remoteApprovalId
+          resourceId: approval.remoteApprovalId,
+          notifications: notifications.map((message) => ({ recipient: message.recipient, sequence: message.sequence }))
         }
       }
       if (approval.status !== 'pending') fail('revision_conflict', 'The remote approval is already terminal.')
@@ -383,14 +393,19 @@ export class CollaborationService {
     remoteApprovalId: string
     locator: ProviderLocatorValue
     text: string
+    idempotencyKey: string
   }): Promise<void> {
-    const notification = await this.repository.transaction(async (tx) => {
+    const actor: AuthContext = {
+      kind: 'system',
+      actorKey: 'provider-runtime:remote-approval-fallback'
+    }
+    await this.commit(actor, 'capability.approval.fallback', input.idempotencyKey, input, async (tx, at) => {
       const approval = required(await tx.getRemoteApproval(input.remoteApprovalId), 'Remote approval')
       if (!sameLocator(approval.locator, input.locator)) {
         fail('permission_denied', 'The fallback notification locator does not match its approval.')
       }
       const projection = required(await tx.getProjection(approval.projectionId), 'Projection')
-      return this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+      const notification = await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
         'provider.notification.outbound', {
           protocolVersion: '1.0',
           type: 'provider.notification.outbound',
@@ -398,9 +413,14 @@ export class CollaborationService {
           remoteApprovalId: approval.remoteApprovalId,
           locator: approval.locator,
           text: input.text
-        }, this.timestamp())
+        }, at)
+      return {
+        response: { remoteApprovalId: approval.remoteApprovalId, fallbackQueued: true },
+        resourceKind: 'remote_capability_approval',
+        resourceId: approval.remoteApprovalId,
+        notifications: [{ recipient: notification.recipient, sequence: notification.sequence }]
+      }
     })
-    await this.notifier?.notifyInboxAvailable(notification.recipient, notification.sequence)
   }
 
   async expireRemoteCapabilityApprovals(limit = 100): Promise<number> {

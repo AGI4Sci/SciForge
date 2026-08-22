@@ -45,7 +45,13 @@ test('remote approval coordinator binds one exact fixed Session and reports the 
     store,
     host,
     outbox: {
-      enqueue: async (kind, request) => { writes.push({ kind, request }) }
+      enqueue: async (kind, request) => {
+        if (!writes.some((entry) => (
+          'idempotencyKey' in entry.request
+          && 'idempotencyKey' in request
+          && entry.request.idempotencyKey === request.idempotencyKey
+        ))) writes.push({ kind, request })
+      }
     },
     localAgentId: () => TEST_IDS.agentId,
     now: () => new Date(TEST_TIMESTAMP)
@@ -119,7 +125,56 @@ test('remote approval coordinator binds one exact fixed Session and reports the 
   assert.equal(store.snapshot().remoteApprovals[0]?.outcome, 'applied')
 })
 
-test('remote approval coordinator rejects a cross-Session decision before touching the Broker', async () => {
+test('a replay resumes a persisted decision after restart and reports the canonical Broker outcome', async () => {
+  const store = await approvalStore()
+  await store.transact((draft) => {
+    draft.remoteApprovals.push(persistedDecision({ state: 'deciding' }))
+  })
+  const writes: Array<{ kind: CollaborationOutboxEntry['kind']; request: RestRequest }> = []
+  let decisions = 0
+  const coordinator = new RemoteApprovalCoordinator({
+    store,
+    host: {
+      subscribe: () => () => undefined,
+      decide: async () => { decisions += 1; return 'not_pending' }
+    },
+    outbox: { enqueue: async (kind, request) => { writes.push({ kind, request }) } },
+    localAgentId: () => TEST_IDS.agentId
+  })
+  await coordinator.handleInbox(approvalDecisionMessage())
+  assert.equal(decisions, 1)
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0]?.request.type, 'capability.approval.result')
+  assert.equal(store.snapshot().remoteApprovals[0]?.outcome, 'not_pending')
+  assert.equal(store.snapshot().remoteApprovals[0]?.state, 'reporting')
+})
+
+test('a replay requeues a persisted Broker outcome without applying the decision again', async () => {
+  const store = await approvalStore()
+  await store.transact((draft) => {
+    draft.remoteApprovals.push(persistedDecision({ state: 'reporting', outcome: 'applied' }))
+  })
+  const writes: Array<{ kind: CollaborationOutboxEntry['kind']; request: RestRequest }> = []
+  let decisions = 0
+  const coordinator = new RemoteApprovalCoordinator({
+    store,
+    host: {
+      subscribe: () => () => undefined,
+      decide: async () => { decisions += 1; return 'already_terminal' }
+    },
+    outbox: { enqueue: async (kind, request) => { writes.push({ kind, request }) } },
+    localAgentId: () => TEST_IDS.agentId
+  })
+  await coordinator.handleInbox(approvalDecisionMessage())
+  assert.equal(decisions, 0)
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0]?.request.type, 'capability.approval.result')
+  if (writes[0]?.request.type === 'capability.approval.result') {
+    assert.equal(writes[0].request.outcome, 'applied')
+  }
+})
+
+test('remote approval coordinator rejects every cross-Session identity mismatch before touching the Broker', async () => {
   const store = await approvalStore()
   await store.transact((draft) => {
     draft.remoteApprovals.push({
@@ -149,22 +204,19 @@ test('remote approval coordinator rejects a cross-Session decision before touchi
     outbox: { enqueue: async () => undefined },
     localAgentId: () => TEST_IDS.agentId
   })
-  await assert.rejects(coordinator.handleInbox(agentInboxMessageSchema.parse({
-    ...agentInboxMessageFixture,
-    payload: {
-      protocolVersion: '1.0',
-      type: 'capability.approval.decision',
-      remoteApprovalId: 'rap_abcdefghijkl',
-      desktopApprovalId: 'capability-approval-fixture',
-      projectionId: TEST_IDS.projectionId,
-      runtimeId: 'codex',
-      threadId: 'wrong-thread',
-      turnId: 'runtime-turn-fixture',
-      capabilityRequestId: 'capability-request-fixture',
-      decisionId: 'decision-fixture',
-      decision: 'deny_once'
-    }
-  })), /does not match/u)
+  for (const mismatch of [
+    { projectionId: 'rsp_zyxwvutsrqpo' },
+    { runtimeId: 'another-runtime' },
+    { threadId: 'wrong-thread' },
+    { turnId: 'wrong-turn' },
+    { capabilityRequestId: 'wrong-capability-request' }
+  ]) {
+    const message = approvalDecisionMessage()
+    await assert.rejects(coordinator.handleInbox(agentInboxMessageSchema.parse({
+      ...message,
+      payload: { ...message.payload, ...mismatch, decision: 'deny_once' }
+    })), /does not match/u)
+  }
   assert.equal(called, false)
 })
 
@@ -200,6 +252,49 @@ test('a Desktop terminal transition durably supersedes an already-published phon
   assert.equal(writes[0]?.kind, 'capability.approval.withdraw')
   assert.equal(writes[0]?.request.type, 'capability.approval.withdraw')
 })
+
+function approvalDecisionMessage() {
+  return agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    payload: {
+      protocolVersion: '1.0',
+      type: 'capability.approval.decision',
+      remoteApprovalId: 'rap_abcdefghijkl',
+      desktopApprovalId: 'capability-approval-fixture',
+      projectionId: TEST_IDS.projectionId,
+      runtimeId: 'codex',
+      threadId: 'fixed-thread-1',
+      turnId: 'runtime-turn-fixture',
+      capabilityRequestId: 'capability-request-fixture',
+      decisionId: 'decision-fixture',
+      decision: 'allow_once'
+    }
+  })
+}
+
+function persistedDecision(overrides: {
+  state: 'deciding' | 'reporting'
+  outcome?: 'applied' | 'already_terminal' | 'not_pending' | 'not_eligible'
+}) {
+  return {
+    desktopApprovalId: 'capability-approval-fixture',
+    remoteApprovalId: 'rap_abcdefghijkl',
+    projectionId: TEST_IDS.projectionId,
+    runtimeId: 'codex',
+    threadId: 'fixed-thread-1',
+    turnId: 'runtime-turn-fixture',
+    capabilityRequestId: 'capability-request-fixture',
+    safeSummary: '安全摘要',
+    effect: 'workspace-write' as const,
+    remoteEligible: true,
+    expiresAt: '2026-08-15T00:05:00.000Z',
+    decisionId: 'decision-fixture',
+    decision: 'allow_once' as const,
+    ...overrides,
+    createdAt: TEST_TIMESTAMP,
+    updatedAt: TEST_TIMESTAMP
+  }
+}
 
 async function approvalStore(): Promise<CollaborationLocalStore> {
   const store = new CollaborationLocalStore(new MemoryBackend({

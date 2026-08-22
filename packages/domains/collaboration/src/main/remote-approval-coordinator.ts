@@ -47,34 +47,36 @@ export class RemoteApprovalCoordinator {
       || record.capabilityRequestId !== payload.capabilityRequestId
     ) throw new Error('Remote approval decision identity does not match the canonical pending request.')
 
-    if (record.decisionId) {
-      if (record.decisionId !== payload.decisionId || record.decision !== payload.decision) {
-        throw new Error('Remote approval decision conflicts with the persisted decision.')
-      }
-      return
+    if (record.decisionId && (
+      record.decisionId !== payload.decisionId || record.decision !== payload.decision
+    )) throw new Error('Remote approval decision conflicts with the persisted decision.')
+    if (!record.decisionId) {
+      await this.options.store.transact((draft) => {
+        const current = requireRecord(draft.remoteApprovals, record.desktopApprovalId)
+        current.decisionId = payload.decisionId
+        current.decision = payload.decision
+        current.state = 'deciding'
+        current.updatedAt = this.now().toISOString()
+      })
     }
-    await this.options.store.transact((draft) => {
-      const current = requireRecord(draft.remoteApprovals, record.desktopApprovalId)
-      current.decisionId = payload.decisionId
-      current.decision = payload.decision
-      current.state = 'deciding'
-      current.updatedAt = this.now().toISOString()
-    })
-    const outcome = await this.options.host.decide({
-      approvalId: payload.desktopApprovalId,
-      runtimeId: payload.runtimeId,
-      threadId: payload.threadId,
-      turnId: payload.turnId,
-      capabilityRequestId: payload.capabilityRequestId,
-      decisionId: payload.decisionId,
-      decision: payload.decision
-    })
-    await this.options.store.transact((draft) => {
-      const current = requireRecord(draft.remoteApprovals, record.desktopApprovalId)
-      current.outcome = outcome
-      current.state = 'reporting'
-      current.updatedAt = this.now().toISOString()
-    })
+    let outcome = record.outcome
+    if (!outcome) {
+      outcome = await this.options.host.decide({
+        approvalId: payload.desktopApprovalId,
+        runtimeId: payload.runtimeId,
+        threadId: payload.threadId,
+        turnId: payload.turnId,
+        capabilityRequestId: payload.capabilityRequestId,
+        decisionId: payload.decisionId,
+        decision: payload.decision
+      })
+      await this.options.store.transact((draft) => {
+        const current = requireRecord(draft.remoteApprovals, record.desktopApprovalId)
+        current.outcome = outcome
+        current.state = 'reporting'
+        current.updatedAt = this.now().toISOString()
+      })
+    }
     const request = restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: requestId(),

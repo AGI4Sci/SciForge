@@ -16,6 +16,7 @@ import {
   type ProviderEvent,
   type ProviderLocator,
   type ProviderSendRequest,
+  type ProviderSendResult,
   type ProviderUpdateMessageRequest,
   type ProviderVerifyIdentityRequest,
   type ProviderVerifyIdentityResult
@@ -646,6 +647,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       const prior = await this.store.readDelivery(endpoint.provider, request.clientMessageId)
       if (prior && !deliveryAttemptDue(prior, this.timestamp())) {
         if (prior.terminal) {
+          await this.enqueueTerminalUpdateFallback(message, request, prior.result)
           await this.ackDeliveredMessage(actor, message)
           continue
         }
@@ -680,18 +682,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
             result.providerMessageId
           )
         }
-        if (
-          result.type === 'provider.send.failed'
-          && request.type === 'provider.update.message'
-          && typeof message.payload.remoteApprovalId === 'string'
-          && typeof message.payload.fallbackText === 'string'
-        ) {
-          await this.service.enqueueRemoteApprovalFallback({
-            remoteApprovalId: message.payload.remoteApprovalId,
-            locator: request.locator,
-            text: message.payload.fallbackText
-          })
-        }
+        await this.enqueueTerminalUpdateFallback(message, request, result)
         await this.ackDeliveredMessage(actor, message)
         continue
       }
@@ -746,6 +737,26 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       inboxMessageId: message.messageId,
       sequence: message.sequence,
       idempotencyKey: `idem_provider_ack_${stableDigest(message.messageId)}`
+    })
+  }
+
+  private async enqueueTerminalUpdateFallback(
+    message: StoredInboxMessage,
+    request: ProviderSendRequest | ProviderUpdateMessageRequest,
+    result: ProviderSendResult
+  ): Promise<void> {
+    if (
+      result.type !== 'provider.send.failed'
+      || result.retryable
+      || request.type !== 'provider.update.message'
+      || typeof message.payload.remoteApprovalId !== 'string'
+      || typeof message.payload.fallbackText !== 'string'
+    ) return
+    await this.service.enqueueRemoteApprovalFallback({
+      remoteApprovalId: message.payload.remoteApprovalId,
+      locator: request.locator,
+      text: message.payload.fallbackText,
+      idempotencyKey: `idem_remote_fallback_${stableDigest(message.messageId)}`
     })
   }
 

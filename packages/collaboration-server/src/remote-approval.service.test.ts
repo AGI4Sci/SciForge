@@ -225,7 +225,41 @@ describe('remote capability approval security boundary', () => {
       providerEventId: 'provider-event-closed'
     })).rejects.toMatchObject({ code: 'permission_denied' })
 
-    const expiringReference = `AP1-${'C'.repeat(20)}`
+    const replyExpiredReference = `AP1-${'C'.repeat(20)}`
+    const replyExpiredService = new CollaborationService({
+      repository,
+      now,
+      remoteApprovalReference: () => replyExpiredReference
+    })
+    const replyExpired = await replyExpiredService.createRemoteCapabilityApproval(device, {
+      projectionId: projection.projectionId,
+      runtimeId: 'codex',
+      threadId: 'thread-fixed',
+      turnId: 'turn-reply-expired',
+      capabilityRequestId: 'capability-request-reply-expired',
+      desktopApprovalId: 'desktop-approval-reply-expired',
+      safeSummary: '回复时已经过期的测试操作',
+      effect: 'workspace-write',
+      remoteEligible: true,
+      expiresAt: new Date(at.getTime() + 60_000).toISOString(),
+      idempotencyKey: 'idem_remote_approval_reply_expired'
+    })
+    const replyExpiredId = String((replyExpired.approval as Record<string, unknown>).remoteApprovalId)
+    await replyExpiredService.confirmRemoteApprovalCard(replyExpiredId, 'provider-message-reply-expired')
+    const afterReplyExpiry = new CollaborationService({
+      repository,
+      now: () => new Date(at.getTime() + 61_000),
+      remoteApprovalReference: () => `AP1-${'D'.repeat(20)}`
+    })
+    const expiredDecision = await afterReplyExpiry.decideRemoteCapabilityApproval(owner.endpoint, {
+      approvalReference: replyExpiredReference,
+      decision: 'deny_once',
+      sourceLocator: locator,
+      providerEventId: 'provider-event-reply-expired'
+    })
+    expect(expiredDecision.entity).toMatchObject({ status: 'expired' })
+
+    const expiringReference = `AP1-${'E'.repeat(20)}`
     const expiringService = new CollaborationService({
       repository,
       now,
@@ -249,7 +283,7 @@ describe('remote capability approval security boundary', () => {
     const later = new CollaborationService({
       repository,
       now: () => new Date(at.getTime() + 61_000),
-      remoteApprovalReference: () => `AP1-${'D'.repeat(20)}`
+      remoteApprovalReference: () => `AP1-${'F'.repeat(20)}`
     })
     expect(await later.expireRemoteCapabilityApprovals()).toBe(1)
     expect(repository.state.remoteApprovals.get(expiringId)).toMatchObject({ status: 'expired' })
@@ -263,5 +297,26 @@ describe('remote capability approval security boundary', () => {
       messageType: 'provider.message.update.outbound',
       payload: expect.objectContaining({ providerMessageId: 'provider-message-fixture' })
     }))
+    expect(updates).toContainEqual(expect.objectContaining({
+      messageType: 'provider.message.update.outbound',
+      payload: expect.objectContaining({ providerMessageId: 'provider-message-reply-expired' })
+    }))
+    const fallbackInput = {
+      remoteApprovalId: expiringId,
+      locator,
+      text: '本次权限审批已过期。',
+      idempotencyKey: 'idem_remote_fallback_fixture'
+    }
+    await later.enqueueRemoteApprovalFallback(fallbackInput)
+    await later.enqueueRemoteApprovalFallback(fallbackInput)
+    const afterFallback = await repository.pullInbox(
+      { kind: 'human_endpoint', id: owner.endpointId },
+      0,
+      50,
+      new Date(at.getTime() + 61_000).toISOString()
+    )
+    expect(afterFallback.filter((message) => (
+      message.payload.notificationKind === 'remote_capability_approval_terminal_fallback'
+    ))).toHaveLength(1)
   })
 })
