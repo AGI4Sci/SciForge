@@ -284,14 +284,27 @@ describe('domain host contracts', () => {
     const dispose = await invoker.subscribe?.('resource-ref-1', () => undefined)
 
     assert.equal(typeof dispose, 'function')
-    listener?.({
+    const capabilityChange: DomainRendererCapabilityChange = {
       resourceRef: 'resource-ref-1',
       resourceKind: 'fixture.state',
+      origin: 'capability',
       actionId: 'fixture.state.refresh',
       beforeRevision: 'revision-1',
       afterRevision: 'revision-2',
       changedAt: '2026-07-28T00:00:00.000Z'
-    })
+    }
+    const providerChange: DomainRendererCapabilityChange = {
+      resourceRef: 'resource-ref-1',
+      resourceKind: 'fixture.state',
+      origin: 'provider',
+      beforeRevision: 'revision-2',
+      afterRevision: 'revision-3',
+      changedAt: '2026-07-28T00:00:01.000Z'
+    }
+    listener?.(capabilityChange)
+    listener?.(providerChange)
+    assert.equal(capabilityChange.actionId, 'fixture.state.refresh')
+    assert.equal('actionId' in providerChange, false)
     dispose?.()
     assert.equal(listener, undefined)
   })

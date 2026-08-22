@@ -1,6 +1,6 @@
 # Identity and Access
 
-> Current-state audit: 2026-08-17. Local Account selection and Host-injected `local-selection` Principal are implemented. OpenContent account enrollment is the active external-account integration change. Canonical cloud identity, Keycloak/OIDC, Connected Mode, and identity migration remain deferred.
+> Current-state audit: 2026-08-22. Local Account selection and the Host-injected `local-selection` Principal remain available for offline work. The `identity-access` domain package also implements system-browser Authorization Code with PKCE, strict OIDC token verification, canonical Cloud User lookup, Desktop Device enrollment, and the `cloud-authenticated` Principal transition. The SciForge Cloud service that supplies `/v1/me` and Device APIs is an external deployment dependency rather than an implementation owned by this repository.
 
 Identity and Access is the SciForge bounded context for recognizing people and establishing who is currently acting. It keeps SciForge identity independent from external services while allowing a user to authorize explicit account bindings.
 
@@ -53,7 +53,7 @@ The SciForge operating state backed by a current cloud-authenticated Human Princ
 _Avoid_: internet available, provider login, Local Profile
 
 **Human Principal**:
-The representation of the current SciForge User and the assurance with which that identity was established. V1 can assert only locally selected identity; that Principal may own a node-local Provider Connection, but the Provider's own authentication rather than local selection proves control of the External Account.
+The representation of the current SciForge User and the assurance with which that identity was established. Local Account selection can assert `local-selection`. A verified OIDC session mapped through `/v1/me` can assert `cloud-authenticated` only while the current Desktop Device is `ACTIVE`. A Human Principal may own a node-local Provider Connection, but the Provider's own authentication rather than either Principal assurance proves control of the External Account.
 _Avoid_: caller ID, installation ID, email match, provider login
 
 **Principal Assurance**:

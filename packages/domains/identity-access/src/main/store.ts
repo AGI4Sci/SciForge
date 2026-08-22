@@ -7,21 +7,37 @@ import {
   MAX_LOCAL_ACCOUNTS,
   IdentityValidationError,
   identityAvailableStateSchema,
+  localCloudIdentityLinkSchema,
   localAccountSchema,
   normalizeUsername,
   type IdentityAvailableState,
   type IdentityUnavailableState,
-  type LocalAccount
+  type LocalAccount,
+  type LocalCloudIdentityLink
 } from '../contract.js'
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
 type AccountRow = {
   user_id: string
   username: string
   created_at: string
   updated_at: string
+  cloud_user_id: string | null
+  cloud_oidc_identity_id: string | null
+  cloud_issuer: string | null
+  cloud_subject: string | null
+  cloud_device_id: string | null
+  cloud_device_status: string | null
 }
+
+export type CloudIdentityLinkInput = Readonly<{
+  cloudUserId: string
+  oidcIdentityId: string
+  issuer: string
+  subject: string
+  displayName: string
+}>
 
 type StateRow = {
   current_user_id: string | null
@@ -113,7 +129,9 @@ export class IdentityStore {
   listAccounts(): readonly LocalAccount[] {
     this.assertOpen()
     const rows = this.database.prepare(`
-      SELECT user_id, username, created_at, updated_at
+      SELECT user_id, username, created_at, updated_at,
+             cloud_user_id, cloud_oidc_identity_id, cloud_issuer, cloud_subject,
+             cloud_device_id, cloud_device_status
       FROM accounts ORDER BY created_at ASC, user_id ASC
     `).all() as AccountRow[]
     return Object.freeze(rows.map(mapAccount))
@@ -233,6 +251,125 @@ export class IdentityStore {
     return this.state()
   }
 
+  advanceIdentityVersion(): IdentityAvailableState {
+    return this.transaction(() => {
+      const current = this.state()
+      requireNextIdentityVersion(current.identityVersion)
+      this.database.prepare(`
+        UPDATE identity_state
+        SET identity_version = identity_version + 1
+        WHERE singleton_id = 1
+      `).run()
+      return this.state()
+    })
+  }
+
+  linkCloudIdentity(input: CloudIdentityLinkInput): IdentityAvailableState {
+    const parsedLink = localCloudIdentityLinkSchema.parse({
+      cloudUserId: input.cloudUserId,
+      oidcIdentityId: input.oidcIdentityId,
+      issuer: input.issuer,
+      subject: input.subject
+    })
+    return this.transaction(() => {
+      const current = this.state()
+      const byUser = this.accountRowByCloudUser(parsedLink.cloudUserId)
+      const bySubject = this.accountRowByCloudSubject(parsedLink.issuer, parsedLink.subject)
+      if (byUser && bySubject && byUser.user_id !== bySubject.user_id) {
+        throw new IdentityValidationError(
+          'identity-unavailable',
+          'The cloud User and OIDC subject are linked to different Local Accounts.'
+        )
+      }
+
+      let target = byUser ?? bySubject
+      if (!target) {
+        const currentRow = current.currentAccount
+          ? this.accountRow(current.currentAccount.userId)
+          : null
+        target = currentRow && currentRow.cloud_user_id === null
+          ? currentRow
+          : this.createCloudAccountRow(input.displayName, current.accountCount)
+      }
+
+      const mappingChanged =
+        target.cloud_user_id !== parsedLink.cloudUserId ||
+        target.cloud_oidc_identity_id !== parsedLink.oidcIdentityId ||
+        target.cloud_issuer !== parsedLink.issuer ||
+        target.cloud_subject !== parsedLink.subject
+      const selectionChanged = current.currentAccount?.userId !== target.user_id
+      if (!mappingChanged && !selectionChanged) return current
+
+      requireNextIdentityVersion(current.identityVersion)
+      if (mappingChanged) {
+        this.database.prepare(`
+          UPDATE accounts
+          SET cloud_user_id = ?, cloud_oidc_identity_id = ?, cloud_issuer = ?,
+              cloud_subject = ?, updated_at = ?
+          WHERE user_id = ?
+        `).run(
+          parsedLink.cloudUserId,
+          parsedLink.oidcIdentityId,
+          parsedLink.issuer,
+          parsedLink.subject,
+          new Date().toISOString(),
+          target.user_id
+        )
+      }
+      this.database.prepare(`
+        UPDATE identity_state
+        SET current_user_id = ?, identity_version = identity_version + 1
+        WHERE singleton_id = 1
+      `).run(target.user_id)
+      return this.state()
+    })
+  }
+
+  linkCloudDevice(
+    cloudUserId: string,
+    deviceId: string,
+    status: 'active' | 'revoked'
+  ): IdentityAvailableState {
+    return this.transaction(() => {
+      const current = this.state()
+      const target = this.accountRowByCloudUser(cloudUserId)
+      if (!target) {
+        throw new IdentityValidationError(
+          'account-not-found',
+          'No Local Account is linked to this cloud User.'
+        )
+      }
+      const parsed = localCloudIdentityLinkSchema.parse({
+        cloudUserId: target.cloud_user_id,
+        oidcIdentityId: target.cloud_oidc_identity_id,
+        issuer: target.cloud_issuer,
+        subject: target.cloud_subject,
+        deviceId,
+        deviceStatus: status
+      })
+      const linkedDeviceId = parsed.deviceId!
+      const linkedDeviceStatus = parsed.deviceStatus!
+      if (
+        target.cloud_device_id === linkedDeviceId &&
+        target.cloud_device_status === linkedDeviceStatus
+      ) {
+        return current
+      }
+      requireNextIdentityVersion(current.identityVersion)
+      this.database.prepare(`
+        UPDATE accounts
+        SET cloud_device_id = ?, cloud_device_status = ?, updated_at = ?
+        WHERE user_id = ?
+      `).run(linkedDeviceId, linkedDeviceStatus, new Date().toISOString(), target.user_id)
+      this.database.prepare(`
+        UPDATE identity_state
+        SET identity_version = identity_version + 1
+        WHERE singleton_id = 1
+      `).run()
+      return this.state()
+    })
+  }
+
   close(): void {
     if (this.closed) return
     this.closed = true
@@ -241,9 +378,75 @@ export class IdentityStore {
 
   private account(userId: string): LocalAccount | null {
     const row = this.database.prepare(`
-      SELECT user_id, username, created_at, updated_at FROM accounts WHERE user_id = ?
+      SELECT user_id, username, created_at, updated_at,
+             cloud_user_id, cloud_oidc_identity_id, cloud_issuer, cloud_subject,
+             cloud_device_id, cloud_device_status
+      FROM accounts WHERE user_id = ?
     `).get(userId) as AccountRow | undefined
     return row ? mapAccount(row) : null
+  }
+
+  private accountRow(userId: string): AccountRow | null {
+    return (this.database.prepare(`
+      SELECT user_id, username, created_at, updated_at,
+             cloud_user_id, cloud_oidc_identity_id, cloud_issuer, cloud_subject,
+             cloud_device_id, cloud_device_status
+      FROM accounts WHERE user_id = ?
+    `).get(userId) as AccountRow | undefined) ?? null
+  }
+
+  private accountRowByCloudUser(cloudUserId: string): AccountRow | null {
+    return (this.database.prepare(`
+      SELECT user_id, username, created_at, updated_at,
+             cloud_user_id, cloud_oidc_identity_id, cloud_issuer, cloud_subject,
+             cloud_device_id, cloud_device_status
+      FROM accounts WHERE cloud_user_id = ?
+    `).get(cloudUserId) as AccountRow | undefined) ?? null
+  }
+
+  private accountRowByCloudSubject(issuer: string, subject: string): AccountRow | null {
+    return (this.database.prepare(`
+      SELECT user_id, username, created_at, updated_at,
+             cloud_user_id, cloud_oidc_identity_id, cloud_issuer, cloud_subject,
+             cloud_device_id, cloud_device_status
+      FROM accounts WHERE cloud_issuer = ? AND cloud_subject = ?
+    `).get(issuer, subject) as AccountRow | undefined) ?? null
+  }
+
+  private createCloudAccountRow(displayName: string, accountCount: number): AccountRow {
+    if (accountCount >= MAX_LOCAL_ACCOUNTS) {
+      throw new IdentityValidationError(
+        'account-capacity-exceeded',
+        `This installation supports at most ${MAX_LOCAL_ACCOUNTS} Local Accounts.`
+      )
+    }
+    const userId = randomUUID()
+    const timestamp = new Date().toISOString()
+    const normalized = this.uniqueCloudUsername(displayName)
+    this.database.prepare(`
+      INSERT INTO accounts (user_id, username, username_key, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(userId, normalized.username, normalized.usernameKey, timestamp, timestamp)
+    return this.accountRow(userId)!
+  }
+
+  private uniqueCloudUsername(displayName: string): ReturnType<typeof normalizeUsername> {
+    const sanitized = Array.from(displayName.normalize('NFC'))
+      .map((character) => /[\p{L}\p{N} _-]/u.test(character) ? character : ' ')
+      .join('')
+      .replace(/\s+/gu, ' ')
+      .trim() || 'SciForge User'
+    const base = Array.from(sanitized).slice(0, 64).join('')
+    for (let suffix = 1; suffix <= MAX_LOCAL_ACCOUNTS + 1; suffix += 1) {
+      const suffixText = suffix === 1 ? '' : ` ${suffix}`
+      const candidate = `${Array.from(base).slice(0, 64 - suffixText.length).join('')}${suffixText}`
+      const normalized = normalizeUsername(candidate)
+      const exists = this.database.prepare(
+        'SELECT 1 FROM accounts WHERE username_key = ?'
+      ).get(normalized.usernameKey)
+      if (!exists) return normalized
+    }
+    throw new IdentityValidationError('username-conflict', 'Could not allocate a Local Account name.')
   }
 
   private accountWithKey(userId: string): (AccountRow & { username_key: string }) | null {
@@ -316,6 +519,24 @@ function migrate(database: DatabaseSync): void {
         PRAGMA user_version = 1;
       `)
     }
+    if (version < 2) {
+      database.exec(`
+        ALTER TABLE accounts ADD COLUMN cloud_user_id TEXT NULL;
+        ALTER TABLE accounts ADD COLUMN cloud_oidc_identity_id TEXT NULL;
+        ALTER TABLE accounts ADD COLUMN cloud_issuer TEXT NULL;
+        ALTER TABLE accounts ADD COLUMN cloud_subject TEXT NULL;
+        ALTER TABLE accounts ADD COLUMN cloud_device_id TEXT NULL;
+        ALTER TABLE accounts ADD COLUMN cloud_device_status TEXT NULL
+          CHECK (cloud_device_status IN ('active', 'revoked'));
+        CREATE UNIQUE INDEX accounts_cloud_user_id_unique
+          ON accounts (cloud_user_id) WHERE cloud_user_id IS NOT NULL;
+        CREATE UNIQUE INDEX accounts_cloud_subject_unique
+          ON accounts (cloud_issuer, cloud_subject) WHERE cloud_issuer IS NOT NULL;
+        CREATE UNIQUE INDEX accounts_cloud_device_id_unique
+          ON accounts (cloud_device_id) WHERE cloud_device_id IS NOT NULL;
+        PRAGMA user_version = 2;
+      `)
+    }
     database.exec('COMMIT')
   } catch (error) {
     try {
@@ -328,11 +549,34 @@ function migrate(database: DatabaseSync): void {
 }
 
 function mapAccount(row: AccountRow): LocalAccount {
+  const cloudIdentity = cloudIdentityFromRow(row)
   return localAccountSchema.parse({
     userId: row.user_id,
     username: row.username,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
+    ...(cloudIdentity ? { cloudIdentity } : {})
+  })
+}
+
+function cloudIdentityFromRow(row: AccountRow): LocalCloudIdentityLink | null {
+  const values = [
+    row.cloud_user_id,
+    row.cloud_oidc_identity_id,
+    row.cloud_issuer,
+    row.cloud_subject
+  ]
+  if (values.every((value) => value === null)) return null
+  if (values.some((value) => value === null)) {
+    throw new Error('Local Account cloud identity columns are inconsistent.')
+  }
+  return localCloudIdentityLinkSchema.parse({
+    cloudUserId: row.cloud_user_id,
+    oidcIdentityId: row.cloud_oidc_identity_id,
+    issuer: row.cloud_issuer,
+    subject: row.cloud_subject,
+    ...(row.cloud_device_id ? { deviceId: row.cloud_device_id } : {}),
+    ...(row.cloud_device_status ? { deviceStatus: row.cloud_device_status } : {})
   })
 }
 

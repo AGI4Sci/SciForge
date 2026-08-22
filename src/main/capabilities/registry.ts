@@ -27,6 +27,15 @@ export type CapabilityResourceObserver = (
   context: Readonly<{ signal?: AbortSignal }>
 ) => CapabilityResourceObservation | Promise<CapabilityResourceObservation>
 
+export type CapabilityResourceProviderChange = Readonly<{
+  semanticRevision: string
+  layoutRevision?: string
+}>
+
+export type CapabilityResourceProviderChangeSubscription = (
+  listener: (change: CapabilityResourceProviderChange) => void
+) => () => void
+
 export type CapabilityResourceRegistration = {
   resourceId: string
   resourceKind: string
@@ -35,6 +44,8 @@ export type CapabilityResourceRegistration = {
   semanticRevision: string
   layoutRevision?: string
   observe: CapabilityResourceObserver
+  /** Synchronously registers provider-originated resource changes and returns an idempotent disposer. */
+  subscribeChanges?: CapabilityResourceProviderChangeSubscription
   /** Releases provider-owned state after the broker has retired every task binding. */
   dispose?: () => void | Promise<void>
   contentTransport?: {

@@ -11,6 +11,7 @@ import {
   CAPABILITY_AGENT_TOOL_NAMES,
   CapabilityAgentToolError,
   createCapabilityAgentToolSurface,
+  type AgentCapabilityEvent,
   type AgentVisualRuntime,
   type CapabilityAgentApprovalRequest,
   type CapabilityAgentBroker,
@@ -55,6 +56,31 @@ const context: CapabilityAgentToolRequestContext = {
 }
 
 describe('CapabilityAgentToolSurface', () => {
+  it('keeps capability and provider event attribution structurally distinct', () => {
+    const capabilityEvent: AgentCapabilityEvent = {
+      eventId: 'event_abcdefghijklmnopqrstuvwxyz',
+      type: 'resource.changed',
+      origin: 'capability',
+      occurredAt: '2026-07-16T11:00:00.000Z',
+      resourceRef: 'res_document_abcdefghijklmnopqrstuvwxyz',
+      resourceStatus: 'live',
+      resourceKind: 'document',
+      operationRef: 'op_abcdefghijklmnopqrstuvwxyz'
+    }
+    const providerEvent: AgentCapabilityEvent = {
+      eventId: 'event_provider_abcdefghijklmnop',
+      type: 'resource.changed',
+      origin: 'provider',
+      occurredAt: '2026-07-16T11:01:00.000Z',
+      resourceRef: 'res_provider_abcdefghijklmnopqrstuvwxyz',
+      resourceStatus: 'live',
+      resourceKind: 'document'
+    }
+
+    expect(capabilityEvent.operationRef).toMatch(/^op_/u)
+    expect(providerEvent).not.toHaveProperty('operationRef')
+  })
+
   it('fails closed when the Host cannot match a tool request to its captured Principal lease', async () => {
     const discover = vi.fn(async () => [])
     const assertPrincipalLease = vi.fn(() => {
@@ -340,6 +366,7 @@ describe('CapabilityAgentToolSurface', () => {
         listEvents: vi.fn(async () => [{
           id: 'event_abcdefghijklmnopqrstuvwxyz',
           type: 'resource.changed' as const,
+          origin: 'capability' as const,
           occurredAt: '2026-07-16T11:00:00.000Z',
           workspaceId: '/workspace',
           resourceRef,
@@ -362,9 +389,50 @@ describe('CapabilityAgentToolSurface', () => {
       value: [{
         resourceRef,
         resourceStatus: 'retired',
+        origin: 'capability',
         operationRef: expect.stringMatching(/^op_/u)
       }]
     })
+  })
+
+  it('projects provider-originated changes without inventing an operation reference', async () => {
+    const resourceRef = 'res_provider_abcdefghijklmnopqrstuvwxyz'
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => []),
+        listEvents: vi.fn(async () => [{
+          id: 'event_provider_abcdefghijklmnop',
+          type: 'resource.changed' as const,
+          origin: 'provider' as const,
+          occurredAt: '2026-07-16T11:01:00.000Z',
+          workspaceId: '/workspace',
+          resourceRef,
+          resourceStatus: 'live' as const,
+          resourceKind: 'document',
+          beforeRevision: '2',
+          afterRevision: '3'
+        }])
+      },
+      resolveCaller: () => caller
+    })
+
+    const result = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.events,
+      arguments: {},
+      context
+    })
+    if (result.tool !== CAPABILITY_AGENT_TOOL_NAMES.events) throw new Error('Expected events result.')
+    expect(result.value).toEqual([{
+      eventId: 'event_provider_abcdefghijklmnop',
+      type: 'resource.changed',
+      origin: 'provider',
+      occurredAt: '2026-07-16T11:01:00.000Z',
+      resourceRef,
+      resourceStatus: 'live',
+      resourceKind: 'document'
+    }])
+    expect(result.value[0]).not.toHaveProperty('operationRef')
   })
 
   it('preserves nested array items and discriminated union variants in compact schemas', async () => {

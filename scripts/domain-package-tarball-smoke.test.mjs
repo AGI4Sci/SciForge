@@ -31,6 +31,8 @@ const targetPackageDirectories = Object.freeze([
   'packages/domains/visual-review'
 ])
 const localDependencyDirectories = Object.freeze([
+  'packages/collaboration-contracts',
+  'packages/collaboration-identity',
   'packages/workers/image-generation',
   'packages/workers/scientific-plotting'
 ])
@@ -66,7 +68,21 @@ function moduleSpecifiers(source) {
 }
 
 async function assertPackedPackageBoundaries(packageRoot, packageName) {
-  for (const sourceFile of await sourceFiles(join(packageRoot, 'src'))) {
+  let codeRoot = null
+  for (const directory of ['src', 'dist']) {
+    const candidate = join(packageRoot, directory)
+    try {
+      if ((await lstat(candidate)).isDirectory()) {
+        codeRoot = candidate
+        break
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+  }
+  assert.notEqual(codeRoot, null, `${packageName} packed archive must contain src or dist`)
+
+  for (const sourceFile of await sourceFiles(codeRoot)) {
     const source = await readFile(sourceFile, 'utf8')
     for (const specifier of moduleSpecifiers(source)) {
       assert.doesNotMatch(
@@ -89,7 +105,12 @@ async function assertPackedPackageBoundaries(packageRoot, packageName) {
 function publicExportSpecifiers(packageJson) {
   assert.equal(typeof packageJson.exports, 'object', `${packageJson.name} must declare exports`)
   return Object.entries(packageJson.exports).map(([subpath, target]) => {
-    assert.equal(typeof target, 'string', `${packageJson.name} ${subpath} must use one explicit export target`)
+    const importTarget = typeof target === 'string' ? target : target?.import
+    assert.equal(
+      typeof importTarget,
+      'string',
+      `${packageJson.name} ${subpath} must use one explicit import target`
+    )
     return subpath === '.' ? packageJson.name : `${packageJson.name}${subpath.slice(1)}`
   })
 }
@@ -128,7 +149,7 @@ test('publishable domain packages resolve every public export from independent t
 
     await run(npm, [
       'install',
-      '--offline',
+      '--prefer-offline',
       '--ignore-scripts',
       '--omit=peer',
       '--no-package-lock',
@@ -188,7 +209,7 @@ test('publishable domain packages resolve every public export from independent t
       join(identity.root, 'sciforge.domain.json'),
       'utf8'
     ))
-    assert.equal(sdkPackage.version, '0.2.1')
+    assert.equal(sdkPackage.version, '0.2.2')
     assert.equal(sdkPackage.exports['./external-navigation'], './src/external-navigation.ts')
     assert.equal(sdkPackage.exports['./file-transfer'], './src/file-transfer.ts')
     assert.equal(
@@ -212,9 +233,17 @@ test('publishable domain packages resolve every public export from independent t
       '1.0.0'
     )
     assert.equal(contentMockPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
-    assert.equal(identityPackage.version, '1.0.0')
-    assert.equal(identityManifest.module.version, '1.0.0')
-    assert.equal(identityManifest.module.hostApi.minimum, '1.3.0')
+    assert.equal(identityPackage.version, '1.1.0')
+    assert.equal(identityManifest.module.version, '1.1.0')
+    assert.equal(identityManifest.module.hostApi.minimum, '1.4.0')
+    assert.equal(
+      identityPackage.dependencies['@sciforge/collaboration-contracts'],
+      '0.1.0'
+    )
+    assert.equal(
+      identityPackage.dependencies['@sciforge/collaboration-identity'],
+      '0.1.0'
+    )
     assert.equal(identityPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
     assert.equal(
       checkpointPackage.dependencies['@sciforge/domain-artifact-versions'],

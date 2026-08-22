@@ -2,6 +2,37 @@
 
 ## ADDED Requirements
 
+### Requirement: Desktop 使用系统浏览器完成 OIDC PKCE 登录
+
+Desktop SHALL 作为无 client secret 的 public client，通过系统浏览器执行 Authorization Code with PKCE S256，并只在受控 loopback callback 接收授权响应。Desktop SHALL NOT 嵌入登录页、收集用户密码、使用 Password Grant、Implicit Flow 或与外部 provider 共用 client。
+
+#### Scenario: 用户完成 Desktop 登录
+
+- **WHEN** 用户在系统浏览器完成授权且 callback state 与 PKCE verifier 均有效
+- **THEN** Desktop SHALL 交换并安全保存可轮换的会话凭据
+- **AND** Renderer、日志、Trace 和普通配置 SHALL NOT 接收 Access Token、Refresh Token、授权码或用户密码。
+
+### Requirement: Cloud Principal 必须通过严格 Token 与 Device 门禁
+
+Desktop SHALL 在建立 `cloud-authenticated` Principal 前验证固定 issuer、JWKS 签名、RS256、非空 `kid`、目标 audience、authorized party，以及 `sub`、`exp`、`nbf`、`iat`、`auth_time` 的存在、类型和时间关系。验证失败、配置缺失或网络错误 SHALL fail closed，并保持本地功能可用但不得授予 Cloud authority。
+
+#### Scenario: Access Token 不满足冻结合同
+
+- **WHEN** Token 签名无效、issuer/audience/authorized party 不匹配，或必需时间 claim 缺失、类型错误或超出容忍范围
+- **THEN** Desktop SHALL 拒绝 Cloud session
+- **AND** SHALL NOT 调用受保护的 SciForge Cloud API 或建立 `cloud-authenticated` Principal。
+
+### Requirement: Canonical Cloud User 与 Desktop Device 共同决定远端身份
+
+Desktop SHALL 使用受验证的 Access Token 调用 `/v1/me` 获取 canonical Cloud User，并将当前安装注册为该用户的独立 Device。只有当前用户已登录且当前 Device 为 `ACTIVE` 时，Identity and Access 才 SHALL 发布 `cloud-authenticated` Principal；Device missing、revoked、ownership conflict 或网络失败 SHALL 降级为非 Cloud authority，而不得复用其他用户或安装的 Device。
+
+#### Scenario: 当前 Device 被撤销或无法确认
+
+- **WHEN** Cloud 返回 Device revoked、missing、ownership conflict 或无法确认的网络状态
+- **THEN** Desktop SHALL 清除 active Device projection 并停止发布 `cloud-authenticated` Principal
+- **AND** 本地 `local-selection` 功能 MAY 继续工作
+- **AND** 恢复 Cloud authority SHALL 要求同一当前用户的 Device 再次被确认或注册为 `ACTIVE`。
+
 ### Requirement: 用户是唯一的人类协作主体
 
 系统 SHALL 使用稳定 `userId` 表示一个协作个体，并以该身份表达 Project 成员关系、Agent 所有权、真人问题目标和审计主体。手机端点、provider 账号、安装实例、显示名和邮箱 SHALL NOT 各自创建隐式用户。

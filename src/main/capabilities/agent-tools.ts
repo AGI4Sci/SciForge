@@ -173,15 +173,24 @@ export type AgentCapabilityInvocation = Readonly<{
   completedAt: string
 }>
 
-export type AgentCapabilityEvent = Readonly<{
+type AgentCapabilityEventBase = Readonly<{
   eventId: string
   type: 'resource.changed'
   occurredAt: string
   resourceRef: string
   resourceStatus: 'live' | 'retired'
   resourceKind: string
-  operationRef: string
 }>
+
+export type AgentCapabilityEvent =
+  | Readonly<AgentCapabilityEventBase & {
+      origin: 'capability'
+      operationRef: string
+    }>
+  | Readonly<AgentCapabilityEventBase & {
+      origin: 'provider'
+      operationRef?: never
+    }>
 
 export type CapabilityAgentToolResult =
   | { tool: typeof CAPABILITY_AGENT_TOOL_NAMES.discover; value: AgentOperationDescriptor[] }
@@ -433,15 +442,26 @@ export class CapabilityAgentToolSurface {
         this.#assertPrincipalLease(request.context)
         const result: CapabilityAgentToolResult = {
           tool: CAPABILITY_AGENT_TOOL_NAMES.events,
-          value: events.map((event) => ({
-            eventId: event.id,
-            type: event.type,
-            occurredAt: event.occurredAt,
-            resourceRef: event.resourceRef,
-            resourceStatus: event.resourceStatus,
-            resourceKind: event.resourceKind,
-            operationRef: this.#operationRef(cache, this.#descriptorForId(descriptors, event.actionId))
-          }))
+          value: events.map((event): AgentCapabilityEvent => {
+            const common = {
+              eventId: event.id,
+              type: event.type,
+              occurredAt: event.occurredAt,
+              resourceRef: event.resourceRef,
+              resourceStatus: event.resourceStatus,
+              resourceKind: event.resourceKind
+            }
+            return event.origin === 'capability'
+              ? {
+                  ...common,
+                  origin: 'capability',
+                  operationRef: this.#operationRef(
+                    cache,
+                    this.#descriptorForId(descriptors, event.actionId)
+                  )
+                }
+              : { ...common, origin: 'provider' }
+          })
         }
         this.#assertPrincipalLease(request.context)
         return result

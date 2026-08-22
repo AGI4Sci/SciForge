@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "environment": "a-https-oidc-test",
+  "testOnly": true,
+  "releaseId": "kc-26.7.0-oidc-r1-20260820",
+  "recordedDate": "2026-08-21",
+  "ecsAddress": "47.76.230.118",
+  "oidc": {
+    "issuer": "https://login-test.sciforge.cn/realms/SciForge",
+    "discoveryUrl": "https://login-test.sciforge.cn/realms/SciForge/.well-known/openid-configuration",
+    "jwksUrl": "https://login-test.sciforge.cn/realms/SciForge/protocol/openid-connect/certs",
+    "signatureAlgorithm": "RS256",
+    "desktopClientId": "sciforge-desktop",
+    "webMobileClientId": "sciforge-web-mobile",
+    "cloudAudience": "sciforge-cloud-api",
+    "authorizedParties": [
+      "sciforge-desktop",
+      "sciforge-web-mobile"
+    ],
+    "desktopRedirectUri": "http://127.0.0.1:43110/oidc/callback"
+  },
+  "edge": {
+    "repository": "https://github.com/hanhuiyang5-web/SciForge",
+    "branch": "feat/a-cloud-identity-e2e",
+    "commit": "7ad6d48c3bd4c6eba23c90dda370c912e6950f49",
+    "caddyImage": "caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a",
+    "network": "sciforge-keycloak_identity-edge",
+    "serviceAlias": "keycloak",
+    "servicePort": 8080,
+    "trustedProxyAddress": "172.24.0.3",
+    "singleHostPublishedPort": 443
+  },
+  "images": {
+    "keycloakBase": "quay.io/keycloak/keycloak@sha256:0f198be292568439d700cdbfb893e69a6009bb43a94a06a945b1d3d506c76b13",
+    "optimizedKeycloakImageId": "sha256:9d3a3537cec0553cf96b2d9e8bf3737e9d1bcc4ce8dcd9f36855e0c9507ed921",
+    "postgres": "postgres@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94"
+  },
+  "deployedArtifactSha256": {
+    "compose": "0dfdf4b4d89ac90d9b2a9d1dd089f637778590f9e90980d1b4f50a386ccea437",
+    "containerfile": "f0f691e6f473663dd5050a02a5e18746685c4bce4aa5bf96f83f1be673e51142",
+    "realmTemplate": "573b737f2399797ca7ca4e86de58651747d78b7a44a6590d2cde32e36640dd54"
+  },
+  "tls": {
+    "issuer": "Let's Encrypt YE2",
+    "subjectCommonName": "login-test.sciforge.cn",
+    "subjectAlternativeNames": [
+      "login-test.sciforge.cn"
+    ],
+    "notBefore": "2026-08-20T10:30:36Z",
+    "notAfter": "2026-11-18T10:30:35Z",
+    "sha256Fingerprint": "38:0F:71:6D:86:33:11:9A:D4:13:8D:A5:52:2A:0D:CF:A4:1A:B1:40:2C:14:98:5D:69:5C:48:C9:5A:44:8D:31"
+  },
+  "backup": {
+    "file": "preopt-20260820T095503Z/keycloak-postgresql-17.6.dump",
+    "sha256": "1d0859cec719d1ae9a11e3950960fd626683a9280faa0eda0239314d667e63b2",
+    "isolatedRestorePassed": true,
+    "temporaryRestoreResourcesRemoved": true
+  },
+  "recordedRuntimeEvidence": {
+    "keycloakHealthy": true,
+    "postgresHealthy": true,
+    "restartHealthRecoverySeconds": 32,
+    "hostPortsNotPublished": [
+      8080,
+      9000,
+      5432
+    ],
+    "twoFreshDesktopPkceTokensPassedStrictClaims": true,
+    "twoDistinctActiveDevicesPassed": true,
+    "sameInstallationCrossOwnerRejected": true
+  },
+  "residualAcceptance": [
+    "Remote refresh-token revocation and end-session completion were not independently proven by the packaged Desktop logout acceptance.",
+    "Previously exposed dedicated test-account passwords must be rotated by the account custodian before later shared use."
+  ]
+}

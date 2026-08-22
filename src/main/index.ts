@@ -1139,6 +1139,7 @@ app
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => app.getPath('userData'),
       getDeviceId: () => hostDeviceId,
+      getAppVersion: () => app.getVersion(),
       getAppRoot: () => app.getAppPath(),
       getExecutablePath: () => process.execPath,
       isPackaged: () => app.isPackaged,

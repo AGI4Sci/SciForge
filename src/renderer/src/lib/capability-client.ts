@@ -205,14 +205,16 @@ export class RendererCapabilityClient {
       if (disposed || payload.subscriptionId !== subscriptionId) return
       const event = capabilityResourceChangeEventSchema.parse(payload.event)
       if (event.resourceRef !== normalizedResourceRef) return
-      listener({
+      const common = {
         resourceRef: event.resourceRef,
         resourceKind: event.resourceKind,
-        actionId: event.actionId,
         beforeRevision: event.beforeRevision,
         afterRevision: event.afterRevision,
         changedAt: event.occurredAt
-      })
+      }
+      listener(event.origin === 'capability'
+        ? { ...common, origin: 'capability', actionId: event.actionId }
+        : { ...common, origin: 'provider' })
     }
     const removeEventListener = transport.onEvent((payload) => {
       if (subscriptionId === null) {

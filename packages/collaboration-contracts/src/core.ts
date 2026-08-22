@@ -22,7 +22,7 @@ export const compatibleProtocolVersionSchema = versionStringSchema.refine(
   { message: `Protocol version must be compatible with ${CURRENT_PROTOCOL_VERSION}` }
 )
 
-const opaqueSuffix = '[A-Za-z0-9]{12,64}'
+const opaqueSuffix = '[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])'
 
 function opaqueId(prefix: string): z.ZodString {
   return z.string().regex(new RegExp(`^${prefix}_${opaqueSuffix}$`, 'u'))
@@ -30,6 +30,7 @@ function opaqueId(prefix: string): z.ZodString {
 
 export const userIdSchema = opaqueId('usr')
 export const humanEndpointIdSchema = opaqueId('hep')
+export const deviceIdSchema = opaqueId('dev')
 export const agentIdSchema = opaqueId('agt')
 export const participantIdSchema = opaqueId('par')
 export const projectionIdSchema = opaqueId('rsp')
@@ -51,6 +52,7 @@ export const managedContainerIdSchema = opaqueId('mco')
 
 export type UserId = z.infer<typeof userIdSchema>
 export type HumanEndpointId = z.infer<typeof humanEndpointIdSchema>
+export type DeviceId = z.infer<typeof deviceIdSchema>
 export type AgentId = z.infer<typeof agentIdSchema>
 export type ParticipantId = z.infer<typeof participantIdSchema>
 export type ProjectionId = z.infer<typeof projectionIdSchema>

@@ -1,4 +1,7 @@
-import type { DomainMainHost } from '@sciforge/domain-sdk/host'
+import type {
+  DomainMainHost,
+  DomainMainRuntimeLifecycleContribution
+} from '@sciforge/domain-sdk/host'
 import {
   principalDeviceIdSchema,
   type DomainMainPrincipalProvider
@@ -7,6 +10,10 @@ import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import type { z } from 'zod'
 import {
   IDENTITY_CAPABILITY_IDS,
+  cloudDeviceRevokeInputSchema,
+  cloudIdentityInspectOutputSchema,
+  cloudIdentityObservationContract,
+  cloudIdentitySnapshotSchema,
   accountRenameInputSchema,
   accountSelectionInputSchema,
   emptyIdentityInputSchema,
@@ -21,14 +28,40 @@ import {
   IDENTITY_ACCESS_DOMAIN_MODULE_ID,
   IDENTITY_CAPABILITY_FACTORY_CONTRIBUTION,
   IDENTITY_PRINCIPAL_PROVIDER_CONTRIBUTION,
+  IDENTITY_RUNTIME_LIFECYCLE_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition.js'
 import { IdentityService } from './service.js'
+import { CloudIdentityRuntime } from './cloud-runtime.js'
+
+export { LocalCloudIdentityLinkService } from './cloud-link-service.js'
 
 type IdentityCapabilityEffect = 'read' | 'external-write' | 'destructive'
 type IdentityCapabilityContext = Readonly<{
   caller: Readonly<{ audience: 'ui' | 'agent' | 'system' }>
   assertPrincipalCurrent: () => void
+  resource?: Readonly<{
+    resourceId: string
+    resourceKind: string
+    semanticRevision: string
+  }>
+  issueResource?: (registration: Readonly<{
+    resourceId: string
+    resourceKind: string
+    audiences: readonly ['ui']
+    semanticRevision: string
+    observe: () => Promise<Readonly<{
+      state: unknown
+      semanticRevision: string
+      operationIds: readonly string[]
+    }>>
+    subscribeChanges: (listener: (change: Readonly<{
+      semanticRevision: string
+      layoutRevision?: string
+    }>) => void) => () => void
+    dispose: () => void
+    retireAfterLastHandleExpires: true
+  }>) => unknown
 }>
 
 export type IdentityCapabilityOptions = Readonly<{
@@ -37,12 +70,13 @@ export type IdentityCapabilityOptions = Readonly<{
   title: string
   description: string
   audiences: readonly ['ui']
-  scope: 'global'
+  scope: 'global' | 'resource'
+  resourceKinds?: readonly string[]
   effect: IdentityCapabilityEffect
   principalTransition?: 'host-authority'
   approval: 'none' | 'confirmation'
   concurrency: Readonly<{
-    revision: 'none'
+    revision: 'none' | 'optimistic'
     idempotency: 'none' | 'required'
   }>
   tags: readonly string[]
@@ -51,8 +85,8 @@ export type IdentityCapabilityOptions = Readonly<{
   handler: (
     input: any,
     context: IdentityCapabilityContext
-  ) => Readonly<{ output: unknown; changed?: boolean }> |
-    Promise<Readonly<{ output: unknown; changed?: boolean }>>
+  ) => Readonly<{ output: unknown; changed?: boolean; semanticRevision?: string }> |
+    Promise<Readonly<{ output: unknown; changed?: boolean; semanticRevision?: string }>>
 }>
 
 export type IdentityCapabilityFactory<CapabilityDefinition = unknown> = Readonly<{
@@ -66,11 +100,17 @@ export type IdentityCapabilityFactory<CapabilityDefinition = unknown> = Readonly
   createDefinitions: () => readonly CapabilityDefinition[]
 }>
 
-type IdentityMainContribution = IdentityCapabilityFactory | DomainMainPrincipalProvider
+type IdentityMainContribution =
+  | IdentityCapabilityFactory
+  | DomainMainPrincipalProvider
+  | DomainMainRuntimeLifecycleContribution
 
 export function createDomainMainEntry(
   host: DomainMainHost
 ): TrustedDomainProcessEntryInput<IdentityMainContribution> {
+  if (!host.packageSecrets) {
+    throw new Error('Identity requires package-scoped secret storage.')
+  }
   let service: IdentityService | undefined
   const getService = (): IdentityService => {
     service ??= new IdentityService(
@@ -84,12 +124,71 @@ export function createDomainMainEntry(
     snapshot: () => getService().snapshot(),
     subscribe: (listener) => getService().subscribe(listener)
   })
-  let disposed = false
-  const dispose = (): void => {
-    if (disposed) return
-    disposed = true
+  let cloudRuntime: CloudIdentityRuntime | null = null
+  let cloudActivation: Promise<CloudIdentityRuntime> | null = null
+  const closedCloudRuntimes = new WeakSet<CloudIdentityRuntime>()
+  const getCloudRuntime = (): CloudIdentityRuntime => {
+    if (!cloudRuntime) throw new Error('Cloud identity runtime is not active.')
+    return cloudRuntime
+  }
+  const closeCloudRuntime = (runtime: CloudIdentityRuntime | null): void => {
+    if (!runtime || closedCloudRuntimes.has(runtime)) return
+    closedCloudRuntimes.add(runtime)
+    if (cloudRuntime === runtime) cloudRuntime = null
+    runtime.close()
+  }
+  const lifecycle: DomainMainRuntimeLifecycleContribution = Object.freeze({
+    activate: async (context) => {
+      if (cloudRuntime || cloudActivation) {
+        throw new Error('Cloud identity runtime lifecycle is already active.')
+      }
+      const pending = (async () => {
+        const appVersion = requireAppVersion(host)
+        const runtime = await CloudIdentityRuntime.create({
+          userDataDir: context.userDataDir,
+          appRoot: context.appRoot,
+          appVersion,
+          environment: context.environment,
+          installationId: requireDeviceId(host),
+          packageSecrets: host.packageSecrets!,
+          externalNavigation: host.externalNavigation
+        })
+        try {
+          await runtime.initialize()
+          return runtime
+        } catch (error) {
+          closeCloudRuntime(runtime)
+          throw error
+        }
+      })()
+      cloudActivation = pending
+      try {
+        const runtime = await pending
+        cloudRuntime = runtime
+        return () => closeCloudRuntime(runtime)
+      } finally {
+        if (cloudActivation === pending) cloudActivation = null
+      }
+    }
+  })
+  let localDisposed = false
+  const disposeLocal = (): void => {
+    if (localDisposed) return
+    localDisposed = true
     service?.close()
     service = undefined
+  }
+  const disposeCloud = async (): Promise<void> => {
+    const pending = cloudActivation
+    if (!pending) {
+      closeCloudRuntime(cloudRuntime)
+      return
+    }
+    try {
+      closeCloudRuntime(await pending)
+    } catch {
+      // A failed activation already reports through the lifecycle owner.
+    }
   }
 
   return {
@@ -101,14 +200,20 @@ export function createDomainMainEntry(
           defineCapability: host.defineCapability as (
             options: IdentityCapabilityOptions
           ) => unknown,
-          getService
+          getService,
+          getCloudRuntime
         }),
-        onDispose: dispose
+        onDispose: disposeLocal
       },
       {
         ...IDENTITY_PRINCIPAL_PROVIDER_CONTRIBUTION,
         value: principalProvider,
-        onDispose: dispose
+        onDispose: disposeLocal
+      },
+      {
+        ...IDENTITY_RUNTIME_LIFECYCLE_CONTRIBUTION,
+        value: lifecycle,
+        onDispose: disposeCloud
       }
     ]
   }
@@ -117,6 +222,7 @@ export function createDomainMainEntry(
 export function createIdentityCapabilityFactory<CapabilityDefinition>(options: Readonly<{
   defineCapability: (options: IdentityCapabilityOptions) => CapabilityDefinition
   getService: () => IdentityService
+  getCloudRuntime: () => CloudIdentityRuntime
 }>): IdentityCapabilityFactory<CapabilityDefinition> {
   const define = (
     input: Omit<IdentityCapabilityOptions, 'version' | 'audiences' | 'scope' | 'tags'>
@@ -148,6 +254,38 @@ export function createIdentityCapabilityFactory<CapabilityDefinition>(options: R
   ): Readonly<{ output: unknown }> => {
     requireHumanUi(context)
     const output = operation()
+    try {
+      context.assertPrincipalCurrent()
+    } catch (error) {
+      if (!isPrincipalChangedError(error)) throw error
+    }
+    return { output }
+  }
+  const observeCloud = async () => {
+    const runtime = options.getCloudRuntime()
+    const state = cloudIdentitySnapshotSchema.parse(runtime.snapshot())
+    return {
+      state,
+      semanticRevision: runtime.semanticRevision(),
+      operationIds: []
+    }
+  }
+  const disposeCloudResource = (): void => undefined
+  const subscribeCloudChanges = (
+    listener: (change: Readonly<{ semanticRevision: string; layoutRevision?: string }>) => void
+  ): (() => void) => {
+    const runtime = options.getCloudRuntime()
+    return runtime.subscribe(() => listener({ semanticRevision: runtime.semanticRevision() }))
+  }
+  const mutateCloud = async (
+    context: IdentityCapabilityContext,
+    operation: (runtime: CloudIdentityRuntime) => Promise<unknown>
+  ): Promise<Readonly<{
+    output: unknown
+  }>> => {
+    requireHumanUi(context)
+    const runtime = options.getCloudRuntime()
+    const output = cloudIdentitySnapshotSchema.parse(await operation(runtime))
     try {
       context.assertPrincipalCurrent()
     } catch (error) {
@@ -271,9 +409,123 @@ export function createIdentityCapabilityFactory<CapabilityDefinition>(options: R
           context,
           () => options.getService().backupAndReset(input.secondConfirmation)
         )
-      })
+      }),
+      options.defineCapability({
+        id: IDENTITY_CAPABILITY_IDS.cloudInspect,
+        version: '1.0.0',
+        title: 'Inspect Cloud Identity',
+        description: 'Issues the canonical observable Desktop cloud identity resource.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        tags: ['identity-access', 'cloud', 'oidc', 'device'],
+        inputSchema: emptyIdentityInputSchema,
+        outputSchema: cloudIdentityInspectOutputSchema,
+        handler: async (_input, context) => {
+          requireHumanUi(context)
+          const runtime = options.getCloudRuntime()
+          const snapshot = cloudIdentitySnapshotSchema.parse(runtime.snapshot())
+          const resource = requireIssueResource(context)({
+            resourceId: 'desktop-cloud-identity',
+            resourceKind: cloudIdentityObservationContract.resourceKind,
+            audiences: ['ui'],
+            semanticRevision: runtime.semanticRevision(),
+            observe: observeCloud,
+            subscribeChanges: subscribeCloudChanges,
+            dispose: disposeCloudResource,
+            retireAfterLastHandleExpires: true
+          })
+          return {
+            output: cloudIdentityInspectOutputSchema.parse({ snapshot, resource })
+          }
+        }
+      }),
+      ...cloudMutationDefinitions(options.defineCapability, mutateCloud)
     ]
   })
+}
+
+function cloudMutationDefinitions<CapabilityDefinition>(
+  defineCapability: (options: IdentityCapabilityOptions) => CapabilityDefinition,
+  mutate: (
+    context: IdentityCapabilityContext,
+    operation: (runtime: CloudIdentityRuntime) => Promise<unknown>
+  ) => Promise<Readonly<{
+    output: unknown
+  }>>
+): readonly CapabilityDefinition[] {
+  const define = (
+    id: string,
+    title: string,
+    description: string,
+    inputSchema: z.ZodType,
+    operation: (runtime: CloudIdentityRuntime, input: any) => Promise<unknown>
+  ): CapabilityDefinition => defineCapability({
+    id,
+    version: '1.0.0',
+    title,
+    description,
+    audiences: ['ui'],
+    scope: 'global',
+    effect: 'external-write',
+    principalTransition: 'host-authority',
+    approval: 'none',
+    concurrency: { revision: 'none', idempotency: 'required' },
+    tags: ['identity-access', 'cloud', 'oidc', 'device'],
+    inputSchema,
+    outputSchema: cloudIdentitySnapshotSchema,
+    handler: (input, context) => mutate(
+      context,
+      (runtime) => operation(runtime, input)
+    )
+  })
+
+  return [
+    define(
+      IDENTITY_CAPABILITY_IDS.cloudLogin,
+      'Sign In to SciForge Cloud',
+      'Starts Authorization Code with PKCE in the system browser.',
+      emptyIdentityInputSchema,
+      (runtime) => runtime.login()
+    ),
+    define(
+      IDENTITY_CAPABILITY_IDS.cloudReauthenticate,
+      'Reauthenticate SciForge Cloud',
+      'Requires a fresh browser authentication for the current cloud User.',
+      emptyIdentityInputSchema,
+      (runtime) => runtime.reauthenticate()
+    ),
+    define(
+      IDENTITY_CAPABILITY_IDS.cloudLogout,
+      'Sign Out of SciForge Cloud',
+      'Revokes the refresh session and clears local cloud credentials.',
+      emptyIdentityInputSchema,
+      (runtime) => runtime.logout()
+    ),
+    define(
+      IDENTITY_CAPABILITY_IDS.cloudEnrollDevice,
+      'Enroll This Desktop',
+      'Registers this installation as a SciForge Cloud Device.',
+      emptyIdentityInputSchema,
+      (runtime) => runtime.enrollDevice()
+    ),
+    define(
+      IDENTITY_CAPABILITY_IDS.cloudRefreshDevices,
+      'Refresh Cloud Devices',
+      'Reloads the current User Device list from SciForge Cloud.',
+      emptyIdentityInputSchema,
+      (runtime) => runtime.refreshDevices()
+    ),
+    define(
+      IDENTITY_CAPABILITY_IDS.cloudRevokeDevice,
+      'Revoke Cloud Device',
+      'Revokes one Device owned by the authenticated cloud User.',
+      cloudDeviceRevokeInputSchema,
+      (runtime, input) => runtime.revokeDevice(input.deviceId)
+    )
+  ]
 }
 
 function requireHumanUi(context: IdentityCapabilityContext): void {
@@ -282,11 +534,33 @@ function requireHumanUi(context: IdentityCapabilityContext): void {
   }
 }
 
+function requireIssueResource(
+  context: IdentityCapabilityContext
+): NonNullable<IdentityCapabilityContext['issueResource']> {
+  if (!context.issueResource) {
+    throw new Error('Cloud identity inspection requires the Host resource broker.')
+  }
+  return context.issueResource
+}
+
 function isPrincipalChangedError(error: unknown): boolean {
   return typeof error === 'object' &&
     error !== null &&
     'code' in error &&
     error.code === 'principal_changed'
+}
+
+function requireAppVersion(host: DomainMainHost): string {
+  const appVersion = host.getAppVersion?.()
+  if (
+    typeof appVersion !== 'string' ||
+    appVersion.length === 0 ||
+    appVersion.length > 256 ||
+    appVersion.trim() !== appVersion
+  ) {
+    throw new Error('Identity requires the canonical Host application version.')
+  }
+  return appVersion
 }
 
 function requireDeviceId(host: DomainMainHost): string {

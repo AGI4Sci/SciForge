@@ -14,6 +14,11 @@ import {
   type IdentityListAccountsOutput,
   type IdentityUiState
 } from '../contract.js'
+import {
+  activeCloudDeviceId,
+  activeCloudUserId,
+  subscribeCloudIdentityChanges
+} from './cloud-link-service.js'
 import { IdentityStore, IdentityStoreOpenError } from './store.js'
 
 type StoreFactory = Readonly<{
@@ -25,6 +30,8 @@ export class IdentityService implements DomainMainPrincipalProvider {
   private store: IdentityStore | null = null
   private unavailableState: IdentityUiState | null = null
   private readonly listeners = new Set<(snapshot: PrincipalContextSnapshot) => void>()
+  private readonly databasePath: string
+  private readonly disposeCloudIdentitySubscription: () => void
   private lastPublishedVersion = 0
 
   constructor(
@@ -32,7 +39,18 @@ export class IdentityService implements DomainMainPrincipalProvider {
     private readonly deviceId: string,
     private readonly stores: StoreFactory = IdentityStore
   ) {
+    this.databasePath = join(this.userDataDir, 'identity-access', 'identity.sqlite')
     this.initialize()
+    this.disposeCloudIdentitySubscription = subscribeCloudIdentityChanges(
+      this.databasePath,
+      (change) => {
+        if (change.kind === 'storage-failed') {
+          this.failClosed(change.error)
+          return
+        }
+        this.refreshCloudIdentityState()
+      }
+    )
   }
 
   inspect(): IdentityUiState {
@@ -85,7 +103,7 @@ export class IdentityService implements DomainMainPrincipalProvider {
     }
     const resetIdentityVersion = nextIdentityVersion(this.lastPublishedVersion)
 
-    const databasePath = join(this.userDataDir, 'identity-access', 'identity.sqlite')
+    const databasePath = this.databasePath
     const backupPath = nextBackupPath(databasePath)
     try {
       copyFileSync(databasePath, backupPath, constants.COPYFILE_EXCL)
@@ -142,7 +160,12 @@ export class IdentityService implements DomainMainPrincipalProvider {
         principal: null
       })
     }
-    return principalContextFromState(state, this.deviceId)
+    return principalContextFromState(
+      state,
+      this.deviceId,
+      activeCloudUserId(this.databasePath),
+      activeCloudDeviceId(this.databasePath)
+    )
   }
 
   subscribe(listener: (snapshot: PrincipalContextSnapshot) => void): () => void {
@@ -151,6 +174,7 @@ export class IdentityService implements DomainMainPrincipalProvider {
   }
 
   close(): void {
+    this.disposeCloudIdentitySubscription()
     this.store?.close()
     this.store = null
     this.listeners.clear()
@@ -222,7 +246,12 @@ export class IdentityService implements DomainMainPrincipalProvider {
   }
 
   private publish(state: IdentityAvailableState): void {
-    const snapshot = principalContextFromState(state, this.deviceId)
+    const snapshot = principalContextFromState(
+      state,
+      this.deviceId,
+      activeCloudUserId(this.databasePath),
+      activeCloudDeviceId(this.databasePath)
+    )
     if (snapshot.identityVersion <= this.lastPublishedVersion) return
     this.lastPublishedVersion = snapshot.identityVersion
     this.notify(snapshot)
@@ -236,6 +265,15 @@ export class IdentityService implements DomainMainPrincipalProvider {
         // A projection listener is not part of the committed Identity
         // transaction and cannot revoke or poison the Principal authority.
       }
+    }
+  }
+
+  private refreshCloudIdentityState(): void {
+    if (!this.store || this.unavailableState) return
+    try {
+      this.publish(this.store.state())
+    } catch (error) {
+      this.failClosed(error)
     }
   }
 }
@@ -252,14 +290,29 @@ function nextIdentityVersion(identityVersion: number): number {
 
 function principalContextFromState(
   state: IdentityAvailableState,
-  deviceId: string
+  localDeviceId: string,
+  activeCloudUser: string | null,
+  activeCloudDevice: string | null
 ): PrincipalContextSnapshot {
-  const principal = state.currentAccount
-    ? {
+  const account = state.currentAccount
+  const cloudIdentity = account?.cloudIdentity
+  const hasActiveCloudDevice = cloudIdentity?.cloudUserId === activeCloudUser &&
+    cloudIdentity.deviceStatus === 'active' &&
+    cloudIdentity.deviceId === activeCloudDevice
+  const principal = account
+    ? hasActiveCloudDevice
+      ? {
+          authority: 'sciforge-cloud',
+          subject: cloudIdentity.cloudUserId,
+          assurance: 'cloud-authenticated' as const,
+          deviceId: cloudIdentity.deviceId,
+          identityVersion: state.identityVersion
+        }
+      : {
         authority: IDENTITY_PRINCIPAL_AUTHORITY,
-        subject: state.currentAccount.userId,
+        subject: account.userId,
         assurance: 'local-selection' as const,
-        deviceId,
+        deviceId: localDeviceId,
         identityVersion: state.identityVersion
       }
     : null

@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **239**
+Registered actions: **246**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -146,6 +146,13 @@ Registered actions: **239**
 | `git-checkpoints.list` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `git-checkpoints.preview` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `git-checkpoints.restore` | 1.0.0 | ui, agent | destructive | confirmation | workspace |
+| `identity.cloud.enroll-device` | 1.0.0 | ui | external-write | none | global |
+| `identity.cloud.inspect` | 1.0.0 | ui | read | none | global |
+| `identity.cloud.login` | 1.0.0 | ui | external-write | none | global |
+| `identity.cloud.logout` | 1.0.0 | ui | external-write | none | global |
+| `identity.cloud.reauthenticate` | 1.0.0 | ui | external-write | none | global |
+| `identity.cloud.refresh-devices` | 1.0.0 | ui | external-write | none | global |
+| `identity.cloud.revoke-device` | 1.0.0 | ui | external-write | none | global |
 | `identity.local.backup-and-reset` | 1.0.0 | ui | destructive | confirmation | global |
 | `identity.local.create-account` | 1.0.0 | ui | external-write | none | global |
 | `identity.local.dismiss-first-prompt` | 1.0.0 | ui | external-write | none | global |
@@ -17458,7 +17465,7 @@ Destructively archives the authenticated user managed Channel and pauses its fix
                 "type": "string"
               },
               "humanEndpointId": {
-                "pattern": "^hep_[A-Za-z0-9]{12,64}$",
+                "pattern": "^hep_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "lastVerifiedAt": {
@@ -17474,11 +17481,11 @@ Destructively archives the authenticated user managed Channel and pauses its fix
                 ]
               },
               "managedContainerId": {
-                "pattern": "^mco_[A-Za-z0-9]{12,64}$",
+                "pattern": "^mco_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "ownerUserId": {
-                "pattern": "^usr_[A-Za-z0-9]{12,64}$",
+                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "policy": {
@@ -17805,7 +17812,7 @@ Reads or refreshes the authenticated user managed Channel and locator status.
                 "type": "string"
               },
               "humanEndpointId": {
-                "pattern": "^hep_[A-Za-z0-9]{12,64}$",
+                "pattern": "^hep_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "lastVerifiedAt": {
@@ -17821,11 +17828,11 @@ Reads or refreshes the authenticated user managed Channel and locator status.
                 ]
               },
               "managedContainerId": {
-                "pattern": "^mco_[A-Za-z0-9]{12,64}$",
+                "pattern": "^mco_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "ownerUserId": {
-                "pattern": "^usr_[A-Za-z0-9]{12,64}$",
+                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "policy": {
@@ -18164,7 +18171,7 @@ Creates or repairs the authenticated user managed Channel through the durable pr
                 "type": "string"
               },
               "humanEndpointId": {
-                "pattern": "^hep_[A-Za-z0-9]{12,64}$",
+                "pattern": "^hep_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "lastVerifiedAt": {
@@ -18180,11 +18187,11 @@ Creates or repairs the authenticated user managed Channel through the durable pr
                 ]
               },
               "managedContainerId": {
-                "pattern": "^mco_[A-Za-z0-9]{12,64}$",
+                "pattern": "^mco_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "ownerUserId": {
-                "pattern": "^usr_[A-Za-z0-9]{12,64}$",
+                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "policy": {
@@ -19805,7 +19812,7 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
               "type": "string"
             },
             "humanEndpointId": {
-              "pattern": "^hep_[A-Za-z0-9]{12,64}$",
+              "pattern": "^hep_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
               "type": "string"
             },
             "lastVerifiedAt": {
@@ -19821,11 +19828,11 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
               ]
             },
             "managedContainerId": {
-              "pattern": "^mco_[A-Za-z0-9]{12,64}$",
+              "pattern": "^mco_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
               "type": "string"
             },
             "ownerUserId": {
-              "pattern": "^usr_[A-Za-z0-9]{12,64}$",
+              "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
               "type": "string"
             },
             "policy": {
@@ -39023,6 +39030,3585 @@ Captures a rescue checkpoint, then restores the selected checkpoint.
 }
 ```
 
+## `identity.cloud.enroll-device`
+
+Registers this installation as a SciForge Cloud Device.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "device": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "signed-out",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "not-enrolled",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "enrolling",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "device": {
+                "additionalProperties": false,
+                "properties": {
+                  "activatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "platform": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "arch": {
+                        "enum": [
+                          "x64",
+                          "arm64"
+                        ],
+                        "type": "string"
+                      },
+                      "os": {
+                        "enum": [
+                          "windows",
+                          "macos",
+                          "linux"
+                        ],
+                        "type": "string"
+                      },
+                      "osVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "os",
+                      "arch",
+                      "appVersion"
+                    ],
+                    "type": "object"
+                  },
+                  "revokedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "deviceId",
+                  "displayName",
+                  "status",
+                  "platform"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "active",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "device": {
+                "additionalProperties": false,
+                "properties": {
+                  "activatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "platform": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "arch": {
+                        "enum": [
+                          "x64",
+                          "arm64"
+                        ],
+                        "type": "string"
+                      },
+                      "os": {
+                        "enum": [
+                          "windows",
+                          "macos",
+                          "linux"
+                        ],
+                        "type": "string"
+                      },
+                      "osVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "os",
+                      "arch",
+                      "appVersion"
+                    ],
+                    "type": "object"
+                  },
+                  "revokedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "deviceId",
+                  "displayName",
+                  "status",
+                  "platform"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "revoked",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "state": {
+                "const": "error",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "devices": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "activatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "deviceId": {
+              "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+              "type": "string"
+            },
+            "displayName": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "platform": {
+              "additionalProperties": false,
+              "properties": {
+                "appVersion": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "arch": {
+                  "enum": [
+                    "x64",
+                    "arm64"
+                  ],
+                  "type": "string"
+                },
+                "os": {
+                  "enum": [
+                    "windows",
+                    "macos",
+                    "linux"
+                  ],
+                  "type": "string"
+                },
+                "osVersion": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "readOnly": true,
+              "required": [
+                "os",
+                "arch",
+                "appVersion"
+              ],
+              "type": "object"
+            },
+            "revokedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "pending",
+                "active",
+                "revoked"
+              ],
+              "type": "string"
+            }
+          },
+          "readOnly": true,
+          "required": [
+            "deviceId",
+            "displayName",
+            "status",
+            "platform"
+          ],
+          "type": "object"
+        },
+        "maxItems": 1024,
+        "type": "array"
+      },
+      "error": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "identity",
+              "device",
+              "runtime"
+            ],
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "source",
+          "message"
+        ],
+        "type": "object"
+      },
+      "identity": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "signed-out",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "accessTokenExpiresAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "state": {
+                "const": "signed-in",
+                "type": "string"
+              },
+              "user": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "email": {
+                    "format": "email",
+                    "maxLength": 512,
+                    "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+                    "type": "string"
+                  },
+                  "emailVerified": {
+                    "type": "boolean"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "username": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "userId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject",
+                  "displayName"
+                ],
+                "type": "object"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "user",
+              "accessTokenExpiresAt"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "revision": {
+        "pattern": "^cloud-[1-9][0-9]*$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "identity",
+      "device",
+      "devices",
+      "revision"
+    ],
+    "type": "object"
+  },
+  "principalTransition": "host-authority",
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "cloud",
+    "oidc",
+    "device"
+  ],
+  "title": "Enroll This Desktop"
+}
+```
+
+## `identity.cloud.inspect`
+
+Issues the canonical observable Desktop cloud identity resource.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "resource": {
+        "additionalProperties": false,
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "semanticRevision": {
+            "pattern": "^cloud-[1-9][0-9]*$",
+            "type": "string"
+          },
+          "token": {
+            "pattern": "^cap_[A-Za-z0-9_-]{20,}$",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "token",
+          "semanticRevision",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "snapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "state": {
+                    "const": "signed-out",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "state": {
+                    "const": "not-enrolled",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "state": {
+                    "const": "enrolling",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "device": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "activatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "deviceId": {
+                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "displayName": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "platform": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "appVersion": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "arch": {
+                            "enum": [
+                              "x64",
+                              "arm64"
+                            ],
+                            "type": "string"
+                          },
+                          "os": {
+                            "enum": [
+                              "windows",
+                              "macos",
+                              "linux"
+                            ],
+                            "type": "string"
+                          },
+                          "osVersion": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "readOnly": true,
+                        "required": [
+                          "os",
+                          "arch",
+                          "appVersion"
+                        ],
+                        "type": "object"
+                      },
+                      "revokedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "status": {
+                        "enum": [
+                          "pending",
+                          "active",
+                          "revoked"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "deviceId",
+                      "displayName",
+                      "status",
+                      "platform"
+                    ],
+                    "type": "object"
+                  },
+                  "state": {
+                    "const": "active",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "state",
+                  "device"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "device": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "activatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "deviceId": {
+                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "displayName": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "platform": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "appVersion": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "arch": {
+                            "enum": [
+                              "x64",
+                              "arm64"
+                            ],
+                            "type": "string"
+                          },
+                          "os": {
+                            "enum": [
+                              "windows",
+                              "macos",
+                              "linux"
+                            ],
+                            "type": "string"
+                          },
+                          "osVersion": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "readOnly": true,
+                        "required": [
+                          "os",
+                          "arch",
+                          "appVersion"
+                        ],
+                        "type": "object"
+                      },
+                      "revokedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "status": {
+                        "enum": [
+                          "pending",
+                          "active",
+                          "revoked"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "deviceId",
+                      "displayName",
+                      "status",
+                      "platform"
+                    ],
+                    "type": "object"
+                  },
+                  "state": {
+                    "const": "revoked",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "state",
+                  "device"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "message": {
+                    "maxLength": 2048,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "const": "error",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "state",
+                  "message"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "devices": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "activatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "deviceId": {
+                  "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "displayName": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "platform": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "appVersion": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "arch": {
+                      "enum": [
+                        "x64",
+                        "arm64"
+                      ],
+                      "type": "string"
+                    },
+                    "os": {
+                      "enum": [
+                        "windows",
+                        "macos",
+                        "linux"
+                      ],
+                      "type": "string"
+                    },
+                    "osVersion": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "readOnly": true,
+                  "required": [
+                    "os",
+                    "arch",
+                    "appVersion"
+                  ],
+                  "type": "object"
+                },
+                "revokedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "pending",
+                    "active",
+                    "revoked"
+                  ],
+                  "type": "string"
+                }
+              },
+              "readOnly": true,
+              "required": [
+                "deviceId",
+                "displayName",
+                "status",
+                "platform"
+              ],
+              "type": "object"
+            },
+            "maxItems": 1024,
+            "type": "array"
+          },
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "identity",
+                  "device",
+                  "runtime"
+                ],
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "source",
+              "message"
+            ],
+            "type": "object"
+          },
+          "identity": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "state": {
+                    "const": "signed-out",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "accessTokenExpiresAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "state": {
+                    "const": "signed-in",
+                    "type": "string"
+                  },
+                  "user": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "displayName": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "email": {
+                        "format": "email",
+                        "maxLength": 512,
+                        "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+                        "type": "string"
+                      },
+                      "emailVerified": {
+                        "type": "boolean"
+                      },
+                      "issuer": {
+                        "format": "uri",
+                        "maxLength": 2048,
+                        "type": "string"
+                      },
+                      "oidcIdentityId": {
+                        "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "subject": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "userId": {
+                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "username": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "userId",
+                      "oidcIdentityId",
+                      "issuer",
+                      "subject",
+                      "displayName"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "state",
+                  "user",
+                  "accessTokenExpiresAt"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "revision": {
+            "pattern": "^cloud-[1-9][0-9]*$",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "identity",
+          "device",
+          "devices",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "snapshot",
+      "resource"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "cloud",
+    "oidc",
+    "device"
+  ],
+  "title": "Inspect Cloud Identity"
+}
+```
+
+## `identity.cloud.login`
+
+Starts Authorization Code with PKCE in the system browser.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "device": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "signed-out",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "not-enrolled",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "enrolling",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "device": {
+                "additionalProperties": false,
+                "properties": {
+                  "activatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "platform": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "arch": {
+                        "enum": [
+                          "x64",
+                          "arm64"
+                        ],
+                        "type": "string"
+                      },
+                      "os": {
+                        "enum": [
+                          "windows",
+                          "macos",
+                          "linux"
+                        ],
+                        "type": "string"
+                      },
+                      "osVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "os",
+                      "arch",
+                      "appVersion"
+                    ],
+                    "type": "object"
+                  },
+                  "revokedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "deviceId",
+                  "displayName",
+                  "status",
+                  "platform"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "active",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "device": {
+                "additionalProperties": false,
+                "properties": {
+                  "activatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "platform": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "arch": {
+                        "enum": [
+                          "x64",
+                          "arm64"
+                        ],
+                        "type": "string"
+                      },
+                      "os": {
+                        "enum": [
+                          "windows",
+                          "macos",
+                          "linux"
+                        ],
+                        "type": "string"
+                      },
+                      "osVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "os",
+                      "arch",
+                      "appVersion"
+                    ],
+                    "type": "object"
+                  },
+                  "revokedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "deviceId",
+                  "displayName",
+                  "status",
+                  "platform"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "revoked",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "state": {
+                "const": "error",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "devices": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "activatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "deviceId": {
+              "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+              "type": "string"
+            },
+            "displayName": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "platform": {
+              "additionalProperties": false,
+              "properties": {
+                "appVersion": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "arch": {
+                  "enum": [
+                    "x64",
+                    "arm64"
+                  ],
+                  "type": "string"
+                },
+                "os": {
+                  "enum": [
+                    "windows",
+                    "macos",
+                    "linux"
+                  ],
+                  "type": "string"
+                },
+                "osVersion": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "readOnly": true,
+              "required": [
+                "os",
+                "arch",
+                "appVersion"
+              ],
+              "type": "object"
+            },
+            "revokedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "pending",
+                "active",
+                "revoked"
+              ],
+              "type": "string"
+            }
+          },
+          "readOnly": true,
+          "required": [
+            "deviceId",
+            "displayName",
+            "status",
+            "platform"
+          ],
+          "type": "object"
+        },
+        "maxItems": 1024,
+        "type": "array"
+      },
+      "error": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "identity",
+              "device",
+              "runtime"
+            ],
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "source",
+          "message"
+        ],
+        "type": "object"
+      },
+      "identity": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "signed-out",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "accessTokenExpiresAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "state": {
+                "const": "signed-in",
+                "type": "string"
+              },
+              "user": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "email": {
+                    "format": "email",
+                    "maxLength": 512,
+                    "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+                    "type": "string"
+                  },
+                  "emailVerified": {
+                    "type": "boolean"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "username": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "userId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject",
+                  "displayName"
+                ],
+                "type": "object"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "user",
+              "accessTokenExpiresAt"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "revision": {
+        "pattern": "^cloud-[1-9][0-9]*$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "identity",
+      "device",
+      "devices",
+      "revision"
+    ],
+    "type": "object"
+  },
+  "principalTransition": "host-authority",
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "cloud",
+    "oidc",
+    "device"
+  ],
+  "title": "Sign In to SciForge Cloud"
+}
+```
+
+## `identity.cloud.logout`
+
+Revokes the refresh session and clears local cloud credentials.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "device": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "signed-out",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "not-enrolled",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "enrolling",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "device": {
+                "additionalProperties": false,
+                "properties": {
+                  "activatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "platform": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "arch": {
+                        "enum": [
+                          "x64",
+                          "arm64"
+                        ],
+                        "type": "string"
+                      },
+                      "os": {
+                        "enum": [
+                          "windows",
+                          "macos",
+                          "linux"
+                        ],
+                        "type": "string"
+                      },
+                      "osVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "os",
+                      "arch",
+                      "appVersion"
+                    ],
+                    "type": "object"
+                  },
+                  "revokedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "deviceId",
+                  "displayName",
+                  "status",
+                  "platform"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "active",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "device": {
+                "additionalProperties": false,
+                "properties": {
+                  "activatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "platform": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "arch": {
+                        "enum": [
+                          "x64",
+                          "arm64"
+                        ],
+                        "type": "string"
+                      },
+                      "os": {
+                        "enum": [
+                          "windows",
+                          "macos",
+                          "linux"
+                        ],
+                        "type": "string"
+                      },
+                      "osVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "os",
+                      "arch",
+                      "appVersion"
+                    ],
+                    "type": "object"
+                  },
+                  "revokedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "deviceId",
+                  "displayName",
+                  "status",
+                  "platform"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "revoked",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "state": {
+                "const": "error",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "devices": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "activatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "deviceId": {
+              "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+              "type": "string"
+            },
+            "displayName": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "platform": {
+              "additionalProperties": false,
+              "properties": {
+                "appVersion": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "arch": {
+                  "enum": [
+                    "x64",
+                    "arm64"
+                  ],
+                  "type": "string"
+                },
+                "os": {
+                  "enum": [
+                    "windows",
+                    "macos",
+                    "linux"
+                  ],
+                  "type": "string"
+                },
+                "osVersion": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "readOnly": true,
+              "required": [
+                "os",
+                "arch",
+                "appVersion"
+              ],
+              "type": "object"
+            },
+            "revokedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "pending",
+                "active",
+                "revoked"
+              ],
+              "type": "string"
+            }
+          },
+          "readOnly": true,
+          "required": [
+            "deviceId",
+            "displayName",
+            "status",
+            "platform"
+          ],
+          "type": "object"
+        },
+        "maxItems": 1024,
+        "type": "array"
+      },
+      "error": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "identity",
+              "device",
+              "runtime"
+            ],
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "source",
+          "message"
+        ],
+        "type": "object"
+      },
+      "identity": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "signed-out",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "accessTokenExpiresAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "state": {
+                "const": "signed-in",
+                "type": "string"
+              },
+              "user": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "email": {
+                    "format": "email",
+                    "maxLength": 512,
+                    "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+                    "type": "string"
+                  },
+                  "emailVerified": {
+                    "type": "boolean"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "username": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "userId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject",
+                  "displayName"
+                ],
+                "type": "object"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "user",
+              "accessTokenExpiresAt"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "revision": {
+        "pattern": "^cloud-[1-9][0-9]*$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "identity",
+      "device",
+      "devices",
+      "revision"
+    ],
+    "type": "object"
+  },
+  "principalTransition": "host-authority",
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "cloud",
+    "oidc",
+    "device"
+  ],
+  "title": "Sign Out of SciForge Cloud"
+}
+```
+
+## `identity.cloud.reauthenticate`
+
+Requires a fresh browser authentication for the current cloud User.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "device": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "signed-out",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "not-enrolled",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "enrolling",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "device": {
+                "additionalProperties": false,
+                "properties": {
+                  "activatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "platform": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "arch": {
+                        "enum": [
+                          "x64",
+                          "arm64"
+                        ],
+                        "type": "string"
+                      },
+                      "os": {
+                        "enum": [
+                          "windows",
+                          "macos",
+                          "linux"
+                        ],
+                        "type": "string"
+                      },
+                      "osVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "os",
+                      "arch",
+                      "appVersion"
+                    ],
+                    "type": "object"
+                  },
+                  "revokedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "deviceId",
+                  "displayName",
+                  "status",
+                  "platform"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "active",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "device": {
+                "additionalProperties": false,
+                "properties": {
+                  "activatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "platform": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "arch": {
+                        "enum": [
+                          "x64",
+                          "arm64"
+                        ],
+                        "type": "string"
+                      },
+                      "os": {
+                        "enum": [
+                          "windows",
+                          "macos",
+                          "linux"
+                        ],
+                        "type": "string"
+                      },
+                      "osVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "os",
+                      "arch",
+                      "appVersion"
+                    ],
+                    "type": "object"
+                  },
+                  "revokedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "deviceId",
+                  "displayName",
+                  "status",
+                  "platform"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "revoked",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "state": {
+                "const": "error",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "devices": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "activatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "deviceId": {
+              "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+              "type": "string"
+            },
+            "displayName": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "platform": {
+              "additionalProperties": false,
+              "properties": {
+                "appVersion": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "arch": {
+                  "enum": [
+                    "x64",
+                    "arm64"
+                  ],
+                  "type": "string"
+                },
+                "os": {
+                  "enum": [
+                    "windows",
+                    "macos",
+                    "linux"
+                  ],
+                  "type": "string"
+                },
+                "osVersion": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "readOnly": true,
+              "required": [
+                "os",
+                "arch",
+                "appVersion"
+              ],
+              "type": "object"
+            },
+            "revokedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "pending",
+                "active",
+                "revoked"
+              ],
+              "type": "string"
+            }
+          },
+          "readOnly": true,
+          "required": [
+            "deviceId",
+            "displayName",
+            "status",
+            "platform"
+          ],
+          "type": "object"
+        },
+        "maxItems": 1024,
+        "type": "array"
+      },
+      "error": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "identity",
+              "device",
+              "runtime"
+            ],
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "source",
+          "message"
+        ],
+        "type": "object"
+      },
+      "identity": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "signed-out",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "accessTokenExpiresAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "state": {
+                "const": "signed-in",
+                "type": "string"
+              },
+              "user": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "email": {
+                    "format": "email",
+                    "maxLength": 512,
+                    "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+                    "type": "string"
+                  },
+                  "emailVerified": {
+                    "type": "boolean"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "username": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "userId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject",
+                  "displayName"
+                ],
+                "type": "object"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "user",
+              "accessTokenExpiresAt"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "revision": {
+        "pattern": "^cloud-[1-9][0-9]*$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "identity",
+      "device",
+      "devices",
+      "revision"
+    ],
+    "type": "object"
+  },
+  "principalTransition": "host-authority",
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "cloud",
+    "oidc",
+    "device"
+  ],
+  "title": "Reauthenticate SciForge Cloud"
+}
+```
+
+## `identity.cloud.refresh-devices`
+
+Reloads the current User Device list from SciForge Cloud.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "device": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "signed-out",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "not-enrolled",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "enrolling",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "device": {
+                "additionalProperties": false,
+                "properties": {
+                  "activatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "platform": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "arch": {
+                        "enum": [
+                          "x64",
+                          "arm64"
+                        ],
+                        "type": "string"
+                      },
+                      "os": {
+                        "enum": [
+                          "windows",
+                          "macos",
+                          "linux"
+                        ],
+                        "type": "string"
+                      },
+                      "osVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "os",
+                      "arch",
+                      "appVersion"
+                    ],
+                    "type": "object"
+                  },
+                  "revokedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "deviceId",
+                  "displayName",
+                  "status",
+                  "platform"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "active",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "device": {
+                "additionalProperties": false,
+                "properties": {
+                  "activatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "platform": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "arch": {
+                        "enum": [
+                          "x64",
+                          "arm64"
+                        ],
+                        "type": "string"
+                      },
+                      "os": {
+                        "enum": [
+                          "windows",
+                          "macos",
+                          "linux"
+                        ],
+                        "type": "string"
+                      },
+                      "osVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "os",
+                      "arch",
+                      "appVersion"
+                    ],
+                    "type": "object"
+                  },
+                  "revokedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "deviceId",
+                  "displayName",
+                  "status",
+                  "platform"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "revoked",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "state": {
+                "const": "error",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "devices": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "activatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "deviceId": {
+              "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+              "type": "string"
+            },
+            "displayName": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "platform": {
+              "additionalProperties": false,
+              "properties": {
+                "appVersion": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "arch": {
+                  "enum": [
+                    "x64",
+                    "arm64"
+                  ],
+                  "type": "string"
+                },
+                "os": {
+                  "enum": [
+                    "windows",
+                    "macos",
+                    "linux"
+                  ],
+                  "type": "string"
+                },
+                "osVersion": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "readOnly": true,
+              "required": [
+                "os",
+                "arch",
+                "appVersion"
+              ],
+              "type": "object"
+            },
+            "revokedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "pending",
+                "active",
+                "revoked"
+              ],
+              "type": "string"
+            }
+          },
+          "readOnly": true,
+          "required": [
+            "deviceId",
+            "displayName",
+            "status",
+            "platform"
+          ],
+          "type": "object"
+        },
+        "maxItems": 1024,
+        "type": "array"
+      },
+      "error": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "identity",
+              "device",
+              "runtime"
+            ],
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "source",
+          "message"
+        ],
+        "type": "object"
+      },
+      "identity": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "signed-out",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "accessTokenExpiresAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "state": {
+                "const": "signed-in",
+                "type": "string"
+              },
+              "user": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "email": {
+                    "format": "email",
+                    "maxLength": 512,
+                    "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+                    "type": "string"
+                  },
+                  "emailVerified": {
+                    "type": "boolean"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "username": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "userId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject",
+                  "displayName"
+                ],
+                "type": "object"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "user",
+              "accessTokenExpiresAt"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "revision": {
+        "pattern": "^cloud-[1-9][0-9]*$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "identity",
+      "device",
+      "devices",
+      "revision"
+    ],
+    "type": "object"
+  },
+  "principalTransition": "host-authority",
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "cloud",
+    "oidc",
+    "device"
+  ],
+  "title": "Refresh Cloud Devices"
+}
+```
+
+## `identity.cloud.revoke-device`
+
+Revokes one Device owned by the authenticated cloud User.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "deviceId": {
+        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "deviceId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "device": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "signed-out",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "not-enrolled",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "enrolling",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "device": {
+                "additionalProperties": false,
+                "properties": {
+                  "activatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "platform": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "arch": {
+                        "enum": [
+                          "x64",
+                          "arm64"
+                        ],
+                        "type": "string"
+                      },
+                      "os": {
+                        "enum": [
+                          "windows",
+                          "macos",
+                          "linux"
+                        ],
+                        "type": "string"
+                      },
+                      "osVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "os",
+                      "arch",
+                      "appVersion"
+                    ],
+                    "type": "object"
+                  },
+                  "revokedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "deviceId",
+                  "displayName",
+                  "status",
+                  "platform"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "active",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "device": {
+                "additionalProperties": false,
+                "properties": {
+                  "activatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "platform": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "arch": {
+                        "enum": [
+                          "x64",
+                          "arm64"
+                        ],
+                        "type": "string"
+                      },
+                      "os": {
+                        "enum": [
+                          "windows",
+                          "macos",
+                          "linux"
+                        ],
+                        "type": "string"
+                      },
+                      "osVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "os",
+                      "arch",
+                      "appVersion"
+                    ],
+                    "type": "object"
+                  },
+                  "revokedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "deviceId",
+                  "displayName",
+                  "status",
+                  "platform"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "revoked",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "state": {
+                "const": "error",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "devices": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "activatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "deviceId": {
+              "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+              "type": "string"
+            },
+            "displayName": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "platform": {
+              "additionalProperties": false,
+              "properties": {
+                "appVersion": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "arch": {
+                  "enum": [
+                    "x64",
+                    "arm64"
+                  ],
+                  "type": "string"
+                },
+                "os": {
+                  "enum": [
+                    "windows",
+                    "macos",
+                    "linux"
+                  ],
+                  "type": "string"
+                },
+                "osVersion": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "readOnly": true,
+              "required": [
+                "os",
+                "arch",
+                "appVersion"
+              ],
+              "type": "object"
+            },
+            "revokedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "pending",
+                "active",
+                "revoked"
+              ],
+              "type": "string"
+            }
+          },
+          "readOnly": true,
+          "required": [
+            "deviceId",
+            "displayName",
+            "status",
+            "platform"
+          ],
+          "type": "object"
+        },
+        "maxItems": 1024,
+        "type": "array"
+      },
+      "error": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "identity",
+              "device",
+              "runtime"
+            ],
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "source",
+          "message"
+        ],
+        "type": "object"
+      },
+      "identity": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "signed-out",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "accessTokenExpiresAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "state": {
+                "const": "signed-in",
+                "type": "string"
+              },
+              "user": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "email": {
+                    "format": "email",
+                    "maxLength": 512,
+                    "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+                    "type": "string"
+                  },
+                  "emailVerified": {
+                    "type": "boolean"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "username": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "userId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject",
+                  "displayName"
+                ],
+                "type": "object"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "user",
+              "accessTokenExpiresAt"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "revision": {
+        "pattern": "^cloud-[1-9][0-9]*$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "identity",
+      "device",
+      "devices",
+      "revision"
+    ],
+    "type": "object"
+  },
+  "principalTransition": "host-authority",
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "cloud",
+    "oidc",
+    "device"
+  ],
+  "title": "Revoke Cloud Device"
+}
+```
+
 ## `identity.local.backup-and-reset`
 
 Backs up an unavailable Identity database before establishing a fresh one.
@@ -39078,6 +42664,48 @@ Backs up an unavailable Identity database before establishing a fresh one.
               {
                 "additionalProperties": false,
                 "properties": {
+                  "cloudIdentity": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "cloudUserId": {
+                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "deviceId": {
+                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "deviceStatus": {
+                        "enum": [
+                          "active",
+                          "revoked"
+                        ],
+                        "type": "string"
+                      },
+                      "issuer": {
+                        "format": "uri",
+                        "maxLength": 2048,
+                        "type": "string"
+                      },
+                      "oidcIdentityId": {
+                        "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "subject": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "cloudUserId",
+                      "oidcIdentityId",
+                      "issuer",
+                      "subject"
+                    ],
+                    "type": "object"
+                  },
                   "createdAt": {
                     "format": "date-time",
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -39201,6 +42829,48 @@ Creates and selects a display-only Local Account on this installation.
           {
             "additionalProperties": false,
             "properties": {
+              "cloudIdentity": {
+                "additionalProperties": false,
+                "properties": {
+                  "cloudUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceStatus": {
+                    "enum": [
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "cloudUserId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject"
+                ],
+                "type": "object"
+              },
               "createdAt": {
                 "format": "date-time",
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -39308,6 +42978,48 @@ Persists dismissal of the optional Local Account first-run prompt.
           {
             "additionalProperties": false,
             "properties": {
+              "cloudIdentity": {
+                "additionalProperties": false,
+                "properties": {
+                  "cloudUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceStatus": {
+                    "enum": [
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "cloudUserId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject"
+                ],
+                "type": "object"
+              },
               "createdAt": {
                 "format": "date-time",
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -39414,6 +43126,48 @@ Clears Local Account selection without changing installation-local data.
           {
             "additionalProperties": false,
             "properties": {
+              "cloudIdentity": {
+                "additionalProperties": false,
+                "properties": {
+                  "cloudUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceStatus": {
+                    "enum": [
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "cloudUserId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject"
+                ],
+                "type": "object"
+              },
               "createdAt": {
                 "format": "date-time",
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -39523,6 +43277,48 @@ Reads the current installation-local account selection state.
               {
                 "additionalProperties": false,
                 "properties": {
+                  "cloudIdentity": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "cloudUserId": {
+                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "deviceId": {
+                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "deviceStatus": {
+                        "enum": [
+                          "active",
+                          "revoked"
+                        ],
+                        "type": "string"
+                      },
+                      "issuer": {
+                        "format": "uri",
+                        "maxLength": 2048,
+                        "type": "string"
+                      },
+                      "oidcIdentityId": {
+                        "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "subject": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "cloudUserId",
+                      "oidcIdentityId",
+                      "issuer",
+                      "subject"
+                    ],
+                    "type": "object"
+                  },
                   "createdAt": {
                     "format": "date-time",
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -39652,6 +43448,48 @@ Lists display-only Local Accounts stored in this installation.
         "items": {
           "additionalProperties": false,
           "properties": {
+            "cloudIdentity": {
+              "additionalProperties": false,
+              "properties": {
+                "cloudUserId": {
+                  "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "deviceId": {
+                  "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "deviceStatus": {
+                  "enum": [
+                    "active",
+                    "revoked"
+                  ],
+                  "type": "string"
+                },
+                "issuer": {
+                  "format": "uri",
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                "oidcIdentityId": {
+                  "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "subject": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "readOnly": true,
+              "required": [
+                "cloudUserId",
+                "oidcIdentityId",
+                "issuer",
+                "subject"
+              ],
+              "type": "object"
+            },
             "createdAt": {
               "format": "date-time",
               "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -39700,6 +43538,48 @@ Lists display-only Local Accounts stored in this installation.
                   {
                     "additionalProperties": false,
                     "properties": {
+                      "cloudIdentity": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "cloudUserId": {
+                            "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "deviceId": {
+                            "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "deviceStatus": {
+                            "enum": [
+                              "active",
+                              "revoked"
+                            ],
+                            "type": "string"
+                          },
+                          "issuer": {
+                            "format": "uri",
+                            "maxLength": 2048,
+                            "type": "string"
+                          },
+                          "oidcIdentityId": {
+                            "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "subject": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "readOnly": true,
+                        "required": [
+                          "cloudUserId",
+                          "oidcIdentityId",
+                          "issuer",
+                          "subject"
+                        ],
+                        "type": "object"
+                      },
                       "createdAt": {
                         "format": "date-time",
                         "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -39857,6 +43737,48 @@ Changes a Local Account display name without changing its user ID.
           {
             "additionalProperties": false,
             "properties": {
+              "cloudIdentity": {
+                "additionalProperties": false,
+                "properties": {
+                  "cloudUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceStatus": {
+                    "enum": [
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "cloudUserId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject"
+                ],
+                "type": "object"
+              },
               "createdAt": {
                 "format": "date-time",
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -39972,6 +43894,48 @@ Selects an existing display-only Local Account on this installation.
           {
             "additionalProperties": false,
             "properties": {
+              "cloudIdentity": {
+                "additionalProperties": false,
+                "properties": {
+                  "cloudUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceStatus": {
+                    "enum": [
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "cloudUserId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject"
+                ],
+                "type": "object"
+              },
               "createdAt": {
                 "format": "date-time",
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",

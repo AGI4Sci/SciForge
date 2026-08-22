@@ -6,10 +6,35 @@ on:
       - ".github/workflows/collaboration-ci.yml"
       - "packages/collaboration-*/**"
       - "packages/domains/collaboration/**"
+      - "packages/domains/identity-access/**"
       - "packages/domain-sdk/**"
+      - "infra/keycloak/**"
+      - "docs/adr/**"
+      - "docs/contexts/identity-access/**"
+      - "docs/identity-access-pr78-acceptance-receipt.md"
+      - "openspec/changes/README.md"
+      - "openspec/changes/unify-user-device-collaboration/specs/user-device-identity/spec.md"
       - "scripts/collaboration-*.mjs"
+      - "scripts/domain-package-tarball-smoke.test.mjs"
       - "scripts/domain-packages.mjs"
+      - "scripts/fixtures/identity-package-secrets-process.mjs"
+      - "scripts/identity-access-docs.test.mjs"
+      - "scripts/keycloak-*.mjs"
+      - "scripts/publishable-package-version-audit.mjs"
       - "src/main/domain-*.ts"
+      - "src/main/index.ts"
+      - "src/main/principal-context*"
+      - "src/main/capabilities/agent-tools*"
+      - "src/main/capabilities/broker*"
+      - "src/main/capabilities/identity-principal-transition.integration.test.ts"
+      - "src/main/capabilities/registry*"
+      - "src/main/ipc/register-app-ipc-handlers*"
+      - "src/preload/index.ts"
+      - "src/renderer/src/components/chat/WorkbenchTopBar*"
+      - "src/renderer/src/dev/dev-sciforge-bridge.ts"
+      - "src/renderer/src/lib/capability-client*"
+      - "src/shared/capability-broker.ts"
+      - "src/shared/sciforge-api.ts"
       - "package.json"
       - "package-lock.json"
   push:
@@ -19,10 +44,35 @@ on:
       - ".github/workflows/collaboration-ci.yml"
       - "packages/collaboration-*/**"
       - "packages/domains/collaboration/**"
+      - "packages/domains/identity-access/**"
       - "packages/domain-sdk/**"
+      - "infra/keycloak/**"
+      - "docs/adr/**"
+      - "docs/contexts/identity-access/**"
+      - "docs/identity-access-pr78-acceptance-receipt.md"
+      - "openspec/changes/README.md"
+      - "openspec/changes/unify-user-device-collaboration/specs/user-device-identity/spec.md"
       - "scripts/collaboration-*.mjs"
+      - "scripts/domain-package-tarball-smoke.test.mjs"
       - "scripts/domain-packages.mjs"
+      - "scripts/fixtures/identity-package-secrets-process.mjs"
+      - "scripts/identity-access-docs.test.mjs"
+      - "scripts/keycloak-*.mjs"
+      - "scripts/publishable-package-version-audit.mjs"
       - "src/main/domain-*.ts"
+      - "src/main/index.ts"
+      - "src/main/principal-context*"
+      - "src/main/capabilities/agent-tools*"
+      - "src/main/capabilities/broker*"
+      - "src/main/capabilities/identity-principal-transition.integration.test.ts"
+      - "src/main/capabilities/registry*"
+      - "src/main/ipc/register-app-ipc-handlers*"
+      - "src/preload/index.ts"
+      - "src/renderer/src/components/chat/WorkbenchTopBar*"
+      - "src/renderer/src/dev/dev-sciforge-bridge.ts"
+      - "src/renderer/src/lib/capability-client*"
+      - "src/shared/capability-broker.ts"
+      - "src/shared/sciforge-api.ts"
       - "package.json"
       - "package-lock.json"
 
@@ -38,6 +88,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -47,17 +99,82 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit publishable package versions
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin \
+            "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          node scripts/publishable-package-version-audit.mjs \
+            --base "origin/${{ github.base_ref }}"
+
       - name: Check contracts and package boundaries
         run: npm run collaboration:typecheck
+
+      - name: Run full application typecheck
+        run: npm run typecheck
+
+      - name: Run lint
+        run: npm run lint
 
       - name: Run collaboration production-path tests
         run: npm run collaboration:test
 
+      - name: Run generic capability boundary tests
+        run: |
+          npx vitest run \
+            src/main/capabilities/broker.test.ts \
+            src/main/capabilities/agent-tools.test.ts \
+            src/renderer/src/lib/capability-client.test.ts
+
+      - name: Run identity package and persistence tests
+        run: |
+          npm --workspace @sciforge/collaboration-identity test
+          npm --workspace @sciforge/domain-identity-access test
+          npx vitest run src/main/domain-package-storage.test.ts
+
+      - name: Run Host identity boundary tests
+        run: |
+          npx vitest run \
+            src/main/ipc/register-app-ipc-handlers.test.ts \
+            src/renderer/src/components/chat/WorkbenchTopBar.test.ts
+
+      - name: Run domain SDK and Principal transition tests
+        run: |
+          npm run domain-sdk:test
+          npx vitest run \
+            src/main/principal-context.test.ts \
+            src/main/capabilities/identity-principal-transition.integration.test.ts
+
+      - name: Verify Keycloak realm contract
+        run: npm run identity:keycloak:check
+
       - name: Verify generated composition and capabilities
-        run: npm run capability:check
+        run: |
+          npm run domain-packages:generate
+          git diff --exit-code
+          npm run domain-packages:check
+          npm run smoke:domain-packages:tarball
+          npm run capability:check
 
       - name: Build deployable collaboration server
         run: npm --workspace @sciforge/collaboration-server run build
 
       - name: Verify server package contents
         run: npm pack --workspace @sciforge/collaboration-server --dry-run
+
+  keycloak-macos-bash32:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify Keycloak contract with macOS system Bash 3.2
+        shell: /bin/bash {0}
+        run: |
+          printf 'macOS system Bash: %s\n' "$BASH_VERSION"
+          [[ "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}" == "3.2" ]]
+          export SCIFORGE_TEST_BASH=/bin/bash
+          npm run identity:keycloak:check

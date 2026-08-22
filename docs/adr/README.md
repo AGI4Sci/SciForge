@@ -6,14 +6,15 @@ This directory preserves architectural decisions together with their lifecycle. 
 
 | ADR | Status | Current reading |
 | --- | --- | --- |
-| 0001–0014, 0016 | accepted | Migrated from the original design workspace; retained as current boundary decisions, with implementation readiness governed by active OpenSpec changes. |
-| 0015 | accepted, amended by 0026 | Main process still asserts the Principal; `local-selection` may scope a separately authenticated node-local Provider Connection. |
+| 0001–0013, 0016 | accepted | Migrated from the original design workspace; retained as current boundary decisions, with implementation readiness governed by active OpenSpec changes. |
+| 0014 | accepted, amended by 0023 | Local Account selection remains non-authenticating; the OIDC Cloud path is separate and never silently promotes a local identity. |
+| 0015 | accepted, amended by 0026 and 0023 | Main process still asserts the Principal; current assurances include local selection and the strictly verified OIDC plus ACTIVE Device path. |
 | 0017 | superseded by 0025 | Keep one Connector, but Content Space precedes every Document port/provider milestone. |
 | 0018–0019 | accepted | Portable references remain non-authorizing; Local Accounts remain attribution rather than local data tenants. |
 | 0020 | superseded | Replaced by `unify-user-device-collaboration` and its implemented collaboration contracts. |
 | 0021 | superseded | Keycloak is not the current Collaboration PoC authentication path. |
 | 0022 | accepted | Exact provider-identity challenge verification is implemented; it no longer depends on Keycloak. |
-| 0023 | deferred | System-browser OIDC+PKCE requires a future identity change and is not current behavior. |
+| 0023 | accepted | The identity-access package owns current system-browser OIDC with PKCE, Cloud User projection, Device state, and Cloud Principal transitions. |
 | 0024 | accepted | Domain-specific Provider composition is implemented for Content Space and reserved separately for future Shared Documents. |
 | 0025 | accepted | Current authority for OpenContent staging and Shared Documents deferral. |
 | 0026 | accepted | External Provider access always uses the executing node owner's current Principal-owned connection. |

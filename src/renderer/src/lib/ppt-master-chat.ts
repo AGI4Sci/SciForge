@@ -187,7 +187,9 @@ export function diagnosticsHasConnectedPptMaster(
 async function waitForPptMasterRuntime(input: PptMasterMcpBootstrapInput): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, input.waitTimeoutMs ?? 45_000)
   const pollIntervalMs = Math.max(250, input.pollIntervalMs ?? 1_000)
-  do {
+  let isFirstAttempt = true
+  while (isFirstAttempt || Date.now() < deadline) {
+    isFirstAttempt = false
     try {
       if (diagnosticsHasConnectedPptMaster(await input.getToolDiagnostics?.())) return true
     } catch {
@@ -195,6 +197,6 @@ async function waitForPptMasterRuntime(input: PptMasterMcpBootstrapInput): Promi
     }
     if (Date.now() >= deadline) break
     await wait(pollIntervalMs)
-  } while (true)
+  }
   return false
 }

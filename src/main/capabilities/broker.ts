@@ -53,6 +53,11 @@ const resourceObservationResultSchema = z.object({
   operationIds: z.array(z.string().trim().min(1).max(192)).max(512).optional()
 }).strict()
 
+const resourceProviderChangeSchema = z.object({
+  semanticRevision: z.string().trim().min(1).max(256),
+  layoutRevision: z.string().trim().min(1).max(256).optional()
+}).strict()
+
 const DEFAULT_HANDLE_TTL_MS = 15 * 60_000
 const MAX_HANDLE_TTL_MS = 24 * 60 * 60_000
 const DEFAULT_MAX_AUDIT_RECORDS = 2_000
@@ -105,6 +110,9 @@ type ResourceState = {
   semanticRevision: string
   layoutRevision?: string
   observe: CapabilityResourceRegistration['observe']
+  subscribeChanges?: CapabilityResourceRegistration['subscribeChanges']
+  changeSubscriptionAttached: boolean
+  disposeChangeSubscription?: () => void
   dispose?: CapabilityResourceRegistration['dispose']
   contentTransport?: CapabilityResourceRegistration['contentTransport']
   retireAfterLastHandleExpires: boolean
@@ -392,6 +400,7 @@ export class CapabilityBroker {
       existing &&
       (
         existing.observe !== registration.observe ||
+        existing.subscribeChanges !== registration.subscribeChanges ||
         existing.dispose !== registration.dispose ||
         !sameContentTransport(existing.contentTransport, registration.contentTransport) ||
         existing.retireAfterLastHandleExpires !== registration.retireAfterLastHandleExpires
@@ -413,6 +422,8 @@ export class CapabilityBroker {
       semanticRevision: registration.semanticRevision,
       layoutRevision: registration.layoutRevision,
       observe: registration.observe,
+      subscribeChanges: registration.subscribeChanges,
+      changeSubscriptionAttached: false,
       dispose: registration.dispose,
       contentTransport: registration.contentTransport,
       retireAfterLastHandleExpires: registration.retireAfterLastHandleExpires === true,
@@ -438,11 +449,13 @@ export class CapabilityBroker {
     resource.layoutRevision = registration.layoutRevision
     resource.allowedAudiences = allowedAudiences
     resource.observe = registration.observe
+    resource.subscribeChanges = registration.subscribeChanges
     resource.dispose = registration.dispose
     resource.contentTransport = registration.contentTransport
     resource.retireAfterLastHandleExpires = registration.retireAfterLastHandleExpires === true
     this.#resources.set(key, resource)
     this.#resourcesByRef.set(resource.resourceRef, resource)
+    if (!resource.provisionalTransactions) this.#ensureResourceChangeSubscription(resource)
 
     const token = opaqueId('cap')
     const ttl = Math.min(MAX_HANDLE_TTL_MS, Math.max(1, registration.expiresInMs ?? this.#handleTtlMs))
@@ -452,7 +465,7 @@ export class CapabilityBroker {
       resourceKey: key,
       workspaceId,
       principalLease: callerLease,
-      semanticRevision: registration.semanticRevision,
+      semanticRevision: resource.semanticRevision,
       expiresAt
     }
     this.#handles.set(token, grant)
@@ -460,7 +473,7 @@ export class CapabilityBroker {
     this.#scheduleHandleExpiry(grant, resource)
     const resourceHandle = capabilityResourceHandleSchema.parse({
       token,
-      semanticRevision: registration.semanticRevision,
+      semanticRevision: resource.semanticRevision,
       expiresAt
     })
     this.#trackInvocationResourceIssuance(resourceTransaction, resource, grant)
@@ -488,6 +501,7 @@ export class CapabilityBroker {
       semanticRevision: state.semanticRevision,
       layoutRevision: state.layoutRevision,
       observe: state.observe,
+      subscribeChanges: state.subscribeChanges,
       dispose: state.dispose,
       contentTransport: state.contentTransport,
       retireAfterLastHandleExpires: state.retireAfterLastHandleExpires
@@ -618,6 +632,7 @@ export class CapabilityBroker {
         semanticRevision: state.semanticRevision,
         layoutRevision: state.layoutRevision,
         observe: state.observe,
+        subscribeChanges: state.subscribeChanges,
         dispose: state.dispose,
         contentTransport: state.contentTransport,
         retireAfterLastHandleExpires: state.retireAfterLastHandleExpires
@@ -1295,6 +1310,7 @@ export class CapabilityBroker {
         semanticRevision,
         layoutRevision: resource.layoutRevision,
         observe: resource.observe,
+        subscribeChanges: resource.subscribeChanges,
         dispose: resource.dispose,
         contentTransport: resource.contentTransport,
         retireAfterLastHandleExpires: resource.retireAfterLastHandleExpires
@@ -1334,6 +1350,7 @@ export class CapabilityBroker {
       this.#publishEvent(capabilityResourceChangeEventSchema.parse({
         id: opaqueId('event'),
         type: 'resource.changed',
+        origin: 'capability',
         occurredAt: this.#now().toISOString(),
         workspaceId: resource.workspaceId,
         resourceRef: resource.resourceRef,
@@ -1384,13 +1401,16 @@ export class CapabilityBroker {
   ): void {
     if (transaction.state !== 'pending') return
     transaction.state = 'committed'
+    const committedResources = new Set<ResourceState>()
     for (const { resource } of transaction.issuances) {
       if (resource.provisionalTransactions?.has(transaction)) {
         // One successful adopter commits the shared resource for every handle.
         resource.provisionalTransactions = undefined
       }
+      if (!resource.provisionalTransactions) committedResources.add(resource)
     }
     transaction.issuances.length = 0
+    for (const resource of committedResources) this.#ensureResourceChangeSubscription(resource)
   }
 
   async #rollbackInvocationResourceTransaction(
@@ -1503,6 +1523,12 @@ export class CapabilityBroker {
     }
     if (raw.dispose !== undefined && typeof raw.dispose !== 'function') {
       throw new CapabilityBrokerError('invalid_resource_registration', 'Resource disposal must be a function.')
+    }
+    if (raw.subscribeChanges !== undefined && typeof raw.subscribeChanges !== 'function') {
+      throw new CapabilityBrokerError(
+        'invalid_resource_registration',
+        'Resource change subscription must be a function.'
+      )
     }
     if (
       raw.retireAfterLastHandleExpires !== undefined &&
@@ -1783,6 +1809,103 @@ export class CapabilityBroker {
     }
   }
 
+  #ensureResourceChangeSubscription(resource: ResourceState): void {
+    if (
+      !resource.subscribeChanges ||
+      resource.changeSubscriptionAttached ||
+      resource.provisionalTransactions ||
+      resource.retirementRequested ||
+      this.#resources.get(resource.key) !== resource ||
+      this.#resourcesByRef.get(resource.resourceRef) !== resource
+    ) return
+
+    resource.changeSubscriptionAttached = true
+    const pending: unknown[] = []
+    let active = false
+    let closed = false
+    const listener = (change: unknown): void => {
+      if (closed) return
+      if (!active) {
+        pending.push(change)
+        return
+      }
+      this.#acceptProviderResourceChange(resource, change)
+    }
+    try {
+      const dispose = resource.subscribeChanges(listener)
+      if (typeof dispose !== 'function') {
+        throw new CapabilityBrokerError(
+          'invalid_resource_change_subscription',
+          'A resource change subscription must synchronously return a disposer.',
+          { category: 'failed' }
+        )
+      }
+      let disposed = false
+      resource.disposeChangeSubscription = () => {
+        if (disposed) return
+        disposed = true
+        closed = true
+        dispose()
+      }
+      active = true
+      for (const change of pending.splice(0)) {
+        this.#acceptProviderResourceChange(resource, change)
+      }
+    } catch (error) {
+      closed = true
+      pending.length = 0
+      resource.disposeChangeSubscription = undefined
+      resource.changeSubscriptionAttached = false
+      this.#reportCleanupError(error)
+    }
+  }
+
+  #acceptProviderResourceChange(resource: ResourceState, rawChange: unknown): void {
+    if (
+      resource.retirementRequested ||
+      this.#resources.get(resource.key) !== resource ||
+      this.#resourcesByRef.get(resource.resourceRef) !== resource
+    ) return
+    const parsed = resourceProviderChangeSchema.safeParse(rawChange)
+    if (!parsed.success) {
+      this.#reportCleanupError(new CapabilityBrokerError(
+        'invalid_provider_resource_change',
+        'A resource provider submitted an invalid change notification.',
+        {
+          category: 'failed',
+          details: { issues: parsed.error.issues.map((issue) => issue.message) }
+        }
+      ))
+      return
+    }
+    const beforeRevision = resource.semanticRevision
+    if (parsed.data.semanticRevision === beforeRevision) return
+    resource.semanticRevision = parsed.data.semanticRevision
+    resource.layoutRevision = parsed.data.layoutRevision ?? resource.layoutRevision
+    this.#publishEvent(capabilityResourceChangeEventSchema.parse({
+      id: opaqueId('event'),
+      type: 'resource.changed',
+      origin: 'provider',
+      occurredAt: this.#now().toISOString(),
+      workspaceId: resource.workspaceId,
+      resourceRef: resource.resourceRef,
+      resourceKind: resource.resourceKind,
+      beforeRevision,
+      afterRevision: resource.semanticRevision
+    }))
+  }
+
+  #detachResourceChangeSubscription(resource: ResourceState): void {
+    const dispose = resource.disposeChangeSubscription
+    resource.disposeChangeSubscription = undefined
+    if (!dispose) return
+    try {
+      dispose()
+    } catch (error) {
+      this.#reportCleanupError(error)
+    }
+  }
+
   #eventVisibleToCaller(event: CapabilityResourceChangeEvent, caller: CapabilityCallerContext): boolean {
     if (event.workspaceId !== caller.workspaceId) return false
     const resource = this.#resourcesByRef.get(event.resourceRef)
@@ -1888,6 +2011,7 @@ export class CapabilityBroker {
   ): Promise<void> {
     resource.retirementRequested = true
     resource.expiryRetirementPending = false
+    this.#detachResourceChangeSubscription(resource)
     if (!deferWhileRetained) resource.retirementIgnoresRetentions = true
     if (resource.retirementRetryTimer) {
       clearTimeout(resource.retirementRetryTimer)

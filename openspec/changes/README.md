@@ -21,4 +21,4 @@ ADRs 0025–0028 are authoritative for this order and its identity/connection/Pr
 
 ## Collaboration authority
 
-`unify-user-device-collaboration` and the implemented collaboration packages supersede the historical Keycloak-based Cloud Collaboration PoC baseline. Provider challenge pairing is current; system-browser OIDC+PKCE is deferred pending a new identity change.
+`unify-user-device-collaboration` and the implemented collaboration packages supersede the historical all-in-one Keycloak-based Cloud Collaboration PoC baseline. The current boundaries are separate and explicit: provider challenge pairing verifies external communication endpoints, while the `identity-access` domain package owns Desktop system-browser OIDC Authorization Code with PKCE, canonical `/v1/me` projection, and Device-backed Principal transitions. The SciForge Cloud API remains an external deployment dependency and is not imported into the Desktop package.

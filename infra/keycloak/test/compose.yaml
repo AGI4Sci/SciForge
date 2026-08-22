@@ -1,0 +1,124 @@
+name: sciforge-keycloak
+
+services:
+  keycloak-db:
+    image: postgres@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+    restart: unless-stopped
+    user: "70:70"
+    read_only: true
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD is required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h /var/run/postgresql -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=70,gid=70,mode=1770
+      - /var/run/postgresql:rw,nosuid,nodev,size=16m,uid=70,gid=70,mode=2775
+    networks:
+      identity-internal:
+        ipv4_address: 172.23.0.2
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 1024m
+    cpus: 1.0
+    pids_limit: 256
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+
+  keycloak:
+    image: sciforge-keycloak-optimized:26.7.0-f0f691e6f473
+    pull_policy: never
+    restart: unless-stopped
+    user: "1000:0"
+    read_only: true
+    command: ["start", "--optimized"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD is required}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:?KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME is required}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD:?KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD is required}
+      KC_HOSTNAME: https://login-test.sciforge.cn
+      KC_PROXY_HEADERS: xforwarded
+      KC_PROXY_TRUSTED_ADDRESSES: 172.24.0.3
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_HTTP_MANAGEMENT_SCHEME: http
+      KC_HTTP_MANAGEMENT_PORT: "9000"
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    expose:
+      - "8080"
+    healthcheck:
+      test:
+        - CMD
+        - /bin/bash
+        - -ec
+        - >-
+          { printf 'HEAD /health/ready HTTP/1.0\r\n\r\n' >&0;
+          grep -q 'HTTP/1.0 200'; } 0<>/dev/tcp/127.0.0.1/9000
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 90s
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=1000,gid=0,mode=1770
+      - /opt/keycloak/data/tmp:rw,noexec,nosuid,nodev,size=64m,uid=1000,gid=0,mode=1770
+      - /opt/keycloak/data/transaction-logs:rw,noexec,nosuid,nodev,size=32m,uid=1000,gid=0,mode=0770
+    networks:
+      identity-internal:
+        ipv4_address: 172.23.0.3
+      identity-edge:
+        aliases:
+          - keycloak
+        ipv4_address: 172.24.0.2
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 1536m
+    cpus: 1.5
+    pids_limit: 512
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+
+volumes:
+  keycloak-db-data:
+    name: sciforge-keycloak_keycloak-db-data
+    external: true
+
+networks:
+  identity-internal:
+    name: sciforge-keycloak_identity-internal
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.23.0.0/29
+          gateway: 172.23.0.1
+  identity-edge:
+    name: sciforge-keycloak_identity-edge
+    internal: false
+    ipam:
+      config:
+        - subnet: 172.24.0.0/29
+          gateway: 172.24.0.1

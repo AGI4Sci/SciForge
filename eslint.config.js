@@ -5,7 +5,16 @@ import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
   {
-    ignores: ['.codex-runtime/**', 'build/**', 'dist/**', 'node_modules/**', 'out/**', 'coverage/**']
+    ignores: [
+      '.codex-runtime/**',
+      '**/artifacts/**',
+      'build/**',
+      'coverage/**',
+      '**/dist/**',
+      'docs/research-agent-needs-site/**',
+      'node_modules/**',
+      'out/**'
+    ]
   },
   js.configs.recommended,
   {

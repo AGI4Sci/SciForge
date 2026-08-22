@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -10,9 +11,11 @@ import {
   createIdentityCapabilityFactory,
   type IdentityCapabilityOptions
 } from './index.js'
+import { CloudIdentityRuntime } from './cloud-runtime.js'
 
 const roots: string[] = []
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
@@ -20,7 +23,8 @@ describe('Identity main contributions', () => {
   it('declares one UI-only global capability set with governed mutation policies', () => {
     const definitions = createIdentityCapabilityFactory({
       defineCapability: (definition) => definition,
-      getService: () => ({}) as never
+      getService: () => ({}) as never,
+      getCloudRuntime: () => ({}) as never
     }).createDefinitions() as IdentityCapabilityOptions[]
     expect(definitions.map((definition) => definition.id)).toEqual(Object.values(IDENTITY_CAPABILITY_IDS))
     for (const definition of definitions) {
@@ -38,16 +42,23 @@ describe('Identity main contributions', () => {
       IDENTITY_CAPABILITY_IDS.createAccount,
       IDENTITY_CAPABILITY_IDS.selectAccount,
       IDENTITY_CAPABILITY_IDS.exitAccount,
-      IDENTITY_CAPABILITY_IDS.backupAndReset
+      IDENTITY_CAPABILITY_IDS.backupAndReset,
+      IDENTITY_CAPABILITY_IDS.cloudLogin,
+      IDENTITY_CAPABILITY_IDS.cloudReauthenticate,
+      IDENTITY_CAPABILITY_IDS.cloudLogout,
+      IDENTITY_CAPABILITY_IDS.cloudEnrollDevice,
+      IDENTITY_CAPABILITY_IDS.cloudRefreshDevices,
+      IDENTITY_CAPABILITY_IDS.cloudRevokeDevice
     ])
   })
 
   it('shares one lazy service between capabilities and Principal provider and rejects Agent calls', async () => {
-    const root = mkdtempSync(join('/private/tmp', 'sciforge-identity-main-'))
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-main-'))
     roots.push(root)
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
+      packageSecrets: memorySecrets(),
       defineCapability: (definition) => definition
     })
     const factory = entry.contributions[0]!.value as ReturnType<typeof createIdentityCapabilityFactory>
@@ -81,11 +92,12 @@ describe('Identity main contributions', () => {
   })
 
   it('acknowledges only committed Host Principal transitions and keeps no-op repeats valid', async () => {
-    const root = mkdtempSync(join('/private/tmp', 'sciforge-identity-transition-'))
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-transition-'))
     roots.push(root)
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
+      packageSecrets: memorySecrets(),
       defineCapability: (definition) => definition
     })
     const factory = entry.contributions[0]!.value as ReturnType<typeof createIdentityCapabilityFactory>
@@ -164,7 +176,8 @@ describe('Identity main contributions', () => {
     const operation = vi.fn(() => ({ status: 'available' as const }))
     const definitions = createIdentityCapabilityFactory({
       defineCapability: (definition) => definition,
-      getService: () => ({ createAccount: operation }) as never
+      getService: () => ({ createAccount: operation }) as never,
+      getCloudRuntime: () => ({}) as never
     }).createDefinitions() as IdentityCapabilityOptions[]
     const create = definitions.find(({ id }) => id === IDENTITY_CAPABILITY_IDS.createAccount)!
     const failure = codedError('principal_provider_failed')
@@ -189,7 +202,8 @@ describe('Identity main contributions', () => {
     }))
     const definitions = createIdentityCapabilityFactory({
       defineCapability: (definition) => definition,
-      getService: () => ({ backupAndReset: reset }) as never
+      getService: () => ({ backupAndReset: reset }) as never,
+      getCloudRuntime: () => ({}) as never
     }).createDefinitions() as IdentityCapabilityOptions[]
     const capability = definitions.find(
       ({ id }) => id === IDENTITY_CAPABILITY_IDS.backupAndReset
@@ -206,11 +220,108 @@ describe('Identity main contributions', () => {
     expect(assertPrincipalCurrent).toHaveBeenCalledOnce()
   })
 
+  it('publishes runtime changes while keeping Principal mutations global and resource-neutral', async () => {
+    let revision = 1
+    const listeners = new Set<() => void>()
+    const snapshot = () => ({
+      identity: { state: 'signed-out' as const },
+      device: { state: 'signed-out' as const },
+      devices: [],
+      revision: `cloud-${revision}`
+    })
+    const runtime = {
+      snapshot,
+      semanticRevision: () => `cloud-${revision}`,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+      login: async () => {
+        revision += 1
+        for (const listener of listeners) listener()
+        return snapshot()
+      }
+    }
+    let registration: {
+      subscribeChanges: (
+        listener: (change: { semanticRevision: string; layoutRevision?: string }) => void
+      ) => () => void
+    } | undefined
+    const resource = {
+      token: `cap_${'a'.repeat(24)}`,
+      semanticRevision: 'cloud-1',
+      expiresAt: '2027-08-21T00:00:00.000Z'
+    }
+    const definitions = createIdentityCapabilityFactory({
+      defineCapability: (definition) => definition,
+      getService: () => ({}) as never,
+      getCloudRuntime: () => runtime as never
+    }).createDefinitions() as IdentityCapabilityOptions[]
+    const inspect = definitions.find(({ id }) => id === IDENTITY_CAPABILITY_IDS.cloudInspect)!
+    const login = definitions.find(({ id }) => id === IDENTITY_CAPABILITY_IDS.cloudLogin)!
+    const context = {
+      caller: { audience: 'ui' as const },
+      assertPrincipalCurrent: vi.fn(),
+      issueResource: (value: {
+        subscribeChanges: (
+          listener: (change: { semanticRevision: string; layoutRevision?: string }) => void
+        ) => () => void
+      }) => {
+        registration = value
+        return resource
+      }
+    }
+
+    await inspect.handler({}, context)
+    const providerChanges: unknown[] = []
+    const unsubscribe = registration!.subscribeChanges((change) => providerChanges.push(change))
+    const result = await login.handler({}, {
+      caller: { audience: 'ui' },
+      assertPrincipalCurrent: vi.fn()
+    })
+
+    expect(providerChanges).toEqual([{ semanticRevision: 'cloud-2' }])
+    expect(login).toMatchObject({
+      scope: 'global',
+      principalTransition: 'host-authority',
+      concurrency: { revision: 'none', idempotency: 'required' }
+    })
+    expect(login).not.toHaveProperty('resourceKinds')
+    expect(result).toEqual({ output: expect.objectContaining({ revision: 'cloud-2' }) })
+    unsubscribe()
+  })
+
+  it('fails an inactive Cloud mutation without constructing a fallback runtime', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-inactive-'))
+    roots.push(root)
+    const createRuntime = vi.spyOn(CloudIdentityRuntime, 'create')
+    const entry = createDomainMainEntry({
+      getUserDataDir: () => root,
+      getDeviceId: () => 'device-1',
+      packageSecrets: memorySecrets(),
+      defineCapability: (definition) => definition
+    })
+    const factory = entry.contributions[0]!.value as ReturnType<typeof createIdentityCapabilityFactory>
+    const login = (factory.createDefinitions() as IdentityCapabilityOptions[]).find(
+      ({ id }) => id === IDENTITY_CAPABILITY_IDS.cloudLogin
+    )!
+
+    await expect(Promise.resolve(login.handler({}, {
+      caller: { audience: 'ui' },
+      assertPrincipalCurrent: vi.fn()
+    }))).rejects.toThrow('Cloud identity runtime is not active.')
+    expect(createRuntime).not.toHaveBeenCalled()
+    entry.contributions[0]!.onDispose?.()
+    entry.contributions[1]!.onDispose?.()
+    await entry.contributions[2]!.onDispose?.()
+  })
+
   it('fails closed when the Host does not provide a canonical installation identity', () => {
     for (const getDeviceId of [undefined, () => ' device-1']) {
       const entry = createDomainMainEntry({
         getUserDataDir: () => '/private/tmp/sciforge-identity-missing-device',
         ...(getDeviceId ? { getDeviceId } : {}),
+        packageSecrets: memorySecrets(),
         defineCapability: (definition) => definition
       })
       const provider = entry.contributions[1]!.value as { current(): unknown }
@@ -220,8 +331,276 @@ describe('Identity main contributions', () => {
       entry.contributions[1]!.onDispose?.()
     }
   })
+
+  it('fails Cloud activation before construction when the Host application version is unavailable', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-version-'))
+    roots.push(root)
+    const createRuntime = vi.spyOn(CloudIdentityRuntime, 'create')
+    const entry = createDomainMainEntry({
+      getUserDataDir: () => root,
+      getDeviceId: () => 'device-1',
+      packageSecrets: memorySecrets(),
+      defineCapability: (definition) => definition
+    })
+    const lifecycle = entry.contributions[2]!.value as {
+      activate(context: unknown): Promise<unknown>
+    }
+
+    await expect(lifecycle.activate(lifecycleContext(root))).rejects.toThrow(
+      'Identity requires the canonical Host application version.'
+    )
+    expect(createRuntime).not.toHaveBeenCalled()
+    await expect(Promise.resolve(entry.contributions[2]!.onDispose?.())).resolves.toBeUndefined()
+  })
+
+  it('passes the canonical Host application version unchanged into Cloud activation', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-version-'))
+    roots.push(root)
+    const runtime = runtimeDouble(Promise.resolve())
+    const createRuntime = vi.spyOn(CloudIdentityRuntime, 'create').mockResolvedValueOnce(runtime.value)
+    const getAppVersion = vi.fn(() => '9.8.7-host')
+    const entry = createDomainMainEntry({
+      getUserDataDir: () => root,
+      getDeviceId: () => 'device-1',
+      getAppVersion,
+      packageSecrets: memorySecrets(),
+      defineCapability: (definition) => definition
+    })
+    const lifecycle = entry.contributions[2]!.value as {
+      activate(context: unknown): Promise<unknown>
+    }
+
+    const dispose = await lifecycle.activate(lifecycleContext(root)) as () => void
+    expect(getAppVersion).toHaveBeenCalledOnce()
+    expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      appRoot: root,
+      appVersion: '9.8.7-host'
+    }))
+    dispose()
+    expect(runtime.close).toHaveBeenCalledOnce()
+  })
+
+  it('waits for initialization before disposing an in-flight activation', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-lifecycle-'))
+    roots.push(root)
+    const initialization = deferred<void>()
+    const runtime = runtimeDouble(initialization.promise)
+    vi.spyOn(CloudIdentityRuntime, 'create').mockResolvedValueOnce(runtime.value)
+    const entry = createDomainMainEntry({
+      getUserDataDir: () => root,
+      getDeviceId: () => 'device-1',
+      getAppVersion: () => '1.0.0',
+      packageSecrets: memorySecrets(),
+      defineCapability: (definition) => definition
+    })
+    const lifecycle = entry.contributions[2]!.value as {
+      activate(context: unknown): Promise<unknown>
+    }
+
+    const activation = lifecycle.activate(lifecycleContext(root))
+    await vi.waitFor(() => expect(runtime.initialize).toHaveBeenCalledOnce())
+    const cleanup = Promise.resolve(entry.contributions[2]!.onDispose?.())
+
+    expect(runtime.close).not.toHaveBeenCalled()
+    initialization.resolve()
+    const returnedDisposer = await activation as () => void
+    await expect(cleanup).resolves.toBeUndefined()
+
+    expect(runtime.close).toHaveBeenCalledOnce()
+    await expectCloudRuntimeInactive(entry)
+    returnedDisposer()
+    expect(runtime.close).toHaveBeenCalledOnce()
+  })
+
+  it('keeps initialization rejection with the activation owner during concurrent cleanup', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-lifecycle-'))
+    roots.push(root)
+    const initialization = deferred<void>()
+    const runtime = runtimeDouble(initialization.promise)
+    vi.spyOn(CloudIdentityRuntime, 'create').mockResolvedValueOnce(runtime.value)
+    const entry = createDomainMainEntry({
+      getUserDataDir: () => root,
+      getDeviceId: () => 'device-1',
+      getAppVersion: () => '1.0.0',
+      packageSecrets: memorySecrets(),
+      defineCapability: (definition) => definition
+    })
+    const lifecycle = entry.contributions[2]!.value as {
+      activate(context: unknown): Promise<unknown>
+    }
+
+    const activation = lifecycle.activate(lifecycleContext(root))
+    await vi.waitFor(() => expect(runtime.initialize).toHaveBeenCalledOnce())
+    const cleanup = Promise.resolve(entry.contributions[2]!.onDispose?.())
+    const failure = new Error('structural initialization failed')
+    const activationFailure = expect(activation).rejects.toBe(failure)
+
+    expect(runtime.close).not.toHaveBeenCalled()
+    initialization.reject(failure)
+
+    await activationFailure
+    await expect(cleanup).resolves.toBeUndefined()
+    expect(runtime.close).toHaveBeenCalledOnce()
+    await expectCloudRuntimeInactive(entry)
+  })
+
+  it('publishes a recoverable signed-out initialization result as an active runtime', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-lifecycle-'))
+    roots.push(root)
+    const snapshot = {
+      identity: { state: 'signed-out' as const },
+      device: { state: 'signed-out' as const },
+      devices: [],
+      revision: 'cloud-1',
+      error: {
+        source: 'identity' as const,
+        code: 'OIDC_CONFIGURATION_ERROR',
+        message: 'Cloud identity configuration is unavailable.'
+      }
+    }
+    const runtime = runtimeDouble(Promise.resolve(snapshot), snapshot)
+    vi.spyOn(CloudIdentityRuntime, 'create').mockResolvedValueOnce(runtime.value)
+    const entry = createDomainMainEntry({
+      getUserDataDir: () => root,
+      getDeviceId: () => 'device-1',
+      getAppVersion: () => '1.0.0',
+      packageSecrets: memorySecrets(),
+      defineCapability: (definition) => definition
+    })
+    const lifecycle = entry.contributions[2]!.value as {
+      activate(context: unknown): Promise<unknown>
+    }
+
+    const returnedDisposer = await lifecycle.activate(lifecycleContext(root)) as () => void
+    const factory = entry.contributions[0]!.value as ReturnType<typeof createIdentityCapabilityFactory>
+    const inspect = (factory.createDefinitions() as IdentityCapabilityOptions[]).find(
+      ({ id }) => id === IDENTITY_CAPABILITY_IDS.cloudInspect
+    )!
+    const result = await inspect.handler({}, {
+      caller: { audience: 'ui' },
+      assertPrincipalCurrent: vi.fn(),
+      issueResource: () => ({
+        token: `cap_${'a'.repeat(24)}`,
+        semanticRevision: 'cloud-1',
+        expiresAt: '2027-08-21T00:00:00.000Z'
+      })
+    })
+
+    expect(result.output).toMatchObject({
+      snapshot: {
+        identity: { state: 'signed-out' },
+        error: { source: 'identity', code: 'OIDC_CONFIGURATION_ERROR' }
+      }
+    })
+    expect(runtime.close).not.toHaveBeenCalled()
+    returnedDisposer()
+    expect(runtime.close).toHaveBeenCalledOnce()
+  })
+
+  it.each(['returned-first', 'catalog-first'] as const)(
+    'closes a normally activated runtime once when disposal is %s',
+    async (order) => {
+      const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-lifecycle-'))
+      roots.push(root)
+      const runtime = runtimeDouble(Promise.resolve())
+      vi.spyOn(CloudIdentityRuntime, 'create').mockResolvedValueOnce(runtime.value)
+      const entry = createDomainMainEntry({
+        getUserDataDir: () => root,
+        getDeviceId: () => 'device-1',
+        getAppVersion: () => '1.0.0',
+        packageSecrets: memorySecrets(),
+        defineCapability: (definition) => definition
+      })
+      const lifecycle = entry.contributions[2]!.value as {
+        activate(context: unknown): Promise<unknown>
+      }
+      const returnedDisposer = await lifecycle.activate(lifecycleContext(root)) as () => void
+
+      if (order === 'returned-first') {
+        returnedDisposer()
+        await entry.contributions[2]!.onDispose?.()
+      } else {
+        await entry.contributions[2]!.onDispose?.()
+        returnedDisposer()
+      }
+
+      expect(runtime.close).toHaveBeenCalledOnce()
+      await expectCloudRuntimeInactive(entry)
+    }
+  )
 })
 
 function codedError(code: string): Error & { code: string } {
   return Object.assign(new Error(code), { code })
+}
+
+function memorySecrets() {
+  const values = new Map<string, string>()
+  return {
+    has: async (key: string) => values.has(key),
+    read: async (key: string) => values.get(key) ?? null,
+    write: async (key: string, value: string) => {
+      values.set(key, value)
+    },
+    remove: async (key: string) => {
+      values.delete(key)
+    }
+  }
+}
+
+function lifecycleContext(root: string) {
+  return {
+    userDataDir: root,
+    appRoot: root,
+    environment: {},
+    signal: new AbortController().signal
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function runtimeDouble(
+  initialization: Promise<unknown>,
+  snapshot: unknown = {
+    identity: { state: 'signed-out' },
+    device: { state: 'signed-out' },
+    devices: [],
+    revision: 'cloud-1'
+  }
+) {
+  const initialize = vi.fn(() => initialization)
+  const close = vi.fn()
+  return {
+    initialize,
+    close,
+    value: {
+      initialize,
+      close,
+      snapshot: vi.fn(() => snapshot),
+      semanticRevision: vi.fn(() => 'cloud-1'),
+      subscribe: vi.fn(() => () => undefined)
+    } as unknown as CloudIdentityRuntime
+  }
+}
+
+async function expectCloudRuntimeInactive(
+  entry: ReturnType<typeof createDomainMainEntry>
+): Promise<void> {
+  const factory = entry.contributions[0]!.value as ReturnType<typeof createIdentityCapabilityFactory>
+  const inspect = (factory.createDefinitions() as IdentityCapabilityOptions[]).find(
+    ({ id }) => id === IDENTITY_CAPABILITY_IDS.cloudInspect
+  )!
+  await expect(Promise.resolve(inspect.handler({}, {
+    caller: { audience: 'ui' },
+    assertPrincipalCurrent: vi.fn(),
+    issueResource: vi.fn()
+  }))).rejects.toThrow('Cloud identity runtime is not active.')
 }
