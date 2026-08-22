@@ -729,6 +729,7 @@ export class CapabilityAgentToolSurface {
         `Capability ${descriptor.title} requires an unavailable human confirmation.`
       )
     }
+    const remoteApproval = remoteApprovalPolicy(descriptor)
     const decision = await this.#requestApproval({
       context,
       actionId: descriptor.id,
@@ -739,7 +740,8 @@ export class CapabilityAgentToolSurface {
       effect: descriptor.effect,
       input,
       ...(resourceRef ? { resourceRef } : {}),
-      ...(resourceLabel ? { resourceLabel } : {})
+      ...(resourceLabel ? { resourceLabel } : {}),
+      ...(remoteApproval ? { remoteApproval } : {})
     }, options)
     this.#assertPrincipalLease(context)
     if (decision !== 'allowed') {
@@ -923,6 +925,17 @@ export class CapabilityAgentToolSurface {
     const descriptor = descriptors.find((candidate) => candidate.id === actionId)
     if (!descriptor) throw new CapabilityAgentToolError('unknown_operation_ref', 'An event referenced an unavailable operation.')
     return descriptor
+  }
+}
+
+function remoteApprovalPolicy(
+  descriptor: CapabilityDescriptor
+): CapabilityAgentApprovalRequest['remoteApproval'] | undefined {
+  if (descriptor.effect !== 'workspace-write') return undefined
+  return {
+    eligible: true,
+    safeSummary: descriptor.title,
+    ttlMs: 5 * 60_000
   }
 }
 

@@ -1292,6 +1292,7 @@ describe('CapabilityAgentToolSurface', () => {
       mode: 'confirmation',
       input: { value: 'result' }
     })
+    expect(approvalRequest.remoteApproval).toBeUndefined()
     expect(invoke.mock.calls[0]![0].approvals).toEqual([{
       actionId: 'test.publish',
       invocationId: approvalRequest.invocationId,
@@ -1312,6 +1313,51 @@ describe('CapabilityAgentToolSurface', () => {
       { runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1' },
       'user_stop'
     )
+  })
+
+  it('allows remote confirmation only for Host-classified workspace writes', async () => {
+    const write = defineCapability({
+      id: 'test.workspace.write',
+      version: '1',
+      title: 'Write workspace result',
+      description: 'Writes one result inside the current workspace.',
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'workspace-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ value: z.string() }).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    })
+    const approval = vi.fn(async () => 'denied' as const)
+    const surface = createCapabilityAgentToolSurface({
+      broker: new CapabilityBroker(new CapabilityRegistry([write])),
+      resolveCaller: () => caller,
+      requestApproval: approval
+    })
+    const approvalContext = { ...context, turnId: 'turn-remote-write', callId: 'call-remote-write' }
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: approvalContext
+    })
+    const operationRef = (discovered.value as Array<{ operationRef: string }>)[0]!.operationRef
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: { value: 'safe fixture' } },
+      context: approvalContext
+    })).rejects.toMatchObject({ code: 'approval_denied' })
+
+    expect(approval).toHaveBeenCalledWith(expect.objectContaining({
+      actionId: 'test.workspace.write',
+      remoteApproval: {
+        eligible: true,
+        safeSummary: 'Write workspace result',
+        ttlMs: 5 * 60_000
+      }
+    }), expect.any(Object))
   })
 
   it('rechecks the captured Principal lease after approval and before dispatch', async () => {
