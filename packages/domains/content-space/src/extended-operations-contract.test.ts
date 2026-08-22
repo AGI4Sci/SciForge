@@ -6,6 +6,7 @@ describe('Content Space extended operations contract', () => {
   it('publishes a closed provider-neutral operation catalog without team deletion', () => {
     const operations = Object.values(contract.CONTENT_SPACE_EXTENDED_OPERATIONS)
 
+    expect(contract.CONTENT_SPACE_EXTENDED_CONTRACT_VERSION).toBe('2.0.0')
     expect(new Set(operations.map(({ id }) => id)).size).toBe(operations.length)
     expect(new Set(operations.map(({ key }) => key)).size).toBe(operations.length)
     expect(operations.every(({ id }) => id.startsWith('content-space.'))).toBe(true)
@@ -53,6 +54,40 @@ describe('Content Space extended operations contract', () => {
       retry: 'never',
       response: { result: 500 }
     })).toThrow()
+  })
+
+  it('rejects a non-user principal from the typed user-search result', () => {
+    const result = (kind: 'user' | 'department' | 'position' | 'group') => ({
+      ok: true,
+      value: {
+        items: [{
+          reference: {
+            providerInstanceRef: 'provider-instance-a',
+            kind,
+            principalId: `${kind}-a`
+          },
+          displayName: `${kind} A`
+        }]
+      }
+    })
+
+    expect(() => contract.contentSpaceSearchUsersResultSchema.parse(result('department')))
+      .toThrow()
+    for (const [schema, kind] of [
+      [contract.contentSpaceSearchUsersResultSchema, 'user'],
+      [contract.contentSpaceSearchDepartmentsResultSchema, 'department'],
+      [contract.contentSpaceSearchPositionsResultSchema, 'position'],
+      [contract.contentSpaceSearchGroupsResultSchema, 'group']
+    ] as const) {
+      expect(schema.parse(result(kind))).toMatchObject({
+        ok: true,
+        value: { items: [{ reference: { kind } }] }
+      })
+    }
+    expect(contract.contentSpaceSearchDepartmentsResultSchema)
+      .not.toBe(contract.contentSpaceSearchUsersResultSchema)
+    expect(() => contract.contentSpaceSearchDepartmentsResultSchema.parse(result('user')))
+      .toThrow()
   })
 
   it('models metadata values as a closed discriminated union', () => {

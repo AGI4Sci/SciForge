@@ -173,6 +173,7 @@ type HashBoundRequest = Extract<
   { operation: HashBoundOperation }
 >
 type NonHashBoundRequest = Exclude<SanitizedNativeDocumentRequest, HashBoundRequest>
+type DispatchableRequest = Exclude<NonHashBoundRequest, { operation: 'import' }>
 
 function isHashBoundRequest(
   request: SanitizedNativeDocumentRequest
@@ -340,6 +341,13 @@ export function createNativeDocumentProviderAdapter(
           'OpenContent does not expose an atomic compare-and-mutate contract for hash-bound native-document mutations.'
         )
       }
+      if (request.operation === 'import') {
+        return failureReceipt(
+          base,
+          'unsupported',
+          'OpenContent import is blocked because the pinned snapshot exposes no verifiable source-identity or content postcondition.'
+        )
+      }
 
       const prepared = await prepareInvocation(
         input,
@@ -413,7 +421,7 @@ export function createNativeDocumentProviderAdapter(
 
 async function enrichDocumentWriteReceipt(
   docflow: DocflowNativeDocumentAdapter,
-  request: NonHashBoundRequest,
+  request: DispatchableRequest,
   base: ReceiptBase,
   receipt: Extract<DocflowNativeDocumentReceipt, { outcome: 'succeeded' }>
 ): Promise<
@@ -426,23 +434,39 @@ async function enrichDocumentWriteReceipt(
     receipt: ContentSpaceProviderNativeDocumentReceipt
   }>
 > {
-  if (!['create', 'import'].includes(request.operation)) {
+  if (request.operation !== 'create') {
     return { success: true, receipt }
   }
-  const hasHash = nativeDocumentHashSchema.safeParse(receipt.json.documentHash).success
-  const hasRevision = revisionIdSchema.safeParse(
-    receipt.json.revisionId ?? receipt.json.versionId
-  ).success
-  if (hasHash && hasRevision) return { success: true, receipt }
-
-  const fileId = receipt.json.fileId ?? receipt.structuredDeliveryItems[0]?.businessIdentity
-  if (typeof fileId !== 'string' || fileId.length === 0) {
+  const delivery = receipt.structuredDeliveryItems[0]
+  const fileId = receipt.json.fileId
+  const cardRevision = delivery?.payload.versionId
+  const parsedCardRevision = revisionIdSchema.safeParse(cardRevision)
+  const reportedRevisions = [receipt.json.versionId, receipt.json.revisionId]
+    .filter((value) => value !== undefined)
+  const writeProofBound = receipt.json.success === true &&
+    receipt.json.operation === request.operation &&
+    typeof fileId === 'string' &&
+    delivery !== undefined &&
+    delivery.businessIdentity === fileId &&
+    parsedCardRevision.success &&
+    reportedRevisions.every((value) => value === cardRevision)
+  if (!writeProofBound) {
     return {
       success: false,
       receipt: outcomeUnknownReceipt(
         base,
         'verify',
-        'The write succeeded but no fileId is available for read-after-write verification.'
+        'The write succeeded but its pinned card/file/revision proof is not bound to the request.'
+      )
+    }
+  }
+  if (delivery.payload.name !== pinnedCreateFileName(request.title)) {
+    return {
+      success: false,
+      receipt: outcomeUnknownReceipt(
+        base,
+        'verify',
+        'The create succeeded but its pinned delivery name is not bound to the requested title.'
       )
     }
   }
@@ -478,20 +502,32 @@ async function enrichDocumentWriteReceipt(
       )
     }
   }
-  const finalHash = nativeDocumentHashSchema.safeParse(
-    receipt.json.documentHash ?? readback.data.json.documentHash
-  )
-  const finalRevision = revisionIdSchema.safeParse(
-    receipt.json.revisionId ?? receipt.json.versionId ??
-    readback.data.json.revisionId ?? readback.data.json.versionId
-  )
-  if (!finalHash.success || !finalRevision.success) {
+  const readbackJson = readback.data.json
+  const readbackDocument = isJsonObject(readbackJson.document)
+    ? readbackJson.document
+    : undefined
+  const finalHash = nativeDocumentHashSchema.safeParse(readbackDocument?.documentHash)
+  if (readbackJson.success !== true || readbackJson.operation !== 'read' ||
+    readbackJson.fileId !== fileId || readbackDocument === undefined || !finalHash.success) {
     return {
       success: false,
       receipt: outcomeUnknownReceipt(
         base,
         'verify',
-        'The write succeeded but readback lacks documentHash or revisionId/versionId.'
+        'The write succeeded but its pinned readback lacks a bound documentHash.'
+      )
+    }
+  }
+  const readbackContent = withoutPinnedDocumentHash(readbackDocument)
+  const parsedReadbackContent = z.json().safeParse(readbackContent)
+  if (!parsedReadbackContent.success ||
+    canonicalJson(parsedReadbackContent.data) !== canonicalJson(request.content.value)) {
+    return {
+      success: false,
+      receipt: outcomeUnknownReceipt(
+        base,
+        'verify',
+        'The create succeeded but its pinned readback content is not bound to the request.'
       )
     }
   }
@@ -502,10 +538,31 @@ async function enrichDocumentWriteReceipt(
       json: {
         ...receipt.json,
         documentHash: finalHash.data,
-        revisionId: finalRevision.data
+        revisionId: parsedCardRevision.data
       }
     }
   }
+}
+
+/** Exact file-name projection characterized from the receipt-pinned 1.0.1 snapshot. */
+function pinnedCreateFileName(title: string): string {
+  const normalized = String(title || 'DocFlow')
+    .replace(/[\\/:*?"<>|]/gu, '')
+    .trim() || 'DocFlow'
+  return /\.mdoc$/iu.test(normalized) ? normalized : `${normalized}.mdoc`
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record).sort().map((key) =>
+    `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
+}
+
+function withoutPinnedDocumentHash(document: JsonRecord): JsonRecord {
+  const { documentHash: _documentHash, ...content } = document
+  return content
 }
 
 type ReceiptBase = Readonly<{
@@ -611,7 +668,7 @@ type PreparedInvocation =
 
 async function prepareInvocation(
   input: FeatureInput,
-  request: NonHashBoundRequest,
+  request: DispatchableRequest,
   invocationId: string,
   probeStates: ManagedStateStore<ProbeState>,
   boundPrincipal: string,
@@ -801,34 +858,6 @@ async function prepareInvocation(
         dataFiles: []
       }
       break
-    case 'import': {
-      if (!input.source) {
-        return {
-          success: false,
-          receipt: contractViolation(base, 'feature source is required for docflow-import.')
-        }
-      }
-      const bytes = await readSource(input.source)
-      if (!bytes.success) {
-        return {
-          success: false,
-          receipt: contractViolation(base, bytes.message)
-        }
-      }
-      rawInvocation = {
-        invocationId,
-        command: 'docflow-import',
-        args: { folderId: request.parent.containerId },
-        dataFiles: [{
-          role: 'source',
-          encoding: 'base64',
-          name: input.source.name,
-          mediaType: importMediaType(input.source.name),
-          content: Buffer.from(bytes.value).toString('base64')
-        }]
-      }
-      break
-    }
     case 'export': {
       if (!input.destination) {
         return {
@@ -1151,21 +1180,6 @@ async function readSource(
   return { success: true, value: result }
 }
 
-function importMediaType(name: string): string {
-  const extension = /(?:\.([^.]+))$/u.exec(name)?.[1]?.toLowerCase()
-  switch (extension) {
-    case 'md':
-    case 'markdown': return 'text/markdown'
-    case 'txt': return 'text/plain'
-    case 'html':
-    case 'htm': return 'text/html'
-    case 'doc': return 'application/msword'
-    case 'docx': return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    case 'pdf': return 'application/pdf'
-    default: return 'application/octet-stream'
-  }
-}
-
 function mapNonSuccessReceipt(
   base: ReceiptBase,
   request: SanitizedNativeDocumentRequest,
@@ -1204,7 +1218,7 @@ function requestBaseHash(request: SanitizedNativeDocumentRequest): string | unde
 function normalizeSuccessReceipt(
   base: ReceiptBase,
   input: FeatureInput,
-  request: NonHashBoundRequest,
+  request: DispatchableRequest,
   receipt: Extract<DocflowNativeDocumentReceipt, { outcome: 'succeeded' }>,
   probeStates: ManagedStateStore<ProbeState>,
   boundPrincipal: string,
@@ -1213,8 +1227,7 @@ function normalizeSuccessReceipt(
 ): ContentSpaceProviderNativeDocumentReceipt {
   const json = receipt.json
   switch (request.operation) {
-    case 'create':
-    case 'import': {
+    case 'create': {
       const documentHash = requiredHash(base, json, 'json.documentHash')
       if (!documentHash.success) return documentHash.receipt
       const revisionId = requiredRevision(base, json)
@@ -1235,45 +1248,65 @@ function normalizeSuccessReceipt(
       })
     }
     case 'read': {
-      const documentHash = requiredHash(base, json, 'json.documentHash')
+      if (json.success !== true || json.operation !== 'read' ||
+        json.fileId !== request.document.reference.fileId ||
+        Object.hasOwn(json, 'documentHash') || Object.hasOwn(json, 'content')) {
+        return postDispatchProofGap(
+          base,
+          'CLI output is not the pinned read result bound to the requested fileId.'
+        )
+      }
+      const document = isJsonObject(json.document) ? json.document : undefined
+      const documentHash = requiredHashValue(
+        base,
+        document?.documentHash,
+        'json.document.documentHash'
+      )
       if (!documentHash.success) return documentHash.receipt
-      if (!Object.hasOwn(json, 'content') || !z.json().safeParse(json.content).success) {
-        return postDispatchProofGap(base, 'CLI output is missing JSON field json.content.')
+      if (document === undefined) {
+        return postDispatchProofGap(base, 'CLI output is missing JSON field json.document.')
+      }
+      const content = z.json().safeParse(withoutPinnedDocumentHash(document))
+      if (!content.success) {
+        return postDispatchProofGap(
+          base,
+          'CLI output json.document content is not canonical JSON.'
+        )
       }
       return successReceipt(base, {
         kind: 'content',
         document: request.document,
         documentHash: documentHash.value,
-        content: json.content
+        content: content.data
       })
     }
     case 'probe': {
-      const documentHash = requiredHash(base, json, 'json.documentHash')
-      if (!documentHash.success) return documentHash.receipt
-      const supported = isJsonObject(json.capabilities) &&
-        typeof json.capabilities.supported === 'boolean'
-        ? json.capabilities.supported
-        : undefined
-      if (supported === undefined) {
-        return postDispatchProofGap(base, 'CLI output is missing boolean json.capabilities.supported.')
-      }
+      const proof = pinnedProbeProof(request, json)
+      if (!proof.success) return postDispatchProofGap(base, proof.message)
+      const { documentHash, matches, supported } = proof
       if (!supported) {
         return successReceipt(base, {
           kind: 'probe',
           document: request.document,
-          documentHash: documentHash.value,
-          probeReceiptId: opaqueReceiptId('probe', base.invocationId, documentHash.value),
+          documentHash,
+          probeReceiptId: opaqueReceiptId('probe', base.invocationId, documentHash),
           capabilitySupported: false,
-          ...(Object.hasOwn(json, 'selection') ? { selection: json.selection } : {})
+          ...(matches?.length === 1 && z.json().safeParse(matches[0]).success
+            ? { selection: matches[0] }
+            : {})
         })
       }
       const template = receipt.managedDataFiles.filter((item) => item.role === 'probe-template')
       if (template.length !== 1) {
         return postDispatchProofGap(base, 'DocFlow receipt requires one managedDataFiles[role=probe-template].')
       }
-      if (!Object.hasOwn(json, 'selection') || !z.json().safeParse(json.selection).success) {
-        return postDispatchProofGap(base, 'CLI output is missing JSON field json.selection.')
+      if (matches?.length !== 1 || !isJsonObject(matches[0])) {
+        return postDispatchProofGap(
+          base,
+          'CLI output requires exactly one object in json.probe.matches.'
+        )
       }
+      const selection = matches[0]
       const probeReceiptId = opaqueReceiptId('probe', base.invocationId, template[0]!.token)
       if (reservation?.kind !== 'probe' || !commitManagedState(
         probeStates,
@@ -1282,10 +1315,10 @@ function normalizeSuccessReceipt(
         Object.freeze({
           providerInstanceRef: request.document.reference.providerInstanceRef,
           fileId: request.document.reference.fileId,
-          documentHash: documentHash.value,
+          documentHash,
           selector: request.selector,
           requestedCapability: request.requestedCapability,
-          selection: json.selection,
+          selection,
           templateToken: template[0]!.token
         }),
         boundPrincipal,
@@ -1296,19 +1329,44 @@ function normalizeSuccessReceipt(
       return successReceipt(base, {
         kind: 'probe',
         document: request.document,
-        documentHash: documentHash.value,
+        documentHash,
         probeReceiptId,
         capabilitySupported: true,
-        selection: json.selection
+        selection
       })
     }
     case 'plan': {
-      if (json.canApply !== true) {
-        return postDispatchProofGap(base, 'CLI output is missing literal true json.canApply.')
+      if (json.success !== true || json.operation !== 'plan' ||
+        json.fileId !== request.document.reference.fileId ||
+        !revisionIdSchema.safeParse(json.operationId).success ||
+        json.operationCount !== request.changes.length ||
+        Object.hasOwn(json, 'canApply') ||
+        Object.hasOwn(json, 'baseDocumentHash') ||
+        Object.hasOwn(json, 'documentHash')) {
+        return postDispatchProofGap(
+          base,
+          'CLI output is not the pinned plan result bound to the requested file and changes.'
+        )
       }
-      const baseHash = json.baseDocumentHash ?? json.documentHash
+      const report = isJsonObject(json.report) ? json.report : undefined
+      if (report?.readOnly !== true || report.canApply !== true) {
+        return postDispatchProofGap(
+          base,
+          'CLI output is missing literal true json.report.readOnly/canApply.'
+        )
+      }
+      const baseHash = report.baseDocumentHash
       if (baseHash !== request.baseHash) {
-        return postDispatchProofGap(base, 'CLI output baseDocumentHash does not match request.baseHash.')
+        return postDispatchProofGap(
+          base,
+          'CLI output json.report.baseDocumentHash does not match request.baseHash.'
+        )
+      }
+      if (!nativeDocumentHashSchema.safeParse(report.resultDocumentHash).success) {
+        return postDispatchProofGap(
+          base,
+          'CLI output is missing 64-hex json.report.resultDocumentHash.'
+        )
       }
       const planReceiptId = opaqueReceiptId('plan', base.invocationId, request.baseHash)
       return successReceipt(base, {
@@ -1388,6 +1446,70 @@ function normalizeSuccessReceipt(
   }
 }
 
+type PinnedProbeProof =
+  | Readonly<{
+    success: true
+    documentHash: string
+    supported: boolean
+    matches: readonly unknown[]
+  }>
+  | Readonly<{ success: false; message: string }>
+
+function pinnedProbeProof(
+  request: Extract<NonHashBoundRequest, { operation: 'probe' }>,
+  json: JsonRecord
+): PinnedProbeProof {
+  const probe = isJsonObject(json.probe) ? json.probe : undefined
+  const capabilities = isJsonObject(probe?.capabilities)
+    ? probe.capabilities
+    : undefined
+  const supported = capabilities?.supported
+  const truncation = isJsonObject(json.truncation) ? json.truncation : undefined
+  const matches = Array.isArray(probe?.matches) ? probe.matches : undefined
+  const documentHash = nativeDocumentHashSchema.safeParse(probe?.documentHash)
+  const total = truncation?.total
+  const returned = truncation?.returned
+  const expectedFileId = request.document.reference.fileId
+  const expectedOperation = mapProbeCapability(request.requestedCapability)
+  const valid = json.success === true &&
+    json.operation === 'probe' &&
+    json.view === 'target' &&
+    json.fileId === expectedFileId &&
+    !Object.hasOwn(json, 'documentHash') &&
+    !Object.hasOwn(json, 'capabilities') &&
+    !Object.hasOwn(json, 'selection') &&
+    probe?.schemaVersion === 1 &&
+    probe.fileId === expectedFileId &&
+    documentHash.success &&
+    capabilities?.requestedOperation === expectedOperation &&
+    typeof supported === 'boolean' &&
+    matches !== undefined &&
+    matches.every((match) => z.json().safeParse(match).success) &&
+    typeof total === 'number' && Number.isSafeInteger(total) && total >= 0 &&
+    typeof returned === 'number' && Number.isSafeInteger(returned) &&
+    returned === matches.length &&
+    total === returned &&
+    truncation?.truncated === false
+  if (!valid) {
+    return {
+      success: false,
+      message: 'CLI output is not the pinned, bound, untruncated json.probe result.'
+    }
+  }
+  if (typeof supported !== 'boolean') {
+    return {
+      success: false,
+      message: 'CLI output is missing the pinned probe capability result.'
+    }
+  }
+  return {
+    success: true,
+    documentHash: documentHash.data,
+    supported,
+    matches
+  }
+}
+
 type RequiredField<Value> =
   | Readonly<{ success: true; value: Value }>
   | Readonly<{ success: false; receipt: ContentSpaceProviderNativeDocumentReceipt }>
@@ -1397,7 +1519,15 @@ function requiredHash(
   json: JsonRecord,
   field: string
 ): RequiredField<string> {
-  const parsed = nativeDocumentHashSchema.safeParse(json.documentHash)
+  return requiredHashValue(base, json.documentHash, field)
+}
+
+function requiredHashValue(
+  base: ReceiptBase,
+  value: unknown,
+  field: string
+): RequiredField<string> {
+  const parsed = nativeDocumentHashSchema.safeParse(value)
   return parsed.success
     ? { success: true, value: parsed.data }
     : {

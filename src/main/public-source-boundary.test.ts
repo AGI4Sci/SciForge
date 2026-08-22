@@ -273,6 +273,20 @@ function trackedDomainPackageDefinitions(): readonly Record<string, unknown>[] {
     .map((path) => JSON.parse(readFileSync(join(repositoryRoot, path), 'utf8')) as Record<string, unknown>)
 }
 
+function trackedInternalPayloadPaths(): readonly string[] {
+  return execFileSync(
+    'git',
+    ['ls-files', '-z', '--', 'internal/**', '.sciforge/internal-overlays/**'],
+    {
+      cwd: repositoryRoot,
+      encoding: 'utf8'
+    }
+  )
+    .split('\0')
+    .filter(Boolean)
+    .sort()
+}
+
 describe('public source boundary', () => {
   it('normalizes portable workspace paths before enforcing the internal boundary', () => {
     const internalVariants = [
@@ -308,6 +322,10 @@ describe('public source boundary', () => {
       packages?: Record<string, { workspaces?: unknown }>
     }
     expect(packageLock.packages?.['']?.workspaces).toEqual(rootManifest.workspaces)
+  })
+
+  it('keeps internal payloads out of the Git-tracked public source', () => {
+    expect(trackedInternalPayloadPaths().join('\n')).toBe('')
   })
 
   it('keeps Principal, external binding, and root verification profiles out of tracked public packages', () => {

@@ -1,4 +1,12 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 
@@ -17,7 +25,8 @@ import type {
   OpenContentCliProcessPort
 } from '@sciforge/opencontent-skill-runtime/main/cli-runner'
 import {
-  assertOpenContentSkillBundledAssetsPresent
+  assertOpenContentSkillBundledAssetsPresent,
+  OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR
 } from '@sciforge/opencontent-skill-runtime/main/bundled-assets'
 
 import {
@@ -81,11 +90,62 @@ describe('OpenContent main-only skill runtime session', () => {
     })
   })
 
+  it('revalidates the source receipt before the first attachment dispatch', async () => {
+    const repositoryRoot = mkdtempSync(resolve(tmpdir(), 'sciforge-opencontent-dispatch-drift-'))
+    const run = vi.fn()
+    try {
+      cpSync(assetFixture.repositoryRoot, repositoryRoot, { recursive: true })
+      const entry = mainEntryFixture(repositoryRoot)
+      createDomainMainEntry(entry.host, { skillRuntime: { processPort: { run } } })
+      writeFileSync(resolve(
+        repositoryRoot,
+        'internal/opencontent/packages/opencontent-skill-assets/assets/',
+        'opencontent-base-1.0.1/cli/bin/oc.js'
+      ), 'module.exports = { driftedAfterActivation: true }\n', { mode: 0o644 })
+
+      await expect(entry.registeredService()!.useSkillRuntime!({
+        principal,
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        invocationId: 'invocation_skill_runtime_dispatch_drift_0001',
+        deadlineAt: new Date(Date.now() + 10_000).toISOString(),
+        signal: new AbortController().signal,
+        assertPrincipalCurrent: () => undefined
+      }, async (transport) => transport.invoke({
+        invocationId: 'invocation_skill_runtime_dispatch_drift_read_0001',
+        command: 'docflow-read',
+        args: { fileId: 'file-a' },
+        dataFiles: []
+      }))).rejects.toThrow(/changed file/u)
+      expect(run).not.toHaveBeenCalled()
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true })
+    }
+  })
+
   it('leaves the optional source runtime disabled when the repository overlay is absent', () => {
     expect(resolveOpenContentSkillRuntimeAssets({
       getAppRoot: () => assetFixture.shadowOnlyRepositoryRoot,
       isPackaged: () => false
     })).toBeUndefined()
+  })
+
+  it('fails source resolution closed when the optional overlay path is a broken symlink', () => {
+    const repositoryRoot = mkdtempSync(resolve(tmpdir(), 'sciforge-opencontent-broken-link-'))
+    try {
+      mkdirSync(resolve(repositoryRoot, 'internal'), { recursive: true })
+      symlinkSync(
+        resolve(repositoryRoot, 'missing-opencontent-overlay'),
+        resolve(repositoryRoot, 'internal/opencontent'),
+        'dir'
+      )
+
+      expect(() => resolveOpenContentSkillRuntimeAssets({
+        getAppRoot: () => repositoryRoot,
+        isPackaged: () => false
+      })).toThrow()
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true })
+    }
   })
 
   it('fails source resolution closed when the fixed repository overlay is unreceipted', () => {
@@ -109,6 +169,25 @@ describe('OpenContent main-only skill runtime session', () => {
         getAppRoot: () => repositoryRoot,
         isPackaged: () => false
       })).toThrow(/changed file/u)
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('fails Connector activation closed when a receipted asset package is missing', () => {
+    const repositoryRoot = mkdtempSync(resolve(tmpdir(), 'sciforge-opencontent-missing-'))
+    try {
+      cpSync(assetFixture.repositoryRoot, repositoryRoot, { recursive: true })
+      rmSync(resolve(
+        repositoryRoot,
+        'internal/opencontent/packages/opencontent-skill-assets'
+      ), { recursive: true })
+      const entry = mainEntryFixture(repositoryRoot)
+
+      expect(() => createDomainMainEntry(entry.host, {
+        skillRuntime: { processPort: { run: vi.fn() } }
+      })).toThrow(/missing file/u)
+      expect(entry.registeredService()).toBeUndefined()
     } finally {
       rmSync(repositoryRoot, { recursive: true, force: true })
     }
@@ -142,7 +221,27 @@ describe('OpenContent main-only skill runtime session', () => {
       expect(() => resolveOpenContentSkillRuntimeAssets({
         getAppRoot: () => repositoryRoot,
         isPackaged: () => false
-      })).toThrow(/requires overlay receipt version 1\.0\.1/u)
+      })).toThrow(/package-owned provenance/u)
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a self-consistent rewritten overlay receipt without pinned provenance', () => {
+    const repositoryRoot = mkdtempSync(resolve(tmpdir(), 'sciforge-opencontent-forged-receipt-'))
+    try {
+      cpSync(assetFixture.repositoryRoot, repositoryRoot, { recursive: true })
+      writeFileSync(resolve(
+        repositoryRoot,
+        'internal/opencontent/packages/opencontent-skill-assets/assets/',
+        'opencontent-base-1.0.1/cli/bin/oc.js'
+      ), 'module.exports = { rewritten: true }\n', { mode: 0o644 })
+      writeOverlayReceipt(repositoryRoot, '1.0.1', 'f'.repeat(64))
+
+      expect(() => resolveOpenContentSkillRuntimeAssets({
+        getAppRoot: () => repositoryRoot,
+        isPackaged: () => false
+      })).toThrow(/provenance/u)
     } finally {
       rmSync(repositoryRoot, { recursive: true, force: true })
     }
@@ -198,6 +297,30 @@ describe('OpenContent main-only skill runtime session', () => {
       getAppRoot: () => 'relative/app.asar',
       isPackaged: () => true
     })).toThrow(/absolute Electron app root/u)
+  })
+
+  it('fails packaged resolution closed for a residual or dangling runtime namespace', () => {
+    const resourcesPath = mkdtempSync(resolve(tmpdir(), 'sciforge-opencontent-packaged-residue-'))
+    try {
+      mkdirSync(resolve(resourcesPath, 'opencontent'), { recursive: true })
+      expect(() => resolveOpenContentSkillRuntimeAssets({
+        getAppRoot: () => resolve(resourcesPath, 'app.asar'),
+        isPackaged: () => true
+      })).toThrow('Bundled OpenContent assets are unavailable or invalid.')
+
+      rmSync(resolve(resourcesPath, 'opencontent'), { recursive: true, force: true })
+      symlinkSync(
+        resolve(resourcesPath, 'missing-opencontent-runtime'),
+        resolve(resourcesPath, 'opencontent'),
+        'dir'
+      )
+      expect(() => resolveOpenContentSkillRuntimeAssets({
+        getAppRoot: () => resolve(resourcesPath, 'app.asar'),
+        isPackaged: () => true
+      })).toThrow('Bundled OpenContent assets are unavailable or invalid.')
+    } finally {
+      rmSync(resourcesPath, { recursive: true, force: true })
+    }
   })
 
   it('fails Connector activation closed for incomplete packaged assets', () => {
@@ -524,7 +647,11 @@ function createAssetFixture() {
   }
 }
 
-function writeOverlayReceipt(repositoryRoot: string, version = '1.0.1'): void {
+function writeOverlayReceipt(
+  repositoryRoot: string,
+  version = '1.0.1',
+  archiveSha256 = OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.installation.archiveSha256
+): void {
   const overlayId = 'opencontent-attachment-assets'
   const overlayRoot = 'internal/opencontent'
   const files = createStaticFileInventory({
@@ -540,7 +667,7 @@ function writeOverlayReceipt(repositoryRoot: string, version = '1.0.1'): void {
   mkdirSync(dirname(receiptPath), { recursive: true })
   writeFileSync(receiptPath, canonicalJson({
     archiveRoot: `sciforge-internal-overlay-${overlayId}-${version}`,
-    archiveSha256: 'a'.repeat(64),
+    archiveSha256,
     files,
     inventorySha256,
     overlayId,

@@ -40,13 +40,13 @@ import {
 } from '@sciforge/domain-opencontent-connector/contract'
 import {
   OPENCONTENT_TEAM_PAGE_SIZE_MAX,
-  openContentIdentityIdSchema,
   type OpenContentBoundTeamAdministration,
   type OpenContentIdentityId,
   type OpenContentTeam
 } from '@sciforge/domain-opencontent-connector/team-administration-contract'
 
 import { domainPackageDefinition } from '../definition.js'
+import { parseOpenContentDirectoryIdentity } from './directory-principal.js'
 import { toOpenContentExpectedBinding } from './external-binding.js'
 
 const ADAPTER_OWNER = Object.freeze({
@@ -56,7 +56,9 @@ const ADAPTER_OWNER = Object.freeze({
 })
 const TEAM_OPERATION_KEYS = new Set(['updateTeamMemberRole', 'transferTeamOwnership'])
 const MAX_TEAM_PAGES = 10_000
-const NON_ATOMIC_NATIVE_OPERATIONS = new Set<
+const MAX_NATIVE_PARENT_POSTCONDITION_PAGES = 10_000
+const NATIVE_PARENT_POSTCONDITION_PAGE_SIZE = 100
+const CONTRACT_BLOCKED_NATIVE_OPERATIONS = new Set<
   (typeof NATIVE_DOCUMENT_OPERATIONS)[number]
 >([
   'update',
@@ -68,10 +70,11 @@ const NON_ATOMIC_NATIVE_OPERATIONS = new Set<
   'comment-reply',
   'comment-solve',
   'comment-reopen',
-  'comment-delete'
+  'comment-delete',
+  'import'
 ])
 const NATIVE_DOCUMENT_OPERATION_STATES = Object.freeze(
-  NATIVE_DOCUMENT_OPERATIONS.map((operation) => NON_ATOMIC_NATIVE_OPERATIONS.has(operation)
+  NATIVE_DOCUMENT_OPERATIONS.map((operation) => CONTRACT_BLOCKED_NATIVE_OPERATIONS.has(operation)
     ? Object.freeze({
         operation,
         readiness: 'blocked_by_contract' as const,
@@ -196,6 +199,7 @@ export function createOpenContentRuntimeFeatures(input: Readonly<{
     },
     execute: async (execution) => {
       const session = featureSessionContext(execution, input.providerInstanceRef)
+      if (execution.operation === 'import') return nativeImportBlockedFailure(execution)
       if (!useSkillRuntime) {
         return nativeFeatureFailure(
           execution,
@@ -206,8 +210,45 @@ export function createOpenContentRuntimeFeatures(input: Readonly<{
         )
       }
       try {
-        return await useSkillRuntime(session, (transport) =>
+        const receipt = await useSkillRuntime(session, (transport) =>
           activeTransport.run(transport, () => nativeAdapter.execute(execution)))
+        if (execution.operation !== 'create' ||
+          receipt.outcome !== 'succeeded' ||
+          receipt.result.kind !== 'document') return receipt
+        try {
+          const parent = execution.target.primary
+          if (!('containerId' in parent)) throw nativePostconditionUnknown()
+          const fileId = receipt.result.document.reference.fileId
+          let pageNumber = 1
+          for (let pages = 0; pages < MAX_NATIVE_PARENT_POSTCONDITION_PAGES; pages += 1) {
+            const page = await input.facade.listFolderEntries({
+              principal: session.principal,
+              providerInstanceRef: session.providerInstanceRef,
+              ...(session.expectedBindingAttestation === undefined
+                ? {}
+                : { expectedBindingAttestation: session.expectedBindingAttestation }),
+              parentFolderGuid: parent.containerId,
+              page: pageNumber,
+              pageSize: NATIVE_PARENT_POSTCONDITION_PAGE_SIZE,
+              signal: session.signal,
+              assertPrincipalCurrent: session.assertPrincipalCurrent
+            })
+            if (page.parentFolderGuid !== parent.containerId ||
+              page.entries.length > NATIVE_PARENT_POSTCONDITION_PAGE_SIZE) {
+              throw nativePostconditionUnknown()
+            }
+            if (page.entries.some((entry) =>
+              entry.kind === 'file' && entry.fileGuid === fileId)) return receipt
+            if (page.nextPage === undefined) throw nativePostconditionUnknown()
+            if (!Number.isSafeInteger(page.nextPage) || page.nextPage <= pageNumber) {
+              throw nativePostconditionUnknown()
+            }
+            pageNumber = page.nextPage
+          }
+          throw nativePostconditionUnknown()
+        } catch {
+          return nativeFeatureFailure(execution, nativePostconditionUnknown())
+        }
       } catch (error) {
         return nativeFeatureFailure(execution, error)
       }
@@ -362,20 +403,14 @@ function createTeamGovernance(input: Readonly<{
 }
 
 function parseProviderDirectoryIdentity(value: string): OpenContentIdentityId {
-  if (!/^[1-9]\d*$/u.test(value)) {
+  const identityId = parseOpenContentDirectoryIdentity(value)
+  if (identityId === undefined) {
     throw featureError(
       'invalid_reference',
       'The OpenContent directory Principal identity is not canonical.'
     )
   }
-  const parsed = openContentIdentityIdSchema.safeParse(Number(value))
-  if (!parsed.success || String(parsed.data) !== value) {
-    throw featureError(
-      'invalid_reference',
-      'The OpenContent directory Principal identity is unavailable.'
-    )
-  }
-  return parsed.data
+  return identityId
 }
 
 async function resolveTeamByRoot(
@@ -546,6 +581,23 @@ function nativeFeatureFailure(
   })
 }
 
+function nativeImportBlockedFailure(
+  execution: Parameters<ContentSpaceNativeDocumentExecutor['execute']>[0]
+): ContentSpaceProviderNativeDocumentReceipt {
+  return Object.freeze({
+    contractVersion: NATIVE_DOCUMENT_CONTRACT_VERSION,
+    resourceType: NATIVE_DOCUMENT_RESOURCE_TYPE,
+    operation: execution.operation,
+    invocationId: execution.context.invocationId ?? 'invalid-invocation',
+    outcome: 'failed' as const,
+    error: Object.freeze({
+      code: 'unsupported' as const,
+      message: 'OpenContent import is blocked because the pinned snapshot exposes no verifiable source-identity or content postcondition.',
+      retry: 'never' as const
+    })
+  })
+}
+
 function nativeExpectedHash(request: unknown): string | undefined {
   if (typeof request !== 'object' || request === null || !('baseHash' in request)) {
     return undefined
@@ -598,6 +650,13 @@ function extendedFeatureFailure(
 
 function featureError(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code })
+}
+
+function nativePostconditionUnknown(): OpenContentConnectorError {
+  return new OpenContentConnectorError(
+    'outcome_unknown',
+    'The created OpenContent document is not proven under its exact parent.'
+  )
 }
 
 function operationError(

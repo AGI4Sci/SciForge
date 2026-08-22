@@ -16,6 +16,7 @@ import type { OpenContentSkillMainExecutionContext } from './contract.js'
 
 const testAssetRoot = mkdtempSync(resolve(tmpdir(), 'sciforge-cli-runner-assets-'))
 for (const relativePath of [
+  'package.json',
   'cli/bin/oc.js',
   'cli/docflow/docflow-node.cjs',
   'scripts/docflow-probe-compact.cjs',
@@ -232,6 +233,7 @@ describe('OpenContent CLI runner seam', () => {
       'docflow-edit',
       'docflow-undo',
       'docflow-redo',
+      'docflow-import',
       'docflow-comment-create',
       'docflow-comment-reply',
       'docflow-comment-solve',
@@ -246,6 +248,18 @@ describe('OpenContent CLI runner seam', () => {
         dataFiles: []
       } as never)).rejects.toThrow()
     }
+    await expect(runner.invoke({
+      invocationId: 'invocation_rejected_docflow_import',
+      command: 'docflow-import',
+      args: { folderId: 'container_a' },
+      dataFiles: [{
+        role: 'source',
+        encoding: 'base64',
+        name: 'draft.docx',
+        mediaType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        content: 'BAUG'
+      }]
+    } as never)).rejects.toThrow()
     expect(run).not.toHaveBeenCalled()
   })
 

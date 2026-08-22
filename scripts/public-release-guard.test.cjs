@@ -13,11 +13,16 @@ const afterPack = require('./after-pack.cjs')
 
 test('public release guard accepts only an empty internal runtime composition', () => {
   assert.deepEqual(
-    assertPublicReleaseCompositionSafe({ packagedRuntimes: [], domainPackages: [] }),
+    assertPublicReleaseCompositionSafe({
+      extraResources: [],
+      packagedRuntimes: [],
+      domainPackages: []
+    }),
     { internalRuntimeCount: 0, verificationProfileCount: 0 }
   )
   assert.throws(
     () => assertPublicReleaseCompositionSafe({
+      extraResources: [],
       packagedRuntimes: [
         { packageName: '@private/zeta' },
         { packageName: '@private/alpha' }
@@ -28,9 +33,40 @@ test('public release guard accepts only an empty internal runtime composition', 
   )
 })
 
+test('public release guard rejects internal extra resources without packaged runtimes', () => {
+  assert.throws(
+    () => assertPublicReleaseCompositionSafe({
+      extraResources: [{ from: 'internal/runtime', to: 'internal/runtime' }],
+      packagedRuntimes: [],
+      domainPackages: []
+    }),
+    /internal extra resource composition is non-empty/u
+  )
+})
+
+test('public release guard fails closed for malformed internal composition shapes', () => {
+  const malformedCompositions = [
+    { packagedRuntimes: [] },
+    { extraResources: {}, packagedRuntimes: [] },
+    { extraResources: [] },
+    { extraResources: [], packagedRuntimes: {} }
+  ]
+
+  for (const composition of malformedCompositions) {
+    assert.throws(
+      () => assertPublicReleaseCompositionSafe({
+        ...composition,
+        domainPackages: []
+      }),
+      /requires canonical extraResources and packagedRuntimes composition/u
+    )
+  }
+})
+
 test('public release guard rejects an active trusted verification profile from canonical main composition', () => {
   assert.throws(
     () => assertPublicReleaseCompositionSafe({
+      extraResources: [],
       packagedRuntimes: [],
       domainPackages: [trustedDomainDefinition({
         contract: verificationProfileContract()
@@ -66,6 +102,7 @@ test('profile discovery requires the manifest contract and matching main runtime
 
   assert.deepEqual(
     assertPublicReleaseCompositionSafe({
+      extraResources: [],
       packagedRuntimes: [],
       domainPackages: [
         developmentOnly,
@@ -98,6 +135,7 @@ test('profile rejection never echoes Principal, external binding, or root contra
   let diagnostic = ''
   assert.throws(
     () => assertPublicReleaseCompositionSafe({
+      extraResources: [],
       packagedRuntimes: [],
       domainPackages: [trustedDomainDefinition({ contract })]
     }),
@@ -115,7 +153,7 @@ test('public release guard accepts canonical composition without active verifica
   const result = await runPublicReleaseGuard([], {
     createComposition(root) {
       discoveredRoot = root
-      return { packagedRuntimes: [] }
+      return { extraResources: [], packagedRuntimes: [] }
     },
     loadDomainPackages: async () => [],
     projectRoot: '/trusted/repository'
@@ -133,7 +171,7 @@ test('public release guard rejects a verification profile loaded by canonical do
     runPublicReleaseGuard([], {
       createComposition(root) {
         discoveredRoots.push(root)
-        return { packagedRuntimes: [] }
+        return { extraResources: [], packagedRuntimes: [] }
       },
       loadDomainPackages: async (root) => {
         discoveredRoots.push(root)
@@ -152,7 +190,7 @@ test('public release guard rejects a verification profile loaded by canonical do
 test('public release guard rejects arguments that could weaken the official policy', async () => {
   await assert.rejects(
     runPublicReleaseGuard(['--allow-internal'], {
-      createComposition: () => ({ packagedRuntimes: [] }),
+      createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
       loadDomainPackages: async () => [],
       projectRoot: '/trusted/repository'
     }),
@@ -166,7 +204,10 @@ test('configured guard preserves local internal acceptance unless public release
     environment: {},
     createComposition() {
       compositionLoads += 1
-      return { packagedRuntimes: [{ packageName: '@fixture/internal-runtime' }] }
+      return {
+        extraResources: [{ from: 'internal/runtime', to: 'internal/runtime' }],
+        packagedRuntimes: [{ packageName: '@fixture/internal-runtime' }]
+      }
     },
     loadDomainPackages: async () => {
       compositionLoads += 1
@@ -183,7 +224,7 @@ test('configured guard fails closed for malformed and enabled public release mod
   await assert.rejects(
     runConfiguredPublicReleaseGuard({
       environment: { SCIFORGE_PUBLIC_RELEASE: 'true' },
-      createComposition: () => ({ packagedRuntimes: [] }),
+      createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
       loadDomainPackages: async () => [],
       projectRoot: '/trusted/repository'
     }),
@@ -192,7 +233,7 @@ test('configured guard fails closed for malformed and enabled public release mod
   await assert.rejects(
     runConfiguredPublicReleaseGuard({
       environment: { SCIFORGE_PUBLIC_RELEASE: '1' },
-      createComposition: () => ({ packagedRuntimes: [] }),
+      createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
       loadDomainPackages: async () => [
         trustedDomainDefinition({ contract: verificationProfileContract() })
       ],

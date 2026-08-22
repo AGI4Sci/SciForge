@@ -14,6 +14,7 @@ import {
   contentSpaceAdministrationListMembersInputSchema,
   contentSpaceAdministrationListSpacesInputSchema,
   contentSpaceAdministrationMemberPageSchema,
+  contentSpaceAdministrationMemberReferenceSchema,
   contentSpaceAdministrationMemberSummarySchema,
   contentSpaceAdministrationObserveSpaceInputSchema,
   contentSpaceAdministrationOpenRootInputSchema,
@@ -2248,6 +2249,10 @@ function assertAdministrationTarget(
   if (!sameContentEntryReference(requestRoot, target.primary)) {
     fail('invalid_target', 'The administration request does not match Broker authority.')
   }
+  if ((operation === 'add-member' || operation === 'remove-member') &&
+    request.member.providerInstanceRef !== requestRoot.providerInstanceRef) {
+    fail('invalid_target', 'The administration member does not match the root Provider Instance.')
+  }
 }
 
 function assertAdministrationOutputProvider(
@@ -2257,10 +2262,17 @@ function assertAdministrationOutputProvider(
   effect: ContentSpaceProviderFeatureEffect
 ): void {
   const roots: unknown[] = []
+  const members: unknown[] = []
   if (operation === 'list-spaces') {
     roots.push(...output.items.map((item: any) => item.root))
+  } else if (operation === 'list-members') {
+    members.push(...output.items.map((item: any) => item.member))
+    roots.push(output.root)
   } else if (operation === 'add-member') {
-    return
+    members.push(output.member)
+  } else if (operation === 'remove-member') {
+    members.push(output.member)
+    roots.push(output.root)
   } else if (operation === 'provision-project') {
     if (output.root) roots.push(output.root)
   } else if (output.root) {
@@ -2269,6 +2281,9 @@ function assertAdministrationOutputProvider(
   try {
     if (roots.some((root) =>
       parsePortableContentContainerReference(root).providerInstanceRef !== providerInstanceRef
+    ) || members.some((member) =>
+      contentSpaceAdministrationMemberReferenceSchema.parse(member).providerInstanceRef !==
+        providerInstanceRef
     )) throw new Error('Provider drift')
   } catch {
     fail(

@@ -1,3 +1,33 @@
+## ADDED Requirements
+
+### Requirement: Shared-container membership uses Provider directory user references
+
+Ordinary shared Content Container membership SHALL use one provider-neutral `Provider Directory Principal Reference` as the only add, list, and remove member identity. The reference SHALL contain only the exact Provider Instance, the closed `user` principal kind, and an opaque canonical Provider principal ID. Extended contract v2 SHALL give `searchUsers`, `searchDepartments`, `searchPositions`, and `searchGroups` distinct literal-kind summary/page/result schemas and SHALL reject an item whose kind does not match the requested search family. `searchUsers` SHALL therefore produce a statically and dynamically typed user reference, and `listMembers` SHALL return the same user shape so its result can be passed directly to the canonical remove operation. The reference SHALL NOT contain or imply a Host Principal, Cloud `contentUserId`, local Connection, external-account selector, endpoint, credential, root authority, or Project membership.
+
+Member add/remove SHALL require an exact authorized shared root, current Principal, current Provider binding attestation, expected root revision, and a member reference for the same Provider Instance. Content Space SHALL reject legacy top-level `contentUserId` member payloads, non-user principals, cross-Provider references, malformed Provider output, and output authority drift before treating the operation as successful. A Provider integration MAY translate the opaque principal ID only behind its package boundary and SHALL use its existing token-free Connector facade and current Principal-bound Connection; it SHALL NOT add an extended-operation invite path or Host identity-mapping fallback.
+
+The dormant Project Content Space provisioning port SHALL remain a separate Project-owned contract: it MAY accept Cloud-owned `contentUserId` values only with verified Cloud-to-Provider identity mappings from the Project-owning context. Provider directory search or ordinary shared-container membership SHALL NOT create or reconcile Project authority.
+
+#### Scenario: Searched Provider user is added, listed, and removed
+
+- **WHEN** typed directory search returns a user reference for the same Provider Instance as an authorized shared root and the admitted caller passes it to `addMember`
+- **THEN** the one Administration path SHALL add that Provider user, `listMembers` SHALL return the same canonical reference, and `removeMember` SHALL accept that listed reference without a Host cross-user mapping or exposed credential
+
+#### Scenario: User search returns another principal kind
+
+- **WHEN** Provider output for `searchUsers` contains a department, position, or group reference
+- **THEN** extended result validation SHALL reject the output before it can become a Team member input
+
+#### Scenario: Legacy or cross-Provider member identity is supplied
+
+- **WHEN** a member mutation supplies a top-level `contentUserId`, a non-user directory principal, or a Provider Instance different from the authorized root
+- **THEN** Content Space SHALL reject it before Provider binding or remote mutation and SHALL NOT reinterpret or map the identity
+
+#### Scenario: Project provisioning supplies Cloud user identities
+
+- **WHEN** the future Project-owning context invokes the separate provisioning port with an authoritative Project binding and verified identity mappings
+- **THEN** that port MAY retain its Cloud `contentUserId` contract without changing or aliasing ordinary Provider-directory member administration
+
 ## MODIFIED Requirements
 
 ### Requirement: Readiness is explicit per operation
@@ -43,7 +73,7 @@ Every official public release path SHALL reject any active verification-profile 
 
 Content Space MAY expose a provider-neutral Project Content Space provisioning port to a trusted consuming context, but SHALL NOT register a generic Agent capability that accepts caller-authored Project identity, owner, membership, coordinator, or binding intent. Provisioning SHALL remain dormant until the Project-owning context supplies an authoritative Project Content Space Binding and verified identity mappings through a separately reviewed integration. Project archival or deletion SHALL never trigger Provider deletion.
 
-Ordinary Agent administration MAY create a non-Project shared Content Container, but its business request SHALL accept only the shared-container label. The logical invocation identity SHALL come solely from the Broker invocation envelope outside that business request. The capability handler SHALL derive the owner from the Broker's current Principal, and the Provider SHALL map only that Principal's currently authenticated external binding. Caller-authored invocation identity, owner, member, coordinator, Project, or external-account fields SHALL NOT be accepted.
+Ordinary Agent administration MAY create a non-Project shared Content Container, but its create request SHALL accept only the shared-container label. The logical invocation identity SHALL come solely from the Broker invocation envelope outside that request. The capability handler SHALL derive the owner from the Broker's current Principal, and the Provider SHALL map only that Principal's currently authenticated external binding. The create request SHALL NOT accept a caller-authored invocation identity, owner, initial member set, coordinator, Project, or external-account field; later ordinary member changes SHALL use only the separate Provider-directory member operations above.
 
 #### Scenario: Ordinary Agent supplies Project membership
 

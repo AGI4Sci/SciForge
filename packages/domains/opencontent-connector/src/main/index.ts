@@ -9,7 +9,8 @@ import {
   defineProviderInstanceDirectoryEntry
 } from '@sciforge/domain-sdk/provider-composition'
 import {
-  assertOpenContentSkillBundledAssetsPresent
+  assertOpenContentSkillBundledAssetsPresent,
+  type OpenContentSkillBundledAssetLocation
 } from '@sciforge/opencontent-skill-runtime/main/bundled-assets'
 import type {
   OpenContentCliProcessPort
@@ -155,6 +156,15 @@ export function createDomainMainEntry(
   const skillAssetPaths = skillAssets === undefined
     ? undefined
     : assertOpenContentSkillBundledAssetsPresent(skillAssets)
+  const assertSkillAssetsCurrent = skillAssets === undefined
+    ? undefined
+    : () => {
+        const currentAssets = resolveOpenContentSkillRuntimeAssets(host)
+        if (currentAssets === undefined || !sameSkillAssetLocation(skillAssets, currentAssets)) {
+          throw new TypeError('Bundled OpenContent assets are unavailable or invalid.')
+        }
+        assertOpenContentSkillBundledAssetsPresent(currentAssets)
+      }
   const skillRuntime = skillAssets === undefined || skillAssetPaths === undefined
     ? undefined
     : createOpenContentSkillRuntimeSession({
@@ -171,7 +181,8 @@ export function createDomainMainEntry(
               : { temporaryRoot: options.skillRuntime.temporaryRoot })
           }),
         assets: skillAssets,
-        site: OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE.origin
+        site: OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE.origin,
+        assertAssetsCurrent: assertSkillAssetsCurrent
       })
   const facade = createOpenContentContentSpaceFacade({
     client,
@@ -209,6 +220,15 @@ export function createDomainMainEntry(
       }
     ]
   }
+}
+
+function sameSkillAssetLocation(
+  expected: OpenContentSkillBundledAssetLocation,
+  current: OpenContentSkillBundledAssetLocation
+): boolean {
+  return expected.mode === 'source'
+    ? current.mode === 'source' && expected.assetRoot === current.assetRoot
+    : current.mode === 'packaged' && expected.resourcesPath === current.resourcesPath
 }
 
 export function createOpenContentCapabilityFactory<CapabilityDefinition>(options: Readonly<{

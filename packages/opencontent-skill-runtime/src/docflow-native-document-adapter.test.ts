@@ -17,7 +17,6 @@ describe('DocFlow native document adapter', () => {
       'docflow-image-download',
       'docflow-comment-list',
       'docflow-comment-get',
-      'docflow-import',
       'docflow-export'
     ])
 
@@ -66,6 +65,7 @@ describe('DocFlow native document adapter', () => {
       'docflow-insert',
       'docflow-undo',
       'docflow-redo',
+      'docflow-import',
       'docflow-comment-create',
       'docflow-comment-reply',
       'docflow-comment-solve',
@@ -79,6 +79,18 @@ describe('DocFlow native document adapter', () => {
         dataFiles: []
       })).rejects.toThrow()
     }
+    await expect(adapter.execute({
+      invocationId: 'invocation_blocked_docflow_import',
+      command: 'docflow-import',
+      args: { folderId: 'container_a' },
+      dataFiles: [{
+        role: 'source',
+        encoding: 'base64',
+        name: 'draft.docx',
+        mediaType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        content: 'BAUG'
+      }]
+    } as never)).rejects.toThrow()
     expect(transport.invoke).not.toHaveBeenCalled()
   })
 
@@ -100,12 +112,16 @@ describe('DocFlow native document adapter', () => {
       }]
     }
     const structuredDelivery = {
-      protocol: 'docflowCard:v1' as const,
+      protocolVersion: '1.0' as const,
+      kind: 'docflowCard' as const,
+      version: 'v1' as const,
       outcome: 'succeeded' as const,
       businessIdentity: 'file_a',
       payload: {
         projectId: 'file_a',
+        versionId: 'version_a',
         name: 'Document.mdoc',
+        versionName: '',
         accessUrl: 'https://provider.invalid/preview/file_a',
         updateTime: '2026-08-20T10:00:00+08:00'
       }

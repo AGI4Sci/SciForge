@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { lstatSync } from 'node:fs'
 import { dirname, isAbsolute, resolve } from 'node:path'
 
 import type { DomainMainHost } from '@sciforge/domain-sdk/host'
@@ -34,11 +34,9 @@ const TRANSPORT_OWNER = Object.freeze({
   moduleVersion: domainPackageDefinition.module.version
 })
 
+const SOURCE_OVERLAY = OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.installation
 const SOURCE_ASSET_PACKAGE_RELATIVE_PATH =
-  'internal/opencontent/packages/opencontent-skill-assets' as const
-const SOURCE_OVERLAY_ID = 'opencontent-attachment-assets' as const
-const SOURCE_OVERLAY_ROOT = 'internal/opencontent' as const
-const SOURCE_OVERLAY_VERSION = '1.0.1' as const
+  `${SOURCE_OVERLAY.overlayRoot}/packages/opencontent-skill-assets`
 
 export type OpenContentSkillRuntimeSession = Readonly<{
   useSkillRuntime: NonNullable<OpenContentContentSpaceFacade['useSkillRuntime']>
@@ -53,16 +51,24 @@ export function resolveOpenContentSkillRuntimeAssets(
     if (!isAbsolute(appRoot)) {
       throw new Error('Source OpenContent runtime requires the absolute repository root.')
     }
+    const overlayRoot = resolve(appRoot, SOURCE_OVERLAY.overlayRoot)
+    const receiptPath = resolve(
+      appRoot,
+      '.sciforge',
+      'internal-overlays',
+      `${SOURCE_OVERLAY.overlayId}.json`
+    )
+    if (!pathEntryExists(overlayRoot) && !pathEntryExists(receiptPath)) return undefined
     const assetPackageRoot = resolve(appRoot, SOURCE_ASSET_PACKAGE_RELATIVE_PATH)
-    if (!existsSync(assetPackageRoot)) return undefined
     const verifiedOverlay = verifyInstalledInternalOverlaySync({
       targetRoot: appRoot,
-      overlayId: SOURCE_OVERLAY_ID,
-      overlayRoot: SOURCE_OVERLAY_ROOT
+      overlayId: SOURCE_OVERLAY.overlayId,
+      overlayRoot: SOURCE_OVERLAY.overlayRoot
     })
-    if (verifiedOverlay.version !== SOURCE_OVERLAY_VERSION) {
+    if (verifiedOverlay.version !== SOURCE_OVERLAY.version ||
+      verifiedOverlay.archiveSha256 !== SOURCE_OVERLAY.archiveSha256) {
       throw new Error(
-        `Source OpenContent runtime requires overlay receipt version ${SOURCE_OVERLAY_VERSION}.`
+        'Source OpenContent runtime receipt does not match package-owned provenance.'
       )
     }
     return Object.freeze({
@@ -83,8 +89,29 @@ export function resolveOpenContentSkillRuntimeAssets(
     resourcesPath,
     OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.packagedResourcesRelativePath
   )
-  if (!existsSync(packagedRoot)) return undefined
+  if (!pathEntryExists(packagedRoot)) {
+    const [packagedNamespace] =
+      OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.packagedResourcesRelativePath.split('/')
+    if (packagedNamespace && pathEntryExists(resolve(resourcesPath, packagedNamespace))) {
+      throw new TypeError('Bundled OpenContent assets are unavailable or invalid.')
+    }
+    return undefined
+  }
   return Object.freeze({ mode: 'packaged', resourcesPath })
+}
+
+function pathEntryExists(path: string): boolean {
+  try {
+    lstatSync(path)
+    return true
+  } catch (error) {
+    if (isFileSystemError(error) && error.code === 'ENOENT') return false
+    throw error
+  }
+}
+
+function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error
 }
 
 /**
@@ -97,6 +124,7 @@ export function createOpenContentSkillRuntimeSession(options: Readonly<{
   processPort: OpenContentCliProcessPort
   assets: OpenContentSkillBundledAssetLocation
   site: string
+  assertAssetsCurrent?: () => void
 }>): OpenContentSkillRuntimeSession {
   return Object.freeze({
     useSkillRuntime: async (input, operation) => {
@@ -106,6 +134,7 @@ export function createOpenContentSkillRuntimeSession(options: Readonly<{
           'The selected OpenContent Provider Instance is unavailable.'
         )
       }
+      options.assertAssetsCurrent?.()
       const assertPrincipalCurrent = () =>
         assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
       return options.connections.useCurrentSession({
@@ -133,6 +162,7 @@ export function createOpenContentSkillRuntimeSession(options: Readonly<{
         })
         const transport: OpenContentSkillRuntimeTransport = Object.freeze({
           invoke: (invocation: OpenContentCliInvocation) => {
+            options.assertAssetsCurrent?.()
             const activeRunner = runner
             if (!activeRunner) {
               throw new OpenContentConnectorError(

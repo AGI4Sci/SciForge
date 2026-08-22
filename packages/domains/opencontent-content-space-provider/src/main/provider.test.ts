@@ -383,13 +383,14 @@ describe('OpenContent Content Space Provider', () => {
         'comment-reply',
         'comment-solve',
         'edit',
+        'import',
         'insert',
         'redo',
         'undo',
         'update'
       ])
     expect(nativeStates.filter(({ readiness }) => readiness === 'poc_only'))
-      .toHaveLength(10)
+      .toHaveLength(9)
     expect(nativeStates.filter(({ readiness }) => readiness === 'poc_only')
       .every(({ reasonCode }) => reasonCode === 'verification_profile_required')).toBe(true)
     expect(nativeStates.some(({ readiness }) => readiness === 'production_ready')).toBe(false)

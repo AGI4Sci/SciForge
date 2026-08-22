@@ -40,6 +40,12 @@ Live PoC acceptance uses a disposable trusted compile-time profile package in an
 
 The static Agent capability and its generated governance entry are deleted. The Content Space administration contract and optional Provider port remain because a future Project-owned adapter can invoke them with authoritative binding and identity evidence. The unused `coordinatorAgentId` is removed from the provider-neutral intent because it neither authorizes nor affects provisioning.
 
+### Use Provider directory references for ordinary shared-container membership
+
+Extended contract v2 gives the four Provider directory searches distinct literal-kind summary/page/result schemas; `searchUsers` therefore returns a statically and dynamically typed non-secret user reference containing the Provider Instance and opaque Provider principal ID. Ordinary member add, list, and remove carry that same reference through the existing Administration port. Content Space verifies same-instance root/input/output authority, while the Provider integration alone translates the opaque ID behind its token-free Connector boundary. This avoids a Host-wide cross-user identity map, raw account DTOs, and a second extended-operation invite path.
+
+Project provisioning remains deliberately different: Cloud Collaboration owns its `contentUserId` values and must supply separately verified Cloud-to-Provider mappings with an authoritative Project binding. Ordinary Provider directory search cannot synthesize Project membership or authority.
+
 ### Build public runtime inclusion from generic package metadata
 
 Public source-owned main runtime dependencies will be declared by package-owned metadata consumed by the existing generated domain composition/build configuration. Electron Vite derives its no-external/bundle set from that generated data. A hard-coded OpenContent package name in Host configuration is rejected because adding another domain/runtime must not require a central edit.

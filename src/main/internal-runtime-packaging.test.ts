@@ -23,8 +23,10 @@ type InternalRuntimeComposition = Readonly<{
     packageName: string
     packageDir: string
     installationEvidence: Readonly<{
+      archiveSha256: string
       overlayId: string
       overlayRoot: string
+      version: string
     }>
     assets: readonly Readonly<{
       sourceRoot: string
@@ -119,6 +121,7 @@ function writeRuntimeFixture(
     }
   }, null, 2)}\n`)
   writeOverlayReceipt(root, overlayId, overlayRoot)
+  writeOverlayTrust(root, overlayId, overlayRoot, 'a'.repeat(64), packageDir)
 }
 
 function writeOverlayReceipt(root: string, overlayId: string, overlayRoot: string): void {
@@ -147,6 +150,44 @@ function writeOverlayReceipt(root: string, overlayId: string, overlayRoot: strin
     join(root, '.sciforge', 'internal-overlays', `${overlayId}.json`),
     internalOverlayIntegrity.canonicalJson(receipt)
   )
+}
+
+function writeOverlayTrust(
+  root: string,
+  overlayId: string,
+  overlayRoot: string,
+  archiveSha256: string,
+  packageDir: string
+): void {
+  const runtimeRoot = join(root, overlayRoot, 'packages', packageDir, 'assets/runtime-v1')
+  const trustedRuntimeFiles = internalOverlayIntegrity.createStaticFileInventory({
+    label: 'fixture runtime trust',
+    rootPath: runtimeRoot,
+    rootPrefix: ''
+  }).map((file, index) => ({
+    role: `fixture-runtime-file-${index + 1}`,
+    relativePath: file.path,
+    sha256: file.sha256,
+    size: file.size
+  }))
+  write(join(root, 'packages', `trust-${overlayId}`, 'package.json'), `${JSON.stringify({
+    name: `@fixture/${overlayId}-trust`,
+    version: '1.0.0',
+    private: false,
+    sciforgeInternalRuntimeTrust: {
+      contractVersion: 1,
+      installations: [{
+        archiveSha256,
+        overlayId,
+        overlayRoot,
+        version: '1.0.0',
+        assets: [{
+          packagedResourcesPath: `internal-runtimes/${packageDir}/runtime-v1`,
+          trustedRuntimeFiles
+        }]
+      }]
+    }
+  }, null, 2)}\n`)
 }
 
 afterEach(() => {
@@ -188,8 +229,10 @@ describe('manifest-driven internal runtime packaging', () => {
       packageName: '@fixture-internal/runtime-a',
       packageDir: 'internal/vendor-a/packages/runtime-a',
       installationEvidence: {
+        archiveSha256: 'a'.repeat(64),
         overlayId: 'vendor-a-overlay',
-        overlayRoot: 'internal/vendor-a'
+        overlayRoot: 'internal/vendor-a',
+        version: '1.0.0'
       },
       assets: [{
         packagedResourcesPath: 'internal-runtimes/runtime-a/runtime-v1',
@@ -206,11 +249,35 @@ describe('manifest-driven internal runtime packaging', () => {
     })
 
     rmSync(join(root, 'internal/vendor-a'), { recursive: true })
+    rmSync(join(
+      root,
+      '.sciforge/internal-overlays/vendor-a-overlay.json'
+    ))
     expect(
       internalRuntimePackaging.createInternalRuntimeComposition(root).packagedRuntimes
     ).toEqual([
       expect.objectContaining({ packageName: '@fixture-internal/runtime-b' })
     ])
+  })
+
+  it('rejects an installation receipt whose runtime payload was removed', () => {
+    const root = tempRoot()
+    writeRuntimeFixture(root, 'vendor-orphaned', 'runtime-orphaned')
+    rmSync(join(root, 'internal/vendor-orphaned'), { recursive: true })
+
+    expect(() => internalRuntimePackaging.createInternalRuntimeComposition(root))
+      .toThrow(/missing file/u)
+  })
+
+  it('rejects a self-consistent receipt that does not match package-owned provenance', () => {
+    const root = tempRoot()
+    const overlayId = 'vendor-forged-overlay'
+    const overlayRoot = 'internal/vendor-forged'
+    writeRuntimeFixture(root, 'vendor-forged', 'runtime-forged')
+    writeOverlayTrust(root, overlayId, overlayRoot, 'b'.repeat(64), 'runtime-forged')
+
+    expect(() => internalRuntimePackaging.createInternalRuntimeComposition(root))
+      .toThrow(/provenance/u)
   })
 
   it('validates complete packaged inventories with SciForge-owned static reads', () => {

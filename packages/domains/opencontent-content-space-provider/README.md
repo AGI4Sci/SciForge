@@ -17,13 +17,14 @@ and the selected Provider Instance. The external OpenContent account is not a Sc
 
 Composition of this adapter is not production admission or live verification.
 The authoritative capability matrix records a limited exact packaged-live
-ordinary-operation subset; every verified operation remains `poc_only`, no
-native-document operation has a live-success claim, and `production_ready`
-remains zero. An `implemented` adapter path or successful sibling operation does
-not imply Agent eligibility.
+ordinary-operation subset, one attachment-backed current-principal read, and
+exact post-fix Team-create/member-add successes. Every verified operation
+remains `poc_only`, no native-document operation has a live-success claim, and
+`production_ready` remains zero. An `implemented` adapter path or successful
+sibling operation does not imply Agent eligibility.
 
 - The six ordinary file operations, all ten Team Administration operations,
-  ten safely contract-shaped native-document operations, and 53 extended
+  nine safely contract-shaped native-document operations, and 53 extended
   operations are `poc_only` / `verification_profile_required` when their
   required runtime is installed. The default product composition cannot
   execute them.
@@ -52,6 +53,10 @@ not imply Agent eligibility.
   `blocked_by_contract`: a read, probe, plan receipt, write-time re-read, or
   post-write digest cannot replace an atomic Provider-side `baseHash`
   comparison performed with the mutation.
+- Native-document `import` is also `blocked_by_contract`: pinned attachment
+  `1.0.1` exposes no source-identity or content postcondition, so the command
+  remains supplier inventory but is absent from runtime admission and
+  executable command unions.
 - `observeImmutableVersion` is blocked. A file identity, version number, or
   digest does not prove immutable retention and version-specific retrieval, so
   this adapter cannot issue an `ArtifactReference`.
@@ -70,6 +75,25 @@ adapter permits creation only when that identity maps to the authenticated
 current OpenContent session. The created object is a shared Content Container
 (an OpenContent Team), not the Content Space bounded context and not a Project
 binding.
+
+Ordinary Team membership does not use that current-owner or Project identity
+mapping. `searchUsers` returns a typed Provider directory user reference, and
+the existing Content Space Administration `addMember`, `listMembers`, and
+`removeMember` path carries that same reference end to end. This adapter parses
+only a canonical same-instance OpenContent directory identity behind its
+Provider boundary, calls the token-private Connector Team API with the current
+Principal-bound Connection, and reconstructs the same typed reference when it
+lists members. A non-current user therefore needs no Host `contentUserId`
+mapping, while tokens, endpoints, raw account DTOs, and Connection selectors
+remain absent from Agent and Content Space contracts.
+
+The packaged installed-attachment callability smoke verified 37 packaged
+inventory files, CLI version `1.0.0`, all 86 supplier commands, and the exact
+61-command admitted union. This is static installation/callability evidence,
+not a Provider live result. The authoritative matrix also records that later
+file/native attempts added no evidence because external Agent operation-
+reference/cursor consumption remained unstable before Provider dispatch; both
+Provider business-dispatch and remote-write counts were zero.
 
 The authoritative operation inventory is
 [the OpenContent capability matrix](../../../docs/opencontent-skill-capability-matrix.md),

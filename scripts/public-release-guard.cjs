@@ -8,8 +8,18 @@ const CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION =
   'main.content-space-verification-profile'
 
 function assertNoInternalRuntimeComposition(composition) {
-  if (!composition || !Array.isArray(composition.packagedRuntimes)) {
-    throw new TypeError('Public release guard requires canonical packagedRuntimes composition.')
+  if (!composition || !Array.isArray(composition.extraResources) ||
+    !Array.isArray(composition.packagedRuntimes)) {
+    throw new TypeError(
+      'Public release guard requires canonical extraResources and packagedRuntimes composition.'
+    )
+  }
+  if (composition.extraResources.length > 0) {
+    throw new Error(
+      '[public-release] Refusing to build or publish an official release while internal ' +
+      `extra resource composition is non-empty (${composition.extraResources.length} entries). ` +
+      'Remove the internal overlay and regenerate composition before releasing.'
+    )
   }
   const packageNames = composition.packagedRuntimes.map((runtime, index) => {
     if (!runtime || typeof runtime.packageName !== 'string' || !runtime.packageName.trim()) {

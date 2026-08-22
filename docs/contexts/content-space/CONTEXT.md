@@ -24,6 +24,14 @@ _Avoid_: Content Space bounded context, Workspace directory, Project
 A Content Container whose Provider-native access model permits an explicit multi-user association. OpenContent calls its current shared-root construct a Team, but that vendor term is not provider-neutral domain language.
 _Avoid_: Content Space, Collaboration Project, universal Team
 
+**Provider Directory Principal Reference**:
+A non-secret typed reference to one user, department, position, or group in a specific Provider Instance directory. It contains only `providerInstanceRef`, a closed principal kind, and the Provider-owned opaque `principalId`; display metadata, Host Principal identity, local Connection identity, endpoint, and credentials are not part of the reference or its authority. Each typed directory search returns a kind-specific summary/page/result (`user`, `department`, `position`, or `group`) and rejects mixed-kind items.
+_Avoid_: SciForge user ID, OpenContent token, local account selector, portable authorization
+
+**Shared Content Container Member**:
+A Provider directory `user` reference associated with one exact shared Content Container. Ordinary member add, list, and remove operations use this reference end to end and require the member and root to name the same Provider Instance. A listed member reference is reusable by the same canonical mutation contracts, but the reference itself grants no root, account, or Provider authority.
+_Avoid_: Project Member, Host `contentUserId`, email-as-identity, raw Provider account DTO
+
 **Content Container Scope**:
 The provider-neutral classification `personal` or `shared` describing whether a Content Container is private to the enrolled External Account or eligible for an explicit multi-user association. Scope is descriptive and never substitutes for Provider authorization.
 _Avoid_: OpenContent Team type, Project membership, ACL
@@ -81,7 +89,7 @@ A process-local executable resource bound to one caller, current Principal, audi
 _Avoid_: portable authority, raw GUID, Connection, reusable provider-wide grant
 
 **Project Content Space Provisioning Port**:
-A provider-neutral dormant SPI through which a future Project-owning context may reconcile one Project Content Directory from an authoritative binding and verified identity mappings. It is not an Agent capability and accepts no prompt-authored Project authority.
+A provider-neutral dormant SPI through which a future Project-owning context may reconcile one Project Content Directory from an authoritative binding and verified mappings between Cloud-owned `contentUserId` values and Provider identities. This Project-specific identity contract is deliberately separate from ordinary shared-container member administration. It is not an Agent capability and accepts no prompt-authored Project authority.
 _Avoid_: Agent self-provisioning, Content Space owns Project membership, provider Team API tool
 
 **Agent Root Candidate**:

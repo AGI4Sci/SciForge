@@ -9,7 +9,6 @@ export const DOCFLOW_NATIVE_DOCUMENT_COMMANDS = Object.freeze([
   'docflow-image-download',
   'docflow-comment-list',
   'docflow-comment-get',
-  'docflow-import',
   'docflow-export'
 ] as const)
 
@@ -36,7 +35,6 @@ export const docflowDataFileRoleSchema = z.enum([
   'content',
   'operations',
   'probe-template',
-  'source',
   'image',
   'destination'
 ])
@@ -45,7 +43,6 @@ const docflowInputDataFileRoleSchema = z.enum([
   'content',
   'operations',
   'probe-template',
-  'source',
   'image'
 ])
 
@@ -224,9 +221,6 @@ const commandInvocationSchemas = [
     fileId: resourceIdSchema,
     commentId: resourceIdSchema
   }).strict().readonly()),
-  invocationSchema('docflow-import', z.object({
-    folderId: resourceIdSchema.optional()
-  }).strict().readonly()),
   invocationSchema('docflow-export', z.object({
     fileId: resourceIdSchema,
     format: z.enum(['docx', 'pdf', 'md'])
@@ -259,9 +253,6 @@ export const docflowCommandInvocationSchema = z.union(commandInvocationSchemas)
       if (file.role === 'image' && (file.encoding !== 'base64' || !file.mediaType.startsWith('image/'))) {
         context.addIssue({ code: 'custom', path: ['dataFiles', index], message: 'Images require base64 image data.' })
       }
-      if (file.role === 'source' && !['utf8', 'base64'].includes(file.encoding)) {
-        context.addIssue({ code: 'custom', path: ['dataFiles', index, 'encoding'], message: 'Import sources must be UTF-8 or base64 data.' })
-      }
       if (file.role === 'destination' && file.encoding !== 'managed-stream') {
         context.addIssue({ code: 'custom', path: ['dataFiles', index, 'encoding'], message: 'Download destinations require a runner-managed stream.' })
       }
@@ -283,8 +274,6 @@ function expectedDataFileRoles(
       return (invocation.args as { source?: unknown }).source === 'data-file'
         ? ['image']
         : []
-    case 'docflow-import':
-      return ['source']
     case 'docflow-image-download':
     case 'docflow-export':
       return ['destination']
@@ -303,12 +292,16 @@ const boundedIdentifierSchema = z.string()
   .refine((value) => value === value.trim(), 'Identifiers must be canonical.')
 
 export const docflowStructuredDeliverySchema = z.object({
-  protocol: z.literal('docflowCard:v1'),
-  outcome: z.literal('succeeded'),
+  protocolVersion: z.literal('1.0'),
+  kind: z.literal('docflowCard'),
+  version: z.literal('v1'),
   businessIdentity: boundedIdentifierSchema,
+  outcome: z.literal('succeeded'),
   payload: z.object({
     projectId: boundedIdentifierSchema,
+    versionId: boundedIdentifierSchema,
     name: z.string().trim().min(1).max(256),
+    versionName: z.string().max(256),
     accessUrl: z.string().url().max(4_096),
     updateTime: z.string().datetime({ offset: true })
   }).strict().readonly()
@@ -538,13 +531,11 @@ const WRITE_COMMANDS = new Set<DocflowCommand>([
   'docflow-create',
   'docflow-image-upload',
   'docflow-image-download',
-  'docflow-import',
   'docflow-export'
 ])
 
 const DELIVERY_COMMANDS = new Set<DocflowCommand>([
-  'docflow-create',
-  'docflow-import'
+  'docflow-create'
 ])
 
 function isWriteCommand(command: DocflowCommand): boolean {

@@ -100,7 +100,7 @@ describe('OpenContent Content Space Provider factory', () => {
     })
 
     expect(acquireFacade).toHaveBeenCalledOnce()
-    expect(binding?.administration.contractVersion).toBe('2.0.0')
+    expect(binding?.administration.contractVersion).toBe('3.0.0')
     expect(binding?.projectProvisioning?.contractVersion).toBe('1.0.0')
   })
 

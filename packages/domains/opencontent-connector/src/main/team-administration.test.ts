@@ -348,6 +348,33 @@ describe('OpenContent Team administration transport', () => {
     }])
   })
 
+  it('fails closed when a metadata-free teamUser collection fills the requested page', async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      result: 0,
+      msg: '',
+      data: {
+        creatorName: 'Synthetic Owner',
+        perm: true,
+        teamUser: [{ identityId: 9000042, userType: 1 }, {
+          identityId: 9000041,
+          userType: 3
+        }]
+      }
+    }))
+    const administration = createOpenContentTeamAdministration({
+      baseUrl: 'https://opencontent.invalid',
+      fetch
+    })
+
+    await expect(administration.listTeamUsers({
+      token,
+      teamId: openContentTeamIdSchema.parse(9000019),
+      pageNumber: 1,
+      pageSize: 2
+    })).rejects.toMatchObject({ code: 'provider_contract_violation' })
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
   it('resolves a Team root only when the folder readback belongs to that Team', async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(jsonResponse({

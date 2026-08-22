@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import * as administration from './administration-contract.js'
 import { toPortableContentContainerReference } from './contract.js'
+import { contentSpaceSearchUsersResultSchema } from './extended-operations-contract.js'
 
 describe('Content Space administration contract', () => {
   it('keeps the Agent create input authority- and invocation-free because Broker context supplies both', () => {
-    expect(administration.CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION).toBe('2.0.0')
+    expect(administration.CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION).toBe('3.0.0')
     const input = { label: 'Research Team' }
     expect(administration.contentSpaceAgentAdministrationCreateSpaceInputSchema.parse(input))
       .toEqual(input)
@@ -183,38 +184,92 @@ describe('Content Space administration contract', () => {
     })).toThrow()
   })
 
-  it('lists, adds, and removes members by consumer user identity only', async () => {
+  it('lists, adds, and removes members by Provider directory user identity only', async () => {
     const root = toPortableContentContainerReference({
       providerInstanceRef: 'provider-instance-a',
       containerId: 'shared-root-a'
     })
+    const memberA = directoryUser('provider-user-a')
+    const memberB = directoryUser('provider-user-b')
     const port = administrationPortFixture(root)
 
     await expect(port.listMembers({ root, page: { limit: 25 } })).resolves.toEqual({
       root,
-      items: [{ contentUserId: 'user-member-a', role: 'internal', revision: 'member-revision-1' }]
+      items: [{ member: memberA, role: 'internal', revision: 'member-revision-1' }]
     })
     await expect(port.addMember({
       root,
-      contentUserId: 'user-member-b',
+      member: memberB,
       expectedRevision: 'revision-1'
-    })).resolves.toMatchObject({ contentUserId: 'user-member-b', role: 'internal' })
+    })).resolves.toMatchObject({ member: memberB, role: 'internal' })
     await expect(port.removeMember({
       root,
-      contentUserId: 'user-member-a',
+      member: memberA,
       expectedRevision: 'revision-2'
     })).resolves.toEqual({
       root,
-      contentUserId: 'user-member-a',
+      member: memberA,
       removed: true,
       revision: 'revision-3'
     })
     expect(() => administration.contentSpaceAdministrationAddMemberInputSchema.parse({
       root,
-      contentUserId: 'user-member-c',
+      member: directoryUser('provider-user-c'),
       expectedRevision: 'revision-3',
       providerMemberId: 'provider-member-c'
     })).toThrow()
+  })
+
+  it('round-trips a searched Provider directory user through member administration', () => {
+    const root = toPortableContentContainerReference({
+      providerInstanceRef: 'provider-instance-a',
+      containerId: 'shared-root-a'
+    })
+    const searched = contentSpaceSearchUsersResultSchema.parse({
+      ok: true,
+      value: {
+        items: [{
+          reference: {
+            providerInstanceRef: 'provider-instance-a',
+            kind: 'user',
+            principalId: 'provider-user-b'
+          },
+          displayName: 'Researcher B',
+          accountName: 'researcher-b'
+        }]
+      }
+    })
+    if (!searched.ok) throw new Error('Expected a successful directory search fixture.')
+    const member = searched.value.items[0]?.reference
+    if (!member) throw new Error('Expected one searched directory user.')
+    const addInput: administration.ContentSpaceAdministrationAddMemberInput = {
+      root,
+      member,
+      expectedRevision: 'revision-1'
+    }
+
+    expect(administration.contentSpaceAdministrationAddMemberInputSchema.parse(addInput))
+      .toEqual(addInput)
+    expect(administration.contentSpaceAdministrationMemberPageSchema.parse({
+      root,
+      items: [{ member, role: 'internal', revision: 'revision-2' }]
+    }).items[0]?.member).toEqual(member)
+    expect(administration.contentSpaceAdministrationRemoveMemberInputSchema.parse({
+      root,
+      member,
+      expectedRevision: 'revision-2'
+    }).member).toEqual(member)
+    expect(administration.contentSpaceAdministrationRemoveMemberReceiptSchema.parse({
+      root,
+      member,
+      removed: true,
+      revision: 'revision-3'
+    }).member).toEqual(member)
+    expect(administration.contentSpaceAdministrationAddMemberInputSchema.safeParse({
+      root,
+      contentUserId: 'user-member-b',
+      expectedRevision: 'revision-1'
+    }).success).toBe(false)
   })
 
   it('rejects caller-supplied idempotency from every ordinary administration write', () => {
@@ -237,10 +292,10 @@ describe('Content Space administration contract', () => {
         root, expectedRevision: 'revision-1'
       }],
       [administration.contentSpaceAdministrationAddMemberInputSchema, {
-        root, contentUserId: 'user-member', expectedRevision: 'revision-1'
+        root, member: directoryUser('provider-user'), expectedRevision: 'revision-1'
       }],
       [administration.contentSpaceAdministrationRemoveMemberInputSchema, {
-        root, contentUserId: 'user-member', expectedRevision: 'revision-1'
+        root, member: directoryUser('provider-user'), expectedRevision: 'revision-1'
       }]
     ] as const
 
@@ -253,13 +308,13 @@ describe('Content Space administration contract', () => {
   it('keeps all four provider-neutral Team roles and rejects the removed member alias', () => {
     for (const role of ['owner', 'manager', 'internal', 'external'] as const) {
       expect(administration.contentSpaceAdministrationMemberSummarySchema.parse({
-        contentUserId: `user-${role}`,
+        member: directoryUser(`provider-user-${role}`),
         role,
         revision: `revision-${role}`
       }).role).toBe(role)
     }
     expect(() => administration.contentSpaceAdministrationMemberSummarySchema.parse({
-      contentUserId: 'user-old-member',
+      member: directoryUser('provider-user-old-member'),
       role: 'member',
       revision: 'revision-old-member'
     })).toThrow()
@@ -376,23 +431,31 @@ function administrationPortFixture(
     listMembers: async () => administration.contentSpaceAdministrationMemberPageSchema.parse({
       root,
       items: [{
-        contentUserId: 'user-member-a',
+        member: directoryUser('provider-user-a'),
         role: 'internal',
         revision: 'member-revision-1'
       }]
     }),
     addMember: async (input) => administration.contentSpaceAdministrationMemberSummarySchema
       .parse({
-        contentUserId: input.contentUserId,
+        member: input.member,
         role: 'internal',
         revision: 'member-revision-2'
       }),
     removeMember: async (input) => administration.contentSpaceAdministrationRemoveMemberReceiptSchema
       .parse({
         root,
-        contentUserId: input.contentUserId,
+        member: input.member,
         removed: true,
         revision: 'revision-3'
       })
+  })
+}
+
+function directoryUser(principalId: string) {
+  return Object.freeze({
+    providerInstanceRef: 'provider-instance-a',
+    kind: 'user' as const,
+    principalId
   })
 }

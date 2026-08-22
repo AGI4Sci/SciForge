@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import {
   CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION,
   CONTENT_SPACE_ADMINISTRATION_OPERATIONS,
+  contentSpaceAdministrationMemberReferenceSchema,
   contentSpaceAdministrationMemberPageSchema,
   contentSpaceAdministrationMemberSummarySchema,
   contentSpaceAdministrationOperationStateListSchema,
@@ -44,6 +45,7 @@ import {
   createCurrentPrincipalOpenContentIdentityBinding,
   type OpenContentIdentityBindingPort
 } from './identity-binding.js'
+import { parseOpenContentDirectoryIdentity } from './directory-principal.js'
 import { toOpenContentExpectedBinding } from './external-binding.js'
 import { createOpenContentProjectProvisioning } from './project-provisioning.js'
 
@@ -322,10 +324,8 @@ function createBoundAdministrationPort(options: Readonly<{
         const available = providerPage.users.slice(cursor.offset)
         const selected = available.slice(0, page.limit - items.length)
         for (const user of selected) {
-          items.push(await memberSummary(
-            options.identities,
-            options.context,
-            session,
+          items.push(memberSummary(
+            options.providerInstanceRef,
             observed.team,
             user
           ))
@@ -360,10 +360,10 @@ function createBoundAdministrationPort(options: Readonly<{
     addMember: async (input) => withSession(async (session) => {
       const observed = await observe(session, input.root)
       assertExpectedRevision(observed.team, input.expectedRevision)
-      const identityId = await options.identities.resolveContentUserIdentity({
-        contentUserId: input.contentUserId,
-        ...identityContext(options.context, session.externalIdentityId)
-      })
+      const identityId = parseDirectoryMemberIdentity(
+        input.member,
+        options.providerInstanceRef
+      )
       let users = await listAllUsers(
         session.administration,
         observed.team.teamId,
@@ -394,7 +394,7 @@ function createBoundAdministrationPort(options: Readonly<{
         }
       }
       return contentSpaceAdministrationMemberSummarySchema.parse({
-        contentUserId: input.contentUserId,
+        member: input.member,
         role: 'internal',
         revision: teamRevision(observed.team)
       })
@@ -402,10 +402,10 @@ function createBoundAdministrationPort(options: Readonly<{
     removeMember: async (input) => withSession(async (session) => {
       const observed = await observe(session, input.root)
       assertExpectedRevision(observed.team, input.expectedRevision)
-      const identityId = await options.identities.resolveContentUserIdentity({
-        contentUserId: input.contentUserId,
-        ...identityContext(options.context, session.externalIdentityId)
-      })
+      const identityId = parseDirectoryMemberIdentity(
+        input.member,
+        options.providerInstanceRef
+      )
       if (identityId === observed.team.ownerIdentityId) {
         throw operationError(
           'blocked_by_contract',
@@ -437,7 +437,7 @@ function createBoundAdministrationPort(options: Readonly<{
           providerInstanceRef: options.providerInstanceRef,
           containerId: observed.root.folderGuid
         }),
-        contentUserId: input.contentUserId,
+        member: input.member,
         removed: true,
         revision: teamRevision(observed.team)
       })
@@ -542,22 +542,43 @@ async function resolveRoot(
   return root
 }
 
-async function memberSummary(
-  identities: OpenContentIdentityBindingPort,
-  context: ContentSpaceProviderOperationContext,
-  session: BoundSession,
+function memberSummary(
+  providerInstanceRef: string,
   team: OpenContentTeam,
   user: OpenContentTeamUser
 ) {
-  const contentUserId = await identities.resolveExternalIdentityContentUser({
-    externalIdentityId: user.identityId,
-    ...identityContext(context, session.externalIdentityId)
-  })
   return contentSpaceAdministrationMemberSummarySchema.parse({
-    contentUserId,
+    member: {
+      providerInstanceRef,
+      kind: 'user',
+      principalId: String(user.identityId)
+    },
     role: teamMemberRole(team, user),
     revision: teamRevision(team)
   })
+}
+
+function parseDirectoryMemberIdentity(
+  rawMember: unknown,
+  providerInstanceRef: string
+): OpenContentIdentityId {
+  const member = contentSpaceAdministrationMemberReferenceSchema.safeParse(rawMember)
+  if (!member.success || member.data.providerInstanceRef !== providerInstanceRef) {
+    throw operationError(
+      'invalid_reference',
+      'The OpenContent directory member reference is invalid.',
+      'never'
+    )
+  }
+  const identityId = parseOpenContentDirectoryIdentity(member.data.principalId)
+  if (identityId === undefined) {
+    throw operationError(
+      'invalid_reference',
+      'The OpenContent directory member reference is unavailable.',
+      'never'
+    )
+  }
+  return identityId
 }
 
 function teamMemberRole(

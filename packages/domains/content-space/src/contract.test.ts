@@ -5,6 +5,10 @@ import { parsePortableResourceReference } from '@sciforge/domain-sdk/portable-re
 import * as contract from './contract.js'
 
 describe('Content Space public contract', () => {
+  it('publishes the third-major Provider boundary for directory-member administration', () => {
+    expect(contract.CONTENT_SPACE_PROVIDER_CONTRACT_VERSION).toBe('3.0.0')
+  })
+
   it('projects the bounded Provider Kind needed for renderer-owned enrollment matching', () => {
     expect(contract.contentSpaceProviderInstanceSummarySchema.parse({
       providerInstanceRef: 'provider-instance-a',

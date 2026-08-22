@@ -31,7 +31,7 @@ import {
 import type { ContentSpaceProviderFeatures } from './provider-features.js'
 
 export const CONTENT_SPACE_DOMAIN_MODULE_ID = 'sciforge.content-space' as const
-export const CONTENT_SPACE_PROVIDER_CONTRACT_VERSION = '2.0.0' as const
+export const CONTENT_SPACE_PROVIDER_CONTRACT_VERSION = '3.0.0' as const
 
 export const CONTENT_CONTAINER_REFERENCE_KIND = 'content-space.container-reference' as const
 export const CONTENT_FILE_REFERENCE_KIND = 'content-space.file-reference' as const
@@ -48,6 +48,46 @@ export const CONTENT_SPACE_PORTABLE_AUTHORITY_RESOLVER_ID =
 export const CONTENT_SPACE_PORTABLE_EXPORT_CONSUMER_MODULE_IDS = Object.freeze([
   CONTENT_SPACE_DOMAIN_MODULE_ID
 ] as const)
+
+const contentSpaceDirectoryPrincipalIdSchema = z.string()
+  .min(1)
+  .max(256)
+  .refine((value) => value === value.trim(), 'Identifiers must be canonical.')
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u, 'Use an opaque provider-neutral identifier.')
+  .refine((value) => !/^(?:res|cap|conn(?:ection)?|xfer|portal)_/iu.test(value), {
+    message: 'Local handles are not durable Content Space identities.'
+  })
+
+export const contentSpaceDirectoryPrincipalKindSchema = z.enum([
+  'user',
+  'department',
+  'position',
+  'group'
+])
+const contentSpaceDirectoryPrincipalReferenceShape = Object.freeze({
+  providerInstanceRef: providerInstanceRefSchema,
+  principalId: contentSpaceDirectoryPrincipalIdSchema
+})
+export const contentSpaceDirectoryPrincipalReferenceSchema = z.object({
+  ...contentSpaceDirectoryPrincipalReferenceShape,
+  kind: contentSpaceDirectoryPrincipalKindSchema,
+}).strict().readonly()
+function directoryPrincipalReferenceSchema<
+  Kind extends z.infer<typeof contentSpaceDirectoryPrincipalKindSchema>
+>(kind: Kind) {
+  return z.object({
+    ...contentSpaceDirectoryPrincipalReferenceShape,
+    kind: z.literal(kind)
+  }).strict().readonly()
+}
+export const contentSpaceDirectoryUserReferenceSchema =
+  directoryPrincipalReferenceSchema('user')
+export const contentSpaceDirectoryDepartmentReferenceSchema =
+  directoryPrincipalReferenceSchema('department')
+export const contentSpaceDirectoryPositionReferenceSchema =
+  directoryPrincipalReferenceSchema('position')
+export const contentSpaceDirectoryGroupReferenceSchema =
+  directoryPrincipalReferenceSchema('group')
 
 export const CONTENT_SPACE_CAPABILITY_IDS = Object.freeze({
   listProviderInstances: 'content-space.list-provider-instances',

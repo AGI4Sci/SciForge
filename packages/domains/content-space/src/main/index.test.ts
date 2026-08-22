@@ -105,6 +105,7 @@ type CapabilityContext = Readonly<{
 
 type CapabilityDefinition = Readonly<{
   id: string
+  version: string
   title: string
   description: string
   audiences: readonly ('ui' | 'agent' | 'system')[]
@@ -115,7 +116,10 @@ type CapabilityDefinition = Readonly<{
   approval: 'none' | 'confirmation'
   autonomousWrite?: 'resource-authorized'
   concurrency: Readonly<{ revision: 'none'; idempotency: 'none' | 'required' }>
-  inputSchema: Readonly<{ safeParse(value: unknown): Readonly<{ success: boolean }> }>
+  inputSchema: Readonly<{
+    parse(value: unknown): unknown
+    safeParse(value: unknown): Readonly<{ success: boolean }>
+  }>
   outputSchema: Readonly<{ safeParse(value: unknown): Readonly<{ success: boolean }> }>
   handler(input: unknown, context: CapabilityContext): Promise<Readonly<{
     output: ContentSpaceResult<unknown>
@@ -1361,6 +1365,56 @@ describe('Content Space main composition', () => {
     }))
   })
 
+  it('uses a Provider directory user as the only Agent member mutation identity', async () => {
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture()))
+    )
+    const member = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      kind: 'user' as const,
+      principalId: 'provider-user-b'
+    })
+    const input = { member, expectedRevision: 'revision:1' }
+
+    for (const capabilityId of [
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember
+    ]) {
+      const capability = definition(definitions, capabilityId)
+      expect(capability.version).toBe('2.0.0')
+      expect(capability.inputSchema.parse(input)).toEqual(input)
+      expect(capability.inputSchema.safeParse({
+        contentUserId: 'user-member-b',
+        expectedRevision: 'revision:1'
+      }).success).toBe(false)
+    }
+    expect(definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers
+    ).version).toBe('2.0.0')
+  })
+
+  it('versions the literal directory-search and Team-governance Agent wires', async () => {
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture()))
+    )
+
+    expect(definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentExtendedRead).version)
+      .toBe('2.0.0')
+    expect(definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite).version)
+      .toBe('2.0.0')
+    expect(definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWorkspaceWrite
+    ).version).toBe('1.0.0')
+    expect(definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedDestructive
+    ).version).toBe('1.0.0')
+  })
+
   it('does not issue Agent administration authority from dormant Project provisioning', async () => {
     const bind = vi.fn(async () => Object.freeze({
       administration: administrationPortFixture()
@@ -2146,19 +2200,23 @@ function administrationPortFixture(
     listMembers: async () => Object.freeze({
       root,
       items: Object.freeze([{
-        contentUserId: 'user:owner',
+        member: Object.freeze({
+          providerInstanceRef: PROVIDER_INSTANCE_REF,
+          kind: 'user' as const,
+          principalId: 'provider-owner'
+        }),
         role: 'owner' as const,
         revision: summary.revision
       }])
     }),
     addMember: async (input) => Object.freeze({
-      contentUserId: input.contentUserId,
+      member: input.member,
       role: 'internal' as const,
       revision: 'revision:2'
     }),
     removeMember: async (input) => Object.freeze({
       root,
-      contentUserId: input.contentUserId,
+      member: input.member,
       removed: true as const,
       revision: 'revision:2'
     }),

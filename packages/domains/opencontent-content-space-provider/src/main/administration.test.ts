@@ -276,6 +276,46 @@ describe('OpenContent provider-neutral administration adapter', () => {
     expect(harness.createTeam).not.toHaveBeenCalled()
   })
 
+  it('adds, lists, and removes a non-current Provider directory user without a Host identity mapping', async () => {
+    const harness = teamHarness()
+    const feature = createOpenContentAdministrationFeature({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture(teamSession(harness.administration))
+    })
+    const administration = (await feature.bind(context)).administration
+    const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
+    const member = Object.freeze({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      kind: 'user' as const,
+      principalId: String(memberIdentityId)
+    })
+
+    await expect(administration.addMember({
+      root: space.root,
+      member,
+      expectedRevision: space.revision
+    })).resolves.toMatchObject({ member, role: 'internal' })
+
+    const listed = await administration.listMembers({
+      root: space.root,
+      page: { limit: 20 }
+    })
+    const listedMember = listed.items.find((item) => item.member.principalId === member.principalId)
+    expect(listedMember).toMatchObject({ member, role: 'internal' })
+
+    await expect(administration.removeMember({
+      root: space.root,
+      member: listedMember!.member,
+      expectedRevision: space.revision
+    })).resolves.toMatchObject({ member, removed: true })
+    await expect(administration.listMembers({
+      root: space.root,
+      page: { limit: 20 }
+    })).resolves.not.toMatchObject({
+      items: [expect.objectContaining({ member })]
+    })
+  })
+
   it('paginates members in provider batches and verifies add and remove writes', async () => {
     const harness = teamHarness({
       users: [ownerIdentityId, ...Array.from({ length: 100 }, (_, index) => (
@@ -307,18 +347,18 @@ describe('OpenContent provider-neutral administration adapter', () => {
 
     await expect(administration.addMember({
       root: space.root,
-      contentUserId: 'content-member',
+      member: directoryMember(memberIdentityId),
       expectedRevision: space.revision
-    })).resolves.toMatchObject({ contentUserId: 'content-member', role: 'internal' })
+    })).resolves.toMatchObject({ member: directoryMember(memberIdentityId), role: 'internal' })
     expect(harness.addTeamUsers).toHaveBeenCalledWith({
       teamId,
       identityIds: [memberIdentityId]
     })
     await expect(administration.removeMember({
       root: space.root,
-      contentUserId: 'content-member',
+      member: directoryMember(memberIdentityId),
       expectedRevision: space.revision
-    })).resolves.toMatchObject({ contentUserId: 'content-member', removed: true })
+    })).resolves.toMatchObject({ member: directoryMember(memberIdentityId), removed: true })
     expect(harness.removeTeamUsers).toHaveBeenCalledWith({
       teamId,
       identityIds: [memberIdentityId]
@@ -352,10 +392,10 @@ describe('OpenContent provider-neutral administration adapter', () => {
       page: { limit: 20 }
     })).resolves.toMatchObject({
       items: [
-        { contentUserId: 'content-owner', role: 'owner' },
-        { contentUserId: 'content-manager', role: 'manager' },
-        { contentUserId: 'content-internal', role: 'internal' },
-        { contentUserId: 'content-external', role: 'external' }
+        { member: directoryMember(ownerIdentityId), role: 'owner' },
+        { member: directoryMember(managerIdentityId), role: 'manager' },
+        { member: directoryMember(memberIdentityId), role: 'internal' },
+        { member: directoryMember(externalIdentityId), role: 'external' }
       ]
     })
   })
@@ -380,7 +420,7 @@ describe('OpenContent provider-neutral administration adapter', () => {
 
     await expect(administration.addMember({
       root: space.root,
-      contentUserId: 'content-manager',
+      member: directoryMember(managerIdentityId),
       expectedRevision: space.revision
     })).rejects.toMatchObject({
       detail: { code: 'conflict', retry: 'after-human-action' }
@@ -558,5 +598,13 @@ function teamValue(
     permission: 15,
     teamType: 2,
     isStuck
+  })
+}
+
+function directoryMember(identityId: OpenContentIdentityId) {
+  return Object.freeze({
+    providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+    kind: 'user' as const,
+    principalId: String(identityId)
   })
 }

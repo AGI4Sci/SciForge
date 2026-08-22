@@ -1,6 +1,6 @@
 # Content Space
 
-Trusted, provider-neutral Content Space V1 domain package. It owns the public
+Trusted, provider-neutral Content Space domain package. It owns the public
 resource and Provider SPI contracts, capability/service/catalog path, portable
 reference codecs and resolver, and renderer contribution. Concrete providers
 are installed independently through standard domain-package composition.
@@ -51,6 +51,17 @@ Content Space also exposes no generic Agent Project-provisioning capability. A
 provider-neutral Project provisioning port may compose as a dormant SPI, but
 only a future Project-owning consumer with an authoritative binding and
 verified identity mappings may invoke it.
+
+Ordinary shared-container membership uses a different identity boundary. The
+v2 extended contract gives each directory search a literal-kind summary/page
+result; typed `searchUsers` therefore returns only non-secret user references containing only
+the Provider Instance, principal kind, and opaque Provider principal ID. The
+v3 Administration contract uses that reference as the sole add/list/remove
+member identity, rejects legacy Host `contentUserId` member payloads, and
+requires the root, input member, and Provider output to stay on the same
+Provider Instance. The separate Project provisioning port retains Cloud-owned
+`contentUserId` values because only the future Project-owning context may supply
+their verified Provider mappings.
 
 See [the Content Space glossary](../../../docs/contexts/content-space/CONTEXT.md),
 [the architecture and canonical call chain](../../../docs/content-space-architecture.md),

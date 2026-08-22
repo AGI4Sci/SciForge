@@ -1,8 +1,32 @@
-import { realpathSync, statSync } from 'node:fs'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { lstatSync, realpathSync, statSync } from 'node:fs'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
+import packageManifest from '../package.json' with { type: 'json' }
 import { OPENCONTENT_SKILL_SOURCE_ZIP_SHA256 } from './contract.js'
 
 export const OPENCONTENT_SKILL_BUNDLED_ASSET_VERSION = 'opencontent-base-1.0.1' as const
+
+export type OpenContentSkillRuntimeFileRole =
+  | 'cli-entrypoint'
+  | 'docflow-entrypoint'
+  | 'docflow-probe-helper'
+  | 'package-manifest'
+  | 'cli-single-attempt-patch'
+
+export type OpenContentSkillRuntimeFileIntegrity = Readonly<{
+  role: OpenContentSkillRuntimeFileRole
+  relativePath: string
+  sha256: string
+  size: number
+}>
+
+const packageOwnedRuntimeTrust = readPackageOwnedRuntimeTrust()
+const trustedRuntimeFiles = packageOwnedRuntimeTrust.asset.trustedRuntimeFiles
+const runtimeFileByRole = new Map(trustedRuntimeFiles.map((file) => [file.role, file]))
+const runtimeFile = (role: OpenContentSkillRuntimeFileRole): OpenContentSkillRuntimeFileIntegrity => {
+  const file = runtimeFileByRole.get(role)
+  if (!file) throw new TypeError('OpenContent package-owned runtime trust is incomplete.')
+  return file
+}
 
 /**
  * Fixed, package-owned paths. A transport may select one of these entrypoints;
@@ -10,14 +34,17 @@ export const OPENCONTENT_SKILL_BUNDLED_ASSET_VERSION = 'opencontent-base-1.0.1' 
  */
 export const OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR = Object.freeze({
   version: OPENCONTENT_SKILL_BUNDLED_ASSET_VERSION,
+  cliVersion: '1.0.0' as const,
   sourceZipSha256: OPENCONTENT_SKILL_SOURCE_ZIP_SHA256,
+  installation: packageOwnedRuntimeTrust.installation,
+  trustedRuntimeFiles,
   moduleFormat: 'commonjs' as const,
-  packagedResourcesRelativePath: `opencontent/${OPENCONTENT_SKILL_BUNDLED_ASSET_VERSION}`,
-  cliEntrypointRelativePath: 'cli/bin/oc.js',
-  docflowEntrypointRelativePath: 'cli/docflow/docflow-node.cjs',
-  docflowProbeHelperRelativePath: 'scripts/docflow-probe-compact.cjs',
-  cliSingleAttemptPatchRelativePath:
-    'runtime-patches/cli-auth-retry-single-attempt.v1.json'
+  packagedResourcesRelativePath: packageOwnedRuntimeTrust.asset.packagedResourcesPath,
+  cliEntrypointRelativePath: runtimeFile('cli-entrypoint').relativePath,
+  docflowEntrypointRelativePath: runtimeFile('docflow-entrypoint').relativePath,
+  docflowProbeHelperRelativePath: runtimeFile('docflow-probe-helper').relativePath,
+  packageJsonRelativePath: runtimeFile('package-manifest').relativePath,
+  cliSingleAttemptPatchRelativePath: runtimeFile('cli-single-attempt-patch').relativePath
 })
 
 export type OpenContentSkillBundledAssetPaths = Readonly<{
@@ -25,6 +52,7 @@ export type OpenContentSkillBundledAssetPaths = Readonly<{
   cliEntrypoint: string
   docflowEntrypoint: string
   docflowProbeHelper: string
+  packageJson: string
   cliSingleAttemptPatch: string
 }>
 
@@ -56,13 +84,22 @@ export function resolveOpenContentSkillBundledAssetPaths(
     root = resolve(location.assetRoot)
   }
 
-  const cliEntrypoint = resolve(root, 'cli', 'bin', 'oc.js')
-  const docflowEntrypoint = resolve(root, 'cli', 'docflow', 'docflow-node.cjs')
-  const docflowProbeHelper = resolve(root, 'scripts', 'docflow-probe-compact.cjs')
+  const cliEntrypoint = resolve(root, OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.cliEntrypointRelativePath)
+  const docflowEntrypoint = resolve(
+    root,
+    OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.docflowEntrypointRelativePath
+  )
+  const docflowProbeHelper = resolve(
+    root,
+    OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.docflowProbeHelperRelativePath
+  )
+  const packageJson = resolve(
+    root,
+    OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.packageJsonRelativePath
+  )
   const cliSingleAttemptPatch = resolve(
     root,
-    'runtime-patches',
-    'cli-auth-retry-single-attempt.v1.json'
+    OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.cliSingleAttemptPatchRelativePath
   )
 
   return Object.freeze({
@@ -70,6 +107,7 @@ export function resolveOpenContentSkillBundledAssetPaths(
     cliEntrypoint,
     docflowEntrypoint,
     docflowProbeHelper,
+    packageJson,
     cliSingleAttemptPatch
   })
 }
@@ -80,6 +118,10 @@ export function assertOpenContentSkillBundledAssetsPresent(
 ): OpenContentSkillBundledAssetPaths {
   const paths = resolveOpenContentSkillBundledAssetPaths(location)
   try {
+    const trustedRoot = location.mode === 'packaged'
+      ? resolve(location.resourcesPath)
+      : paths.root
+    assertNoBundledAssetSymlink(trustedRoot, paths.root)
     if (!statSync(paths.root).isDirectory()) {
       throw new TypeError('invalid root')
     }
@@ -88,8 +130,10 @@ export function assertOpenContentSkillBundledAssetsPresent(
       paths.cliEntrypoint,
       paths.docflowEntrypoint,
       paths.docflowProbeHelper,
+      paths.packageJson,
       paths.cliSingleAttemptPatch
     ]) {
+      assertNoBundledAssetSymlink(paths.root, runtimeFile)
       if (!statSync(runtimeFile).isFile()) {
         throw new TypeError('invalid runtime file')
       }
@@ -102,4 +146,84 @@ export function assertOpenContentSkillBundledAssetsPresent(
     throw new TypeError('Bundled OpenContent assets are unavailable or invalid.')
   }
   return paths
+}
+
+function readPackageOwnedRuntimeTrust(): Readonly<{
+  installation: Readonly<{
+    archiveSha256: string
+    overlayId: string
+    overlayRoot: string
+    version: string
+  }>
+  asset: Readonly<{
+    packagedResourcesPath: string
+    trustedRuntimeFiles: readonly OpenContentSkillRuntimeFileIntegrity[]
+  }>
+}> {
+  const trust = packageManifest.sciforgeInternalRuntimeTrust
+  const installation = trust.installations[0]
+  const asset = installation?.assets[0]
+  const roles = new Set<OpenContentSkillRuntimeFileRole>([
+    'cli-entrypoint',
+    'docflow-entrypoint',
+    'docflow-probe-helper',
+    'package-manifest',
+    'cli-single-attempt-patch'
+  ])
+  if (trust.contractVersion !== 1 || trust.installations.length !== 1 ||
+    !installation || installation.assets.length !== 1 || !asset ||
+    !/^[a-f0-9]{64}$/u.test(installation.archiveSha256) ||
+    !/^[a-z0-9][a-z0-9-]*$/u.test(installation.overlayId) ||
+    !installation.overlayRoot.startsWith('internal/') ||
+    installation.version.trim() === '' || asset.packagedResourcesPath.trim() === '' ||
+    asset.trustedRuntimeFiles.length !== roles.size) {
+    throw new TypeError('OpenContent package-owned runtime trust is invalid.')
+  }
+  const files = asset.trustedRuntimeFiles.map((file) => {
+    if (!roles.delete(file.role as OpenContentSkillRuntimeFileRole) ||
+      file.relativePath.startsWith('/') || file.relativePath.includes('..') ||
+      !/^[a-f0-9]{64}$/u.test(file.sha256) ||
+      !Number.isSafeInteger(file.size) || file.size < 1) {
+      throw new TypeError('OpenContent package-owned runtime file trust is invalid.')
+    }
+    return Object.freeze({
+      role: file.role as OpenContentSkillRuntimeFileRole,
+      relativePath: file.relativePath,
+      sha256: file.sha256,
+      size: file.size
+    })
+  })
+  if (roles.size !== 0) {
+    throw new TypeError('OpenContent package-owned runtime trust is incomplete.')
+  }
+  return Object.freeze({
+    installation: Object.freeze({
+      archiveSha256: installation.archiveSha256,
+      overlayId: installation.overlayId,
+      overlayRoot: installation.overlayRoot,
+      version: installation.version
+    }),
+    asset: Object.freeze({
+      packagedResourcesPath: asset.packagedResourcesPath,
+      trustedRuntimeFiles: Object.freeze(files)
+    })
+  })
+}
+
+function assertNoBundledAssetSymlink(root: string, candidate: string): void {
+  const candidateRelativePath = relative(root, candidate)
+  if (candidateRelativePath.startsWith('..') || isAbsolute(candidateRelativePath)) {
+    throw new TypeError('escaped runtime file')
+  }
+  if (lstatSync(root).isSymbolicLink()) {
+    throw new TypeError('symbolic runtime root')
+  }
+  let current = root
+  if (candidateRelativePath === '') return
+  for (const segment of candidateRelativePath.split(sep)) {
+    current = resolve(current, segment)
+    if (lstatSync(current).isSymbolicLink()) {
+      throw new TypeError('symbolic runtime file')
+    }
+  }
 }

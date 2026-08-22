@@ -6,6 +6,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -35,6 +36,7 @@ describe('OpenContent bundled assets', () => {
         paths.cliEntrypoint,
         paths.docflowEntrypoint,
         paths.docflowProbeHelper,
+        paths.packageJson,
         paths.cliSingleAttemptPatch
       ]) {
         expect(`${realpathSync(runtimeFile)}`.startsWith(canonicalRoot)).toBe(true)
@@ -45,6 +47,8 @@ describe('OpenContent bundled assets', () => {
         .toBe('scripts/docflow-probe-compact.cjs')
       expect(OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.cliSingleAttemptPatchRelativePath)
         .toBe('runtime-patches/cli-auth-retry-single-attempt.v1.json')
+      expect(OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.packageJsonRelativePath)
+        .toBe('package.json')
     } finally {
       fixture.dispose()
     }
@@ -89,6 +93,60 @@ describe('OpenContent bundled assets', () => {
     })).toThrow('Bundled OpenContent assets are unavailable or invalid.')
   })
 
+  it('rejects a bundled asset root supplied through a symbolic link', () => {
+    const fixture = createAssetFixture()
+    const linkedRoot = resolve(fixture.root, 'linked-opencontent-base')
+    try {
+      symlinkSync(fixture.assetRoot, linkedRoot, 'dir')
+
+      expect(() => assertOpenContentSkillBundledAssetsPresent({
+        mode: 'source',
+        assetRoot: linkedRoot
+      })).toThrow('Bundled OpenContent assets are unavailable or invalid.')
+    } finally {
+      fixture.dispose()
+    }
+  })
+
+  it('rejects a required runtime file supplied through an in-root symbolic link', () => {
+    const fixture = createAssetFixture()
+    const cliEntrypoint = resolve(fixture.assetRoot, 'cli/bin/oc.js')
+    try {
+      rmSync(cliEntrypoint)
+      symlinkSync('../docflow/docflow-node.cjs', cliEntrypoint)
+
+      expect(() => assertOpenContentSkillBundledAssetsPresent({
+        mode: 'source',
+        assetRoot: fixture.assetRoot
+      })).toThrow('Bundled OpenContent assets are unavailable or invalid.')
+    } finally {
+      fixture.dispose()
+    }
+  })
+
+  it('rejects a packaged asset reached through a symbolic-link ancestor', () => {
+    const fixture = createAssetFixture()
+    const resourcesPath = mkdtempSync(resolve(tmpdir(), 'sciforge-opencontent-linked-resources-'))
+    const externalOpenContentRoot = resolve(fixture.root, 'external-opencontent')
+    try {
+      mkdirSync(externalOpenContentRoot, { recursive: true })
+      cpSync(
+        fixture.assetRoot,
+        resolve(externalOpenContentRoot, OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.version),
+        { recursive: true }
+      )
+      symlinkSync(externalOpenContentRoot, resolve(resourcesPath, 'opencontent'), 'dir')
+
+      expect(() => assertOpenContentSkillBundledAssetsPresent({
+        mode: 'packaged',
+        resourcesPath
+      })).toThrow('Bundled OpenContent assets are unavailable or invalid.')
+    } finally {
+      fixture.dispose()
+      rmSync(resourcesPath, { recursive: true, force: true })
+    }
+  })
+
   it('admits a complete packaged copy and fails closed when its helper is absent', () => {
     const fixture = createAssetFixture()
     const resourcesPath = mkdtempSync(resolve(tmpdir(), 'sciforge-opencontent-assets-'))
@@ -107,6 +165,7 @@ describe('OpenContent bundled assets', () => {
       expect(realpathSync(packagedPaths.cliEntrypoint).startsWith(canonicalRoot)).toBe(true)
       expect(realpathSync(packagedPaths.docflowEntrypoint).startsWith(canonicalRoot)).toBe(true)
       expect(realpathSync(packagedPaths.docflowProbeHelper).startsWith(canonicalRoot)).toBe(true)
+      expect(realpathSync(packagedPaths.packageJson).startsWith(canonicalRoot)).toBe(true)
       expect(realpathSync(packagedPaths.cliSingleAttemptPatch).startsWith(canonicalRoot)).toBe(true)
       expect(relative(packagedPaths.root, packagedPaths.cliEntrypoint)).toBe('cli/bin/oc.js')
 
@@ -133,6 +192,7 @@ function createAssetFixture() {
   const root = mkdtempSync(resolve(tmpdir(), 'sciforge-opencontent-source-assets-'))
   const assetRoot = resolve(root, 'opencontent-base-1.0.1')
   for (const relativePath of [
+    'package.json',
     'cli/bin/oc.js',
     'cli/docflow/docflow-node.cjs',
     'scripts/docflow-probe-compact.cjs',
@@ -145,6 +205,7 @@ function createAssetFixture() {
     })
   }
   return {
+    root,
     assetRoot,
     dispose: () => rmSync(root, { recursive: true, force: true })
   }

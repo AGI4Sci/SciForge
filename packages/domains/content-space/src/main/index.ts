@@ -307,10 +307,11 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         audiences?: ContentSpaceCapabilityOptions['audiences']
         scope?: ContentSpaceCapabilityOptions['scope']
         tags?: ContentSpaceCapabilityOptions['tags']
+        version?: ContentSpaceCapabilityOptions['version']
       }>
   ): CapabilityDefinition => options.defineCapability({
     ...input,
-    version: '1.0.0',
+    version: input.version ?? '1.0.0',
     audiences: input.audiences ?? ['ui', 'agent', 'system'],
     scope: input.scope ?? 'global',
     tags: Object.freeze(Array.from(new Set([
@@ -1255,6 +1256,9 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       })),
       ...CONTENT_SPACE_PROVIDER_FEATURE_EFFECTS.map((effect) => define({
         id: EXTENDED_CAPABILITY_ID_BY_EFFECT[effect],
+        ...(effect === 'read' || effect === 'external-write'
+          ? { version: '2.0.0' as const }
+          : {}),
         title: `Use Authorized Extended Content Space Operation (${effect})`,
         description: 'Executes one contracted extended operation against the exact Broker-authorized Content Space resource. Provider-scoped operations require a separate explicit Provider administration grant.',
         audiences: ['agent'],
@@ -1558,6 +1562,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       }),
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers,
+        version: '2.0.0',
         title: 'List Authorized Content Space Members',
         description: 'Lists members for the exact authorized personal or Team root.',
         audiences: ['agent'],
@@ -1584,8 +1589,9 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       }),
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
+        version: '2.0.0',
         title: 'Add Authorized Content Space Member',
-        description: 'Adds one natural-person Content user to the exact authorized root.',
+        description: 'Adds one Provider directory user to the exact authorized shared root.',
         audiences: ['agent'],
         scope: 'resource',
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
@@ -1611,8 +1617,9 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       }),
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember,
+        version: '2.0.0',
         title: 'Remove Authorized Content Space Member',
-        description: 'Removes one natural-person Content user from the exact authorized root.',
+        description: 'Removes one Provider directory user from the exact authorized shared root.',
         audiences: ['agent'],
         scope: 'resource',
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
@@ -2027,7 +2034,7 @@ const ADMINISTRATION_MEMBER_PAGE_WIRE_SCHEMA = z.object({
 
 const ADMINISTRATION_REMOVE_MEMBER_WIRE_SCHEMA = z.object({
   root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA,
-  contentUserId: administrationRemoveMemberShape.contentUserId,
+  member: administrationRemoveMemberShape.member,
   removed: administrationRemoveMemberShape.removed,
   revision: administrationRemoveMemberShape.revision
 }).strict().readonly()
@@ -2056,7 +2063,7 @@ const AGENT_ADMINISTRATION_LIST_MEMBERS_INPUT_SCHEMA = z.object({
 }).strict().readonly()
 
 const AGENT_ADMINISTRATION_MEMBER_MUTATION_INPUT_SCHEMA = z.object({
-  contentUserId: administrationMemberMutationShape.contentUserId,
+  member: administrationMemberMutationShape.member,
   expectedRevision: administrationMemberMutationShape.expectedRevision
 }).strict().readonly()
 

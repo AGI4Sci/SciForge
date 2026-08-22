@@ -15,6 +15,7 @@ const {
 const PROJECT_ROOT = resolve(__dirname, '..')
 const PACKAGE_NAME_PATTERN = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/
 const OVERLAY_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/
+const SHA256_PATTERN = /^[a-f0-9]{64}$/
 
 function parseJson(path) {
   try {
@@ -111,7 +112,183 @@ function internalPackageManifestPaths(root) {
   return manifests.sort()
 }
 
-function readInstallationEvidence(root, packageRoot, packageName, internal) {
+function publicPackageManifestPaths(root) {
+  const packagesRoot = join(root, 'packages')
+  if (!existsSync(packagesRoot)) return []
+  const manifests = []
+  visit(packagesRoot, 0)
+  return manifests.sort()
+
+  function visit(directory, depth) {
+    if (depth > 2) return
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue
+      const packageRoot = join(directory, entry.name)
+      const manifestPath = join(packageRoot, 'package.json')
+      if (existsSync(manifestPath)) {
+        const stats = lstatSync(manifestPath)
+        if (stats.isSymbolicLink() || !stats.isFile()) {
+          throw new Error(`Public package manifest must be a regular file: ${manifestPath}.`)
+        }
+        manifests.push(manifestPath)
+      } else {
+        visit(packageRoot, depth + 1)
+      }
+    }
+  }
+}
+
+function readPackageOwnedOverlayTrust(root) {
+  const installations = new Map()
+  for (const manifestPath of publicPackageManifestPaths(root)) {
+    const manifest = parseJson(manifestPath)
+    if (manifest.sciforgeInternalRuntimeTrust === undefined) continue
+    const packageName = requiredString(manifest.name, `${manifestPath} name`)
+    const trust = requiredRecord(
+      manifest.sciforgeInternalRuntimeTrust,
+      `${packageName} sciforgeInternalRuntimeTrust`
+    )
+    assertExactKeys(
+      trust,
+      ['contractVersion', 'installations'],
+      `${packageName} sciforgeInternalRuntimeTrust`
+    )
+    if (trust.contractVersion !== 1 || !Array.isArray(trust.installations) ||
+      trust.installations.length === 0) {
+      throw new Error(`${packageName} internal runtime trust contract is invalid.`)
+    }
+    for (const [index, value] of trust.installations.entries()) {
+      const label = `${packageName} sciforgeInternalRuntimeTrust.installations[${index}]`
+      const installation = requiredRecord(value, label)
+      assertExactKeys(
+        installation,
+        ['archiveSha256', 'assets', 'overlayId', 'overlayRoot', 'version'],
+        label
+      )
+      const overlayId = requiredString(installation.overlayId, `${label}.overlayId`)
+      if (!OVERLAY_ID_PATTERN.test(overlayId) || installations.has(overlayId)) {
+        throw new Error(`${label}.overlayId is invalid or duplicated.`)
+      }
+      const overlayRoot = packageRelativePath(installation.overlayRoot, `${label}.overlayRoot`)
+      if (!overlayRoot.startsWith('internal/')) {
+        throw new Error(`${label}.overlayRoot must remain beneath internal/.`)
+      }
+      const version = requiredString(installation.version, `${label}.version`)
+      const archiveSha256 = requiredString(
+        installation.archiveSha256,
+        `${label}.archiveSha256`
+      )
+      if (!SHA256_PATTERN.test(archiveSha256) || !Array.isArray(installation.assets) ||
+        installation.assets.length === 0) {
+        throw new Error(`${label} archive or asset trust is invalid.`)
+      }
+      const assets = installation.assets.map((assetValue, assetIndex) => {
+        const assetLabel = `${label}.assets[${assetIndex}]`
+        const asset = requiredRecord(assetValue, assetLabel)
+        assertExactKeys(asset, ['packagedResourcesPath', 'trustedRuntimeFiles'], assetLabel)
+        const packagedResourcesPath = packageRelativePath(
+          asset.packagedResourcesPath,
+          `${assetLabel}.packagedResourcesPath`
+        )
+        if (!Array.isArray(asset.trustedRuntimeFiles) ||
+          asset.trustedRuntimeFiles.length === 0) {
+          throw new Error(`${assetLabel}.trustedRuntimeFiles must be non-empty.`)
+        }
+        const roles = new Set()
+        const paths = new Set()
+        const trustedRuntimeFiles = asset.trustedRuntimeFiles.map((fileValue, fileIndex) => {
+          const fileLabel = `${assetLabel}.trustedRuntimeFiles[${fileIndex}]`
+          const file = requiredRecord(fileValue, fileLabel)
+          assertExactKeys(file, ['relativePath', 'role', 'sha256', 'size'], fileLabel)
+          const role = requiredString(file.role, `${fileLabel}.role`)
+          const relativePath = packageRelativePath(file.relativePath, `${fileLabel}.relativePath`)
+          const sha256 = requiredString(file.sha256, `${fileLabel}.sha256`)
+          if (roles.has(role) || paths.has(relativePath) || !SHA256_PATTERN.test(sha256) ||
+            !Number.isSafeInteger(file.size) || file.size < 1) {
+            throw new Error(`${fileLabel} is invalid or duplicated.`)
+          }
+          roles.add(role)
+          paths.add(relativePath)
+          return Object.freeze({ relativePath, role, sha256, size: file.size })
+        })
+        return Object.freeze({
+          packagedResourcesPath,
+          trustedRuntimeFiles: Object.freeze(trustedRuntimeFiles)
+        })
+      })
+      const assetPaths = assets.map((asset) => asset.packagedResourcesPath)
+      if (new Set(assetPaths).size !== assetPaths.length) {
+        throw new Error(`${label} contains duplicate packaged asset trust.`)
+      }
+      installations.set(overlayId, Object.freeze({
+        archiveSha256,
+        assets: Object.freeze(assets),
+        overlayId,
+        overlayRoot,
+        version
+      }))
+    }
+  }
+  return installations
+}
+
+function verifyInstalledOverlayReceipts(root) {
+  const packageOwnedTrust = readPackageOwnedOverlayTrust(root)
+  const installedTrust = new Map()
+  const receiptsRoot = join(root, '.sciforge', 'internal-overlays')
+  let receiptsRootStats
+  try {
+    receiptsRootStats = lstatSync(receiptsRoot)
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return
+    throw error
+  }
+  assertNoSymlinkPath(root, receiptsRoot, 'Internal overlay receipt directory')
+  if (!receiptsRootStats.isDirectory()) {
+    throw new Error('Internal overlay receipt directory must be a real directory.')
+  }
+  for (const entry of readdirSync(receiptsRoot, { withFileTypes: true })) {
+    if (!entry.name.endsWith('.json')) continue
+    const receiptPath = join(receiptsRoot, entry.name)
+    if (entry.isSymbolicLink() || !entry.isFile()) {
+      throw new Error(`Internal overlay receipt must be a regular file: ${receiptPath}.`)
+    }
+    const parsedReceipt = requiredRecord(
+      parseJson(receiptPath),
+      `Internal overlay receipt ${receiptPath}`
+    )
+    const overlayId = requiredString(
+      parsedReceipt.overlayId,
+      `Internal overlay receipt ${receiptPath}.overlayId`
+    )
+    if (!OVERLAY_ID_PATTERN.test(overlayId) || entry.name !== `${overlayId}.json`) {
+      throw new Error(`Internal overlay receipt identity is invalid: ${receiptPath}.`)
+    }
+    const overlayRoot = packageRelativePath(
+      parsedReceipt.overlayRoot,
+      `Internal overlay receipt ${receiptPath}.overlayRoot`
+    )
+    if (!overlayRoot.startsWith('internal/')) {
+      throw new Error(`Internal overlay receipt root must remain beneath internal/: ${receiptPath}.`)
+    }
+    const receipt = verifyInstalledInternalOverlaySync({ overlayId, overlayRoot, targetRoot: root })
+    const trust = packageOwnedTrust.get(overlayId)
+    if (!trust || trust.overlayRoot !== receipt.overlayRoot ||
+      trust.version !== receipt.version || trust.archiveSha256 !== receipt.archiveSha256) {
+      throw new Error('Internal overlay receipt does not match package-owned provenance.')
+    }
+    installedTrust.set(overlayId, trust)
+  }
+  return installedTrust
+}
+
+function readInstallationEvidence(
+  root,
+  packageRoot,
+  packageName,
+  internal,
+  installedTrust
+) {
   const label = `${packageName} sciforgeInternal.installationEvidence`
   const value = requiredRecord(internal.installationEvidence, label)
   assertExactKeys(value, ['overlayId', 'overlayRoot'], label)
@@ -134,10 +311,15 @@ function readInstallationEvidence(root, packageRoot, packageName, internal) {
     overlayRoot,
     targetRoot: root
   })
+  const trust = installedTrust.get(overlayId)
+  if (!trust) {
+    throw new Error(`${label} does not match package-owned provenance.`)
+  }
   return Object.freeze({
     overlayId,
     overlayRoot,
-    receipt
+    receipt,
+    trust
   })
 }
 
@@ -199,6 +381,20 @@ function readAssets(root, packageRoot, packageName, packaging, installationEvide
         throw new Error(`${label} required path is absent from the trusted receipt: ${requiredPath}.`)
       }
     }
+    const trustedAssets = installationEvidence.trust.assets.filter(
+      (candidate) => candidate.packagedResourcesPath === packagedResourcesPath
+    )
+    if (trustedAssets.length !== 1) {
+      throw new Error(`${label} does not match package-owned asset provenance.`)
+    }
+    const inventoryByPath = new Map(inventory.map((file) => [file.path, file]))
+    for (const trustedFile of trustedAssets[0].trustedRuntimeFiles) {
+      const received = inventoryByPath.get(trustedFile.relativePath)
+      if (!received || received.size !== trustedFile.size ||
+        received.sha256 !== trustedFile.sha256) {
+        throw new Error(`${label} does not match package-owned runtime provenance.`)
+      }
+    }
     assertExactKeys(
       asset,
       ['packagedResourcesPath', 'requiredPaths', 'root'],
@@ -214,6 +410,7 @@ function readAssets(root, packageRoot, packageName, packaging, installationEvide
 }
 
 function createInternalRuntimeComposition(root = PROJECT_ROOT) {
+  const installedTrust = verifyInstalledOverlayReceipts(root) ?? new Map()
   const runtimes = []
   const packageNames = new Set()
   const packagedResourcePaths = new Set()
@@ -246,7 +443,8 @@ function createInternalRuntimeComposition(root = PROJECT_ROOT) {
       root,
       packageRoot,
       packageName,
-      internal
+      internal,
+      installedTrust
     )
     const assets = readAssets(
       root,
@@ -267,8 +465,10 @@ function createInternalRuntimeComposition(root = PROJECT_ROOT) {
       packageName,
       packageDir: projectRelativePath(root, packageRoot),
       installationEvidence: Object.freeze({
+        archiveSha256: installationEvidence.receipt.archiveSha256,
         overlayId: installationEvidence.overlayId,
-        overlayRoot: installationEvidence.overlayRoot
+        overlayRoot: installationEvidence.overlayRoot,
+        version: installationEvidence.receipt.version
       }),
       assets
     }))

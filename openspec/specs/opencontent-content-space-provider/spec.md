@@ -26,6 +26,22 @@ The bound account's personal root SHALL map to one `ContentContainerSummary` wit
 - **WHEN** the Provider returns the same stable root identity with a different safe label
 - **THEN** the reference SHALL remain stable and only display metadata SHALL change
 
+### Requirement: Team membership reuses typed OpenContent directory user references
+
+The adapter SHALL validate each OpenContent directory-search response against the extended v2 literal kind for that operation, including `user` for `searchUsers`, and SHALL reject mixed-kind output. It SHALL accept ordinary Team member add/remove input only as a same-instance Content Space Provider directory `user` reference. It SHALL parse the opaque canonical principal ID into its private OpenContent identity only behind the Provider boundary, call the existing token-private Connector Team Administration methods through the current Principal-bound Connection, and observe the Team after mutation before reporting success. `listMembers` SHALL construct the same typed user reference from each Provider Team user so callers can remove a listed member without a Host `contentUserId` reverse mapping.
+
+The adapter SHALL NOT accept legacy ordinary-member `contentUserId` payloads, select a Connection, expose a numeric identity or account DTO, add an extended-operation invite path, or use the current-owner identity binding as a cross-user fallback. Current-owner Team creation and the dormant Project provisioning port MAY continue to use their separate verified Host/Cloud identity mappings because they are different contracts.
+
+#### Scenario: Current account invites another directory user
+
+- **WHEN** Content Space supplies a canonical OpenContent directory user reference returned by typed `searchUsers` for the same Provider Instance as the authorized Team root
+- **THEN** the adapter SHALL add that Provider identity through the existing Administration and Connector path, list the same canonical reference, and accept it for removal without exposing or borrowing either account's credential
+
+#### Scenario: Directory identity is non-canonical or belongs to another instance
+
+- **WHEN** the member reference uses a non-user kind, a non-canonical OpenContent identity, or another Provider Instance
+- **THEN** the adapter SHALL fail before Team mutation and SHALL NOT reinterpret it through Host identity mapping
+
 ### Requirement: One canonical Content Space path serves Human and Agent audiences
 
 Renderer and Agent callers SHALL converge on the same Content Space service → pinned Provider path. Human operations SHALL use Human-only global capabilities and Host-selected file handles. Agent content operations SHALL use Agent-only Broker resource capabilities after a confirmed root authorization; an Agent SHALL NOT invoke the Human global content capabilities. The adapter SHALL use only the executing node owner's current Principal-bound connection. Callers SHALL NOT supply a connection, external account, endpoint, coordinator/admin credential, or alternate Provider.

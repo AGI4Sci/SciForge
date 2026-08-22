@@ -158,6 +158,79 @@ describe('ContentSpaceService', () => {
     expect(createSpace).not.toHaveBeenCalled()
   })
 
+  it('rejects a member from another Provider Instance before binding administration', async () => {
+    const root = toPortableContentContainerReference(ROOT)
+    const addMember = vi.fn(async (
+      input: Parameters<ContentSpaceAdministrationPort['addMember']>[0]
+    ) => Object.freeze({
+      member: input.member,
+      role: 'internal' as const,
+      revision: 'revision:2'
+    }))
+    const bind = vi.fn(async () => Object.freeze({
+      administration: administrationPortFixture({ addMember })
+    }))
+    const service = serviceFor(providerFixture({
+      features: {
+        administration: {
+          describeOperations: () => administrationStates('add-member'),
+          bind
+        }
+      }
+    }))
+
+    await expect(service.executeAdministration({
+      target: featureTarget(ROOT),
+      operation: 'add-member',
+      request: {
+        root,
+        member: {
+          providerInstanceRef: 'provider-instance-beta',
+          kind: 'user',
+          principalId: 'provider-user-b'
+        },
+        expectedRevision: 'revision:1'
+      }
+    }, writeCall())).rejects.toMatchObject({ detail: { code: 'invalid_target' } })
+
+    expect(bind).not.toHaveBeenCalled()
+    expect(addMember).not.toHaveBeenCalled()
+  })
+
+  it('rejects a listed member whose Provider Instance drifts from the root', async () => {
+    const root = toPortableContentContainerReference(ROOT)
+    const listMembers = vi.fn(async () => Object.freeze({
+      root,
+      items: Object.freeze([Object.freeze({
+        member: Object.freeze({
+          providerInstanceRef: 'provider-instance-beta',
+          kind: 'user' as const,
+          principalId: 'provider-user-b'
+        }),
+        role: 'internal' as const,
+        revision: 'revision:1'
+      })])
+    }))
+    const service = serviceFor(providerFixture({
+      features: {
+        administration: {
+          describeOperations: () => administrationStates('list-members'),
+          bind: async () => Object.freeze({
+            administration: administrationPortFixture({ listMembers })
+          })
+        }
+      }
+    }))
+
+    await expect(service.executeAdministration({
+      target: featureTarget(ROOT),
+      operation: 'list-members',
+      request: { root, page: { limit: 25 } }
+    }, writeCall())).rejects.toMatchObject({ detail: { code: 'provider_unavailable' } })
+
+    expect(listMembers).toHaveBeenCalledOnce()
+  })
+
   it('dispatches ready Project provisioning through the Provider-owned provisioning port', async () => {
     const root = toPortableContentContainerReference(ROOT)
     const intent = Object.freeze({
@@ -2183,13 +2256,13 @@ function administrationPortFixture(
     openRoot: async () => Object.freeze({ root, revision: summary.revision }),
     listMembers: async () => Object.freeze({ root, items: Object.freeze([]) }),
     addMember: async (input) => Object.freeze({
-      contentUserId: input.contentUserId,
+      member: input.member,
       role: 'internal' as const,
       revision: 'revision:2'
     }),
     removeMember: async (input) => Object.freeze({
       root,
-      contentUserId: input.contentUserId,
+      member: input.member,
       removed: true as const,
       revision: 'revision:2'
     }),

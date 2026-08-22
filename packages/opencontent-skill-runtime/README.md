@@ -34,6 +34,18 @@ exact overlay receipt version and complete inventory through the shared public
 its fixed required-entrypoint and containment checks; it does not duplicate the
 receipt verifier.
 
+Native-document create verification is an exact contract for the
+receipt-pinned `1.0.1` snapshot, not a promise about a future supplier release.
+That snapshot derives the delivery name by removing file-name-forbidden
+characters, trimming, preserving an existing case-insensitive `.mdoc` suffix,
+or appending `.mdoc`. A create can succeed only when that exact name is bound to
+the requested title and one bound readback contains the requested canonical
+JSON content after removing only its top-level supplier `documentHash`. The
+Provider package separately verifies that the created file is listed under the
+requested parent. The pinned import result exposes no source-identity or
+content proof, so native import is blocked before source transfer or subprocess
+dispatch and is absent from the executable DocFlow command union.
+
 `./main/cli-runner` is the canonical supplier transport boundary. It binds the
 fixed asset, current Principal assertion, cancellation/deadline,
 bounded-output limits, and ephemeral Provider Connection material.

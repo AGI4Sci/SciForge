@@ -165,11 +165,13 @@ const providerTeamUserPageSchema = z.object({
   list: z.array(providerTeamUserSchema).max(OPENCONTENT_TEAM_PAGE_SIZE_MAX).optional(),
   datas: z.array(providerTeamUserSchema).max(OPENCONTENT_TEAM_PAGE_SIZE_MAX).optional(),
   items: z.array(providerTeamUserSchema).max(OPENCONTENT_TEAM_PAGE_SIZE_MAX).optional(),
+  teamUser: z.array(providerTeamUserSchema).max(OPENCONTENT_TEAM_PAGE_SIZE_MAX).optional(),
   teamUserList: z.array(providerTeamUserSchema).max(OPENCONTENT_TEAM_PAGE_SIZE_MAX).optional()
 }).passthrough().refine((page) => (
   page.list !== undefined ||
   page.datas !== undefined ||
   page.items !== undefined ||
+  page.teamUser !== undefined ||
   page.teamUserList !== undefined
 ))
 
@@ -359,9 +361,16 @@ export function createOpenContentTeamAdministration(options: Readonly<{
       if (pageNumber !== input.pageNumber || pageSize !== input.pageSize) {
         throw connectorError('provider_contract_violation')
       }
-      const rawUsers = page.list ?? page.datas ?? page.items ?? page.teamUserList ?? []
+      const rawUsers = page.list ?? page.datas ?? page.items ?? page.teamUser ?? page.teamUserList ?? []
       const users = rawUsers.map(normalizeTeamUser)
-      const totalCount = page.totalCount ?? page.total ?? users.length
+      const suppliedTotalCount = page.totalCount ?? page.total
+      if (page.teamUser !== undefined && suppliedTotalCount === undefined &&
+        users.length >= pageSize) {
+        throw connectorError('provider_contract_violation')
+      }
+      const totalCount = suppliedTotalCount ?? (page.teamUser === undefined
+        ? users.length
+        : (pageNumber - 1) * pageSize + users.length)
       return openContentTeamUserPageSchema.parse({
         pageNumber,
         pageSize,

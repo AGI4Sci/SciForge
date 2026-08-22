@@ -4,6 +4,7 @@ import type { PortableResourceReferenceEnvelope } from '@sciforge/domain-sdk/por
 
 import {
   contentSpacePageRequestSchema,
+  contentSpaceDirectoryUserReferenceSchema,
   contentSpaceReadinessReasonSchema,
   contentSpaceReadinessSchema,
   parsePortableContentContainerReference,
@@ -11,7 +12,7 @@ import {
   type ContentSpacePageRequest
 } from './contract.js'
 
-export const CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION = '2.0.0' as const
+export const CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION = '3.0.0' as const
 export const PROJECT_CONTENT_SPACE_PROVISIONING_CONTRACT_VERSION = '1.0.0' as const
 
 export const CONTENT_SPACE_ADMINISTRATION_OPERATIONS = Object.freeze([
@@ -248,8 +249,11 @@ export const contentSpaceAdministrationMemberRoleSchema = z.enum([
   'external'
 ])
 
+export const contentSpaceAdministrationMemberReferenceSchema =
+  contentSpaceDirectoryUserReferenceSchema
+
 export const contentSpaceAdministrationMemberSummarySchema = z.object({
-  contentUserId: consumerResourceIdSchema,
+  member: contentSpaceAdministrationMemberReferenceSchema,
   role: contentSpaceAdministrationMemberRoleSchema,
   revision: administrationRevisionSchema
 }).strict().readonly()
@@ -267,7 +271,7 @@ export const contentSpaceAdministrationListMembersInputSchema = z.object({
 
 const contentSpaceAdministrationMemberMutationInputSchema = z.object({
   root: portableContentContainerReferenceEnvelopeSchema,
-  contentUserId: consumerResourceIdSchema,
+  member: contentSpaceAdministrationMemberReferenceSchema,
   expectedRevision: administrationRevisionSchema
 }).strict().readonly()
 
@@ -278,7 +282,7 @@ export const contentSpaceAdministrationRemoveMemberInputSchema =
 
 export const contentSpaceAdministrationRemoveMemberReceiptSchema = z.object({
   root: portableContentContainerReferenceEnvelopeSchema,
-  contentUserId: consumerResourceIdSchema,
+  member: contentSpaceAdministrationMemberReferenceSchema,
   removed: z.literal(true),
   revision: administrationRevisionSchema
 }).strict().readonly()

@@ -130,12 +130,16 @@ function successReceipt(
 
 function delivery(fileId: string = FILE.fileId, name = 'Document.mdoc') {
   return {
-    protocol: 'docflowCard:v1' as const,
-    outcome: 'succeeded' as const,
+    protocolVersion: '1.0' as const,
+    kind: 'docflowCard' as const,
+    version: 'v1' as const,
     businessIdentity: fileId,
+    outcome: 'succeeded' as const,
     payload: {
       projectId: fileId,
+      versionId: 'version-one',
       name,
+      versionName: '',
       accessUrl: `https://provider.invalid/preview/${fileId}`,
       updateTime: '2026-08-20T10:00:00+08:00'
     }
@@ -159,13 +163,21 @@ function canonicalPlanningReceipt(
     return successReceipt(invocation, {
       json: {
         success: true,
-        documentHash: BASE_HASH,
-        capabilities: { supported: true },
-        selection: {
-          editTarget: { targetText: 'Old text', occurrence: 1 },
-          range: { start: 0, end: 8, unit: 'utf16' },
-          oldText: 'Old text'
-        }
+        operation: 'probe',
+        view: 'target',
+        fileId: FILE.fileId,
+        probe: {
+          schemaVersion: 1,
+          fileId: FILE.fileId,
+          documentHash: BASE_HASH,
+          capabilities: { requestedOperation: 'replaceText', supported: true },
+          matches: [{
+            editTarget: { targetText: 'Old text', occurrence: 1 },
+            range: { start: 0, end: 8, unit: 'utf16' },
+            oldText: 'Old text'
+          }]
+        },
+        truncation: { total: 1, returned: 1, truncated: false }
       },
       managed: [{
         role: 'probe-template',
@@ -179,8 +191,16 @@ function canonicalPlanningReceipt(
     return successReceipt(invocation, {
       json: {
         success: true,
-        canApply: true,
-        baseDocumentHash: BASE_HASH
+        operation: 'plan',
+        fileId: FILE.fileId,
+        operationId: 'operation-one',
+        operationCount: 1,
+        report: {
+          readOnly: true,
+          canApply: true,
+          baseDocumentHash: BASE_HASH,
+          resultDocumentHash: NEXT_HASH
+        }
       }
     })
   }
@@ -188,6 +208,481 @@ function canonicalPlanningReceipt(
 }
 
 describe('native-document Content Space provider adapter', () => {
+  it('uses the pinned create card revision and nested readback document hash', async () => {
+    const execute = vi.fn(async (raw: unknown) => {
+      const invocation = docflowCommandInvocationSchema.parse(raw)
+      if (invocation.command === 'docflow-create') {
+        return successReceipt(invocation, {
+          json: {
+            success: true,
+            operation: 'create',
+            fileId: 'created-document'
+          },
+          delivery: [delivery('created-document', 'Draft.mdoc')]
+        })
+      }
+      if (invocation.command === 'docflow-read') {
+        return successReceipt(invocation, {
+          json: {
+            success: true,
+            operation: 'read',
+            fileId: 'created-document',
+            document: {
+              documentHash: NEXT_HASH,
+              type: 'doc',
+              children: []
+            }
+          }
+        })
+      }
+      return failureReceipt(invocation)
+    })
+    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+
+    await expect(adapter.execute(featureInput('create', {
+      operation: 'create',
+      resourceType: 'native_document',
+      parent: ROOT,
+      title: 'Draft',
+      content: { encoding: 'json', value: { type: 'doc', children: [] } }
+    }))).resolves.toMatchObject({
+      outcome: 'succeeded',
+      result: {
+        kind: 'document',
+        documentHash: NEXT_HASH,
+        revisionId: 'version-one',
+        document: {
+          reference: { fileId: 'created-document' }
+        }
+      }
+    })
+    expect(execute).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['forbidden characters and whitespace', '  Draft: ?  ', 'Draft.mdoc'],
+    ['an existing mixed-case suffix', 'Draft.MDOC', 'Draft.MDOC'],
+    ['the pinned empty-name fallback', '\\/:*?"<>|', 'DocFlow.mdoc']
+  ] as const)('uses receipt-pinned create naming for %s', async (
+    _case,
+    title,
+    expectedName
+  ) => {
+    const content = { type: 'doc', children: [] }
+    const execute = vi.fn(async (raw: unknown) => {
+      const invocation = docflowCommandInvocationSchema.parse(raw)
+      if (invocation.command === 'docflow-create') {
+        return successReceipt(invocation, {
+          json: { success: true, operation: 'create', fileId: 'created-document' },
+          delivery: [delivery('created-document', expectedName)]
+        })
+      }
+      if (invocation.command === 'docflow-read') {
+        return successReceipt(invocation, {
+          json: {
+            success: true,
+            operation: 'read',
+            fileId: 'created-document',
+            document: { documentHash: NEXT_HASH, ...content }
+          }
+        })
+      }
+      return failureReceipt(invocation)
+    })
+    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+
+    await expect(adapter.execute(featureInput('create', {
+      operation: 'create',
+      resourceType: 'native_document',
+      parent: ROOT,
+      title,
+      content: { encoding: 'json', value: content }
+    }))).resolves.toMatchObject({ outcome: 'succeeded' })
+    expect(execute).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails create verification when the pinned readback content differs from the request', async () => {
+    const execute = vi.fn(async (raw: unknown) => {
+      const invocation = docflowCommandInvocationSchema.parse(raw)
+      if (invocation.command === 'docflow-create') {
+        return successReceipt(invocation, {
+          json: {
+            success: true,
+            operation: 'create',
+            fileId: 'created-document'
+          },
+          delivery: [delivery('created-document', 'Draft.mdoc')]
+        })
+      }
+      if (invocation.command === 'docflow-read') {
+        return successReceipt(invocation, {
+          json: {
+            success: true,
+            operation: 'read',
+            fileId: 'created-document',
+            document: {
+              documentHash: NEXT_HASH,
+              type: 'doc',
+              children: [{ type: 'paragraph', text: 'supplier drift' }]
+            }
+          }
+        })
+      }
+      return failureReceipt(invocation)
+    })
+    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+
+    await expect(adapter.execute(featureInput('create', {
+      operation: 'create',
+      resourceType: 'native_document',
+      parent: ROOT,
+      title: 'Draft',
+      content: { encoding: 'json', value: { type: 'doc', children: [] } }
+    }))).resolves.toMatchObject({
+      outcome: 'outcome_unknown',
+      error: { code: 'outcome_unknown', stage: 'verify', retry: 'never' }
+    })
+    expect(execute).toHaveBeenCalledTimes(2)
+    expect(execute.mock.calls.filter(([raw]) =>
+      docflowCommandInvocationSchema.parse(raw).command === 'docflow-create')).toHaveLength(1)
+  })
+
+  it('fails create verification before readback when the delivery name is not canonical for the title', async () => {
+    const execute = vi.fn(async (raw: unknown) => {
+      const invocation = docflowCommandInvocationSchema.parse(raw)
+      if (invocation.command === 'docflow-create') {
+        return successReceipt(invocation, {
+          json: {
+            success: true,
+            operation: 'create',
+            fileId: 'created-document'
+          },
+          delivery: [delivery('created-document', 'Another title.mdoc')]
+        })
+      }
+      return failureReceipt(invocation)
+    })
+    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+
+    await expect(adapter.execute(featureInput('create', {
+      operation: 'create',
+      resourceType: 'native_document',
+      parent: ROOT,
+      title: 'Draft',
+      content: { encoding: 'json', value: { type: 'doc', children: [] } }
+    }))).resolves.toMatchObject({
+      outcome: 'outcome_unknown',
+      error: { code: 'outcome_unknown', stage: 'verify', retry: 'never' }
+    })
+    expect(execute).toHaveBeenCalledOnce()
+  })
+
+  it('blocks import before source transfer or DocFlow dispatch without pinned source proof', async () => {
+    const execute = vi.fn(async (raw: unknown) => {
+      const invocation = docflowCommandInvocationSchema.parse(raw)
+      return successReceipt(invocation, {
+        json: {
+          success: true,
+          operation: 'import',
+          fileId: 'imported-document'
+        },
+        delivery: [delivery('imported-document', 'draft.mdoc')]
+      })
+    })
+    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const importSource = source('draft.docx', new Uint8Array([4, 5, 6]))
+
+    await expect(adapter.execute(featureInput('import', {
+      operation: 'import',
+      resourceType: 'native_document',
+      parent: ROOT
+    }, { source: importSource }))).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'unsupported', retry: 'never' }
+    })
+    expect(importSource.read).not.toHaveBeenCalled()
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('does not accept legacy flat create proof in place of the pinned card and readback', async () => {
+    const execute = vi.fn(async (raw: unknown) => {
+      const invocation = docflowCommandInvocationSchema.parse(raw)
+      if (invocation.command === 'docflow-create') {
+        return successReceipt(invocation, {
+          json: {
+            success: true,
+            operation: 'create',
+            fileId: 'created-document',
+            documentHash: BASE_HASH,
+            revisionId: 'version-one'
+          },
+          delivery: [delivery('created-document', 'Draft.mdoc')]
+        })
+      }
+      if (invocation.command === 'docflow-read') {
+        return successReceipt(invocation, {
+          json: {
+            success: true,
+            operation: 'read',
+            fileId: 'created-document',
+            document: { documentHash: NEXT_HASH, type: 'doc', children: [] }
+          }
+        })
+      }
+      return failureReceipt(invocation)
+    })
+    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+
+    await expect(adapter.execute(featureInput('create', {
+      operation: 'create',
+      resourceType: 'native_document',
+      parent: ROOT,
+      title: 'Draft',
+      content: { encoding: 'json', value: { type: 'doc', children: [] } }
+    }))).resolves.toMatchObject({
+      outcome: 'succeeded',
+      result: { documentHash: NEXT_HASH, revisionId: 'version-one' }
+    })
+    expect(execute).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['success', { success: false }],
+    ['operation', { operation: 'read' }],
+    ['fileId', { fileId: 'another-document' }],
+    ['card revision', { versionId: 'another-version' }]
+  ] as const)('fails closed before readback when pinned create %s proof drifts', async (
+    _field,
+    drift
+  ) => {
+    const execute = vi.fn(async (raw: unknown) => {
+      const invocation = docflowCommandInvocationSchema.parse(raw)
+      if (invocation.command === 'docflow-create') {
+        return successReceipt(invocation, {
+          json: {
+            success: true,
+            operation: 'create',
+            fileId: 'created-document',
+            ...drift
+          },
+          delivery: [delivery('created-document', 'Draft.mdoc')]
+        })
+      }
+      if (invocation.command === 'docflow-read') {
+        return successReceipt(invocation, {
+          json: {
+            success: true,
+            operation: 'read',
+            fileId: 'created-document',
+            document: { documentHash: NEXT_HASH, type: 'doc', children: [] }
+          }
+        })
+      }
+      return failureReceipt(invocation)
+    })
+    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+
+    await expect(adapter.execute(featureInput('create', {
+      operation: 'create',
+      resourceType: 'native_document',
+      parent: ROOT,
+      title: 'Draft',
+      content: { encoding: 'json', value: { type: 'doc', children: [] } }
+    }))).resolves.toMatchObject({
+      outcome: 'outcome_unknown',
+      error: { code: 'outcome_unknown', stage: 'verify', retry: 'never' }
+    })
+    expect(execute).toHaveBeenCalledOnce()
+  })
+
+  it('returns pinned read content without leaking its supplier hash into the document body', async () => {
+    const document = {
+      documentHash: BASE_HASH,
+      type: 'doc',
+      children: [{ type: 'paragraph', text: 'Body' }]
+    }
+    const execute = vi.fn(async (raw: unknown) => {
+      const invocation = docflowCommandInvocationSchema.parse(raw)
+      return successReceipt(invocation, {
+        json: {
+          success: true,
+          operation: 'read',
+          fileId: FILE.fileId,
+          document
+        }
+      })
+    })
+    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+
+    const receipt = await adapter.execute(featureInput('read', {
+      operation: 'read',
+      document: DOCUMENT
+    }))
+    expect(receipt).toMatchObject({
+      outcome: 'succeeded',
+      result: {
+        kind: 'content',
+        document: DOCUMENT,
+        documentHash: BASE_HASH,
+        content: {
+          type: 'doc',
+          children: [{ type: 'paragraph', text: 'Body' }]
+        }
+      }
+    })
+    expect(receipt.outcome === 'succeeded' && receipt.result.kind === 'content'
+      ? receipt.result.content
+      : {}).not.toHaveProperty('documentHash')
+    expect(execute).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['success', { success: false }],
+    ['operation', { operation: 'probe' }],
+    ['fileId', { fileId: 'another-document' }],
+    ['legacy alias', { documentHash: BASE_HASH }]
+  ] as const)('fails closed when pinned read %s proof drifts', async (_field, drift) => {
+    const execute = vi.fn(async (raw: unknown) => {
+      const invocation = docflowCommandInvocationSchema.parse(raw)
+      return successReceipt(invocation, {
+        json: {
+          success: true,
+          operation: 'read',
+          fileId: FILE.fileId,
+          document: { documentHash: BASE_HASH, type: 'doc', children: [] },
+          ...drift
+        }
+      })
+    })
+    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+
+    await expect(adapter.execute(featureInput('read', {
+      operation: 'read',
+      document: DOCUMENT
+    }))).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'contract_violation', retry: 'never' }
+    })
+    expect(execute).toHaveBeenCalledOnce()
+  })
+
+  it('binds one pinned nested probe match to its supplier hash and managed template', async () => {
+    const probeToken = `ocdf_${'n'.repeat(32)}`
+    const selection = {
+      editTarget: { nodeId: 'node-a' },
+      range: { start: 0, end: 4, unit: 'utf16' },
+      oldText: 'Body'
+    }
+    const execute = vi.fn(async (raw: unknown) => {
+      const invocation = docflowCommandInvocationSchema.parse(raw)
+      return successReceipt(invocation, {
+        json: {
+          success: true,
+          operation: 'probe',
+          view: 'target',
+          fileId: FILE.fileId,
+          probe: {
+            schemaVersion: 1,
+            fileId: FILE.fileId,
+            documentHash: BASE_HASH,
+            matches: [selection],
+            capabilities: {
+              requestedOperation: 'replaceText',
+              supported: true
+            }
+          },
+          truncation: { total: 1, returned: 1, truncated: false }
+        },
+        managed: [{
+          role: 'probe-template',
+          token: probeToken,
+          name: 'probe-template.json',
+          mediaType: 'application/json'
+        }]
+      })
+    })
+    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+
+    await expect(adapter.execute(featureInput('probe', {
+      operation: 'probe',
+      document: DOCUMENT,
+      selector: { kind: 'text', text: 'Body', occurrence: 1 },
+      requestedCapability: 'replace_text'
+    }, { invocationId: 'invocation_pinned_probe_0001' }))).resolves.toMatchObject({
+      outcome: 'succeeded',
+      result: {
+        kind: 'probe',
+        documentHash: BASE_HASH,
+        capabilitySupported: true,
+        selection
+      }
+    })
+    expect(execute).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['success', { success: false }],
+    ['operation', { operation: 'read' }],
+    ['top-level fileId', { fileId: 'another-document' }],
+    ['nested fileId', { probe: { fileId: 'another-document' } }],
+    ['requested operation', {
+      probe: { capabilities: { requestedOperation: 'insertText', supported: true } }
+    }],
+    ['legacy alias', { documentHash: BASE_HASH }],
+    ['truncation', { truncation: { total: 2, returned: 1, truncated: true } }]
+  ] as const)('fails closed when pinned probe %s proof drifts', async (_field, drift) => {
+    const probeToken = `ocdf_${'s'.repeat(32)}`
+    const baseProbe = {
+      success: true,
+      operation: 'probe',
+      view: 'target',
+      fileId: FILE.fileId,
+      probe: {
+        schemaVersion: 1,
+        fileId: FILE.fileId,
+        documentHash: BASE_HASH,
+        summary: {},
+        editContext: {},
+        matches: [{ editTarget: { nodeId: 'node-a' } }],
+        index: [],
+        capabilities: { requestedOperation: 'replaceText', supported: true }
+      },
+      truncation: { total: 1, returned: 1, truncated: false }
+    }
+    const driftedProbe = {
+      ...baseProbe,
+      ...drift,
+      ...(!('probe' in drift) || drift.probe === undefined
+        ? {}
+        : { probe: { ...baseProbe.probe, ...drift.probe } })
+    }
+    const execute = vi.fn(async (raw: unknown) => {
+      const invocation = docflowCommandInvocationSchema.parse(raw)
+      return successReceipt(invocation, {
+        json: driftedProbe,
+        managed: [{
+          role: 'probe-template',
+          token: probeToken,
+          name: 'probe-template.json',
+          mediaType: 'application/json'
+        }]
+      })
+    })
+    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+
+    await expect(adapter.execute(featureInput('probe', {
+      operation: 'probe',
+      document: DOCUMENT,
+      selector: { kind: 'text', text: 'Body', occurrence: 1 },
+      requestedCapability: 'replace_text'
+    }, { invocationId: `invocation_probe_drift_${_field.replaceAll(' ', '_')}` })))
+      .resolves.toMatchObject({
+        outcome: 'failed',
+        error: { code: 'contract_violation', retry: 'never' }
+      })
+    expect(execute).toHaveBeenCalledOnce()
+  })
+
   it('maps the direct provider-neutral operations to fixed DocFlow invocations and typed data files', async () => {
     const execute = vi.fn(async (raw: unknown) => {
       const invocation = docflowCommandInvocationSchema.parse(raw)
@@ -195,7 +690,6 @@ describe('native-document Content Space provider adapter', () => {
     })
     const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
     const imageSource = source('figure.png', new Uint8Array([1, 2, 3]))
-    const importSource = source('draft.docx', new Uint8Array([4, 5, 6]))
     const cases: readonly Readonly<{
       input: FeatureInput
       expected: unknown
@@ -269,24 +763,6 @@ describe('native-document Content Space provider adapter', () => {
           args: { fileId: FILE.fileId, commentId: 'comment-one' },
           dataFiles: []
         }
-      },
-      {
-        input: featureInput('import', {
-          operation: 'import',
-          resourceType: 'native_document',
-          parent: ROOT
-        }, { source: importSource }),
-        expected: {
-          command: 'docflow-import',
-          args: { folderId: ROOT.containerId },
-          dataFiles: [{
-            role: 'source',
-            encoding: 'base64',
-            name: 'draft.docx',
-            mediaType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            content: 'BAUG'
-          }]
-        }
       }
     ]
 
@@ -301,7 +777,7 @@ describe('native-document Content Space provider adapter', () => {
     }
   })
 
-  it('normalizes successful receipts for all six direct non-chain operations', async () => {
+  it('normalizes successful receipts for the five directly verifiable non-chain operations', async () => {
     const fixtures: readonly Readonly<{
       operation: FeatureInput['operation']
       request: unknown
@@ -339,12 +815,6 @@ describe('native-document Content Space provider adapter', () => {
         operation: 'comment-get',
         request: { operation: 'comment-get', document: DOCUMENT, commentId: 'comment-one' },
         resultKind: 'comment'
-      },
-      {
-        operation: 'import',
-        request: { operation: 'import', resourceType: 'native_document', parent: ROOT },
-        source: source('draft.docx', new Uint8Array([4, 5, 6])),
-        resultKind: 'document'
       }
     ]
 
@@ -352,28 +822,31 @@ describe('native-document Content Space provider adapter', () => {
       const execute = vi.fn(async (raw: unknown) => {
         const invocation = docflowCommandInvocationSchema.parse(raw)
         switch (invocation.command) {
-          case 'docflow-create':
-          case 'docflow-import': {
-            const fileId = invocation.command === 'docflow-create'
-              ? 'created-document'
-              : 'imported-document'
+          case 'docflow-create': {
+            const fileId = 'created-document'
             return successReceipt(invocation, {
               json: {
                 success: true,
-                fileId,
-                documentHash: NEXT_HASH,
-                versionId: 'version-one'
+                operation: 'create',
+                fileId
               },
-              delivery: [delivery(fileId)]
+              delivery: [delivery(fileId, 'Draft.mdoc')]
             })
           }
-          case 'docflow-read':
+          case 'docflow-read': {
+            const readbackFileId = invocation.args.fileId
             return successReceipt(invocation, {
               json: {
-                documentHash: BASE_HASH,
-                content: { type: 'doc', children: [] }
+                success: true,
+                operation: 'read',
+                fileId: readbackFileId,
+                document: {
+                  documentHash: readbackFileId === FILE.fileId ? BASE_HASH : NEXT_HASH,
+                  type: 'doc'
+                }
               }
             })
+          }
           case 'docflow-image-upload':
             return successReceipt(invocation, {
               json: { resourceId: 'image-resource', mediaType: 'image/png' }
@@ -405,7 +878,9 @@ describe('native-document Content Space provider adapter', () => {
         outcome: 'succeeded',
         result: { kind: fixture.resultKind }
       })
-      expect(execute, fixture.operation).toHaveBeenCalledTimes(1)
+      expect(execute, fixture.operation).toHaveBeenCalledTimes(
+        fixture.operation === 'create' ? 2 : 1
+      )
     }
   })
 
@@ -625,6 +1100,68 @@ describe('native-document Content Space provider adapter', () => {
     expect(execute).toHaveBeenCalledTimes(2)
   })
 
+  it.each([
+    ['success', { success: false }],
+    ['operation', { operation: 'read' }],
+    ['fileId', { fileId: 'another-document' }],
+    ['operationId', { operationId: '' }],
+    ['operationCount', { operationCount: 2 }],
+    ['legacy alias', { canApply: true }]
+  ] as const)('fails closed when pinned plan %s proof drifts', async (_field, drift) => {
+    const probeToken = `ocdf_${'t'.repeat(32)}`
+    const execute = vi.fn(async (raw: unknown) => {
+      const invocation = docflowCommandInvocationSchema.parse(raw)
+      if (invocation.command === 'docflow-probe') {
+        return canonicalPlanningReceipt(invocation, probeToken) ?? failureReceipt(invocation)
+      }
+      if (invocation.command === 'docflow-plan') {
+        return successReceipt(invocation, {
+          json: {
+            success: true,
+            operation: 'plan',
+            fileId: FILE.fileId,
+            operationId: 'operation-one',
+            operationCount: 1,
+            report: {
+              readOnly: true,
+              canApply: true,
+              baseDocumentHash: BASE_HASH,
+              resultDocumentHash: NEXT_HASH
+            },
+            ...drift
+          }
+        })
+      }
+      return failureReceipt(invocation)
+    })
+    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const probe = await adapter.execute(featureInput('probe', {
+      operation: 'probe',
+      document: DOCUMENT,
+      selector: { kind: 'text', text: 'Old text', occurrence: 1 },
+      requestedCapability: 'replace_text'
+    }, { invocationId: `invocation_plan_drift_probe_${_field.replaceAll(' ', '_')}` }))
+    if (probe.outcome !== 'succeeded' || probe.result.kind !== 'probe') {
+      throw new Error('Expected the drift fixture probe to succeed.')
+    }
+
+    await expect(adapter.execute(featureInput('plan', {
+      operation: 'plan',
+      document: DOCUMENT,
+      probeReceiptId: probe.result.probeReceiptId,
+      baseHash: BASE_HASH,
+      changes: [{
+        kind: 'replace_text',
+        target: { kind: 'text', text: 'Old text', occurrence: 1 },
+        value: 'New text'
+      }]
+    }, { invocationId: `invocation_plan_drift_${_field.replaceAll(' ', '_')}` }))).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'contract_violation', retry: 'never' }
+    })
+    expect(execute).toHaveBeenCalledTimes(2)
+  })
+
   it('rejects a stale or foreign managed chain before invoking DocFlow', async () => {
     const execute = vi.fn<DocflowNativeDocumentAdapter['execute']>()
     const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
@@ -739,9 +1276,18 @@ describe('native-document Content Space provider adapter', () => {
         tokenIndex += 1
         return successReceipt(invocation, {
           json: {
-            documentHash: BASE_HASH,
-            capabilities: { supported: true },
-            selection: { editTarget: { targetText: 'Old text', occurrence: 1 } }
+            success: true,
+            operation: 'probe',
+            view: 'target',
+            fileId: FILE.fileId,
+            probe: {
+              schemaVersion: 1,
+              fileId: FILE.fileId,
+              documentHash: BASE_HASH,
+              capabilities: { requestedOperation: 'replaceText', supported: true },
+              matches: [{ editTarget: { targetText: 'Old text', occurrence: 1 } }]
+            },
+            truncation: { total: 1, returned: 1, truncated: false }
           },
           managed: [{
             role: 'probe-template',
@@ -788,13 +1334,21 @@ describe('native-document Content Space provider adapter', () => {
   it('returns outcome_unknown when a successful write and its single readback still lack a document hash', async () => {
     const execute = vi.fn(async (raw: unknown) => {
       const invocation = docflowCommandInvocationSchema.parse(raw)
+      if (invocation.command === 'docflow-read') {
+        return successReceipt(invocation, {
+          json: {
+            success: true,
+            operation: 'read',
+            fileId: 'new-document',
+            document: { type: 'doc', children: [] }
+          }
+        })
+      }
       return successReceipt(invocation, {
         json: {
           success: true,
           operation: 'create',
           fileId: 'new-document',
-          fileName: 'Draft.mdoc',
-          versionId: 'version-one'
         },
         delivery: [delivery('new-document', 'Draft.mdoc')]
       })
@@ -828,9 +1382,8 @@ describe('native-document Content Space provider adapter', () => {
       return successReceipt(invocation, {
         json: {
           success: true,
-          fileId: 'new-document',
-          documentHash: NEXT_HASH,
-          revisionId: 'revision-one'
+          operation: 'create',
+          fileId: 'new-document'
         }
       })
     })
@@ -856,13 +1409,13 @@ describe('native-document Content Space provider adapter', () => {
     ['command binding', (invocation: DocflowCommandInvocation): unknown => ({
       ...successReceipt(invocation, {
         json: {
-          fileId: 'new-document',
-          documentHash: NEXT_HASH,
-          revisionId: 'revision-one'
+          success: true,
+          operation: 'create',
+          fileId: 'new-document'
         },
         delivery: [delivery('new-document')]
       }),
-      command: 'docflow-import'
+      command: 'docflow-read'
     })]
   ] as const)('returns outcome_unknown when a succeeded write has an incomplete %s proof', async (
     _gap,
@@ -890,7 +1443,14 @@ describe('native-document Content Space provider adapter', () => {
   it('keeps post-dispatch proof gaps as contract violations for reads', async () => {
     const execute = vi.fn(async (raw: unknown) => {
       const invocation = docflowCommandInvocationSchema.parse(raw)
-      return successReceipt(invocation, { json: { documentHash: BASE_HASH } })
+      return successReceipt(invocation, {
+        json: {
+          success: true,
+          operation: 'read',
+          fileId: FILE.fileId,
+          document: { type: 'doc', children: [] }
+        }
+      })
     })
     const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
 

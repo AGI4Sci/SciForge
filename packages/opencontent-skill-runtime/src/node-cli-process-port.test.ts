@@ -6,8 +6,10 @@ import {
   rm,
   writeFile
 } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -21,9 +23,17 @@ import {
   type OpenContentCliProcessRequest
 } from './cli-runner.js'
 import {
+  docflowTransportResultSchema,
+} from './docflow-native-document-adapter.js'
+import {
   OpenContentCliProcessError,
-  createNodeOpenContentCliProcessPort
+  type NodeOpenContentCliProcessPortOptions
 } from './node-cli-process-port.js'
+import * as publicNodeCliProcessPort from './node-cli-process-port.js'
+import {
+  createNodeOpenContentCliProcessPortInternal,
+  type NodeOpenContentCliProcessPortInternalOptions
+} from './node-cli-process-port.internal.js'
 
 const roots: string[] = []
 
@@ -33,10 +43,68 @@ afterEach(async () => {
   ))
 })
 
+function createNodeOpenContentCliProcessPort(
+  options: NodeOpenContentCliProcessPortOptions,
+  internal: Partial<Pick<
+    NodeOpenContentCliProcessPortInternalOptions,
+    'afterSnapshotRead' | 'trustedSnapshotIntegrity'
+  >> = {}
+) {
+  let trustedSnapshotIntegrity = internal.trustedSnapshotIntegrity
+  if (trustedSnapshotIntegrity === undefined) {
+    try {
+      trustedSnapshotIntegrity = fixtureSnapshotIntegrity(options.trustedEntrypoint)
+    } catch {
+      trustedSnapshotIntegrity = []
+    }
+  }
+  return createNodeOpenContentCliProcessPortInternal({
+    ...options,
+    trustedSnapshotIntegrity,
+    ...(internal.afterSnapshotRead === undefined
+      ? {}
+      : { afterSnapshotRead: internal.afterSnapshotRead })
+  })
+}
+
 describe('Node OpenContent CLI process port', () => {
+  it('keeps internal factories and trust overrides outside the public package entrypoint', () => {
+    const noInternalOptions: Record<Extract<
+      keyof NodeOpenContentCliProcessPortOptions,
+      'afterSnapshotRead' | 'trustedSnapshotIntegrity'
+    >, never> = {}
+    expect(noInternalOptions).toEqual({})
+    expect(publicNodeCliProcessPort).not.toHaveProperty(
+      'createNodeOpenContentCliProcessPortInternal'
+    )
+  })
+
+  it('does not read or forward hidden JavaScript trust overrides', async () => {
+    const fixture = await createFixture()
+    const accessed = new Set<PropertyKey>()
+    const options = new Proxy({
+      trustedEntrypoint: fixture.entrypoint,
+      temporaryRoot: fixture.invocationsRoot,
+      afterSnapshotRead: () => {
+        throw new Error('hidden hook must not run')
+      },
+      trustedSnapshotIntegrity: fixtureSnapshotIntegrity(fixture.entrypoint)
+    }, {
+      get(target, property, receiver) {
+        accessed.add(property)
+        return Reflect.get(target, property, receiver)
+      }
+    })
+
+    publicNodeCliProcessPort.createNodeOpenContentCliProcessPort(options)
+
+    expect(accessed).not.toContain('afterSnapshotRead')
+    expect(accessed).not.toContain('trustedSnapshotIntegrity')
+  })
+
   it('keeps the 86-command snapshot inventory separate from the admitted adapter union', async () => {
     expect(OPENCONTENT_CLI_COMMANDS).toHaveLength(86)
-    expect(OPENCONTENT_CLI_ADMITTED_COMMANDS).toHaveLength(62)
+    expect(OPENCONTENT_CLI_ADMITTED_COMMANDS).toHaveLength(61)
     for (const excluded of [
       'docflow-last-delivery',
       'docflow-failure-list',
@@ -48,6 +116,7 @@ describe('Node OpenContent CLI process port', () => {
       'docflow-edit',
       'docflow-undo',
       'docflow-redo',
+      'docflow-import',
       'docflow-comment-create',
       'docflow-comment-reply',
       'docflow-comment-solve',
@@ -76,6 +145,7 @@ describe('Node OpenContent CLI process port', () => {
       'docflow-edit',
       'docflow-undo',
       'docflow-redo',
+      'docflow-import',
       'docflow-comment-create',
       'docflow-comment-reply',
       'docflow-comment-solve',
@@ -89,6 +159,18 @@ describe('Node OpenContent CLI process port', () => {
         dataFiles: []
       } as never, fixture.entrypoint))).rejects.toThrow()
     }
+    await expect(port.run(request({
+      invocationId: 'invocation_blocked_docflow_import',
+      command: 'docflow-import',
+      args: { folderId: 'container_a' },
+      dataFiles: [{
+        role: 'source',
+        encoding: 'base64',
+        name: 'draft.docx',
+        mediaType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        content: 'BAUG'
+      }]
+    } as never, fixture.entrypoint))).rejects.toThrow()
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
   })
 
@@ -195,11 +277,17 @@ describe('Node OpenContent CLI process port', () => {
 
     expect(result.protocol).toBe('docflow-command-result:v1')
     expect(result.json).toMatchObject({
-      title: 'A document',
-      content: '<article><p>Hello</p></article>'
+      success: true,
+      operation: 'create',
+      fileId: 'document-a'
     })
     expect(JSON.stringify(result)).not.toContain(fixture.invocationsRoot)
     expect(result.structuredDeliveryItems).toHaveLength(1)
+    expect(docflowTransportResultSchema.safeParse(result).success).toBe(true)
+    expect(result.structuredDeliveryItems[0].payload.accessUrl).toBe(
+      'https://redacted-provider.invalid/'
+    )
+    expect(JSON.stringify(result)).not.toContain('https://provider.invalid')
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
   })
 
@@ -318,7 +406,10 @@ describe('Node OpenContent CLI process port', () => {
     }, fixture.entrypoint)) as Record<string, any>
     const probeToken = probe.managedDataFiles[0].token as string
     expect(probeToken).toMatch(/^ocdf_[A-Za-z0-9_-]{32,128}$/u)
-    expect(probe.json.target).toBe('{"text":"Hello"}')
+    expect(probe.json.probe).toMatchObject({
+      documentHash: 'a'.repeat(64),
+      capabilities: { supported: true }
+    })
     expect(JSON.stringify(probe)).not.toContain('editPlanTemplateFile')
 
     const planInvocation = {
@@ -343,6 +434,189 @@ describe('Node OpenContent CLI process port', () => {
     await expect(port.run(request(planInvocation, fixture.entrypoint)))
       .rejects.toMatchObject({ code: 'invalid-input', dispatched: false })
 
+    expect(await readdir(fixture.invocationsRoot)).toEqual([])
+  })
+
+  it('captures the pinned nested probe template as a one-use managed token', async () => {
+    const fixture = await createFixture()
+    const port = createNodeOpenContentCliProcessPort({
+      trustedEntrypoint: fixture.entrypoint,
+      temporaryRoot: fixture.invocationsRoot
+    })
+
+    const result = await port.run(request({
+      invocationId: 'invocation_pinned_nested_probe_a',
+      command: 'docflow-probe',
+      args: {
+        fileId: 'pinned-probe-shape',
+        target: { text: 'Body' },
+        view: 'target',
+        operation: 'replaceText',
+        include: ['nodes', 'text']
+      },
+      dataFiles: []
+    }, fixture.entrypoint)) as Record<string, any>
+
+    expect(result.managedDataFiles).toEqual([
+      expect.objectContaining({
+        role: 'probe-template',
+        name: 'probe-template.json',
+        mediaType: 'application/json'
+      })
+    ])
+    expect(result.managedDataFiles[0].token).toMatch(/^ocdf_[A-Za-z0-9_-]{32,128}$/u)
+    expect(JSON.stringify(result)).not.toContain('editPlanTemplateFile')
+    expect(JSON.stringify(result)).not.toContain(fixture.invocationsRoot)
+    expect(await readdir(fixture.invocationsRoot)).toEqual([])
+  })
+
+  it.each([
+    'truncated-probe',
+    'incomplete-probe',
+    'legacy-alias-probe',
+    'non-object-probe'
+  ] as const)('rejects %s before retaining its managed template', async (invalidFileId) => {
+    const fixture = await createFixture()
+    const port = createNodeOpenContentCliProcessPort({
+      trustedEntrypoint: fixture.entrypoint,
+      temporaryRoot: fixture.invocationsRoot,
+      managedTokenLimits: { maxEntries: 1, maxBytes: 16 * 1024 * 1024 }
+    })
+
+    await expect(port.run(request({
+      invocationId: `invocation_${invalidFileId}_a`,
+      command: 'docflow-probe',
+      args: {
+        fileId: invalidFileId,
+        target: { text: 'Body' },
+        view: 'target',
+        operation: 'replaceText',
+        include: ['nodes', 'text']
+      },
+      dataFiles: []
+    }, fixture.entrypoint))).rejects.toMatchObject({
+      code: 'provider-contract-violation',
+      dispatched: true
+    })
+
+    await expect(port.run(request({
+      invocationId: `invocation_probe_after_${invalidFileId}_a`,
+      command: 'docflow-probe',
+      args: {
+        fileId: 'valid-after-truncated-probe',
+        target: { text: 'Body' },
+        view: 'target',
+        operation: 'replaceText',
+        include: ['nodes', 'text']
+      },
+      dataFiles: []
+    }, fixture.entrypoint))).resolves.toMatchObject({
+      managedDataFiles: [expect.objectContaining({ role: 'probe-template' })]
+    })
+    expect(await readdir(fixture.invocationsRoot)).toEqual([])
+  })
+
+  it('accepts the pinned nested read-only plan report and validates its managed plan file', async () => {
+    const fixture = await createFixture()
+    const port = createNodeOpenContentCliProcessPort({
+      trustedEntrypoint: fixture.entrypoint,
+      temporaryRoot: fixture.invocationsRoot
+    })
+    const probe = await port.run(request({
+      invocationId: 'invocation_pinned_plan_probe_a',
+      command: 'docflow-probe',
+      args: {
+        fileId: 'pinned-plan-shape',
+        target: { text: 'Body' },
+        view: 'target',
+        operation: 'replaceText',
+        include: ['nodes', 'text']
+      },
+      dataFiles: []
+    }, fixture.entrypoint)) as Record<string, any>
+
+    const result = await port.run(request({
+      invocationId: 'invocation_pinned_nested_plan_a',
+      command: 'docflow-plan',
+      args: { fileId: 'pinned-plan-shape', baseHash: 'a'.repeat(64) },
+      dataFiles: [
+        {
+          role: 'probe-template',
+          encoding: 'managed',
+          token: probe.managedDataFiles[0].token
+        },
+        {
+          role: 'operations',
+          encoding: 'json',
+          name: 'operations.json',
+          mediaType: 'application/json',
+          content: { operations: [{ op: 'replaceText' }] }
+        }
+      ]
+    }, fixture.entrypoint)) as Record<string, any>
+
+    expect(result).toMatchObject({
+      protocol: 'docflow-command-result:v1',
+      command: 'docflow-plan',
+      ok: true,
+      json: {
+        report: {
+          readOnly: true,
+          canApply: true,
+          baseDocumentHash: 'a'.repeat(64),
+          resultDocumentHash: 'b'.repeat(64)
+        }
+      }
+    })
+    expect(JSON.stringify(result)).not.toContain('planFile')
+    expect(JSON.stringify(result)).not.toContain(fixture.invocationsRoot)
+    expect(await readdir(fixture.invocationsRoot)).toEqual([])
+  })
+
+  it.each([
+    'plan-count-drift',
+    'plan-legacy-alias'
+  ] as const)('rejects the unpinned %s result', async (invalidFileId) => {
+    const fixture = await createFixture()
+    const port = createNodeOpenContentCliProcessPort({
+      trustedEntrypoint: fixture.entrypoint,
+      temporaryRoot: fixture.invocationsRoot
+    })
+    const probe = await port.run(request({
+      invocationId: `invocation_${invalidFileId}_probe_a`,
+      command: 'docflow-probe',
+      args: {
+        fileId: invalidFileId,
+        target: { text: 'Body' },
+        view: 'target',
+        operation: 'replaceText',
+        include: ['nodes', 'text']
+      },
+      dataFiles: []
+    }, fixture.entrypoint)) as Record<string, any>
+
+    await expect(port.run(request({
+      invocationId: `invocation_${invalidFileId}_a`,
+      command: 'docflow-plan',
+      args: { fileId: invalidFileId, baseHash: 'a'.repeat(64) },
+      dataFiles: [
+        {
+          role: 'probe-template',
+          encoding: 'managed',
+          token: probe.managedDataFiles[0].token
+        },
+        {
+          role: 'operations',
+          encoding: 'json',
+          name: 'operations.json',
+          mediaType: 'application/json',
+          content: { operations: [{ op: 'replaceText' }] }
+        }
+      ]
+    }, fixture.entrypoint))).rejects.toMatchObject({
+      code: 'provider-contract-violation',
+      dispatched: true
+    })
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
   })
 
@@ -1033,6 +1307,77 @@ describe('Node OpenContent CLI process port', () => {
     expect(await readdir(duplicatedFixture.invocationsRoot)).toEqual([])
   })
 
+  it('rejects drift in every trusted runtime file before child dispatch', async () => {
+    const cases = [
+      'cli/bin/oc.js',
+      'cli/docflow/docflow-node.cjs',
+      'scripts/docflow-probe-compact.cjs',
+      'package.json',
+      'runtime-patches/cli-auth-retry-single-attempt.v1.json'
+    ]
+    for (const [index, relativePath] of cases.entries()) {
+      const fixture = await createFixture()
+      const trustedSnapshotIntegrity = fixtureSnapshotIntegrity(fixture.entrypoint)
+      const principalCheck = vi.fn()
+      const port = createNodeOpenContentCliProcessPort({
+        trustedEntrypoint: fixture.entrypoint,
+        temporaryRoot: fixture.invocationsRoot
+      }, { trustedSnapshotIntegrity })
+      const path = join(fixture.root, ...relativePath.split('/'))
+      const bytes = await readFile(path)
+      const changed = Buffer.from(bytes)
+      changed[index % changed.byteLength] ^= 1
+      await writeFile(path, changed)
+
+      const failure = await port.run(request({
+        invocationId: `invocation_snapshot_byte_drift_${index}`,
+        command: 'file-info',
+        args: { fileId: 'file-a' },
+        dataFiles: []
+      }, fixture.entrypoint, undefined, principalCheck)).catch((error: unknown) => error)
+      expect(failure).toMatchObject({
+        code: 'blocked-by-contract',
+        dispatched: false,
+        message: 'The pinned OpenContent CLI snapshot integrity check failed.'
+      })
+      expect(serializeFailure(failure)).not.toContain(relativePath)
+      expect(principalCheck).not.toHaveBeenCalled()
+      expect(await readdir(fixture.invocationsRoot)).toEqual([])
+    }
+  })
+
+  it('materializes the same verified bytes when the source path changes after reading', async () => {
+    const fixture = await createFixture()
+    const trustedSnapshotIntegrity = fixtureSnapshotIntegrity(fixture.entrypoint)
+    const afterSnapshotRead = vi.fn(async () => {
+      await writeFile(fixture.entrypoint, 'throw new Error("swapped source must not execute")\n')
+    })
+    const port = createNodeOpenContentCliProcessPort({
+      trustedEntrypoint: fixture.entrypoint,
+      temporaryRoot: fixture.invocationsRoot
+    }, { trustedSnapshotIntegrity, afterSnapshotRead })
+
+    await expect(port.run(request({
+      invocationId: 'invocation_snapshot_post_read_swap_a',
+      command: 'file-info',
+      args: { fileId: 'file-a' },
+      dataFiles: []
+    }, fixture.entrypoint))).resolves.toMatchObject({ outcome: 'succeeded' })
+    expect(afterSnapshotRead).toHaveBeenCalledOnce()
+
+    await expect(port.run(request({
+      invocationId: 'invocation_snapshot_post_read_swap_b',
+      command: 'file-info',
+      args: { fileId: 'file-a' },
+      dataFiles: []
+    }, fixture.entrypoint))).rejects.toMatchObject({
+      code: 'blocked-by-contract',
+      dispatched: false
+    })
+    expect(afterSnapshotRead).toHaveBeenCalledOnce()
+    expect(await readdir(fixture.invocationsRoot)).toEqual([])
+  })
+
   it('rejects unrecognized fields in the fixed private source-patch descriptor', async () => {
     const fixture = await createFixture()
     const patchPath = join(
@@ -1140,6 +1485,26 @@ async function createFixture(): Promise<Readonly<{
   return Object.freeze({ root, entrypoint, invocationsRoot })
 }
 
+function fixtureSnapshotIntegrity(entrypoint: string) {
+  const root = resolve(dirname(entrypoint), '..', '..')
+  const files = [
+    ['cli-entrypoint', 'cli/bin/oc.js'],
+    ['docflow-entrypoint', 'cli/docflow/docflow-node.cjs'],
+    ['docflow-probe-helper', 'scripts/docflow-probe-compact.cjs'],
+    ['package-manifest', 'package.json'],
+    ['cli-single-attempt-patch', 'runtime-patches/cli-auth-retry-single-attempt.v1.json']
+  ] as const
+  return files.map(([role, relativePath]) => {
+    const bytes = readFileSync(join(root, ...relativePath.split('/')))
+    return Object.freeze({
+      role,
+      relativePath,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      size: bytes.byteLength
+    })
+  })
+}
+
 const FIXTURE_CLI = String.raw`
 'use strict'
 /* TEST_AUTH_RETRY_ENABLED */
@@ -1245,17 +1610,22 @@ if (params.mode === 'hang') {
     args: params
   })
 } else if (command === 'docflow-create') {
+  const content = fs.readFileSync(params.filePath, 'utf8')
   send({
-    title: params.title,
-    content: fs.readFileSync(params.filePath, 'utf8'),
+    success: params.title === 'A document' && content === '<article><p>Hello</p></article>',
+    operation: 'create',
     fileId: 'document-a',
     structuredDeliveryItems: [{
-      protocol: 'docflowCard:v1',
-      outcome: 'succeeded',
+      protocolVersion: '1.0',
+      kind: 'docflowCard',
+      version: 'v1',
       businessIdentity: 'document-a',
+      outcome: 'succeeded',
       payload: {
         projectId: 'document-a',
+        versionId: 'version-a',
         name: 'A document.mdoc',
+        versionName: '',
         accessUrl: 'https://provider.invalid/document-a',
         updateTime: '2026-08-20T00:00:00.000Z'
       }
@@ -1276,12 +1646,51 @@ if (params.mode === 'hang') {
     operationId: 'operation-a',
     ...(params.fileId === 'managed-byte-cap' ? { padding: 'x'.repeat(256) } : {})
   }))
-  send({ fileId: params.fileId, target: params.target, documentHash: '${'a'.repeat(64)}', editPlanTemplateFile: output })
+  send({
+    success: true,
+    operation: 'probe',
+    view: 'target',
+    fileId: params.fileId,
+    ...(params.fileId === 'legacy-alias-probe'
+      ? { documentHash: '${'a'.repeat(64)}' }
+      : {}),
+    probe: {
+      schemaVersion: 1,
+      fileId: params.fileId,
+      documentHash: '${'a'.repeat(64)}',
+      matches: params.fileId === 'non-object-probe'
+        ? ['invalid-selection']
+        : [{ editTarget: { nodeId: 'node-a' } }],
+      capabilities: { requestedOperation: params.operation, supported: true },
+      editPlanTemplateFile: output
+    },
+    truncation: {
+      total: params.fileId === 'incomplete-probe' ? 2 : 1,
+      returned: 1,
+      truncated: params.fileId === 'truncated-probe'
+    }
+  })
 } else if (command === 'docflow-plan') {
   const template = JSON.parse(fs.readFileSync(params.templateFile, 'utf8'))
   const operations = JSON.parse(fs.readFileSync(params.operationsFile, 'utf8'))
   fs.writeFileSync(params.planFile, JSON.stringify({ ...template, ...operations }))
-  send({ canApply: true, operationCount: operations.operations.length, planFile: params.planFile })
+  send({
+    success: true,
+    operation: 'plan',
+    fileId: params.fileId,
+    ...(params.fileId === 'plan-legacy-alias' ? { canApply: true } : {}),
+    operationId: 'operation-a',
+    operationCount: params.fileId === 'plan-count-drift'
+      ? operations.operations.length + 1
+      : operations.operations.length,
+    planFile: params.planFile,
+    report: {
+      readOnly: true,
+      canApply: true,
+      baseDocumentHash: '${'a'.repeat(64)}',
+      resultDocumentHash: '${'b'.repeat(64)}'
+    }
+  })
 } else {
   send({ command, args: params })
 }

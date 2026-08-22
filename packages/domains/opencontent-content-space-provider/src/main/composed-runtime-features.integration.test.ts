@@ -8,9 +8,15 @@ import {
   DOCFLOW_COMMAND_RESULT_PROTOCOL
 } from '@sciforge/opencontent-skill-runtime/main/docflow-native-document-adapter'
 import {
+  OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR
+} from '@sciforge/opencontent-skill-runtime/main/bundled-assets'
+import {
   OPENCONTENT_CLI_RESULT_PROTOCOL
 } from '@sciforge/opencontent-skill-runtime/main/extended-operation-adapter'
-import type { ContentSpaceProvider } from '@sciforge/domain-content-space/contract'
+import {
+  toPortableContentContainerReference,
+  type ContentSpaceProvider
+} from '@sciforge/domain-content-space/contract'
 import type {
   ContentSpaceExtendedOperationsExecutor,
   ContentSpaceNativeDocumentExecutor
@@ -87,13 +93,18 @@ describe('composed OpenContent runtime features', () => {
             observedPrivateRequests.push(request)
             const invocation = request.invocation
             if (invocation.command === 'docflow-read') {
+              const documentHash = invocation.args.fileId === 'created-document'
+                ? NEXT_DOCUMENT_HASH
+                : DOCUMENT_HASH
               return {
                 protocol: DOCFLOW_COMMAND_RESULT_PROTOCOL,
                 command: invocation.command,
                 ok: true,
                 json: {
-                  documentHash: DOCUMENT_HASH,
-                  content: { type: 'doc', children: [] }
+                  success: true,
+                  operation: 'read',
+                  fileId: invocation.args.fileId,
+                  document: { documentHash, type: 'doc', children: [] }
                 },
                 structuredDeliveryItems: [],
                 managedDataFiles: []
@@ -106,17 +117,20 @@ describe('composed OpenContent runtime features', () => {
                 ok: true,
                 json: {
                   success: true,
+                  operation: 'create',
                   fileId: 'created-document',
-                  documentHash: NEXT_DOCUMENT_HASH,
-                  versionId: 'version-created'
                 },
                 structuredDeliveryItems: [{
-                  protocol: 'docflowCard:v1',
-                  outcome: 'succeeded',
+                  protocolVersion: '1.0',
+                  kind: 'docflowCard',
+                  version: 'v1',
                   businessIdentity: 'created-document',
+                  outcome: 'succeeded',
                   payload: {
                     projectId: 'created-document',
+                    versionId: 'version-created',
                     name: 'Draft.mdoc',
+                    versionName: '',
                     accessUrl: 'https://provider.invalid/preview/created-document',
                     updateTime: '2026-08-20T10:00:00+08:00'
                   }
@@ -236,13 +250,14 @@ describe('composed OpenContent runtime features', () => {
         'comment-reply',
         'comment-solve',
         'edit',
+        'import',
         'insert',
         'redo',
         'undo',
         'update'
       ])
     expect(nativeOperations.filter((state) => state.readiness === 'poc_only'))
-      .toHaveLength(10)
+      .toHaveLength(9)
     expect(nativeOperations.filter((state) => state.readiness === 'poc_only')
       .every((state) => state.reasonCode === 'verification_profile_required')).toBe(true)
 
@@ -278,6 +293,7 @@ describe('composed OpenContent runtime features', () => {
     expect(processRequests.map((request) => request.invocation.command)).toEqual([
       'docflow-read',
       'docflow-create',
+      'docflow-read',
       'file-info',
       'rename'
     ])
@@ -300,6 +316,198 @@ describe('composed OpenContent runtime features', () => {
       extendedWrite
     }))
       .not.toMatch(/system-user-token-canary|test1\.edoc2\.com|entrypoint|executable|environment/u)
+  })
+
+  it('calls the pinned create/read/probe/plan shapes through the receipted canonical facade offline', async () => {
+    const commands: string[] = []
+    const probeToken = `ocdf_${'r'.repeat(32)}`
+    const selection = Object.freeze({
+      editTarget: { targetText: 'Old text', occurrence: 1 },
+      range: { start: 0, end: 8, unit: 'utf16' },
+      oldText: 'Old text'
+    })
+    const internalServices = inMemoryInternalServices()
+    createConnectorMainEntry(connectorHost(internalServices, connectionSettings()), {
+      fetch: providerFetch(),
+      skillRuntime: {
+        processPort: {
+          run: vi.fn(async (request) => {
+            const invocation = request.invocation
+            commands.push(invocation.command)
+            const base = {
+              protocol: DOCFLOW_COMMAND_RESULT_PROTOCOL,
+              command: invocation.command,
+              ok: true as const,
+              structuredDeliveryItems: [] as unknown[],
+              managedDataFiles: [] as unknown[]
+            }
+            if (invocation.command === 'docflow-create') {
+              return {
+                ...base,
+                json: { success: true, operation: 'create', fileId: 'created-document' },
+                structuredDeliveryItems: [{
+                  protocolVersion: '1.0',
+                  kind: 'docflowCard',
+                  version: 'v1',
+                  businessIdentity: 'created-document',
+                  outcome: 'succeeded',
+                  payload: {
+                    projectId: 'created-document',
+                    versionId: 'version-created',
+                    name: 'Draft.mdoc',
+                    versionName: '',
+                    accessUrl: 'https://redacted-provider.invalid/',
+                    updateTime: '2026-08-20T10:00:00+08:00'
+                  }
+                }]
+              }
+            }
+            if (invocation.command === 'docflow-read') {
+              return {
+                ...base,
+                json: {
+                  success: true,
+                  operation: 'read',
+                  fileId: invocation.args.fileId,
+                  document: {
+                    documentHash: invocation.args.fileId === 'created-document'
+                      ? NEXT_DOCUMENT_HASH
+                      : DOCUMENT_HASH,
+                    type: 'doc',
+                    children: []
+                  }
+                }
+              }
+            }
+            if (invocation.command === 'docflow-probe') {
+              return {
+                ...base,
+                json: {
+                  success: true,
+                  operation: 'probe',
+                  view: 'target',
+                  fileId: file.fileId,
+                  probe: {
+                    schemaVersion: 1,
+                    fileId: file.fileId,
+                    documentHash: DOCUMENT_HASH,
+                    summary: {},
+                    editContext: {},
+                    matches: [selection],
+                    index: [],
+                    capabilities: { requestedOperation: 'replaceText', supported: true }
+                  },
+                  truncation: { total: 1, returned: 1, truncated: false }
+                },
+                managedDataFiles: [{
+                  role: 'probe-template',
+                  token: probeToken,
+                  name: 'probe-template.json',
+                  mediaType: 'application/json'
+                }]
+              }
+            }
+            if (invocation.command === 'docflow-plan') {
+              return {
+                ...base,
+                json: {
+                  success: true,
+                  operation: 'plan',
+                  fileId: file.fileId,
+                  operationId: 'operation-one',
+                  operationCount: 1,
+                  report: {
+                    readOnly: true,
+                    canApply: true,
+                    baseDocumentHash: DOCUMENT_HASH,
+                    resultDocumentHash: NEXT_DOCUMENT_HASH
+                  }
+                }
+              }
+            }
+            throw new Error(`Unexpected offline native command: ${invocation.command}`)
+          })
+        }
+      }
+    })
+    const native = requiredNativeFeature(composedProvider(internalServices))
+    const signal = new AbortController().signal
+    const created = await native.execute(nativeInput({
+      effect: 'external-write',
+      signal,
+      invocationId: 'invocation_offline_create_0001',
+      operation: 'create',
+      request: {
+        operation: 'create',
+        resourceType: 'native_document',
+        parent: root,
+        title: 'Draft',
+        content: { encoding: 'json', value: { type: 'doc', children: [] } }
+      },
+      primary: root
+    }))
+    const read = await native.execute(nativeInput({
+      effect: 'read',
+      signal,
+      invocationId: 'invocation_offline_read_0001',
+      operation: 'read',
+      request: { operation: 'read', document },
+      primary: file
+    }))
+    const probe = await native.execute(nativeInput({
+      effect: 'read',
+      signal,
+      invocationId: 'invocation_offline_probe_0001',
+      operation: 'probe',
+      request: {
+        operation: 'probe',
+        document,
+        selector: { kind: 'text', text: 'Old text', occurrence: 1 },
+        requestedCapability: 'replace_text'
+      },
+      primary: file
+    }))
+    if (probe.outcome !== 'succeeded' || probe.result.kind !== 'probe') {
+      throw new Error('The receipted offline probe did not succeed.')
+    }
+    const plan = await native.execute(nativeInput({
+      effect: 'read',
+      signal,
+      invocationId: 'invocation_offline_plan_0001',
+      operation: 'plan',
+      request: {
+        operation: 'plan',
+        document,
+        probeReceiptId: probe.result.probeReceiptId,
+        baseHash: DOCUMENT_HASH,
+        changes: [{
+          kind: 'replace_text',
+          target: { kind: 'text', text: 'Old text', occurrence: 1 },
+          value: 'New text'
+        }]
+      },
+      primary: file
+    }))
+
+    expect(created).toMatchObject({
+      outcome: 'succeeded',
+      result: { kind: 'document', documentHash: NEXT_DOCUMENT_HASH }
+    })
+    expect(read).toMatchObject({
+      outcome: 'succeeded',
+      result: { kind: 'content', documentHash: DOCUMENT_HASH }
+    })
+    expect(plan).toMatchObject({
+      outcome: 'succeeded',
+      result: { kind: 'plan', baseHash: DOCUMENT_HASH, changeCount: 1 }
+    })
+    expect(commands).toEqual([
+      'docflow-create',
+      'docflow-read',
+      'docflow-read',
+      'docflow-probe',
+      'docflow-plan'
+    ])
   })
 
   it('fails closed before transport when another Provider Instance is selected', async () => {
@@ -496,6 +704,138 @@ describe('composed OpenContent runtime features', () => {
     expect(governanceFetch.requestCount()).toBe(callsBeforeInvalidIdentity)
     expect(governanceFetch.observedUserTypes).toEqual([2, 3, 4])
   })
+
+  it('routes a searched Provider directory user through canonical Team membership administration', async () => {
+    const internalServices = inMemoryInternalServices()
+    const governanceFetch = providerGovernanceFetch()
+    createConnectorMainEntry(connectorHost(internalServices, connectionSettings()), {
+      fetch: governanceFetch.fetch,
+      skillRuntime: {
+        processPort: {
+          run: async (request) => {
+            const invocation = request.invocation
+            if (invocation.command !== 'search-user') {
+              throw new Error(`Unexpected Team integration command: ${invocation.command}`)
+            }
+            return {
+              protocol: OPENCONTENT_CLI_RESULT_PROTOCOL,
+              invocationId: invocation.invocationId,
+              command: invocation.command,
+              attemptCount: 1,
+              outcome: 'succeeded',
+              json: {
+                success: true,
+                data: {
+                  items: [{ identityId: '85', name: 'Grace', account: 'grace' }]
+                }
+              },
+              structuredDeliveryItems: [],
+              managedDataFiles: []
+            }
+          }
+        }
+      }
+    })
+    const provider = composedProvider(internalServices)
+    const signal = new AbortController().signal
+    const searched = await requiredExtendedFeature(provider).execute(directorySearchInput(signal))
+    const member = searchedDirectoryUser(searched)
+    const feature = provider.features?.administration
+    if (!feature) throw new Error('Composed OpenContent administration feature is unavailable.')
+    const { administration } = await feature.bind({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      invocationId: 'invocation_team_member_admin_0001',
+      deadlineAt: DEADLINE,
+      signal,
+      assertPrincipalCurrent: () => undefined
+    })
+    const spaces = await administration.listSpaces({ page: { limit: 10 } })
+    const space = spaces.items[0]
+    if (!space) throw new Error('The composed OpenContent Team fixture is unavailable.')
+
+    await expect(administration.addMember({
+      root: space.root,
+      member,
+      expectedRevision: space.revision
+    })).resolves.toMatchObject({ member, role: 'internal' })
+    const listed = await administration.listMembers({
+      root: space.root,
+      page: { limit: 10 }
+    })
+    const listedMember = listed.items.find((item) => item.member.principalId === '85')
+    expect(listedMember).toMatchObject({ member, role: 'internal' })
+    if (!listedMember) throw new Error('The added Provider directory member was not listed.')
+
+    await expect(administration.removeMember({
+      root: space.root,
+      member: listedMember.member,
+      expectedRevision: space.revision
+    })).resolves.toMatchObject({ member, removed: true })
+    await expect(administration.listMembers({
+      root: space.root,
+      page: { limit: 10 }
+    })).resolves.not.toMatchObject({
+      items: expect.arrayContaining([expect.objectContaining({ member })])
+    })
+    expect(governanceFetch.observedAddedIdentityIds).toEqual([85])
+    expect(governanceFetch.observedRemovedIdentityIds).toEqual([85])
+  })
+
+  it('lists Team members from the actual teamUser collection without pagination metadata', async () => {
+    const internalServices = inMemoryInternalServices()
+    const fallbackFetch = providerFetch()
+    const fetch = vi.fn<typeof globalThis.fetch>(async (rawUrl, init) => {
+      const url = new URL(typeof rawUrl === 'string' ? rawUrl : rawUrl.toString())
+      if (url.pathname.endsWith('/Team/GetTeamById')) {
+        return jsonResponse({ result: 0, data: providerTeam(42) })
+      }
+      if (url.pathname.endsWith('/Team/GetTeamUserByTeamIdPaging')) {
+        return jsonResponse({
+          result: 0,
+          data: {
+            creatorName: 'Synthetic Owner',
+            perm: true,
+            teamUser: [{
+              identityId: 42,
+              userType: 1,
+              displayName: 'Synthetic Owner'
+            }]
+          }
+        })
+      }
+      return fallbackFetch(rawUrl, init)
+    })
+    createConnectorMainEntry(connectorHost(internalServices, connectionSettings()), { fetch })
+    const provider = composedProvider(internalServices)
+    const feature = provider.features?.administration
+    if (!feature) throw new Error('Composed OpenContent administration feature is unavailable.')
+    const signal = new AbortController().signal
+    const { administration } = await feature.bind({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      invocationId: 'invocation_team_member_collection_0001',
+      deadlineAt: DEADLINE,
+      signal,
+      assertPrincipalCurrent: () => undefined
+    })
+    const teamRoot = toPortableContentContainerReference(root)
+
+    await expect(administration.listMembers({
+      root: teamRoot,
+      page: { limit: 10 }
+    })).resolves.toMatchObject({
+      root: teamRoot,
+      items: [{
+        member: {
+          providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+          kind: 'user',
+          principalId: '42'
+        },
+        role: 'owner'
+      }]
+    })
+  })
 })
 
 function createAssetFixture() {
@@ -509,6 +849,7 @@ function createAssetFixture() {
     'cli/bin/oc.js',
     'cli/docflow/docflow-node.cjs',
     'scripts/docflow-probe-compact.cjs',
+    'package.json',
     'runtime-patches/cli-auth-retry-single-attempt.v1.json'
   ]) {
     const target = resolve(assetRoot, ...relativePath.split('/'))
@@ -540,7 +881,7 @@ function writeOverlayReceipt(repositoryRoot: string): void {
   mkdirSync(dirname(receiptPath), { recursive: true })
   writeFileSync(receiptPath, canonicalJson({
     archiveRoot: `sciforge-internal-overlay-${overlayId}-${version}`,
-    archiveSha256: 'a'.repeat(64),
+    archiveSha256: OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.installation.archiveSha256,
     files,
     inventorySha256: digestInventory({ files, overlayId, overlayRoot, version }),
     overlayId,
@@ -554,7 +895,7 @@ function nativeInput(input: Readonly<{
   effect: 'read' | 'external-write'
   signal: AbortSignal
   invocationId: string
-  operation: 'read' | 'create' | 'update'
+  operation: 'read' | 'create' | 'probe' | 'plan' | 'update'
   request: unknown
   primary: typeof root | typeof file
   contextProviderInstanceRef?: string
@@ -862,6 +1203,47 @@ function providerFetch(businessRequests: string[] = []): typeof fetch {
         }
       })
     }
+    if (url.pathname.endsWith('/DocList/GetFolderChildren')) {
+      businessRequests.push(url.pathname)
+      expect(body).toMatchObject({
+        token: SYSTEM_USER_TOKEN,
+        fid: root.containerId,
+        noCalcPerm: false
+      })
+      if (typeof body !== 'object' || body === null ||
+        !('argsXml' in body) || typeof body.argsXml !== 'string') {
+        throw new Error('The create parent postcondition requires bounded folder pagination.')
+      }
+      const argsXml = decodeURIComponent(body.argsXml)
+      expect(argsXml).toContain('<PageNum>1</PageNum>')
+      expect(argsXml).toContain('<PageSize>100</PageSize>')
+      return jsonResponse({
+        result: 0,
+        msg: '',
+        data: {
+          folderId: 8,
+          thisFolder: { id: 8, folderGuid: root.containerId, permission: 7 },
+          docListInfo: {
+            foldersInfo: [],
+            filesInfo: [{
+              id: 10888,
+              fileGuid: 'created-document',
+              name: 'Draft.mdoc',
+              parentFolderId: 8,
+              size: 128,
+              permission: 7
+            }],
+            settings: {
+              pageNum: 1,
+              pageSize: 100,
+              totalCount: 1,
+              fileCount: 1,
+              folderCount: 0
+            }
+          }
+        }
+      })
+    }
     if (url.pathname.endsWith('/DocList/GetFolderInfoById')) {
       businessRequests.push(url.pathname)
       expect(body).toMatchObject({ token: SYSTEM_USER_TOKEN, folderId: 8 })
@@ -879,10 +1261,16 @@ function providerGovernanceFetch(): Readonly<{
   requestCount(): number
   observedUserTypes: number[]
   observedOwnerIdentityIds: number[]
+  observedAddedIdentityIds: number[]
+  observedRemovedIdentityIds: number[]
 }> {
   const observedUserTypes: number[] = []
   const observedOwnerIdentityIds: number[] = []
-  let currentUserType = 3
+  const observedAddedIdentityIds: number[] = []
+  const observedRemovedIdentityIds: number[] = []
+  const teamUsers = new Map<number, Readonly<{ userType: number; displayName: string }>>([
+    [84, Object.freeze({ userType: 3, displayName: 'Ada' })]
+  ])
   let currentOwnerIdentityId = 42
   const fetch = vi.fn<typeof globalThis.fetch>(async (rawUrl, init) => {
     const url = new URL(typeof rawUrl === 'string' ? rawUrl : rawUrl.toString())
@@ -922,21 +1310,42 @@ function providerGovernanceFetch(): Readonly<{
     }
     if (url.pathname.endsWith('/Team/SetTeamUserRole')) {
       const userType = requiredNumberField(body, 'userType')
-      currentUserType = userType
       observedUserTypes.push(userType)
-      expect(requiredNumberArrayField(body, 'userIds')).toEqual([84])
+      const userIds = requiredNumberArrayField(body, 'userIds')
+      expect(userIds).toEqual([84])
+      teamUsers.set(84, Object.freeze({ userType, displayName: 'Ada' }))
       return jsonResponse({ result: 0 })
     }
     if (url.pathname.endsWith('/Team/GetTeamUserByTeamIdPaging')) {
+      const users = [...teamUsers].map(([identityId, user]) => ({
+        identityId,
+        userType: user.userType,
+        displayName: user.displayName
+      }))
       return jsonResponse({
         result: 0,
         data: {
           pageNum: 1,
           pageSize: 100,
-          totalCount: 1,
-          list: [{ identityId: 84, userType: currentUserType, displayName: 'Ada' }]
+          totalCount: users.length,
+          list: users
         }
       })
+    }
+    if (url.pathname.endsWith('/Team/SaveTeamUserList')) {
+      const additions = requiredRecordArrayField(body, 'addUserInfo')
+      const deletions = requiredNumberArrayField(body, 'deleteUserInfo')
+      for (const addition of additions) {
+        const identityId = requiredNumberField(addition, 'userId')
+        const userType = requiredNumberField(addition, 'userType')
+        observedAddedIdentityIds.push(identityId)
+        teamUsers.set(identityId, Object.freeze({ userType, displayName: `User ${identityId}` }))
+      }
+      for (const identityId of deletions) {
+        observedRemovedIdentityIds.push(identityId)
+        teamUsers.delete(identityId)
+      }
+      return jsonResponse({ result: 0 })
     }
     if (url.pathname.endsWith('/Team/EditTeamOwner')) {
       currentOwnerIdentityId = requiredNumberField(body, 'userId')
@@ -952,7 +1361,9 @@ function providerGovernanceFetch(): Readonly<{
     fetch: fetch as typeof globalThis.fetch,
     requestCount: () => fetch.mock.calls.length,
     observedUserTypes,
-    observedOwnerIdentityIds
+    observedOwnerIdentityIds,
+    observedAddedIdentityIds,
+    observedRemovedIdentityIds
   })
 }
 
@@ -991,6 +1402,18 @@ function requiredNumberArrayField(value: unknown, field: string): number[] {
     throw new Error(`Expected numeric array field ${field}.`)
   }
   return candidate as number[]
+}
+
+function requiredRecordArrayField(value: unknown, field: string): Record<string, unknown>[] {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error(`Expected object array field ${field}.`)
+  }
+  const candidate = (value as Record<string, unknown>)[field]
+  if (!Array.isArray(candidate) || candidate.some((item: unknown) =>
+    typeof item !== 'object' || item === null || Array.isArray(item))) {
+    throw new Error(`Expected object array field ${field}.`)
+  }
+  return candidate as Record<string, unknown>[]
 }
 
 function jsonResponse(value: unknown): Response {

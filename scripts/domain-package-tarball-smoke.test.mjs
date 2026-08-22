@@ -259,16 +259,16 @@ test('publishable domain packages resolve every public export from independent t
     assert.equal(artifactPackage.version, '1.1.0')
     assert.equal(artifactManifest.module.version, '1.1.0')
     assert.equal(artifactPackage.dependencies['@sciforge/domain-sdk'], '^0.2.0')
-    assert.equal(contentPackage.version, '2.0.0')
-    assert.equal(contentManifest.module.version, '2.0.0')
+    assert.equal(contentPackage.version, '3.0.0')
+    assert.equal(contentManifest.module.version, '3.0.0')
     assert.equal(contentManifest.module.hostApi.minimum, '1.3.0')
     assert.equal(contentPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
-    assert.equal(contentMockPackage.version, '1.0.1')
-    assert.equal(contentMockManifest.module.version, '1.0.1')
+    assert.equal(contentMockPackage.version, '1.0.2')
+    assert.equal(contentMockManifest.module.version, '1.0.2')
     assert.equal(contentMockManifest.module.hostApi.minimum, '1.3.0')
     assert.equal(
       contentMockPackage.dependencies['@sciforge/domain-content-space'],
-      '2.0.0'
+      '3.0.0'
     )
     assert.equal(contentMockPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
     assert.equal(identityPackage.version, '1.1.0')
@@ -286,6 +286,11 @@ test('publishable domain packages resolve every public export from independent t
     assert.equal(
       openContentRuntime.exports['./main/extended-operation-adapter'].import,
       './src/extended-operation-adapter.ts'
+    )
+    assert.equal(
+      Object.keys(openContentRuntime.exports).some((subpath) => subpath.includes('internal')),
+      false,
+      'OpenContent runtime must not export its private process implementation'
     )
     assert.equal(
       openContentConnector.dependencies['@sciforge/opencontent-skill-runtime'],
@@ -385,6 +390,14 @@ test('publishable domain packages resolve every public export from independent t
         false,
         'OpenContent Connector main must not expose credential-bearing Team transport'
       )
+      const openContentProcessPort = await import(
+        '@sciforge/opencontent-skill-runtime/main/node-cli-process-port'
+      )
+      assert.equal(
+        'createNodeOpenContentCliProcessPortInternal' in openContentProcessPort,
+        false,
+        'OpenContent runtime must not expose its private process factory'
+      )
       const require = createRequire(import.meta.url)
       const integrity = require('@sciforge/internal-runtime-integrity')
       assert.equal(typeof integrity.verifyInstalledInternalOverlaySync, 'function')
@@ -394,6 +407,9 @@ test('publishable domain packages resolve every public export from independent t
       import type {
         OpenContentBoundTeamAdministration
       } from '@sciforge/domain-opencontent-connector/team-administration-contract'
+      import type {
+        NodeOpenContentCliProcessPortOptions
+      } from '@sciforge/opencontent-skill-runtime/main/node-cli-process-port'
 
       // @ts-expect-error Credential-bearing administration is Connector-main private.
       import type { OpenContentTeamAdministration } from '@sciforge/domain-opencontent-connector/team-administration-contract'
@@ -405,6 +421,15 @@ test('publishable domain packages resolve every public export from independent t
         Parameters<OpenContentBoundTeamAdministration['listTeams']>[0]
       // @ts-expect-error Provider-facing Team administration never accepts a Token.
       listTeamsInput.token
+
+      declare const processOptions: NodeOpenContentCliProcessPortOptions
+      // @ts-expect-error Package-owned integrity is not a public override.
+      processOptions.trustedSnapshotIntegrity
+      // @ts-expect-error The verified-read race seam is package-private.
+      processOptions.afterSnapshotRead
+
+      // @ts-expect-error The private process implementation is not a package export.
+      import type { NodeOpenContentCliProcessPortInternalOptions } from '@sciforge/opencontent-skill-runtime/src/node-cli-process-port.internal'
     `)
     const typeBoundaryConfig = join(installation, 'tsconfig.json')
     await writeFile(typeBoundaryConfig, JSON.stringify({

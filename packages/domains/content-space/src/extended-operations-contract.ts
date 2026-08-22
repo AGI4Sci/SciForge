@@ -10,13 +10,18 @@ import {
   artifactDigestSchema,
   artifactReferenceSchema,
   contentContainerReferenceSchema,
+  contentSpaceDirectoryDepartmentReferenceSchema,
+  contentSpaceDirectoryGroupReferenceSchema,
+  contentSpaceDirectoryPrincipalReferenceSchema,
+  contentSpaceDirectoryPositionReferenceSchema,
+  contentSpaceDirectoryUserReferenceSchema,
   contentEntryReferenceSchema,
   contentFileReferenceSchema,
   contentSpaceEntryNameSchema,
   contentSpacePageRequestSchema
 } from './contract.js'
 
-export const CONTENT_SPACE_EXTENDED_CONTRACT_VERSION = '1.0.0' as const
+export const CONTENT_SPACE_EXTENDED_CONTRACT_VERSION = '2.0.0' as const
 
 const boundedLabelSchema = z.string().trim().min(1).max(256)
 const boundedDescriptionSchema = z.string().trim().min(1).max(2_048)
@@ -85,24 +90,30 @@ export const contentSpaceMutableEntryReferenceSchema = z.union([
   contentFileReferenceSchema
 ])
 
-export const contentSpaceDirectoryPrincipalKindSchema = z.enum([
-  'user',
-  'department',
-  'position',
-  'group'
-])
-export const contentSpaceDirectoryPrincipalReferenceSchema = z.object({
-  providerInstanceRef: providerInstanceRefSchema,
-  kind: contentSpaceDirectoryPrincipalKindSchema,
-  principalId: extendedOpaqueIdSchema
-}).strict().readonly()
-export const contentSpaceDirectoryPrincipalSummarySchema = z.object({
-  reference: contentSpaceDirectoryPrincipalReferenceSchema,
+const contentSpaceDirectoryPrincipalSummaryShape = Object.freeze({
   displayName: boundedLabelSchema,
   accountName: z.string().trim().min(1).max(256).optional(),
   departmentName: boundedLabelSchema.optional(),
   positionName: boundedLabelSchema.optional()
-}).strict().readonly()
+})
+function directoryPrincipalSummarySchema<ReferenceSchema extends z.ZodType>(
+  reference: ReferenceSchema
+) {
+  return z.object({
+    reference,
+    ...contentSpaceDirectoryPrincipalSummaryShape
+  }).strict().readonly()
+}
+export const contentSpaceDirectoryPrincipalSummarySchema =
+  directoryPrincipalSummarySchema(contentSpaceDirectoryPrincipalReferenceSchema)
+export const contentSpaceDirectoryUserSummarySchema =
+  directoryPrincipalSummarySchema(contentSpaceDirectoryUserReferenceSchema)
+export const contentSpaceDirectoryDepartmentSummarySchema =
+  directoryPrincipalSummarySchema(contentSpaceDirectoryDepartmentReferenceSchema)
+export const contentSpaceDirectoryPositionSummarySchema =
+  directoryPrincipalSummarySchema(contentSpaceDirectoryPositionReferenceSchema)
+export const contentSpaceDirectoryGroupSummarySchema =
+  directoryPrincipalSummarySchema(contentSpaceDirectoryGroupReferenceSchema)
 
 const contentSpaceTimestampRangeSchema = z.object({
   from: z.string().datetime({ offset: true }).optional(),
@@ -1126,16 +1137,34 @@ export const contentSpaceSearchPositionsRequestSchema = z.object(
 export const contentSpaceSearchGroupsRequestSchema = z.object(
   contentSpaceDirectorySearchBase
 ).strict().readonly()
-export const contentSpaceDirectoryPrincipalPageSchema = z.object({
-  items: z.array(contentSpaceDirectoryPrincipalSummarySchema).max(200).readonly(),
-  nextCursor: z.string().trim().min(1).max(256).optional()
-}).strict().readonly()
+function directoryPrincipalPageSchema<SummarySchema extends z.ZodType>(
+  summary: SummarySchema
+) {
+  return z.object({
+    items: z.array(summary).max(200).readonly(),
+    nextCursor: z.string().trim().min(1).max(256).optional()
+  }).strict().readonly()
+}
+export const contentSpaceDirectoryUserPageSchema =
+  directoryPrincipalPageSchema(contentSpaceDirectoryUserSummarySchema)
+export const contentSpaceDirectoryDepartmentPageSchema =
+  directoryPrincipalPageSchema(contentSpaceDirectoryDepartmentSummarySchema)
+export const contentSpaceDirectoryPositionPageSchema =
+  directoryPrincipalPageSchema(contentSpaceDirectoryPositionSummarySchema)
+export const contentSpaceDirectoryGroupPageSchema =
+  directoryPrincipalPageSchema(contentSpaceDirectoryGroupSummarySchema)
 export const contentSpaceSearchUsersResultSchema = contentSpaceExtendedResultSchema(
-  contentSpaceDirectoryPrincipalPageSchema
+  contentSpaceDirectoryUserPageSchema
 )
-export const contentSpaceSearchDepartmentsResultSchema = contentSpaceSearchUsersResultSchema
-export const contentSpaceSearchPositionsResultSchema = contentSpaceSearchUsersResultSchema
-export const contentSpaceSearchGroupsResultSchema = contentSpaceSearchUsersResultSchema
+export const contentSpaceSearchDepartmentsResultSchema = contentSpaceExtendedResultSchema(
+  contentSpaceDirectoryDepartmentPageSchema
+)
+export const contentSpaceSearchPositionsResultSchema = contentSpaceExtendedResultSchema(
+  contentSpaceDirectoryPositionPageSchema
+)
+export const contentSpaceSearchGroupsResultSchema = contentSpaceExtendedResultSchema(
+  contentSpaceDirectoryGroupPageSchema
+)
 
 export const contentSpacePermissionTargetKindSchema = z.enum([
   'file',
@@ -1307,15 +1336,12 @@ export const contentSpaceBrowseKnowledgeCollectionResultSchema = contentSpaceExt
 export const contentSpaceTeamMemberRoleSchema = z.enum(['manager', 'internal', 'external'])
 export const contentSpaceUpdateTeamMemberRoleRequestSchema = z.object({
   teamRoot: contentContainerReferenceSchema,
-  member: contentSpaceDirectoryPrincipalReferenceSchema.refine(
-    (principal) => principal.kind === 'user',
-    'A team member must be a user principal.'
-  ),
+  member: contentSpaceDirectoryUserReferenceSchema,
   role: contentSpaceTeamMemberRoleSchema
 }).strict().readonly()
 export const contentSpaceUpdateTeamMemberRoleReceiptSchema = z.object({
   teamRoot: contentContainerReferenceSchema,
-  member: contentSpaceDirectoryPrincipalReferenceSchema,
+  member: contentSpaceDirectoryUserReferenceSchema,
   role: contentSpaceTeamMemberRoleSchema
 }).strict().readonly()
 export const contentSpaceUpdateTeamMemberRoleResultSchema = contentSpaceExtendedResultSchema(
@@ -1323,14 +1349,11 @@ export const contentSpaceUpdateTeamMemberRoleResultSchema = contentSpaceExtended
 )
 export const contentSpaceTransferTeamOwnershipRequestSchema = z.object({
   teamRoot: contentContainerReferenceSchema,
-  newOwner: contentSpaceDirectoryPrincipalReferenceSchema.refine(
-    (principal) => principal.kind === 'user',
-    'A team owner must be a user principal.'
-  )
+  newOwner: contentSpaceDirectoryUserReferenceSchema
 }).strict().readonly()
 export const contentSpaceTransferTeamOwnershipReceiptSchema = z.object({
   teamRoot: contentContainerReferenceSchema,
-  owner: contentSpaceDirectoryPrincipalReferenceSchema
+  owner: contentSpaceDirectoryUserReferenceSchema
 }).strict().readonly()
 export const contentSpaceTransferTeamOwnershipResultSchema = contentSpaceExtendedResultSchema(
   contentSpaceTransferTeamOwnershipReceiptSchema

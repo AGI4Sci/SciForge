@@ -14,14 +14,14 @@
 
 ## 2. 安装后能获得什么
 
-私有附件只增加供应商 Runtime 候选，不产生生产准入。当前 OpenContent 的 `live_verified` 与 `production_ready` 操作均为 **0**。安全形状完整但尚未通过 packaged 真实验收的操作统一声明为 `poc_only / verification_profile_required`；缺少原子并发、不可变检索或 Project 权威合同的操作继续 `blocked_by_contract`。
+私有附件只增加供应商 Runtime 候选，不产生生产准入。当前仍为 **0 项 `production_ready`**；有限的 packaged 真实证据只属于能力矩阵中记录的精确 operation/scope，且对应操作仍为 `poc_only / verification_profile_required`。不要从一次 live 验收推导相邻操作、其他 root 或生产准入；权威清单统一见 [OpenContent 技能能力矩阵](./opencontent-skill-capability-matrix.md#current-packaged-canonical-evidence)。缺少原子并发、不可变检索或 Project 权威合同的操作继续 `blocked_by_contract`。
 
 | 能力类别 | 未安装附件 | 已安装附件 |
 | --- | --- | --- |
 | 个人库/团队库普通文件能力 | 6 项 PoC，默认不可执行 | 6 项 PoC，默认不可执行 |
 | Team Administration | 10 项 PoC，默认不可执行 | 10 项 PoC，默认不可执行 |
 | Project Content Directory provisioning | `provision-project` 为 blocked；仅保留 dormant provider-neutral port，无普通 Agent 入口 | 同左 |
-| native-document | 不注册 | 20 项候选：10 项 PoC；含 `edit` 在内的 10 项 hash-bound mutation 阻断 |
+| native-document | 不注册 | 20 项候选：9 项 PoC；含 `edit` 在内的 10 项 hash-bound mutation 与缺少 source/content postcondition 的 `import` 共 11 项阻断 |
 | extended operations | Team 治理 2 项 PoC；其余 52 项因缺附件阻断 | 53 项 PoC；`updateFileVersion` 阻断 |
 | `ArtifactReference` | `observeImmutableVersion` 阻断 | `observeImmutableVersion` 阻断 |
 | Team 删除 | 不存在 | 不存在 |
@@ -156,8 +156,8 @@ Connector 内置的 `edoc2-test1-verification` 只是把测试 Provider Instance
 2. 读取 Content Space capability description，分别核对声明的 readiness 与本次 admission；
 3. 核对普通文件 6 项和 Team Administration 10 项均为
    `poc_only / verification_profile_required`；
-4. 已安装附件时，核对 native-document 共 20 项，其中 10 项 PoC、含 `edit` 在内
-   10 项阻断；extended operations 共 54 项，其中 53 项 PoC、
+4. 已安装附件时，核对 native-document 共 20 项，其中 9 项 PoC、含 `edit` 在内
+   10 项 hash-bound mutation 与 `import` 共 11 项阻断；extended operations 共 54 项，其中 53 项 PoC、
    `updateFileVersion` 阻断；
 5. 核对 `observeImmutableVersion` 阻断、无 `ArtifactReference`；
 6. 核对不存在 Team 删除和 `content-space.agent-provision-project` 能力。
@@ -306,10 +306,10 @@ OpenContent Connector、Provider、SciForge 自研 Runtime、SDK 文档和能力
 - [ ] `npm run verify:internal-runtimes` 通过，且没有执行 overlay 自带脚本。
 - [ ] `npm run dev` 正常启动 Electron。
 - [ ] 已使用个人账号配置 OpenContent 连接。
-- [ ] 静态/发现验收分别显示 readiness 与 admission，并确认 0 项 production/live、普通/Admin 为 PoC、native 10 PoC + 10 blocked、extended 53 PoC + 1 blocked、无 Team 删除。
+- [ ] 静态/发现验收分别显示 readiness 与 admission，并确认 0 项 `production_ready`；仅能力矩阵 exact ledger 中的 operation/scope 具有 `live_verified` 证据；普通/Admin 为 PoC、native 9 PoC + 11 blocked、extended 53 PoC + 1 blocked、无 Team 删除。
 - [ ] 受控 mutation/Admin/non-zero transfer 使用 v2 opaque binding attestation，且 Connector 在业务 dispatch 前重新核对；证据中没有原始账号、credential 或敏感 root。
 - [ ] Agent 创建共享 root 的输入不含 owner；owner 仅由 Broker current Principal 注入并由 Provider 对当前 session 验证。
-- [ ] `edit`、`updateFileVersion`、immutable observation 和 `ArtifactReference` 均保持阻断。
+- [ ] `edit`、`import`、`updateFileVersion`、immutable observation 和 `ArtifactReference` 均保持阻断。
 - [ ] 不存在通用 Agent Project provisioning 入口；provider-neutral port 仅 dormant。
 - [ ] 未将私有附件、private lock 记录或内部构建产物加入公开提交。
 

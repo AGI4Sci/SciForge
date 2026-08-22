@@ -55,9 +55,10 @@ and OpenContent has zero `production_ready` operations:
 - no Team deletion operation exists.
 
 Installing a valid internal overlay additionally enables the supplier-backed native-document and
-extended-operation runtime. Ten safely contract-shaped native-document operations and 53 extended
-operations remain PoC-only. Native `edit`, the other nine hash-bound native mutations, and
-`updateFileVersion` remain `blocked_by_contract`; attachment presence cannot admit them. Immutable
+extended-operation runtime. Nine safely contract-shaped native-document operations and 53 extended
+operations remain PoC-only. Native `edit`, the other nine hash-bound native mutations, import
+without a source/content postcondition, and `updateFileVersion` remain `blocked_by_contract`;
+attachment presence cannot admit them. Immutable
 version observation is also blocked, so OpenContent cannot issue an `ArtifactReference`.
 
 A PoC invocation requires a separately reviewed package-owned Content Space profile that matches
