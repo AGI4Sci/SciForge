@@ -710,15 +710,37 @@ export class CollaborationRuntime {
   }
 
   private async reconcileProjectionTranscript(projectionId: string): Promise<void> {
-    const projection = this.store.snapshot().projections.find((candidate) => (
+    const state = this.store.snapshot()
+    const projection = state.projections.find((candidate) => (
       candidate.projection.projectionId === projectionId
     ))
     if (!projection?.threadId || !this.context) return
+    const finalizedTurnIds = new Set(state.queue
+      .filter((item) => (
+        item.projectionId === projectionId &&
+        item.direction === 'outbound' &&
+        item.kind === 'assistant-reply' &&
+        Boolean(item.turnId)
+      ))
+      .map((item) => item.turnId!))
+    const recoverableTurnIds = new Set(state.queue
+      .filter((item) => (
+        item.projectionId === projectionId &&
+        item.direction === 'inbound' &&
+        item.origin === 'human-endpoint' &&
+        item.kind === 'user-message' &&
+        item.state === 'completed' &&
+        Boolean(item.turnId) &&
+        !finalizedTurnIds.has(item.turnId!)
+      ))
+      .map((item) => item.turnId!))
+    if (recoverableTurnIds.size === 0) return
     const thread = await this.context.agentThreads.read({
       runtimeId: projection.runtimeId,
       threadId: projection.threadId
     })
     for (const turn of thread.turns) {
+      if (!recoverableTurnIds.has(turn.id)) continue
       await this.requireProjections().reconcileCanonicalTurn({
         runtimeId: projection.runtimeId,
         threadId: projection.threadId,

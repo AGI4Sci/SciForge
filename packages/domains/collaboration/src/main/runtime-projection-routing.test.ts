@@ -5,6 +5,7 @@ import {
 } from '@sciforge/collaboration-contracts'
 import {
   agentNodeFixture,
+  humanEndpointBindingFixture,
   remoteSessionProjectionFixture
 } from '@sciforge/collaboration-contracts/testing'
 import type {
@@ -131,6 +132,144 @@ test('the active runtime mirrors completed assistant progress before after-turn 
   }
 })
 
+test('startup reconciles only completed remote turns without an existing final reply', async () => {
+  const timestamp = '2026-08-22T11:00:00.000Z'
+  const projection = {
+    ...localProjectionFromRemote(remoteSessionProjectionFixture, {
+      runtimeId: 'codex',
+      threadId: 'fixed-thread-1',
+      bindingMode: 'existing'
+    }),
+    nextSequence: 5
+  }
+  const inbound = (
+    queueItemId: string,
+    sequence: number,
+    turnId: string,
+    state: 'completed' | 'failed'
+  ) => ({
+    queueItemId,
+    projectionId: projection.projection.projectionId,
+    sequence,
+    direction: 'inbound' as const,
+    origin: 'human-endpoint' as const,
+    kind: 'user-message' as const,
+    senderUserId: projection.projection.ownerUserId,
+    senderHumanEndpointId: humanEndpointBindingFixture.humanEndpointId,
+    providerMessageId: `provider-${sequence}`,
+    clientDirectiveId: `directive-${sequence}`,
+    contentHash: String(sequence).repeat(64),
+    text: `remote message ${sequence}`,
+    state,
+    attempts: 1,
+    turnId,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    completedAt: timestamp,
+    ...(state === 'failed' ? { error: 'Agent turn ended in failed.' } : {})
+  })
+  const completedWithFinal = inbound(
+    'lqi_completedold01',
+    1,
+    'turn-completed-with-final',
+    'completed'
+  )
+  const existingFinal = {
+    queueItemId: 'lqi_existingfinal01',
+    projectionId: projection.projection.projectionId,
+    sequence: 2,
+    direction: 'outbound' as const,
+    origin: 'agent' as const,
+    kind: 'assistant-reply' as const,
+    localItemId: 'existing-final-item',
+    contentHash: 'a'.repeat(64),
+    text: 'already delivered final',
+    state: 'completed' as const,
+    attempts: 0,
+    turnId: completedWithFinal.turnId,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    completedAt: timestamp
+  }
+  const failed = inbound('lqi_failedremote01', 3, 'turn-failed', 'failed')
+  const recoverable = inbound('lqi_recoverable01', 4, 'turn-recoverable', 'completed')
+  const backend = new MemoryBackend({
+    ...EMPTY_COLLABORATION_LOCAL_STATE,
+    revision: 1,
+    agents: [agentNodeFixture],
+    projections: [projection],
+    queue: [completedWithFinal, existingFinal, failed, recoverable],
+    receipts: []
+  })
+  const settings: DomainMainPackageSettingsHost = {
+    read: async () => ({ revision: 0, value: null }),
+    write: async () => { throw new Error('Settings writes are not expected.') },
+    clear: async () => { throw new Error('Settings writes are not expected.') }
+  }
+  const secrets: DomainMainPackageSecretStoreHost = {
+    has: async () => false,
+    read: async () => null,
+    write: async () => { throw new Error('Secret writes are not expected.') },
+    remove: async () => undefined
+  }
+  const runtime = new CollaborationRuntime({
+    statePath: 'unused',
+    packageSettings: settings,
+    packageSecrets: secrets,
+    stateBackend: backend
+  })
+  const abortController = new AbortController()
+  const context = {
+    agentExecution: {
+      run: async () => { throw new Error('Startup reconciliation must not execute an Agent turn.') }
+    },
+    agentThreads: {
+      read: async () => ({
+        runtimeId: 'codex',
+        threadId: 'fixed-thread-1',
+        title: 'Fixed Session',
+        updatedAt: timestamp,
+        watermark: '0',
+        turns: [
+          canonicalTurn(completedWithFinal.turnId, 'late completed output'),
+          canonicalTurn(failed.turnId, 'late failed output'),
+          canonicalTurn(recoverable.turnId, 'recoverable final output')
+        ],
+        artifacts: []
+      }),
+      subscribeMessages: async function* (input: Readonly<{ signal?: AbortSignal }>) {
+        yield* []
+        await waitForAbort(input.signal)
+      },
+      list: async () => [],
+      hasActiveTurns: () => false
+    },
+    turnEvents: {
+      subscribe: () => async () => undefined,
+      subscribeRequiredBeforeTurn: () => async () => undefined,
+      readDurableTurnBoundarySnapshot: async () => ({ issuerEpoch: 'test', boundaries: [] })
+    },
+    signal: abortController.signal
+  } as unknown as DomainMainRuntimeLifecycleContext
+
+  const dispose = await runtime.activate(context)
+  try {
+    await waitFor(() => backend.snapshot().queue.some((item) => (
+      item.direction === 'outbound' && item.turnId === recoverable.turnId
+    )))
+    const reconciledFinals = backend.snapshot().queue.filter((item) => (
+      item.direction === 'outbound' && item.kind === 'assistant-reply'
+    ))
+    assert.deepEqual(
+      reconciledFinals.map((item) => item.turnId).sort(),
+      [completedWithFinal.turnId, recoverable.turnId].sort()
+    )
+  } finally {
+    abortController.abort()
+    await dispose()
+  }
+})
+
 class MemoryBackend implements CollaborationStateBackend {
   constructor(private value: CollaborationLocalState) {}
 
@@ -161,4 +300,20 @@ async function waitFor(
 function waitForAbort(signal: AbortSignal | undefined): Promise<void> {
   if (!signal || signal.aborted) return Promise.resolve()
   return new Promise((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+}
+
+function canonicalTurn(turnId: string, text: string) {
+  return {
+    id: turnId,
+    status: 'completed',
+    completedAt: '2026-08-22T11:00:00.000Z',
+    messages: [{
+      itemId: `${turnId}-final`,
+      turnId,
+      kind: 'assistant-final' as const,
+      text,
+      occurredAt: '2026-08-22T11:00:00.000Z'
+    }],
+    artifacts: []
+  }
 }
