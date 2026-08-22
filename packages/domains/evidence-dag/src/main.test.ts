@@ -61,6 +61,7 @@ test('lazily activates one runtime shared by every Evidence contribution', async
       calls.push(`${instance}:view`)
       return { url: 'http://127.0.0.1:3897/', status }
     },
+    snapshotStatus: async () => status,
     update: async () => {
       calls.push(`${instance}:update`)
       return {
@@ -238,6 +239,7 @@ test('disposal during activation stays fail-closed and deactivates exactly once'
     },
     consume: async () => { calls.push('consume') },
     view: async () => ({ url: 'http://127.0.0.1:3897/', status }),
+    snapshotStatus: async () => status,
     update: async () => ({
       url: 'http://127.0.0.1:3897/',
       threadId: 'codex:thread-1',
@@ -296,12 +298,17 @@ test('disposal during activation stays fail-closed and deactivates exactly once'
   )
 })
 
-test('keeps system access read-only and never reports a changed global resource', async () => {
+test('keeps the dedicated system snapshot path read-only and reports no global change', async () => {
   let exportInput: unknown
+  let snapshotStatusInput: unknown
   const runtime: EvidenceDagRuntimePort = {
     activate: async () => () => undefined,
     consume: async () => undefined,
     view: async () => ({ url: 'http://127.0.0.1:3897/', status }),
+    snapshotStatus: async (input) => {
+      snapshotStatusInput = input
+      return status
+    },
     update: async () => ({
       url: 'http://127.0.0.1:3897/',
       threadId: 'codex:thread-1',
@@ -345,13 +352,17 @@ test('keeps system access read-only and never reports a changed global resource'
   }
   const dispose = await lifecycle.activate(lifecycleContext(new AbortController().signal))
   const view = capabilities.find(({ id }) => id === EVIDENCE_DAG_CAPABILITY_IDS.view)!
+  const snapshotStatus = capabilities.find(
+    ({ id }) => id === EVIDENCE_DAG_CAPABILITY_IDS.snapshotStatus
+  )!
   const update = capabilities.find(({ id }) => id === EVIDENCE_DAG_CAPABILITY_IDS.update)!
   const priority = capabilities.find(({ id }) => id === EVIDENCE_DAG_CAPABILITY_IDS.priority)!
   const exportProducts = capabilities.find(
     ({ id }) => id === EVIDENCE_DAG_CAPABILITY_IDS.exportSnapshotProducts
   )!
 
-  assert.deepEqual(view.audiences, ['ui', 'agent', 'system'])
+  assert.deepEqual(view.audiences, ['ui', 'agent'])
+  assert.deepEqual(snapshotStatus.audiences, ['system'])
   assert.deepEqual(update.audiences, ['ui', 'agent'])
   assert.deepEqual(priority.audiences, ['ui', 'agent'])
   assert.deepEqual(await update.handler({
@@ -366,6 +377,16 @@ test('keeps system access read-only and never reports a changed global resource'
       coalesced: false,
       status
     }
+  })
+  assert.deepEqual(await snapshotStatus.handler({
+    runtimeId: 'codex',
+    threadId: 'thread-1',
+    workspaceRoot: '/spoofed'
+  }, { caller: { workspaceId: '/workspace' } }), { output: status })
+  assert.deepEqual(snapshotStatusInput, {
+    runtimeId: 'codex',
+    threadId: 'thread-1',
+    workspaceRoot: '/workspace'
   })
   assert.equal('changed' in await priority.handler({
     runtimeId: 'codex',

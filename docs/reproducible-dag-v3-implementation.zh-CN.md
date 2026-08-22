@@ -228,7 +228,7 @@ Create Loop run history 提供“导出可复跑规范（JSON）”和“按此�
 | 攻击或故障场景 | 修复后的行为 |
 | --- | --- |
 | `1/4`、`2/4` partial batch 被误当成已覆盖 watermark | 只有完整 `n/n` 或更高 Host sequence 才能推进，乱序合并取 canonical maximum |
-| 手工 session 或 producer 自报 workspace | Agent thread 反查 authoritative workspace；package execution 要求 Host `capability-caller` binding、三方 workspace 一致且 sequence 匹配 |
+| 手工 session 或 producer 自报 workspace | Agent thread 反查 authoritative workspace；package execution 只信 Host `capability-caller` binding、正安全 acceptance sequence 与三方一致 workspace；opaque watermark 的覆盖关系只由 Evidence 公共合同解释 |
 | 伪造 canonical event/manifest/spec 或拆换 artifact | 严格校验 marker 全字段、producer/run/execution/scope、正文指纹，并核对 terminal event 与展开 artifact 的规范化 multiset |
 | 修改 Project/Evidence snapshot payload 或串换 row | 读取时重算 digest，并核对 project/thread、version、vector、compiler/status 与 ArtifactVersion 绑定；失败即拒绝 |
 | 受限 graph 的旁路字段或旁路 HTTP endpoint | 所有 Engine 投影使用同一 allowlist；assessment、review、goal、node metadata、status 与 audit 不再原样直出 |
@@ -245,6 +245,7 @@ Create Loop run history 提供“导出可复跑规范（JSON）”和“按此�
 | delivery receipt 淘汰后忘记唯一终态 | 永久保存紧凑 terminal identity；索引满时 fail-closed，不因 receipt pruning 接受冲突终态 |
 | 旧 v2 receipt 缺 execution tuple | 仅用 Host Full Trace 中 eventId、producer、完整 intent digest 一致的事件恢复；无法恢复则保留 exact retry 并按 producer 阻断新终态 |
 | 旧 Project handoff 没有 Host binding | v1/v2 文件私有隔离为 legacy 副本，不安全重放，也不阻断新 v3 队列启动 |
+| 旧 Evidence queue 没有物理 workspace authority | v1/v2 文件私有隔离为 legacy 副本；不按当前 realpath 猜测旧快照或 pending job 的权限，新 v3 queue 从空权威状态启动 |
 | UI 把结构闭包写成科学充分 | 改为“结构血缘闭合、模式与路径检查通过”，semantic verification 与 human review 独立显示 |
 
 这些检查把“同一输入复跑”拆成三层：输入与执行条件是否一致、结果比较器是否命中、证据与治理状态是否足够。任一层缺少可信事实，都不会被绿色 UI 或一个 digest 悄悄提升为“已复现”或“已批准”。
@@ -479,7 +480,7 @@ npm run demo:v3 --prefix packages/domains/evidence-dag -- \
 | Root | `npm run typecheck`、`npm run build` | 均通过 |
 | Diff hygiene | `git diff --check` | 通过 |
 
-回归覆盖的关键行为包括：跨语言 canonical JSON/digest、完整 Conclusion closure、ArtifactVersion grounding、secret canary、fresh approval、防 topology/digest 篡改、exact/numeric/table/JSON comparator、controlled/uncontrolled 分类、terminal outbox replay、Evidence queue 恢复、Project immutable EvidenceRef、captured scope、访问脱敏和 v2 → v3 单向迁移。
+回归覆盖的关键行为包括：跨语言 canonical JSON/digest、完整 Conclusion closure、ArtifactVersion grounding、secret canary、fresh approval、防 topology/digest 篡改、exact/numeric/table/JSON comparator、controlled/uncontrolled 分类、terminal outbox replay、Evidence v3 queue 恢复与旧 queue 隔离、Project immutable EvidenceRef、captured scope、访问脱敏和 Project 数据库 v2 → v3 单向迁移。
 
 ## ⚠️ 当前限制与治理边界
 

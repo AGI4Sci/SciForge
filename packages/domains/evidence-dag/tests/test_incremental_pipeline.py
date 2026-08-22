@@ -77,6 +77,155 @@ class IncrementalTracePipelineTests(unittest.TestCase):
             compare_watermarks("20:event-new:batch:4/4", "20:event-new"),
             0,
         )
+        self.assertIsNone(compare_watermarks("20:event-a", "20:event-b"))
+        self.assertIsNone(compare_watermarks("turn:4", "turn:3"))
+        self.assertEqual(
+            compare_watermarks("turn:3:batch:4/4", "turn:3"),
+            0,
+        )
+        self.assertEqual(
+            compare_watermarks(
+                "opaque:event-9:batch:2/4",
+                "opaque:event-9:batch:1/2",
+            ),
+            0,
+        )
+        self.assertIsNone(
+            compare_watermarks("opaque:event-10", "opaque:event-9")
+        )
+        self.assertEqual(
+            compare_watermarks(
+                "2026-01-01T00:00:00.0009Z",
+                "2026-01-01T00:00:00.0001Z",
+            ),
+            1,
+        )
+        self.assertIsNone(
+            compare_watermarks(
+                "2026-02-30T00:00:00Z",
+                "2026-02-28T00:00:00Z",
+            )
+        )
+        self.assertEqual(
+            compare_watermarks(
+                "2026-01-01T01:00:00+01:00",
+                "2026-01-01T00:00:00Z",
+            ),
+            0,
+        )
+        self.assertIsNone(
+            compare_watermarks("7:artifact-lifecycle:2", "7:artifact-lifecycle:1")
+        )
+        self.assertIsNone(
+            compare_watermarks(
+                "0001-01-01T00:00:00+23:00",
+                "0001-01-01T00:00:00Z",
+            )
+        )
+        self.assertIsNone(
+            compare_watermarks(
+                "9999-12-31T23:59:59-23:00",
+                "9999-12-31T23:59:59Z",
+            )
+        )
+
+    def test_committed_thread_identity_cannot_cross_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            workspace_a = os.path.join(root, "workspace-a")
+            workspace_b = os.path.join(root, "workspace-b")
+            os.makedirs(workspace_a)
+            os.makedirs(workspace_b)
+            engine = Engine(
+                StubLLM(
+                    extract_response=_extract("a", "workspace-a"),
+                    nli_handler=lambda _p, _h: 0.9,
+                ),
+                storage_dir=os.path.join(root, "storage"),
+            )
+            engine.update(**_command(
+                workspace_a,
+                watermark="1",
+                trace=[{"id": "a", "type": "message", "content": "workspace a"}],
+            ))
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "does not match the committed Evidence thread workspace",
+            ):
+                engine.update(**_command(
+                    workspace_b,
+                    watermark="2",
+                    trace=[{"id": "b", "type": "message", "content": "workspace b"}],
+                ))
+
+    @unittest.skipIf(os.name == "nt", "symlink creation may require elevated privileges")
+    def test_legacy_committed_thread_without_scope_key_is_not_reauthorized(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            workspace_a = os.path.join(root, "workspace-a")
+            workspace_b = os.path.join(root, "workspace-b")
+            workspace_link = os.path.join(root, "workspace-current")
+            os.makedirs(workspace_a)
+            os.makedirs(workspace_b)
+            os.symlink(workspace_a, workspace_link)
+            engine = Engine(
+                StubLLM(
+                    extract_response=_extract("a", "workspace"),
+                    nli_handler=lambda _p, _h: 0.9,
+                ),
+                storage_dir=os.path.join(root, "storage"),
+            )
+            engine.update(**_command(
+                workspace_link,
+                watermark="1",
+                trace=[{"id": "a", "type": "message", "content": "workspace"}],
+            ))
+            engine.require("thread").meta["scope"].pop("scopeKey")
+            os.unlink(workspace_link)
+            os.symlink(workspace_b, workspace_link)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "has no trusted workspace authority",
+            ):
+                engine.update(**_command(
+                    workspace_link,
+                    watermark="2",
+                    trace=[{"id": "b", "type": "message", "content": "new"}],
+                ))
+
+    @unittest.skipIf(os.name == "nt", "symlink creation may require elevated privileges")
+    def test_committed_thread_identity_survives_workspace_symlink_retargeting(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            workspace_a = os.path.join(root, "workspace-a")
+            workspace_b = os.path.join(root, "workspace-b")
+            workspace_link = os.path.join(root, "workspace-current")
+            os.makedirs(workspace_a)
+            os.makedirs(workspace_b)
+            os.symlink(workspace_a, workspace_link)
+            engine = Engine(
+                StubLLM(
+                    extract_response=_extract("a", "workspace-a"),
+                    nli_handler=lambda _p, _h: 0.9,
+                ),
+                storage_dir=os.path.join(root, "storage"),
+            )
+            engine.update(**_command(
+                workspace_link,
+                watermark="1",
+                trace=[{"id": "a", "type": "message", "content": "workspace a"}],
+            ))
+
+            os.unlink(workspace_link)
+            os.symlink(workspace_b, workspace_link)
+            with self.assertRaisesRegex(
+                ValueError,
+                "does not match the committed Evidence thread workspace",
+            ):
+                engine.update(**_command(
+                    workspace_link,
+                    watermark="2",
+                    trace=[{"id": "b", "type": "message", "content": "workspace b"}],
+                ))
 
     def test_canonical_execution_bundle_commits_without_model_access(self) -> None:
         lineage_envelope = {

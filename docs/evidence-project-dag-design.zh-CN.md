@@ -851,7 +851,7 @@ UI 必须区分：
 - Evidence DAG 与 Project DAG 分别由独立 domain package 完整拥有后端、公共合同、主进程 lifecycle 和可选 UI，并通过 manifest 与生成式 composition 接入宿主；宿主只依赖通用 SDK extension point。
 - Evidence DAG 的自动 feed 与手动更新进入同一个 package-owned durable queue。job 固化 workspace scope、目标 watermark、重试状态和真实错误；重启会恢复未完成 job，同时始终把最后 committed Snapshot 与 pending delta 分开呈现。
 - Evidence DAG 将结构化 SourceAnchor、Artifact Registry、ArtifactVersion、文件移动重绑定、语义 ID、字节 digest 和实验 run/environment lineage 保存在同一个不可变 Snapshot 合同中；verify 与 audit 是绑定 committed digest 的独立只读侧链。
-- Project DAG package-owned durable outbox 消费宿主广播的通用 completed-turn 事件，等待 Evidence capability 达到 committed coverage 后提交唯一 Project 更新入口。Project DAG 只消费经验证的 `threadId + digest` evidence vector，并以 durable receipt 表达 accepted、running、committed、covered、superseded 或 failed 状态。
+- Project DAG package-owned durable outbox 消费宿主广播的通用 `turn-completed` / `execution-completed` artifact 事件，等待 Evidence capability 达到 committed coverage 后提交唯一 Project 更新入口。Project DAG 只消费经验证的 `threadId + digest` evidence vector，并以 durable receipt 表达 accepted、running、committed、covered、superseded 或 failed 状态。
 - Project 编译 actor、HTTP actor 和审计 actor 各自拥有 SQLite 连接；编译使用显式写事务原子提交 Snapshot 与 receipt，失败不会暴露半更新图，重启也不会把已提交 generation 误报为失败。
 - Goal、scope、policy 与 Decision 的变化复用同一个 Project 更新 lane；Goal 保存立即版本化并 enqueue，不等待后续 compile 才生效。
 - Project provenance resolver 从 Project Claim 一次解析到 session Claim、SourceAssertion、SourceAnchor、ArtifactVersion、Artifact 和 run，并在同一读取链路执行 fail-closed 访问控制。

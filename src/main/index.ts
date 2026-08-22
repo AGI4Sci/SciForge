@@ -1682,7 +1682,7 @@ app
         }
       }
     })
-    void domainExecutionEvents.replayPending().catch((error) => {
+    void domainExecutionEvents.startDelivery().catch((error) => {
       logError('domain-execution-events', 'Durable execution event replay failed.', error)
     })
     void agentRuntimeHost.recoverCompletedTurnArtifacts().catch((error) => {

@@ -8,6 +8,7 @@ import {
   unlink
 } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { evidenceDagWatermarkCoversValue } from '@sciforge/domain-evidence-dag/contract'
 import {
   projectDagDurableReceiptSchema,
   type ProjectDagDurableReceipt
@@ -169,19 +170,48 @@ export class ProjectDagHandoffOutbox {
     return result!
   }
 
-  async markAccepted(
-    id: string,
+  async markAcceptedBatch(
+    ids: readonly string[],
     receipt: ProjectDagDurableReceipt
   ): Promise<void> {
     const parsedReceipt = deepFreeze(projectDagDurableReceiptSchema.parse(receipt))
-    await this.#replace(id, (current) => ({
-      ...current,
-      state: 'accepted',
-      receipt: parsedReceipt,
-      updatedAt: new Date().toISOString(),
-      nextAttemptAt: undefined,
-      error: undefined
-    }))
+    const uniqueIds = [...new Set(ids)]
+    if (uniqueIds.length === 0) return
+    await this.load()
+    await this.#mutate(async () => {
+      const selected = uniqueIds
+        .map((id) => this.#records.get(id))
+        .filter((record): record is ProjectDagHandoffRecord =>
+          record !== undefined && !isTerminal(record)
+        )
+      const anchor = selected[0]
+      if (anchor && selected.some((record) => !sameAuthoritativeLane(record, anchor))) {
+        throw new Error('Project DAG handoff batch spans multiple authoritative lanes.')
+      }
+      const recordsBefore = new Map(this.#records)
+      const updatedAt = new Date().toISOString()
+      let changed = false
+      for (const id of uniqueIds) {
+        const current = this.#records.get(id)
+        if (!current || isTerminal(current)) continue
+        this.#records.set(id, Object.freeze({
+          ...current,
+          state: 'accepted',
+          receipt: parsedReceipt,
+          updatedAt,
+          nextAttemptAt: undefined,
+          error: undefined
+        }))
+        changed = true
+      }
+      if (!changed) return
+      try {
+        await this.#persist()
+      } catch (error) {
+        this.#records = recordsBefore
+        throw error
+      }
+    })
   }
 
   async markRetry(id: string, error: string, retryAfterMs: number): Promise<void> {
@@ -222,7 +252,9 @@ export class ProjectDagHandoffOutbox {
         )
       )
       .sort((left, right) =>
-        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
+        readyAt(left) - readyAt(right) ||
+        left.createdAt.localeCompare(right.createdAt) ||
+        left.id.localeCompare(right.id)
       )
   }
 
@@ -230,6 +262,20 @@ export class ProjectDagHandoffOutbox {
     return [...this.#records.values()].filter((record) =>
       record.state === 'pending' || record.state === 'retry_scheduled'
     )
+  }
+
+  activeInLaneCoveredBy(
+    anchor: ProjectDagHandoffRecord,
+    committedWatermark: string
+  ): readonly ProjectDagHandoffRecord[] {
+    return this.active()
+      .filter((record) =>
+        sameAuthoritativeLane(record, anchor) &&
+        evidenceDagWatermarkCoversValue(committedWatermark, record.targetWatermark)
+      )
+      .sort((left, right) =>
+        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
+      )
   }
 
   all(): readonly ProjectDagHandoffRecord[] {
@@ -307,30 +353,24 @@ export class ProjectDagHandoffOutbox {
   }
 }
 
-export function evidenceWatermarkCovers(
-  committedWatermark: string,
-  targetWatermark: string
+function sameAuthoritativeLane(
+  left: ProjectDagHandoffRecord,
+  right: ProjectDagHandoffRecord
 ): boolean {
-  const committed = committedWatermark.trim()
-  const target = targetWatermark.trim()
-  if (!committed || !target) return false
-  if (committed === target) return true
-  if (committed.startsWith(`${target}:batch:`)) {
-    const match = /:batch:(\d+)\/(\d+)$/u.exec(committed)
-    return Boolean(match && match[1] === match[2])
-  }
-  const committedSequence = leadingSequence(committed)
-  const targetSequence = leadingSequence(target)
-  return committedSequence !== null &&
-    targetSequence !== null &&
-    committedSequence > targetSequence
+  return left.workspaceRoot === right.workspaceRoot &&
+    left.runtimeId === right.runtimeId &&
+    left.threadId === right.threadId &&
+    left.sourceKind === right.sourceKind &&
+    left.producerModuleId === right.producerModuleId &&
+    left.executionId === right.executionId &&
+    left.hostAcceptanceSequence === right.hostAcceptanceSequence &&
+    left.hostWorkspaceBinding === right.hostWorkspaceBinding
 }
 
-function leadingSequence(value: string): number | null {
-  const match = /^(\d+)(?:$|:)/u.exec(value)
-  if (!match) return null
-  const parsed = Number(match[1])
-  return Number.isSafeInteger(parsed) ? parsed : null
+function readyAt(record: ProjectDagHandoffRecord): number {
+  if (record.state === 'pending') return 0
+  const parsed = Date.parse(record.nextAttemptAt ?? '')
+  return Number.isFinite(parsed) ? parsed : 0
 }
 
 function handoffId(input: {
@@ -375,9 +415,6 @@ function parseOutbox(value: unknown): PersistedOutbox {
 
 function legacyOutboxVersion(value: unknown): 1 | 2 | null {
   if (!isRecord(value) || (value.version !== 1 && value.version !== 2)) return null
-  if (!Array.isArray(value.records) || value.records.length > MAX_RECORDS) {
-    throw new Error('Legacy Project DAG handoff outbox has an invalid record collection.')
-  }
   return value.version
 }
 
@@ -504,8 +541,7 @@ function assertIdentityFields(value: ProjectDagHandoffIdentity): void {
     !value.producerModuleId ||
     !value.executionId ||
     value.hostAcceptanceSequence === undefined ||
-    value.hostWorkspaceBinding !== 'capability-caller' ||
-    !value.targetWatermark.startsWith(`${value.hostAcceptanceSequence}:`)
+    value.hostWorkspaceBinding !== 'capability-caller'
   ) {
     throw new Error(
       'Package-execution Project DAG handoff requires a Host-bound producer identity.'

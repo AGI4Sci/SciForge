@@ -8,6 +8,12 @@ import {
   type ArtifactVersionRefV1
 } from '@sciforge/domain-artifact-versions/contract'
 
+export {
+  compareEvidenceDagWatermarks,
+  evidenceDagWatermarkCoversValue,
+  laterEvidenceDagWatermark
+} from './watermark.js'
+
 const boundedIdSchema = z.string().trim().min(1).max(512)
 const runtimeIdSchema = z.string().trim().min(1).max(128)
 const watermarkSchema = z.string().trim().min(1).max(512)
@@ -18,6 +24,7 @@ export const EVIDENCE_DAG_RESOURCE_KIND = 'evidence-dag' as const
 
 export const EVIDENCE_DAG_CAPABILITY_IDS = Object.freeze({
   view: 'evidence-dag.view',
+  snapshotStatus: 'evidence-dag.snapshot-status',
   update: 'evidence-dag.update',
   priority: 'evidence-dag.priority',
   resolvePreview: 'evidence-dag.resolve-evidence-preview',
@@ -124,6 +131,19 @@ export const evidenceDagViewOutputSchema = z.object({
   threadId: boundedIdSchema.optional(),
   status: evidenceDagCanonicalStatusSchema
 }).strict()
+
+/**
+ * Workspace-authorized status read for downstream domain services. Unlike
+ * `view`, this contract has no UI URL and therefore does not require the
+ * Evidence sidecar to be ready.
+ */
+export const evidenceDagSnapshotStatusInputSchema = z.object({
+  runtimeId: runtimeIdSchema,
+  threadId: boundedIdSchema,
+  workspaceRoot: z.string().trim().min(1).max(4_096).optional()
+}).strict()
+
+export const evidenceDagSnapshotStatusOutputSchema = evidenceDagCanonicalStatusSchema
 
 export const evidenceDagUpdateOperationSchema = z.enum(['update', 'rebuild'])
 export const evidenceDagRebuildKindSchema = z.enum([
@@ -426,6 +446,9 @@ export type EvidenceDagPendingUpdate = z.infer<typeof evidenceDagPendingUpdateSc
 export type EvidenceDagCanonicalStatus = z.infer<typeof evidenceDagCanonicalStatusSchema>
 export type EvidenceDagViewInput = z.input<typeof evidenceDagViewInputSchema>
 export type EvidenceDagViewOutput = z.infer<typeof evidenceDagViewOutputSchema>
+export type EvidenceDagSnapshotStatusInput = z.infer<
+  typeof evidenceDagSnapshotStatusInputSchema
+>
 export type EvidenceDagUpdateInput = z.input<typeof evidenceDagUpdateInputSchema>
 export type EvidenceDagUpdateOutput = z.infer<typeof evidenceDagUpdateOutputSchema>
 export type EvidenceDagPriorityInput = z.infer<typeof evidenceDagPriorityInputSchema>

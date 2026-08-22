@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { chmod, mkdir, open, readFile, rename, unlink } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { chmod, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import {
   evidenceDagCommittedSnapshotSchema,
   evidenceDagTypedErrorSchema,
+  laterEvidenceDagWatermark,
   type EvidenceDagCommittedSnapshot,
   type EvidenceDagPendingUpdate,
   type EvidenceDagTypedError
@@ -15,7 +16,6 @@ import {
   type EvidenceDagUpdateProgress,
   type EvidenceDagUpdateSubmission
 } from './client.js'
-import { laterEvidenceDagWatermark } from './watermark.js'
 
 export type EvidenceDagQueuePriority = EvidenceDagUpdateSubmission['priority']
 
@@ -68,9 +68,27 @@ type QueueJob = {
   consecutiveNoProgressFailures: number
 }
 
+type QueueThreadState = {
+  runtimeId: string
+  threadId: string
+  engineThreadId: string
+  workspaceRoot: string
+  workspacePhysicalRoot: string
+  workspaceScopeKey: string
+  updatedAt: string
+  committed?: EvidenceDagCommittedSnapshot
+}
+
+type WorkspaceBinding = Readonly<{
+  workspaceRoot: string
+  workspacePhysicalRoot: string
+  workspaceScopeKey: string
+}>
+
 type QueueFile = {
-  version: 2
+  version: 3
   jobs: StoredQueueJob[]
+  threads: QueueThreadState[]
 }
 
 type StoredQueueJob = Omit<QueueJob, 'trace' | 'traceRef' | 'traceItemCount'> & {
@@ -86,6 +104,7 @@ const PRIORITY: Record<EvidenceDagQueuePriority, number> = {
 }
 
 const MAX_QUEUE_JOBS = 200
+const MAX_QUEUE_THREADS = 10_000
 const ACTIVE_QUEUE_STATUSES = new Set<QueueJobStatus>(['queued', 'running', 'retrying'])
 const ISO_TIMESTAMP_WITH_OFFSET =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/u
@@ -102,7 +121,9 @@ class EvidenceDagQueuePersistenceError extends Error {
 
 export class EvidenceDagQueue {
   private jobs: QueueJob[] = []
+  private threads = new Map<string, QueueThreadState>()
   private readonly active = new Set<string>()
+  private readonly running = new Set<Promise<void>>()
   private loading: Promise<void> | undefined
   private enabled = false
   private closed = false
@@ -137,36 +158,83 @@ export class EvidenceDagQueue {
   async enqueue(input: EvidenceDagQueueInput): Promise<EvidenceDagQueueEnqueueResult> {
     await this.load()
     if (!input.trace.length) throw new Error('Evidence DAG update requires at least one artifact.')
+    if (input.engineThreadId !== `${input.runtimeId}:${input.threadId}`) {
+      throw new Error('Evidence DAG queue scope is not bound to its canonical runtime/thread identity.')
+    }
+    const workspaceRoot = canonicalWorkspaceRoot(input.workspaceRoot)
+    if (!workspaceRoot) {
+      throw new Error('Evidence DAG queue workspace authority must be an absolute path.')
+    }
+    const workspace = await resolveWorkspaceBinding(workspaceRoot)
     await this.hydrateCoalescingCandidate(input)
-    const result = await this.mutateJobs((jobs) => {
+    const result = await this.mutateJobs((jobs, threads) => {
+      const authority = threads.get(input.engineThreadId)
+      if (authority && (
+        authority.runtimeId !== input.runtimeId || authority.threadId !== input.threadId
+      )) {
+        throw new Error('Evidence DAG canonical thread identity collides with another scope.')
+      }
+      if (authority && !sameWorkspace(authority.workspaceRoot, workspace.workspaceRoot)) {
+        throw new Error('Cannot bind one Evidence DAG thread identity to multiple workspaces.')
+      }
+      if (authority && (
+        authority.workspacePhysicalRoot !== workspace.workspacePhysicalRoot ||
+        authority.workspaceScopeKey !== workspace.workspaceScopeKey
+      )) {
+        throw new Error('Evidence DAG workspace authority changed its physical target.')
+      }
+      requireThreadCapacity(threads, input.engineThreadId)
+      const matching = jobs
+        .filter((job) => job.engineThreadId === input.engineThreadId)
+        .sort(compareNewestJob)
+      if (matching.some((job) =>
+        job.runtimeId !== input.runtimeId || job.threadId !== input.threadId
+      )) {
+        throw new Error('Evidence DAG canonical thread identity collides with another scope.')
+      }
+      if (matching.some((job) =>
+        !sameWorkspace(job.workspaceRoot, workspace.workspacePhysicalRoot)
+      )) {
+        throw new Error('Cannot bind one Evidence DAG thread identity to multiple workspaces.')
+      }
       if (input.idempotencyKey) {
         const replay = jobs.find((job) => job.idempotencyKey === input.idempotencyKey)
         if (replay) {
+          if (
+            replay.engineThreadId !== input.engineThreadId ||
+            !sameWorkspace(replay.workspaceRoot, workspace.workspacePhysicalRoot)
+          ) {
+            throw new Error('Evidence DAG idempotency key is already bound to another scope.')
+          }
           return {
             changed: false,
             value: { jobId: replay.id, coalesced: true, itemCount: replay.traceItemCount }
           }
         }
       }
-      const matching = jobs
-        .filter((job) => job.engineThreadId === input.engineThreadId)
-        .sort(compareNewestJob)
       const latest = input.priority === 'immediate'
         ? matching.find((job) => job.status === 'failed' && isArtifactLifecycleJob(job))
           ?? matching[0]
         : matching[0]
-      const existing = !input.idempotencyKey && latest && (
+      const candidate = !input.idempotencyKey && latest && (
         latest.status === 'queued' ||
         latest.status === 'retrying' ||
         (latest.status === 'failed' && input.priority === 'immediate')
       )
         ? latest
         : undefined
-      if (existing) {
+      const revivingArtifactLifecycle = candidate?.status === 'failed' &&
+        isArtifactLifecycleJob(candidate)
+      const coalescedWatermark = !candidate
+        ? undefined
+        : revivingArtifactLifecycle
+          ? artifactLifecycleRetryWatermark(input.targetWatermark, candidate.idempotencyKey!)
+          : laterEvidenceDagWatermark(candidate.targetWatermark, input.targetWatermark)
+      const existing = coalescedWatermark === undefined ? undefined : candidate
+      if (existing && coalescedWatermark !== undefined) {
         const revivingFailed = existing.status === 'failed'
-        const revivingArtifactLifecycle = revivingFailed && isArtifactLifecycleJob(existing)
         if (revivingFailed) requireActiveCapacity(jobs)
-        if (existing.workspaceRoot !== input.workspaceRoot) {
+        if (!sameWorkspace(existing.workspaceRoot, workspace.workspacePhysicalRoot)) {
           throw new Error('Cannot coalesce Evidence DAG updates from different workspaces.')
         }
         const mergedTrace = mergeTrace(existing.trace, input.trace)
@@ -181,9 +249,7 @@ export class EvidenceDagQueue {
           existing.reason === input.reason &&
           Boolean(existing.rebuild) === Boolean(input.rebuild) &&
           existing.rebuildRationale === input.rebuildRationale
-        existing.targetWatermark = revivingArtifactLifecycle
-          ? artifactLifecycleRetryWatermark(input.targetWatermark, existing.idempotencyKey!)
-          : laterEvidenceDagWatermark(existing.targetWatermark, input.targetWatermark)
+        existing.targetWatermark = coalescedWatermark
         existing.trace = mergedTrace
         existing.traceRef = undefined
         existing.traceItemCount = mergedTrace.length
@@ -221,6 +287,17 @@ export class EvidenceDagQueue {
 
       requireActiveCapacity(jobs)
       const timestamp = this.nowIso()
+      if (!authority) {
+        threads.set(input.engineThreadId, {
+          runtimeId: input.runtimeId,
+          threadId: input.threadId,
+          engineThreadId: input.engineThreadId,
+          workspaceRoot: workspace.workspaceRoot,
+          workspacePhysicalRoot: workspace.workspacePhysicalRoot,
+          workspaceScopeKey: workspace.workspaceScopeKey,
+          updatedAt: timestamp
+        })
+      }
       const job: QueueJob = {
         id: randomUUID(),
         ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
@@ -232,7 +309,7 @@ export class EvidenceDagQueue {
         priority: input.priority,
         trace: input.trace.map((item) => structuredClone(item) as Record<string, unknown>),
         traceItemCount: input.trace.length,
-        workspaceRoot: input.workspaceRoot,
+        workspaceRoot: workspace.workspacePhysicalRoot,
         ...(input.rebuild ? { rebuild: true } : {}),
         ...(input.rebuildRationale ? { rebuildRationale: input.rebuildRationale } : {}),
         status: 'queued',
@@ -251,10 +328,18 @@ export class EvidenceDagQueue {
     return result
   }
 
-  async pending(runtimeId: string, threadId: string): Promise<EvidenceDagPendingUpdate | null> {
-    await this.load()
+  async pending(
+    runtimeId: string,
+    threadId: string,
+    workspaceRoot?: string
+  ): Promise<EvidenceDagPendingUpdate | null> {
+    const state = await this.authorizedThreadState(runtimeId, threadId, workspaceRoot)
+    if (!state) return null
     const matching = this.jobs
-      .filter((job) => job.runtimeId === runtimeId && job.threadId === threadId)
+      .filter((job) =>
+        job.runtimeId === runtimeId &&
+        job.threadId === threadId
+      )
       .sort((left, right) =>
         right.createdAt.localeCompare(left.createdAt) ||
         right.updatedAt.localeCompare(left.updatedAt)
@@ -297,19 +382,18 @@ export class EvidenceDagQueue {
 
   async committed(
     runtimeId: string,
-    threadId: string
+    threadId: string,
+    workspaceRoot?: string
   ): Promise<EvidenceDagCommittedSnapshot | null> {
-    await this.load()
-    return this.jobs
-      .filter((job) =>
-        job.runtimeId === runtimeId &&
-        job.threadId === threadId &&
-        job.snapshot
-      )
-      .sort((left, right) =>
-        right.snapshot!.version - left.snapshot!.version ||
-        right.updatedAt.localeCompare(left.updatedAt)
-      )[0]?.snapshot ?? null
+    const state = await this.authorizedThreadState(runtimeId, threadId, workspaceRoot)
+    if (!state) return null
+    return state.committed ? structuredClone(state.committed) : null
+  }
+
+  async workspaceRoot(runtimeId: string, threadId: string): Promise<string | null> {
+    const state = await this.authorizedThreadState(runtimeId, threadId)
+    if (!state) return null
+    return state.workspaceRoot
   }
 
   async waitForCommitted(
@@ -321,7 +405,7 @@ export class EvidenceDagQueue {
     while (!this.closed && Date.now() < deadline) {
       const job = this.jobs.find((candidate) => candidate.id === jobId)
       if (!job) throw new Error(`Evidence DAG queue job ${jobId} was not found.`)
-      if (job.status === 'succeeded' && job.snapshot) return job.snapshot
+      if (job.status === 'succeeded' && job.snapshot) return structuredClone(job.snapshot)
       if (job.status === 'failed' && job.error) throw new EvidenceDagServiceError(job.error)
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
@@ -334,7 +418,7 @@ export class EvidenceDagQueue {
   }
 
   async prioritize(runtimeId: string, threadId: string, visible: boolean): Promise<void> {
-    await this.load()
+    await this.authorizedThreadState(runtimeId, threadId)
     const wanted: EvidenceDagQueuePriority = visible ? 'immediate' : 'background'
     await this.mutateJobs((jobs) => {
       let changed = false
@@ -356,7 +440,27 @@ export class EvidenceDagQueue {
     this.closed = true
     if (this.pumpTimer) clearTimeout(this.pumpTimer)
     this.pumpTimer = undefined
+    await Promise.all([...this.running])
     await this.writing
+  }
+
+  private async authorizedThreadState(
+    runtimeId: string,
+    threadId: string,
+    workspaceRoot?: string
+  ): Promise<QueueThreadState | null> {
+    await this.load()
+    const state = this.threads.get(`${runtimeId}:${threadId}`)
+    if (!state || state.runtimeId !== runtimeId || state.threadId !== threadId) return null
+    if (workspaceRoot && !sameWorkspace(state.workspaceRoot, workspaceRoot)) return null
+    const current = await resolveWorkspaceBinding(state.workspaceRoot)
+    if (
+      current.workspacePhysicalRoot !== state.workspacePhysicalRoot ||
+      current.workspaceScopeKey !== state.workspaceScopeKey
+    ) {
+      throw new Error('Evidence DAG workspace authority changed its physical target.')
+    }
+    return state
   }
 
   private load(): Promise<void> {
@@ -371,20 +475,39 @@ export class EvidenceDagQueue {
       await chmod(this.options.storagePath, 0o600)
       const parsed: unknown = JSON.parse(contents)
       const loaded = parseQueueFile(parsed)
-      let recovered = loaded.recovered
+      if (loaded.legacyVersion !== null) {
+        const legacyPath = `${this.options.storagePath}.legacy-v${loaded.legacyVersion}.` +
+          `${this.now().getTime()}.${randomUUID()}.json`
+        await rename(this.options.storagePath, legacyPath)
+        try {
+          await this.writeQueueFile([], new Map())
+        } catch (error) {
+          await rename(legacyPath, this.options.storagePath).catch(() => undefined)
+          throw error
+        }
+        this.jobs = []
+        this.threads = new Map()
+        return
+      }
+      let recovered = false
+      const threads = cloneThreadStates(loaded.threads)
       for (const job of loaded.jobs) {
         if (job.status !== 'running') continue
         job.status = 'queued'
         job.updatedAt = this.nowIso()
         recovered = true
       }
+      const threadsRecovered = mergeThreadStates(threads, loaded.jobs)
+      recovered ||= threadsRecovered
       const compacted = compactQueueJobs(loaded.jobs)
       recovered ||= compacted.length !== loaded.jobs.length
-      if (recovered) await this.writeQueueFile(compacted)
+      if (recovered) await this.writeQueueFile(compacted, threads)
       this.jobs = compacted
+      this.threads = threads
     } catch (error) {
       if (!hasErrorCode(error, 'ENOENT')) throw error
       this.jobs = []
+      this.threads = new Map()
     }
   }
 
@@ -419,8 +542,11 @@ export class EvidenceDagQueue {
         )[0]
       if (!job) break
       this.active.add(job.id)
-      void this.run(job.id).catch(() => undefined).finally(() => {
+      const running = this.run(job.id).catch(() => undefined)
+      this.running.add(running)
+      void running.finally(() => {
         this.active.delete(job.id)
+        this.running.delete(running)
         this.schedulePump(0)
       })
     }
@@ -444,6 +570,29 @@ export class EvidenceDagQueue {
 
   private async run(jobId: string): Promise<void> {
     await this.hydrateJobTrace(jobId)
+    const queued = this.jobs.find((job) => job.id === jobId)
+    if (!queued) return
+    try {
+      await this.authorizedThreadState(queued.runtimeId, queued.threadId)
+    } catch (error) {
+      await this.mutateJobs((jobs) => {
+        const job = requireQueueJob(jobs, jobId)
+        if (job.status !== 'queued' && job.status !== 'retrying') {
+          return { changed: false, value: undefined }
+        }
+        job.status = 'failed'
+        job.nextAttemptAt = undefined
+        job.error = evidenceDagTypedErrorSchema.parse({
+          code: 'access_restricted',
+          message: errorMessage(error).slice(0, 4_000),
+          retryable: false,
+          occurredAt: this.nowIso()
+        })
+        job.updatedAt = this.nowIso()
+        return { changed: true, value: undefined }
+      })
+      return
+    }
     const started = await this.mutateJobs((jobs) => {
       const job = requireQueueJob(jobs, jobId)
       if (
@@ -480,23 +629,45 @@ export class EvidenceDagQueue {
     })
     if (!started) return
 
-    let snapshot: EvidenceDagCommittedSnapshot
     try {
-      snapshot = await this.options.submit(
+      const snapshot = await this.options.submit(
         started,
         async (progress) => {
-          await this.mutateJobs((jobs) => {
+          if (
+            !Number.isSafeInteger(progress.completedBatches) ||
+            progress.completedBatches < 0 ||
+            !Number.isSafeInteger(progress.totalBatches) ||
+            progress.totalBatches <= 0 ||
+            progress.completedBatches > progress.totalBatches
+          ) {
+            throw new Error('Evidence DAG update progress has an invalid batch cursor.')
+          }
+          const committed = snapshotForThread(progress.snapshot, started.engineThreadId)
+          await this.mutateJobs((jobs, threads) => {
             const job = requireQueueJob(jobs, jobId)
             if (job.status !== 'running') return { changed: false, value: undefined }
+            assertSnapshotAdvance(threads.get(job.engineThreadId)?.committed, committed)
+            assertSnapshotAdvance(job.snapshot, committed)
             job.completedBatches = progress.completedBatches
             job.totalBatches = progress.totalBatches
-            job.snapshot = progress.snapshot
+            job.snapshot = committed
             job.consecutiveNoProgressFailures = 0
             job.updatedAt = this.nowIso()
             return { changed: true, value: undefined }
           })
         }
       )
+      const committed = snapshotForThread(snapshot, started.engineThreadId)
+      await this.mutateJobs((jobs, threads) => {
+        const job = requireQueueJob(jobs, jobId)
+        assertSnapshotAdvance(threads.get(job.engineThreadId)?.committed, committed)
+        assertSnapshotAdvance(job.snapshot, committed)
+        job.snapshot = committed
+        job.status = 'succeeded'
+        job.consecutiveNoProgressFailures = 0
+        job.updatedAt = this.nowIso()
+        return { changed: true, value: undefined }
+      })
     } catch (error) {
       if (error instanceof EvidenceDagQueuePersistenceError) throw error
       const diagnostic = error instanceof EvidenceDagServiceError
@@ -528,15 +699,6 @@ export class EvidenceDagQueue {
       })
       return
     }
-
-    await this.mutateJobs((jobs) => {
-      const job = requireQueueJob(jobs, jobId)
-      job.snapshot = snapshot
-      job.status = 'succeeded'
-      job.consecutiveNoProgressFailures = 0
-      job.updatedAt = this.nowIso()
-      return { changed: true, value: undefined }
-    })
   }
 
   private hasPriorFailedLifecycle(candidate: QueueJob): boolean {
@@ -549,15 +711,21 @@ export class EvidenceDagQueue {
   }
 
   private mutateJobs<T>(
-    transform: (jobs: QueueJob[]) => Readonly<{ changed: boolean; value: T }>
+    transform: (
+      jobs: QueueJob[],
+      threads: Map<string, QueueThreadState>
+    ) => Readonly<{ changed: boolean; value: T }>
   ): Promise<T> {
     const pending = this.writing.then(async () => {
       const candidate = structuredClone(this.jobs) as QueueJob[]
-      const result = transform(candidate)
+      const threads = cloneThreadStates(this.threads)
+      const result = transform(candidate, threads)
       if (!result.changed) return result.value
+      mergeThreadStates(threads, candidate)
       const compacted = compactQueueJobs(candidate)
-      await this.writeQueueFile(compacted)
+      await this.writeQueueFile(compacted, threads)
       this.jobs = compacted
+      this.threads = threads
       return result.value
     })
     this.writing = pending.then(() => undefined, () => undefined)
@@ -570,13 +738,23 @@ export class EvidenceDagQueue {
     await chmod(directory, 0o700)
   }
 
-  private async writeQueueFile(jobs: QueueJob[]): Promise<void> {
+  private async writeQueueFile(
+    jobs: QueueJob[],
+    threads: ReadonlyMap<string, QueueThreadState>
+  ): Promise<void> {
     const directory = dirname(this.options.storagePath)
     const temporaryPath = `${this.options.storagePath}.${process.pid}.${randomUUID()}.tmp`
     let temporaryHandle: Awaited<ReturnType<typeof open>> | undefined
+    let replaced = false
     try {
       for (const job of jobs) await this.ensureTraceAsset(job)
-      const file: QueueFile = { version: 2, jobs: jobs.map(storedQueueJob) }
+      const file: QueueFile = {
+        version: 3,
+        jobs: jobs.map(storedQueueJob),
+        threads: [...threads.values()]
+          .map((state) => structuredClone(state))
+          .sort((left, right) => left.engineThreadId.localeCompare(right.engineThreadId))
+      }
       const contents = `${JSON.stringify(file, null, 2)}\n`
       await this.ensureStorageDirectory()
       temporaryHandle = await open(temporaryPath, 'wx', 0o600)
@@ -586,6 +764,7 @@ export class EvidenceDagQueue {
       await temporaryHandle.close()
       temporaryHandle = undefined
       await rename(temporaryPath, this.options.storagePath)
+      replaced = true
       if (process.platform !== 'win32') {
         const directoryHandle = await open(directory, 'r')
         try {
@@ -595,6 +774,10 @@ export class EvidenceDagQueue {
         }
       }
     } catch (error) {
+      // rename() is the atomic commit point. A later directory fsync failure may
+      // weaken crash durability, but rolling back only memory would diverge from
+      // the already-replaced file for the rest of this process.
+      if (replaced) return
       throw new EvidenceDagQueuePersistenceError(error)
     } finally {
       await temporaryHandle?.close().catch(() => undefined)
@@ -690,7 +873,17 @@ function artifactLifecycleRetryWatermark(targetWatermark: string, idempotencyKey
   return `${targetWatermark}:artifact-lifecycle-retry:${receipt}`
 }
 
-const QUEUE_FILE_KEYS = new Set(['version', 'jobs'])
+const QUEUE_FILE_KEYS = new Set(['version', 'jobs', 'threads'])
+const QUEUE_THREAD_KEYS = new Set([
+  'runtimeId',
+  'threadId',
+  'engineThreadId',
+  'workspaceRoot',
+  'workspacePhysicalRoot',
+  'workspaceScopeKey',
+  'updatedAt',
+  'committed'
+])
 const QUEUE_JOB_KEYS = new Set([
   'id',
   'idempotencyKey',
@@ -700,7 +893,6 @@ const QUEUE_JOB_KEYS = new Set([
   'targetWatermark',
   'reason',
   'priority',
-  'trace',
   'traceRef',
   'traceItemCount',
   'workspaceRoot',
@@ -708,80 +900,138 @@ const QUEUE_JOB_KEYS = new Set([
   'rebuildRationale',
   'status',
   'attempt',
-  'attempts',
   'consecutiveNoProgressFailures',
   'createdAt',
   'updatedAt',
   'nextAttemptAt',
   'error',
-  'lastError',
   'snapshot',
   'completedBatches',
-  'totalBatches',
-  'phase'
+  'totalBatches'
 ])
 
 function parseQueueFile(value: unknown): Readonly<{
   jobs: QueueJob[]
-  recovered: boolean
+  threads: Map<string, QueueThreadState>
+  legacyVersion: 1 | 2 | null
 }> {
   const file = record(value)
-  if (!file || !hasOnlyKeys(file, QUEUE_FILE_KEYS) || !Array.isArray(file.jobs)) {
+  if (!file) {
     throw new Error('Evidence DAG update queue storage has an invalid root object.')
   }
-  if (file.version !== 1 && file.version !== 2) {
+  if (file.version === 1 || file.version === 2) {
+    return {
+      jobs: [],
+      threads: new Map(),
+      legacyVersion: file.version
+    }
+  }
+  if (file.version !== 3) {
     throw new Error('Evidence DAG update queue storage has an unsupported version.')
   }
+  if (!hasOnlyKeys(file, QUEUE_FILE_KEYS) || !Array.isArray(file.jobs)) {
+    throw new Error('Evidence DAG update queue storage has an invalid root object.')
+  }
+  if (!Array.isArray(file.threads)) {
+    throw new Error('Evidence DAG update queue storage has an invalid thread registry.')
+  }
+  const storedThreads = file.threads as unknown[]
 
   const jobs: QueueJob[] = []
   const jobIds = new Set<string>()
-  let recovered = file.version !== 2
+  const threads = new Map<string, QueueThreadState>()
+  if (storedThreads.length > MAX_QUEUE_THREADS) {
+    throw new Error('Evidence DAG update queue thread registry exceeds its capacity.')
+  }
+  for (const [index, value] of storedThreads.entries()) {
+    const state = canonicalThreadState(value)
+    if (!state || threads.has(state.engineThreadId)) {
+      throw invalidStoredThread(index)
+    }
+    threads.set(state.engineThreadId, state)
+  }
+  const workspaceByEngineThread = new Map(
+    [...threads.values()].map((state) => [state.engineThreadId, state.workspacePhysicalRoot])
+  )
   for (const [index, value] of file.jobs.entries()) {
     const stored = record(value)
-    if (!stored) throw invalidStoredJob(index)
-    const phase = stored.phase === undefined ? undefined : stringValue(stored.phase)
-    if (phase === 'project') {
-      recovered = true
-      continue
-    }
-    if (
-      (stored.phase !== undefined && phase === undefined) ||
-      (phase !== undefined && phase !== 'evidence') ||
-      !hasOnlyKeys(stored, QUEUE_JOB_KEYS)
-    ) {
+    if (!stored || !hasOnlyKeys(stored, QUEUE_JOB_KEYS)) {
       throw invalidStoredJob(index)
     }
     const job = canonicalJob(stored)
     if (!job || jobIds.has(job.id)) throw invalidStoredJob(index)
+    if (!threads.has(job.engineThreadId)) {
+      throw new Error(
+        `Evidence DAG update queue job at index ${index} has no thread authority.`
+      )
+    }
+    const boundWorkspace = workspaceByEngineThread.get(job.engineThreadId)
+    if (boundWorkspace && !sameWorkspace(boundWorkspace, job.workspaceRoot)) {
+      throw new Error(
+        `Evidence DAG update queue thread identity spans multiple workspaces at index ${index}.`
+      )
+    }
+    workspaceByEngineThread.set(job.engineThreadId, job.workspaceRoot)
     jobIds.add(job.id)
-    if (file.version !== 2 || stored.trace !== undefined || stored.phase !== undefined ||
-        stored.attempts !== undefined || stored.lastError !== undefined) recovered = true
     jobs.push(job)
   }
-  return { jobs, recovered }
+  return { jobs, threads, legacyVersion: null }
+}
+
+function canonicalThreadState(value: unknown): QueueThreadState | null {
+  const stored = record(value)
+  if (!stored || !hasOnlyKeys(stored, QUEUE_THREAD_KEYS)) return null
+  const runtimeId = stringValue(stored.runtimeId)
+  const threadId = stringValue(stored.threadId)
+  const engineThreadId = stringValue(stored.engineThreadId)
+  const workspaceRoot = canonicalWorkspaceRoot(stored.workspaceRoot)
+  const workspacePhysicalRoot = canonicalWorkspaceRoot(stored.workspacePhysicalRoot)
+  const workspaceScopeKey = stringValue(stored.workspaceScopeKey)
+  const updatedAt = validTimestamp(stored.updatedAt)
+  const committed = stored.committed === undefined
+    ? undefined
+    : canonicalStoredSnapshot(stored.committed)
+  if (
+    !runtimeId || !threadId || !engineThreadId ||
+    engineThreadId !== `${runtimeId}:${threadId}` ||
+    !workspaceRoot || !workspacePhysicalRoot || !workspaceScopeKey ||
+    !isWorkspaceScopeKey(workspaceScopeKey, workspacePhysicalRoot) ||
+    !updatedAt ||
+    (stored.committed !== undefined && !committed) ||
+    (committed && committed.threadId !== engineThreadId)
+  ) return null
+  return {
+    runtimeId,
+    threadId,
+    engineThreadId,
+    workspaceRoot,
+    workspacePhysicalRoot,
+    workspaceScopeKey,
+    updatedAt,
+    ...(committed ? { committed } : {})
+  }
 }
 
 function canonicalJob(job: Record<string, unknown>): QueueJob | null {
   const id = stringValue(job.id)
+  const idempotencyKey = job.idempotencyKey === undefined
+    ? undefined
+    : stringValue(job.idempotencyKey)
   const runtimeId = stringValue(job.runtimeId)
   const threadId = stringValue(job.threadId)
   const engineThreadId = stringValue(job.engineThreadId)
   const targetWatermark = stringValue(job.targetWatermark)
-  const workspaceRoot = stringValue(job.workspaceRoot)
+  const workspaceRoot = canonicalWorkspaceRoot(job.workspaceRoot)
   const createdAt = validTimestamp(job.createdAt)
   const updatedAt = validTimestamp(job.updatedAt)
-  const reason = job.reason === undefined ? 'recovery' : stringValue(job.reason)
-  const trace = Array.isArray(job.trace) && job.trace.every((item) => record(item) !== null)
-    ? job.trace.map((item) => structuredClone(item) as Record<string, unknown>)
-    : []
-  const traceRef = job.traceRef === undefined ? undefined : stringValue(job.traceRef)
-  const traceItemCount = job.traceItemCount === undefined
-    ? undefined
-    : positiveInteger(job.traceItemCount)
-  if (!id || !runtimeId || !threadId || !engineThreadId || !targetWatermark || !workspaceRoot ||
+  const reason = stringValue(job.reason)
+  const traceRef = stringValue(job.traceRef)
+  const traceItemCount = positiveInteger(job.traceItemCount)
+  if (!id || !runtimeId || !threadId || !engineThreadId ||
+      engineThreadId !== `${runtimeId}:${threadId}` || !targetWatermark || !workspaceRoot ||
       !reason || !createdAt || !updatedAt ||
-      (!trace.length && (!traceRef || !isTraceRef(traceRef) || !traceItemCount)) ||
-      (trace.length && (traceRef !== undefined || traceItemCount !== undefined))) return null
+      (job.idempotencyKey !== undefined && !idempotencyKey) ||
+      !traceRef || !isTraceRef(traceRef) || !traceItemCount) return null
   const status = canonicalQueueStatus(job.status)
   if (!status) return null
   const priority = canonicalQueuePriority(job.priority)
@@ -790,24 +1040,14 @@ function canonicalJob(job: Record<string, unknown>): QueueJob | null {
     ? undefined
     : evidenceDagTypedErrorSchema.safeParse(job.error)
   if (parsedError && !parsedError.success) return null
-  const legacyError = job.lastError === undefined ? undefined : stringValue(job.lastError)
-  if (job.lastError !== undefined && !legacyError) return null
-  const error = parsedError?.success
-    ? parsedError.data
-    : legacyError
-      ? evidenceDagTypedErrorSchema.parse({
-          code: 'internal_error',
-          message: legacyError.slice(0, 4_000),
-          retryable: false,
-          occurredAt: updatedAt
-        })
-      : undefined
+  const error = parsedError?.success ? parsedError.data : undefined
   const snapshot = job.snapshot === undefined ? undefined : canonicalStoredSnapshot(job.snapshot)
-  if (job.snapshot !== undefined && !snapshot) return null
-  const attempt = storedNonnegativeInteger(job.attempt, job.attempts)
-  const consecutiveNoProgressFailures = job.consecutiveNoProgressFailures === undefined
-    ? 0
-    : nonnegativeInteger(job.consecutiveNoProgressFailures)
+  if (
+    (job.snapshot !== undefined && !snapshot) ||
+    (snapshot && snapshot.threadId !== engineThreadId)
+  ) return null
+  const attempt = nonnegativeInteger(job.attempt)
+  const consecutiveNoProgressFailures = nonnegativeInteger(job.consecutiveNoProgressFailures)
   const nextAttemptAt = job.nextAttemptAt === undefined
     ? undefined
     : validTimestamp(job.nextAttemptAt)
@@ -820,33 +1060,37 @@ function canonicalJob(job: Record<string, unknown>): QueueJob | null {
   const rebuildRationale = job.rebuildRationale === undefined
     ? undefined
     : stringValue(job.rebuildRationale)
+  const hasBatchCursor = completedBatches !== undefined || totalBatches !== undefined
   if (
     attempt === undefined ||
     consecutiveNoProgressFailures === undefined ||
     (job.nextAttemptAt !== undefined && !nextAttemptAt) ||
     (job.completedBatches !== undefined && completedBatches === undefined) ||
     (job.totalBatches !== undefined && totalBatches === undefined) ||
+    ((completedBatches === undefined) !== (totalBatches === undefined)) ||
     (completedBatches !== undefined && totalBatches !== undefined && completedBatches > totalBatches) ||
+    (hasBatchCursor && !snapshot) ||
     (job.rebuild !== undefined && typeof job.rebuild !== 'boolean') ||
     (job.rebuildRationale !== undefined && !rebuildRationale) ||
     (status === 'retrying' && (!nextAttemptAt || !error)) ||
     (status === 'failed' && !error) ||
-    (status === 'succeeded' && !snapshot)
+    (status === 'succeeded' && !snapshot) ||
+    (status !== 'retrying' && nextAttemptAt !== undefined) ||
+    (status !== 'retrying' && status !== 'failed' && error !== undefined) ||
+    ((status === 'running' || status === 'retrying' || status === 'succeeded') && attempt === 0)
   ) return null
   return {
     id,
-    ...(stringValue(job.idempotencyKey)
-      ? { idempotencyKey: stringValue(job.idempotencyKey) }
-      : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
     runtimeId,
     threadId,
     engineThreadId,
     targetWatermark,
     reason,
     priority,
-    trace,
-    ...(traceRef ? { traceRef } : {}),
-    traceItemCount: trace.length || traceItemCount!,
+    trace: [],
+    traceRef,
+    traceItemCount,
     workspaceRoot,
     ...(job.rebuild === true ? { rebuild: true } : {}),
     ...(rebuildRationale ? { rebuildRationale } : {}),
@@ -873,16 +1117,8 @@ function isTraceRef(value: string): boolean {
   return /^sha256:[a-f0-9]{64}$/u.test(value)
 }
 
-function storedNonnegativeInteger(primary: unknown, legacy: unknown): number | undefined {
-  if (primary !== undefined) return nonnegativeInteger(primary)
-  if (legacy !== undefined) return nonnegativeInteger(legacy)
-  return 0
-}
-
 function canonicalQueueStatus(value: unknown): QueueJobStatus | undefined {
-  if (value === undefined) return 'queued'
   const status = stringValue(value)
-  if (status === 'retry_scheduled') return 'retrying'
   return status === 'queued' || status === 'running' || status === 'retrying' ||
     status === 'failed' || status === 'succeeded'
     ? status
@@ -890,7 +1126,6 @@ function canonicalQueueStatus(value: unknown): QueueJobStatus | undefined {
 }
 
 function canonicalQueuePriority(value: unknown): EvidenceDagQueuePriority | undefined {
-  if (value === undefined) return 'normal'
   const priority = stringValue(value)
   return priority === 'background' || priority === 'normal' || priority === 'high' ||
     priority === 'immediate'
@@ -911,6 +1146,77 @@ function canonicalStoredSnapshot(value: unknown): EvidenceDagCommittedSnapshot |
   return parsed.success ? parsed.data : null
 }
 
+function snapshotForThread(
+  value: unknown,
+  engineThreadId: string
+): EvidenceDagCommittedSnapshot {
+  const snapshot = canonicalStoredSnapshot(value)
+  if (!snapshot || snapshot.threadId !== engineThreadId) {
+    throw new Error('Evidence DAG committed snapshot is not bound to its queue thread identity.')
+  }
+  return structuredClone(snapshot)
+}
+
+function assertSnapshotAdvance(
+  previous: EvidenceDagCommittedSnapshot | undefined,
+  next: EvidenceDagCommittedSnapshot
+): void {
+  if (!previous) return
+  if (next.version < previous.version) {
+    throw new Error('Evidence DAG committed snapshot version cannot regress within one update.')
+  }
+  if (next.version === previous.version && !isDeepStrictEqual(next, previous)) {
+    throw new Error('Evidence DAG committed snapshot version is immutable within one update.')
+  }
+}
+
+function cloneThreadStates(
+  states: ReadonlyMap<string, QueueThreadState>
+): Map<string, QueueThreadState> {
+  return new Map([...states].map(([key, state]) => [key, structuredClone(state)]))
+}
+
+function mergeThreadStates(
+  states: Map<string, QueueThreadState>,
+  jobs: readonly QueueJob[]
+): boolean {
+  let changed = false
+  for (const job of jobs) {
+    const existing = states.get(job.engineThreadId)
+    if (!existing) {
+      throw new Error(`Evidence DAG queue job ${job.id} has no thread authority.`)
+    }
+    if (existing.runtimeId !== job.runtimeId || existing.threadId !== job.threadId) {
+      throw new Error('Evidence DAG canonical thread identity collides with another scope.')
+    }
+    if (!sameWorkspace(existing.workspacePhysicalRoot, job.workspaceRoot)) {
+      throw new Error('Evidence DAG queue thread identity spans multiple workspaces.')
+    }
+    if (job.updatedAt > existing.updatedAt) {
+      existing.updatedAt = job.updatedAt
+      changed = true
+    }
+    if (!job.snapshot) continue
+    const snapshot = snapshotForThread(job.snapshot, job.engineThreadId)
+    job.snapshot = snapshot
+    if (!existing.committed || snapshot.version > existing.committed.version) {
+      existing.committed = structuredClone(snapshot)
+      changed = true
+      continue
+    }
+    if (
+      snapshot.version === existing.committed.version &&
+      !isDeepStrictEqual(snapshot, existing.committed)
+    ) {
+      throw new Error(
+        `Evidence DAG queue has conflicting committed snapshot version ${snapshot.version} ` +
+        `for thread ${job.engineThreadId}.`
+      )
+    }
+  }
+  return changed
+}
+
 function compactQueueJobs(jobs: QueueJob[]): QueueJob[] {
   const overflow = jobs.length - MAX_QUEUE_JOBS
   if (overflow <= 0) return jobs
@@ -924,6 +1230,17 @@ function compactQueueJobs(jobs: QueueJob[]): QueueJob[] {
     .map((job) => job.id))
   if (!oldestTerminalIds.size) return jobs
   return jobs.filter((job) => !oldestTerminalIds.has(job.id))
+}
+
+function requireThreadCapacity(
+  states: ReadonlyMap<string, QueueThreadState>,
+  engineThreadId: string
+): void {
+  if (states.has(engineThreadId) || states.size < MAX_QUEUE_THREADS) return
+  throw new Error(
+    `Evidence DAG queue thread registry is at capacity with ${states.size} identities; ` +
+    'enqueue was rejected.'
+  )
 }
 
 function requireActiveCapacity(jobs: readonly QueueJob[]): void {
@@ -950,6 +1267,50 @@ function compareOldestJob(left: QueueJob, right: QueueJob): number {
   return left.createdAt.localeCompare(right.createdAt) ||
     left.updatedAt.localeCompare(right.updatedAt) ||
     left.id.localeCompare(right.id)
+}
+
+function sameWorkspace(left: string, right: string): boolean {
+  const canonicalLeft = canonicalWorkspaceRoot(left)
+  const canonicalRight = canonicalWorkspaceRoot(right)
+  return canonicalLeft !== undefined && canonicalLeft === canonicalRight
+}
+
+function canonicalWorkspaceRoot(value: unknown): string | undefined {
+  const workspaceRoot = stringValue(value)
+  if (!workspaceRoot || workspaceRoot.includes('\0') || !isAbsolute(workspaceRoot)) {
+    return undefined
+  }
+  return resolve(workspaceRoot)
+}
+
+async function resolveWorkspaceBinding(workspaceRoot: string): Promise<WorkspaceBinding> {
+  const lexicalRoot = canonicalWorkspaceRoot(workspaceRoot)
+  if (!lexicalRoot) {
+    throw new Error('Evidence DAG queue workspace authority must be an absolute path.')
+  }
+  let kind = 'real'
+  let physicalRoot: string
+  try {
+    physicalRoot = resolve(await realpath(lexicalRoot))
+  } catch (error) {
+    if (!hasErrorCode(error, 'ENOENT')) throw error
+    kind = 'lexical'
+    physicalRoot = lexicalRoot
+  }
+  return {
+    workspaceRoot: lexicalRoot,
+    workspacePhysicalRoot: physicalRoot,
+    workspaceScopeKey: workspaceScopeKey(kind, physicalRoot)
+  }
+}
+
+function workspaceScopeKey(kind: string, physicalRoot: string): string {
+  return `${kind}:sha256:${createHash('sha256').update(physicalRoot).digest('hex')}`
+}
+
+function isWorkspaceScopeKey(value: string, physicalRoot: string): boolean {
+  const kind = /^(real|lexical):sha256:[a-f0-9]{64}$/u.exec(value)?.[1]
+  return kind !== undefined && value === workspaceScopeKey(kind, physicalRoot)
 }
 
 function mergeTrace(
@@ -990,6 +1351,10 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string
 
 function invalidStoredJob(index: number): Error {
   return new Error(`Evidence DAG update queue storage has an invalid job at index ${index}.`)
+}
+
+function invalidStoredThread(index: number): Error {
+  return new Error(`Evidence DAG update queue storage has an invalid thread at index ${index}.`)
 }
 
 function hasErrorCode(value: unknown, code: string): boolean {
