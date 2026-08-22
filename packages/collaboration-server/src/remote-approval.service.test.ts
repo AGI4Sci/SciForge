@@ -52,7 +52,7 @@ async function onboard(
   )
   return {
     user,
-    endpoint: { ...endpoint, assurance: 'strong' as const },
+    endpoint,
     userId: String(redeemed.userId),
     endpointId: String(redeemed.humanEndpointId)
   }

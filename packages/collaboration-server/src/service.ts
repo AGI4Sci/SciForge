@@ -206,7 +206,7 @@ export class CollaborationService {
         actor,
         operation: 'capability_approval',
         targetUserId: approval.ownerUserId,
-        requiredAssurance: 'strong',
+        requiredAssurance: 'verified',
         remoteApprovalAllowed: input.decision === 'deny_once' || approval.remoteEligible
       })
       const projection = required(await tx.getProjection(approval.projectionId), 'Projection')

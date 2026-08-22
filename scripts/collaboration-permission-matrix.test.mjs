@@ -107,7 +107,7 @@ test('8.3 canonical matrix rejects A accessing B projection, proxy answer, non-m
   assertDenied({ actor: coordinator, operation: 'task_update', assigneeAgentId: 'agent-worker' })
 })
 
-test('8.2 a remote endpoint cannot approve a pending capability unless policy and assurance both allow it', () => {
+test('8.2 a verified remote endpoint cannot approve a pending capability unless policy allows it', () => {
   assertDenied({
     actor: endpointB,
     operation: 'capability_approval',
@@ -115,6 +115,13 @@ test('8.2 a remote endpoint cannot approve a pending capability unless policy an
     requiredAssurance: 'strong',
     remoteApprovalAllowed: false
   })
+  assert.doesNotThrow(() => authorize({
+    actor: endpointA,
+    operation: 'capability_approval',
+    targetUserId: 'user-a',
+    requiredAssurance: 'verified',
+    remoteApprovalAllowed: true
+  }))
   assertDenied({
     actor: endpointA,
     operation: 'capability_approval',
