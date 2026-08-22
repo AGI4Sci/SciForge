@@ -1,0 +1,37 @@
+services:
+  restore-db:
+    image: postgres@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+    restart: "no"
+    user: "70:70"
+    read_only: true
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD is required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h /var/run/postgresql -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    volumes:
+      - restore-db-data:/var/lib/postgresql/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,uid=70,gid=70,mode=1770
+      - /var/run/postgresql:rw,nosuid,nodev,size=16m,uid=70,gid=70,mode=2775
+    networks:
+      - restore-database
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 128
+
+volumes:
+  restore-db-data:
+
+networks:
+  restore-database:
+    internal: true

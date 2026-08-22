@@ -66,7 +66,7 @@
     "collaboration:typecheck": "npm --workspace @sciforge/collaboration-contracts run typecheck && npm --workspace @sciforge/collaboration-provider-zulip run typecheck && npm --workspace @sciforge/collaboration-server run typecheck && npm --workspace @sciforge/domain-collaboration run typecheck",
     "precollaboration:test": "npm run build:collaboration-dependencies",
     "collaboration:test": "npm --workspace @sciforge/collaboration-contracts test && npm --workspace @sciforge/collaboration-provider-zulip test && npm --workspace @sciforge/collaboration-server test && npm --workspace @sciforge/domain-collaboration test && node --import tsx --test ./scripts/collaboration-canonical-server.test.mjs ./scripts/collaboration-permission-matrix.test.mjs ./scripts/collaboration-canonical-projection.test.mjs ./scripts/collaboration-full-path.test.mjs ./scripts/collaboration-transport-security.test.mjs && node ./scripts/collaboration-secret-audit.mjs && node ./scripts/collaboration-providers.mjs --check",
-    "identity:keycloak:check": "node --test ./scripts/keycloak-realm.test.mjs",
+    "identity:keycloak:check": "node --test ./scripts/keycloak-realm.test.mjs ./scripts/keycloak-test-deployment.test.mjs ./infra/keycloak/test/scripts/verify-oidc-artifacts.test.mjs ./infra/keycloak/test/scripts/verify-edge-contract.test.mjs",
     "identity:keycloak:login": "node ./scripts/keycloak-pkce-login.mjs",
     "smoke:domain-packages:tarball": "node --test ./scripts/domain-package-tarball-smoke.test.mjs",
     "package-versions:check": "node ./scripts/publishable-package-version-audit.mjs",
