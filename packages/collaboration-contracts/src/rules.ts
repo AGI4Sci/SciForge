@@ -175,6 +175,8 @@ export const STABLE_ENTITY_ID_FIELDS = {
   project_input: 'projectInputId',
   project: 'projectId',
   project_endpoint_binding: 'projectEndpointBindingId',
+  project_content_space_binding: 'projectId',
+  resource_ref: 'resourceRefId',
   task: 'taskId',
   project_record: 'projectRecordId',
   human_needed: 'humanRequestId',

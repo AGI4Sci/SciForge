@@ -6,6 +6,7 @@ import {
   credentialVersionSchema,
   displayNameSchema,
   entityMetadataShape,
+  executionIdSchema,
   humanAnswerIdSchema,
   humanEndpointIdSchema,
   humanRequestIdSchema,
@@ -35,6 +36,10 @@ import {
   providerManagedContainerPolicySchema,
   providerManagedContainerRefSchema
 } from './provider.js'
+import {
+  taskExecutionFenceSchema,
+  taskFileIntentSchema
+} from './content-space-task-io.js'
 
 function uniqueStrings(values: readonly string[]): boolean {
   return new Set(values).size === values.length
@@ -312,6 +317,10 @@ export const taskSchema = z.object({
   objective: nonEmptyTextSchema,
   completionCriteria: z.array(z.string().trim().min(1).max(2_000)).min(1).max(100),
   dependencyTaskIds: z.array(taskIdSchema).max(1_000).refine(uniqueStrings, 'Task dependencies must be unique'),
+  fileIntent: taskFileIntentSchema.nullable(),
+  resourceRefIds: z.array(z.string().regex(/^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$/u)).max(101)
+    .refine(uniqueStrings, 'Derived ResourceRef IDs must be unique'),
+  executionFence: taskExecutionFenceSchema,
   status: taskStatusSchema,
   attempt: z.number().int().min(0).max(100),
   maxRetries: z.number().int().min(0).max(100),
@@ -327,6 +336,23 @@ export const taskSchema = z.object({
   const terminal = task.status === 'rejected' || task.status === 'succeeded' || task.status === 'failed' || task.status === 'cancelled'
   if (terminal !== (task.completedAt !== undefined)) {
     context.addIssue({ code: 'custom', path: ['completedAt'], message: 'Terminal Task requires completedAt exclusively' })
+  }
+  if (task.executionFence.assigneeAgentId !== task.assigneeAgentId) {
+    context.addIssue({ code: 'custom', path: ['executionFence', 'assigneeAgentId'], message: 'Execution fence assignee must match Task assignee.' })
+  }
+  if ((task.fileIntent === null) !== (task.executionFence.bindingRevision === null)) {
+    context.addIssue({ code: 'custom', path: ['executionFence', 'bindingRevision'], message: 'Only file Tasks carry a binding revision.' })
+  }
+  if (task.fileIntent === null && task.resourceRefIds.length !== 0) {
+    context.addIssue({ code: 'custom', path: ['resourceRefIds'], message: 'Metadata-only Tasks cannot project ResourceRefs.' })
+  }
+  if (task.fileIntent !== null) {
+    if (task.executionFence.bindingRevision !== task.fileIntent.bindingRevision) {
+      context.addIssue({ code: 'custom', path: ['executionFence', 'bindingRevision'], message: 'Execution fence must preserve the Task binding revision.' })
+    }
+    if (task.resourceRefIds.length !== task.fileIntent.inputs.length + 1) {
+      context.addIssue({ code: 'custom', path: ['resourceRefIds'], message: 'ResourceRef projection must be derived from every input and the binding root.' })
+    }
   }
 })
 export type Task = z.infer<typeof taskSchema>
@@ -369,6 +395,7 @@ export const humanNeededSchema = z.object({
   humanRequestId: humanRequestIdSchema,
   projectId: projectIdSchema,
   taskId: taskIdSchema,
+  executionId: executionIdSchema,
   targetUserId: userIdSchema,
   requestedByAgentId: agentIdSchema,
   requiredAssurance: assuranceLevelSchema,
@@ -385,6 +412,7 @@ export const humanAnswerSchema = z.object({
   humanRequestId: humanRequestIdSchema,
   projectId: projectIdSchema,
   taskId: taskIdSchema,
+  executionId: executionIdSchema,
   requestRevision: revisionSchema,
   answeredByUserId: userIdSchema,
   answeredFromHumanEndpointId: humanEndpointIdSchema,

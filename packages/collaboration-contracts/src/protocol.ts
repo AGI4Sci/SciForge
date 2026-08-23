@@ -28,6 +28,7 @@ import {
   sequenceSchema,
   sha256Schema,
   taskIdSchema,
+  executionIdSchema,
   threadIdSchema,
   timestampSchema,
   userIdSchema
@@ -51,6 +52,13 @@ import {
   taskStatusSchema,
   userPrincipalSchema
 } from './entities.js'
+import {
+  contentSpaceAuthorizationProofSchema,
+  portableContentSpaceLocatorSchema,
+  projectContentSpaceBindingSchema,
+  taskFileIntentSchema,
+  cloudResourceRefSchema
+} from './content-space-task-io.js'
 import { collaborationErrorSchema } from './errors.js'
 import {
   humanEndpointProviderContractSchema,
@@ -131,6 +139,7 @@ export const taskOfferedPayloadSchema = z.object({
   type: z.literal('task.offered'),
   projectId: projectIdSchema,
   taskId: taskIdSchema,
+  executionId: executionIdSchema,
   revision: revisionSchema
 }).strict()
 export type TaskOfferedPayload = z.infer<typeof taskOfferedPayloadSchema>
@@ -176,6 +185,7 @@ export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
     type: z.literal('task.cancelled'),
     projectId: projectIdSchema,
     taskId: taskIdSchema,
+    executionId: executionIdSchema,
     revision: revisionSchema,
     reason: z.string().trim().min(1).max(500)
   }).strict(),
@@ -184,6 +194,7 @@ export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
     type: z.literal('task.updated'),
     projectId: projectIdSchema,
     taskId: taskIdSchema,
+    executionId: executionIdSchema,
     revision: revisionSchema,
     status: taskStatusSchema,
     safeFailureCode: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u).optional(),
@@ -457,15 +468,20 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...writeCommandShape, type: z.literal('project.endpoint.bind'), projectId: projectIdSchema, locator: providerLocatorSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('project.endpoint.update'), projectEndpointBindingId: projectEndpointBindingIdSchema, expectedRevision: revisionSchema, locator: providerLocatorSchema.optional(), locatorRevision: revisionSchema.optional(), status: z.enum(['active', 'closed']).optional() }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('project.endpoint.get'), projectId: projectIdSchema }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('task.create'), projectId: projectIdSchema, expectedRevision: revisionSchema, assigneeAgentId: agentIdSchema, title: z.string().trim().min(1).max(200), objective: nonEmptyTextSchema, completionCriteria: z.array(z.string().trim().min(1).max(2_000)).min(1).max(100), dependencyTaskIds: z.array(taskIdSchema).max(1_000) }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('project.content_space.bind'), projectId: projectIdSchema, expectedRevision: revisionSchema, rootLocator: portableContentSpaceLocatorSchema, authorizationProof: contentSpaceAuthorizationProofSchema }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('project.content_space.unbind'), projectId: projectIdSchema, expectedRevision: revisionSchema, expectedBindingRevision: revisionSchema }).strict(),
+  z.object({ ...protocolEnvelopeShape, type: z.literal('project.content_space.get'), projectId: projectIdSchema }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('task.create'), projectId: projectIdSchema, expectedRevision: revisionSchema, assigneeAgentId: agentIdSchema, title: z.string().trim().min(1).max(200), objective: nonEmptyTextSchema, completionCriteria: z.array(z.string().trim().min(1).max(2_000)).min(1).max(100), dependencyTaskIds: z.array(taskIdSchema).max(1_000), fileIntent: taskFileIntentSchema.nullable().optional() }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('task.get'), taskId: taskIdSchema }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('task.transition'), taskId: taskIdSchema, expectedRevision: revisionSchema, status: taskStatusSchema, resultSummary: nonEmptyTextSchema.optional(), safeFailureCode: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u).optional() }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('task.transition'), taskId: taskIdSchema, executionId: executionIdSchema, expectedRevision: revisionSchema, status: taskStatusSchema, resultSummary: nonEmptyTextSchema.optional(), safeFailureCode: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u).optional() }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('task.retry_or_reassign'), taskId: taskIdSchema, previousExecutionId: executionIdSchema, expectedRevision: revisionSchema, assigneeAgentId: agentIdSchema }).strict(),
+  z.object({ ...protocolEnvelopeShape, type: z.literal('resource.get'), resourceRefId: z.string().regex(/^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$/u) }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('project_record.submit'), projectId: projectIdSchema, sourceTaskId: taskIdSchema.nullable(), sourceRevision: revisionSchema, kind: z.enum(['observation', 'proposal', 'decision', 'summary', 'task_result']), body: nonEmptyTextSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('project_record.accept'), projectRecordId: projectRecordIdSchema, expectedRevision: revisionSchema, decision: z.enum(['accepted', 'rejected']) }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('inbox.pull'), recipientType: z.enum(['user', 'agent']), afterSequence: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), limit: z.number().int().min(1).max(1_000) }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('inbox.ack'), inboxMessageId: inboxMessageIdSchema, sequence: sequenceSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('human.answer'), humanRequestId: z.string().regex(/^hrq_[A-Za-z0-9]{12,64}$/u), requestRevision: revisionSchema, answer: nonEmptyTextSchema }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('human.needed.create'), projectId: projectIdSchema, taskId: taskIdSchema, expectedTaskRevision: revisionSchema, targetUserId: userIdSchema, requiredAssurance: assuranceLevelSchema, prompt: nonEmptyTextSchema, expiresAt: timestampSchema }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('human.needed.create'), projectId: projectIdSchema, taskId: taskIdSchema, executionId: executionIdSchema, expectedTaskRevision: revisionSchema, targetUserId: userIdSchema, requiredAssurance: assuranceLevelSchema, prompt: nonEmptyTextSchema, expiresAt: timestampSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('receipt.get'), receiptId: receiptIdSchema }).strict()
 ])
 export type RestRequest = z.infer<typeof restRequestSchema>
@@ -482,7 +498,9 @@ export const restEntitySchema = z.union([
   projectInputSchema,
   projectSchema,
   projectEndpointBindingSchema,
+  projectContentSpaceBindingSchema,
   taskSchema,
+  cloudResourceRefSchema,
   projectRecordSchema,
   humanNeededSchema,
   humanAnswerSchema

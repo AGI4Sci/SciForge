@@ -1,4 +1,5 @@
 export * from './core.js'
+export * from './content-space-task-io.js'
 export * from './entities.js'
 export * from './errors.js'
 export * from './identity.js'
