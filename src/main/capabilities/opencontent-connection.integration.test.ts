@@ -277,10 +277,12 @@ function createHarness(fetchImplementation: typeof fetch) {
     internalServices: services
   })
   const entry = createDomainMainEntry(host)
-  const factory = entry.contributions
-    .map((contribution) => contribution.value)
-    .find(hasCapabilityDefinitions)
-  if (!factory) throw new Error('OpenContent capability factory is missing from its main entry.')
+  const factory: unknown = entry.contributions
+    .find((contribution) => contribution.kind === 'main.capability-factory')
+    ?.value
+  if (!hasCapabilityDefinitions(factory)) {
+    throw new Error('OpenContent capability factory is missing from its main entry.')
+  }
   const registry = new CapabilityRegistry(factory.createDefinitions())
   const broker = new CapabilityBroker(registry, {
     resolveCurrentPrincipal: () => principal
