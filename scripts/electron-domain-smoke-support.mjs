@@ -16,6 +16,7 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { CAPABILITY_BROKER_CONTRACT_VERSION } from '../src/shared/capability-broker-contract-version.mjs'
 
 const TEMPORARY_DIRECTORY_PREFIX = 'sciforge-electron-domain-smoke-'
 const DEFAULT_TIMEOUT_MS = 45_000
@@ -306,6 +307,7 @@ export async function runElectronDomainSmoke({
       )
       phase = 'capability workflow'
       const result = await window.evaluate(smokeRendererWorkflow, {
+        expectedContractVersion: CAPABILITY_BROKER_CONTRACT_VERSION,
         identityInvocationId: createIdentitySmokeInvocationId(),
         requiredCapabilityIds: REQUIRED_CAPABILITY_IDS,
         workspaceDirectory
@@ -444,6 +446,7 @@ export function parseSmokeCliOptions(argv) {
 }
 
 async function smokeRendererWorkflow({
+  expectedContractVersion,
   identityInvocationId,
   requiredCapabilityIds,
   workspaceDirectory
@@ -455,7 +458,7 @@ async function smokeRendererWorkflow({
   }
   const readiness = await api.capabilities.readiness({
     workspaceId: workspaceDirectory,
-    expectedContractVersion: 1,
+    expectedContractVersion,
     requiredCapabilityIds
   })
   if (readiness.status !== 'ready') throw new Error(readiness.message)

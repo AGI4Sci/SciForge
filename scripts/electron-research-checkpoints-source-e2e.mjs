@@ -9,6 +9,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { createSourceSmokeConfiguration } from './electron-domain-smoke-support.mjs'
+import { CAPABILITY_BROKER_CONTRACT_VERSION } from '../src/shared/capability-broker-contract-version.mjs'
 
 const require = createRequire(import.meta.url)
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -546,13 +547,17 @@ async function rendererAgentCall(window, method, input) {
 }
 
 async function requireCapabilities(window, workspaceDirectory) {
-  const result = await window.evaluate(({ workspaceId, requiredCapabilityIds }) => (
+  const result = await window.evaluate(({ expectedContractVersion, workspaceId, requiredCapabilityIds }) => (
     globalThis.sciforge.capabilities.readiness({
       workspaceId,
-      expectedContractVersion: 1,
+      expectedContractVersion,
       requiredCapabilityIds
     })
-  ), { workspaceId: workspaceDirectory, requiredCapabilityIds: REQUIRED_CAPABILITIES })
+  ), {
+    expectedContractVersion: CAPABILITY_BROKER_CONTRACT_VERSION,
+    workspaceId: workspaceDirectory,
+    requiredCapabilityIds: REQUIRED_CAPABILITIES
+  })
   if (result.status !== 'ready') throw new Error(`Required capabilities are not ready: ${result.message}`)
 }
 
