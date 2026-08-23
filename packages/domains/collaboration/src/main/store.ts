@@ -45,7 +45,7 @@ export const collaborationQueueItemSchema = z.object({
   sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   direction: z.enum(['inbound', 'outbound']),
   origin: z.enum(['desktop', 'human-endpoint', 'agent', 'system']),
-  kind: z.enum(['user-message', 'assistant-reply', 'system-status']),
+  kind: z.enum(['user-message', 'assistant-progress', 'assistant-reply', 'system-status']),
   senderUserId: userIdSchema.optional(),
   senderHumanEndpointId: endpointIdSchema.optional(),
   providerMessageId: providerMessageIdSchema.optional(),
@@ -78,8 +78,8 @@ export const collaborationQueueItemSchema = z.object({
       message: 'Human endpoint inbound messages require exact endpoint and provider message identity.'
     })
   }
-  if (item.kind === 'assistant-reply' && item.direction !== 'outbound') {
-    context.addIssue({ code: 'custom', path: ['direction'], message: 'Assistant replies are outbound.' })
+  if ((item.kind === 'assistant-progress' || item.kind === 'assistant-reply') && item.direction !== 'outbound') {
+    context.addIssue({ code: 'custom', path: ['direction'], message: 'Assistant messages are outbound.' })
   }
   const terminal = ['completed', 'failed', 'ignored'].includes(item.state)
   if (terminal !== (item.completedAt !== undefined)) {
@@ -114,7 +114,10 @@ export const collaborationOutboxEntrySchema = z.object({
     'task.result',
     'task.failed',
     'agent.heartbeat',
-    'inbox.ack'
+    'inbox.ack',
+    'capability.approval.create',
+    'capability.approval.result',
+    'capability.approval.withdraw'
   ]),
   body: z.record(z.string(), z.json()),
   state: z.enum(['pending', 'sending', 'reconciling', 'delivered', 'failed']),
@@ -152,6 +155,26 @@ export const collaborationDiagnosticRecordSchema = z.object({
   recoverable: z.boolean()
 }).strict()
 
+export const collaborationLocalRemoteApprovalSchema = z.object({
+  desktopApprovalId: z.string().trim().min(1).max(512),
+  remoteApprovalId: z.string().regex(/^rap_[A-Za-z0-9]{12,64}$/).optional(),
+  projectionId: projectionIdSchema,
+  runtimeId: z.string().trim().min(1).max(128),
+  threadId: z.string().trim().min(1).max(512),
+  turnId: z.string().trim().min(1).max(512),
+  capabilityRequestId: z.string().trim().min(1).max(512),
+  safeSummary: z.string().trim().min(1).max(500),
+  effect: z.enum(['workspace-write', 'external-write', 'destructive']),
+  remoteEligible: z.boolean(),
+  expiresAt: timestampSchema,
+  decisionId: z.string().trim().min(1).max(512).optional(),
+  decision: z.enum(['allow_once', 'deny_once']).optional(),
+  outcome: z.enum(['applied', 'already_terminal', 'not_pending', 'not_eligible']).optional(),
+  state: z.enum(['creating', 'pending', 'deciding', 'reporting', 'completed', 'failed']),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema
+}).strict()
+
 export const collaborationLocalStateSchema = z.object({
   schemaVersion: z.literal(1),
   revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
@@ -172,7 +195,8 @@ export const collaborationLocalStateSchema = z.object({
   queue: z.array(collaborationQueueItemSchema).max(100_000),
   receipts: z.array(collaborationLocalReceiptSchema).max(200_000),
   outbox: z.array(collaborationOutboxEntrySchema).max(100_000),
-  diagnostics: z.array(collaborationDiagnosticRecordSchema).max(256)
+  diagnostics: z.array(collaborationDiagnosticRecordSchema).max(256),
+  remoteApprovals: z.array(collaborationLocalRemoteApprovalSchema).max(10_000).default([])
 }).strict()
 
 export type CollaborationLocalState = z.infer<typeof collaborationLocalStateSchema>
@@ -181,6 +205,7 @@ export type CollaborationQueueItem = z.infer<typeof collaborationQueueItemSchema
 export type CollaborationLocalReceipt = z.infer<typeof collaborationLocalReceiptSchema>
 export type CollaborationOutboxEntry = z.infer<typeof collaborationOutboxEntrySchema>
 export type CollaborationTaskRun = z.infer<typeof collaborationTaskRunSchema>
+export type CollaborationLocalRemoteApproval = z.infer<typeof collaborationLocalRemoteApprovalSchema>
 
 export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.freeze({
   schemaVersion: 1,
@@ -197,7 +222,8 @@ export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.f
   queue: [],
   receipts: [],
   outbox: [],
-  diagnostics: []
+  diagnostics: [],
+  remoteApprovals: []
 })
 
 export interface CollaborationStateBackend {

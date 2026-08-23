@@ -3,6 +3,8 @@ import path from 'node:path'
 import type {
   DomainMainAfterTurnEvent,
   DomainMainBeforeTurnEvent,
+  DomainRemoteCapabilityApproval,
+  DomainRemoteCapabilityApprovalDecision,
   DomainMainTurnLifecycleEvent,
   DomainTurnArtifactEvent
 } from '@sciforge/domain-sdk/host'
@@ -195,6 +197,7 @@ const AUXILIARY_READ_CACHE_MS = 1_000
 const AUXILIARY_READ_CACHE_MAX_ENTRIES = 128
 const TURN_ARTIFACT_CAPTURE_RETRY_MIN_MS = 100
 const TURN_ARTIFACT_CAPTURE_RETRY_MAX_MS = 5_000
+const TURN_ARTIFACT_TERMINAL_REPLAY_GRACE_MS = 1_000
 // `sciforge` remains accepted as a legacy identifier so persisted metadata can
 // fail with a clear "adapter not registered" result. Production startup only
 // registers Codex and Claude; there is no bundled adapter behind this ID.
@@ -220,6 +223,10 @@ type CapabilityApprovalRecord = {
   actionId: string
   invocationId: string
   approvalId: string
+  capabilityRequestId: string
+  remoteEligible: boolean
+  safeSummary: string
+  expiresAt: string
   requestedEvent: Extract<AgentRuntimeEvent, { kind: 'approval_requested' }>
   event: Extract<AgentRuntimeEvent, { kind: 'approval_requested' | 'approval_resolved' }>
   resolve?: (decision: CapabilityAgentApprovalDecision) => void
@@ -295,6 +302,9 @@ export class AgentRuntimeHost {
   private readonly capabilityApprovals = new Map<string, CapabilityApprovalRecord>()
   private readonly capabilityApprovalOrder: string[] = []
   private readonly capabilityApprovalSubscribers = new Map<string, Set<CapabilityApprovalSubscriber>>()
+  private readonly remoteCapabilityApprovalSubscribers = new Set<
+    (approval: DomainRemoteCapabilityApproval) => void | Promise<void>
+  >()
   private readonly governance = new RuntimeGovernanceSupervisor()
   private readonly executionIntegrity = new RuntimeExecutionIntegrityGuard()
   private readonly subagentToolBridge: AgentRuntimeSubagentToolBridge | null
@@ -1137,35 +1147,56 @@ export class AgentRuntimeHost {
             context: withCapturedPrincipalContext(next.context, watch.principalContext)
           }
         }
-        for await (const rawEvent of resolved.adapter.subscribeEvents(resolved.context, {
-          runtimeId: resolved.adapter.id,
-          threadId: watch.threadId,
-          sinceSeq: 0,
-          signal
-        })) {
-          if (signal.aborted || this.disposed) return
-          const event = this.withTurnPrincipal(resolved.adapter.id, rawEvent)
-          if (event.threadId !== watch.threadId || event.turnId?.trim() !== watch.turnId) continue
-          await this.persistExecutorFilePatchReceipt(resolved.adapter.id, watch, event)
-          const state = event.kind === 'turn_lifecycle'
-            ? normalizeAgentRuntimeTurnState(event.state)
-            : undefined
-          if (!state || !isAgentRuntimeTerminalTurnState(state)) continue
-          await this.persistTerminalArtifactBoundaryOnce(
-            resolved.adapter.id,
-            event,
-            watch,
-            state,
-            durableTurnOccurredAt(event)
-          )
-          this.options.services?.contextState?.observeEvent(event)
-          await this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
-          this.observeThreadTurnLifecycle(resolved.adapter.id, event)
-          await this.publishTerminalTurnLifecycle(resolved.adapter.id, resolved.context, event)
-          return
+        const recoveredState = await this.readAcceptedTurnState(
+          resolved.adapter,
+          resolved.context,
+          watch
+        )
+        const replayController = new AbortController()
+        const abortReplay = (): void => replayController.abort()
+        signal.addEventListener('abort', abortReplay, { once: true })
+        const replayTimeout = recoveredState && isAgentRuntimeTerminalTurnState(recoveredState)
+          ? setTimeout(abortReplay, TURN_ARTIFACT_TERMINAL_REPLAY_GRACE_MS)
+          : undefined
+        try {
+          for await (const rawEvent of resolved.adapter.subscribeEvents(resolved.context, {
+            runtimeId: resolved.adapter.id,
+            threadId: watch.threadId,
+            sinceSeq: 0,
+            signal: replayController.signal
+          })) {
+            if (signal.aborted || this.disposed) return
+            const event = this.withTurnPrincipal(resolved.adapter.id, rawEvent)
+            if (event.threadId !== watch.threadId || event.turnId?.trim() !== watch.turnId) continue
+            await this.persistExecutorFilePatchReceipt(resolved.adapter.id, watch, event)
+            const state = event.kind === 'turn_lifecycle'
+              ? normalizeAgentRuntimeTurnState(event.state)
+              : undefined
+            if (!state || !isAgentRuntimeTerminalTurnState(state)) continue
+            await this.persistTerminalArtifactBoundaryOnce(
+              resolved.adapter.id,
+              event,
+              watch,
+              state,
+              durableTurnOccurredAt(event)
+            )
+            this.options.services?.contextState?.observeEvent(event)
+            await this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
+            this.observeThreadTurnLifecycle(resolved.adapter.id, event)
+            await this.publishTerminalTurnLifecycle(resolved.adapter.id, resolved.context, event)
+            return
+          }
+        } finally {
+          if (replayTimeout) clearTimeout(replayTimeout)
+          signal.removeEventListener('abort', abortReplay)
         }
-        const state = await this.readAcceptedTurnState(resolved.adapter, resolved.context, watch)
-        if (state && isAgentRuntimeTerminalTurnState(state) && state !== 'completed') {
+        if (signal.aborted || this.disposed) return
+        const state = recoveredState ?? await this.readAcceptedTurnState(
+          resolved.adapter,
+          resolved.context,
+          watch
+        )
+        if (state && isAgentRuntimeTerminalTurnState(state)) {
           await this.releaseAcceptedTurnBoundaryFromStatus(resolved.adapter.id, watch, state)
           return
         }
@@ -1243,8 +1274,34 @@ export class AgentRuntimeHost {
     if (status.id.trim() !== watch.threadId || status.runtimeId !== adapter.id) {
       throw new Error('Accepted turn artifact recovery resolved to a different thread.')
     }
-    if (status.latestTurnId?.trim() !== watch.turnId) return undefined
-    return normalizeAgentRuntimeTurnState(status.latestTurnStatus ?? status.status) ?? undefined
+    if (status.latestTurnId?.trim() === watch.turnId) {
+      return normalizeAgentRuntimeTurnState(status.latestTurnStatus ?? status.status) ?? undefined
+    }
+    let cursor: string | undefined
+    const seenCursors = new Set<string>()
+    for (let pageCount = 0; pageCount < 100; pageCount += 1) {
+      const page = await adapter.readThreadPage(context, {
+        runtimeId: adapter.id,
+        threadId: watch.threadId,
+        ...(cursor ? { cursor } : {}),
+        limit: 100,
+        ...(watch.workspaceLocator ? { workspaceLocator: watch.workspaceLocator } : {})
+      })
+      if (page.threadId.trim() !== watch.threadId || page.runtimeId !== adapter.id) {
+        throw new Error('Accepted turn artifact recovery page resolved to a different thread.')
+      }
+      const exactTurn = page.turns.find((turn) => turn.id.trim() === watch.turnId)
+      if (exactTurn) {
+        return normalizeAgentRuntimeTurnState(exactTurn.status) ?? undefined
+      }
+      cursor = page.nextCursor ?? undefined
+      if (!cursor) return undefined
+      if (seenCursors.has(cursor)) {
+        throw new Error('Accepted turn artifact recovery returned a repeated history cursor.')
+      }
+      seenCursors.add(cursor)
+    }
+    throw new Error('Accepted turn artifact recovery exceeded the history page limit.')
   }
 
   private async persistTerminalArtifactBoundaryOnce(
@@ -1755,6 +1812,8 @@ export class AgentRuntimeHost {
 
     const approvalId = `capability-approval-${randomUUID()}`
     const createdAt = new Date().toISOString()
+    const ttlMs = Math.max(1_000, Math.min(request.remoteApproval?.ttlMs ?? 5 * 60_000, 5 * 60_000))
+    const expiresAt = new Date(Date.parse(createdAt) + ttlMs).toISOString()
     const inputPreview = capabilityApprovalInputPreview(request)
     const event: Extract<AgentRuntimeEvent, { kind: 'approval_requested' }> = {
       kind: 'approval_requested',
@@ -1788,6 +1847,10 @@ export class AgentRuntimeHost {
         actionId: request.actionId,
         invocationId: request.invocationId,
         approvalId,
+        capabilityRequestId: request.invocationId,
+        remoteEligible: request.remoteApproval?.eligible === true,
+        safeSummary: (request.remoteApproval?.safeSummary ?? request.title).trim().slice(0, 500),
+        expiresAt,
         requestedEvent: event,
         event,
         resolve
@@ -1803,8 +1866,45 @@ export class AgentRuntimeHost {
       this.capabilityApprovalOrder.push(approvalId)
       this.subagentToolBridge?.suspendChildExecutionDeadline(runtimeId, threadId, approvalId)
       this.publishCapabilityApprovalEvent(record, event)
+      this.publishRemoteCapabilityApproval(record)
       this.pruneCapabilityApprovalHistory()
     })
+  }
+
+  subscribeRemoteCapabilityApprovals(
+    listener: (approval: DomainRemoteCapabilityApproval) => void | Promise<void>
+  ): () => void {
+    this.remoteCapabilityApprovalSubscribers.add(listener)
+    for (const approvalId of this.capabilityApprovalOrder) {
+      const record = this.capabilityApprovals.get(approvalId)
+      if (record?.resolve) void listener(this.remoteCapabilityApproval(record))
+    }
+    return () => { this.remoteCapabilityApprovalSubscribers.delete(listener) }
+  }
+
+  async decideRemoteCapabilityApproval(
+    input: DomainRemoteCapabilityApprovalDecision
+  ): Promise<'applied' | 'already_terminal' | 'not_pending' | 'not_eligible'> {
+    const record = this.capabilityApprovals.get(input.approvalId)
+    if (!record) return 'not_pending'
+    if (!record.resolve) return 'already_terminal'
+    if (
+      record.runtimeId !== input.runtimeId
+      || record.threadId !== input.threadId
+      || record.turnId !== input.turnId
+      || record.capabilityRequestId !== input.capabilityRequestId
+    ) return 'not_pending'
+    if (!record.remoteEligible && input.decision === 'allow_once') return 'not_eligible'
+    if (record.expiresAt <= new Date().toISOString()) {
+      this.settleCapabilityApproval(record, 'cancelled', 'Remote capability approval expired.')
+      return 'not_pending'
+    }
+    this.settleCapabilityApproval(
+      record,
+      input.decision === 'allow_once' ? 'allowed' : 'denied',
+      `Remote capability confirmation ${input.decision}.`
+    )
+    return 'applied'
   }
 
   cancelCapabilityApprovalTurn(identity: AgentRuntimeToolTurnIdentity, reason = 'turn_cancelled'): number {
@@ -1837,6 +1937,7 @@ export class AgentRuntimeHost {
       for (const subscriber of subscribers) subscriber.close()
     }
     this.capabilityApprovalSubscribers.clear()
+    this.remoteCapabilityApprovalSubscribers.clear()
     this.capabilityApprovals.clear()
     this.capabilityApprovalOrder.splice(0)
   }
@@ -3434,6 +3535,32 @@ export class AgentRuntimeHost {
     void this.options.services?.trace?.observeEvent(record.runtimeId, event).catch(() => undefined)
   }
 
+  private remoteCapabilityApproval(record: CapabilityApprovalRecord): DomainRemoteCapabilityApproval {
+    return Object.freeze({
+      approvalId: record.approvalId,
+      runtimeId: record.runtimeId,
+      threadId: record.threadId,
+      turnId: record.turnId,
+      capabilityRequestId: record.capabilityRequestId,
+      actionId: record.actionId,
+      invocationId: record.invocationId,
+      safeSummary: record.safeSummary,
+      effect: record.requestedEvent.meta?.effect as DomainRemoteCapabilityApproval['effect'],
+      remoteEligible: record.remoteEligible,
+      createdAt: record.requestedEvent.createdAt ?? new Date().toISOString(),
+      expiresAt: record.expiresAt,
+      state: record.resolve ? 'pending' : record.event.kind === 'approval_resolved'
+        ? record.event.decision === 'allowed' ? 'approved'
+          : record.event.decision === 'denied' ? 'denied' : 'cancelled'
+        : 'cancelled'
+    })
+  }
+
+  private publishRemoteCapabilityApproval(record: CapabilityApprovalRecord): void {
+    const approval = this.remoteCapabilityApproval(record)
+    for (const listener of this.remoteCapabilityApprovalSubscribers) void listener(approval)
+  }
+
   private settleCapabilityApproval(
     record: CapabilityApprovalRecord,
     decision: CapabilityAgentApprovalDecision,
@@ -3461,6 +3588,7 @@ export class AgentRuntimeHost {
       message,
       createdAt: new Date().toISOString()
     })
+    this.publishRemoteCapabilityApproval(record)
     resolve(decision)
     this.pruneCapabilityApprovalHistory()
   }
@@ -4146,8 +4274,7 @@ export class AgentRuntimeHost {
     if (
       !clientDirectiveId ||
       !watch.deliveryAttemptId ||
-      !watch.boundaryLeaseId ||
-      state === 'completed'
+      !watch.boundaryLeaseId
     ) return
     const key = turnGovernanceKey(runtimeId, watch.threadId, watch.turnId)
     const existing = this.terminalLifecyclePublications.get(key)
@@ -4155,6 +4282,9 @@ export class AgentRuntimeHost {
     const publication = this.options.turnArtifacts!.publishLifecycleSettlement(Object.freeze({
       kind: 'after-turn',
       settlementSource: 'runtime',
+      // A completed status without its durable terminal event cannot safely
+      // materialize artifacts. Close it as cancelled so the exact accepted
+      // boundary is released without inventing a completion timestamp.
       state: state === 'failed' ? 'failed' : 'cancelled',
       issuerEpoch: watch.issuerEpoch,
       deliveryAttemptOrdinal: watch.deliveryAttemptOrdinal,

@@ -269,6 +269,7 @@ export class FakeCollaborationRepository {
       projectInputs: new Map(),
       humanRequests: new Map(),
       humanAnswers: new Map(),
+      remoteApprovals: new Map(),
       projects: new Map(),
       projectMembers: new Map(),
       tasks: new Map(),
@@ -565,6 +566,34 @@ export class FakeCollaborationRepository {
   async insertHumanAnswer(answer) {
     if (this.state.humanAnswers.has(answer.humanAnswerId)) throw new Error('fake repository duplicate human answer')
     this.state.humanAnswers.set(answer.humanAnswerId, copy(answer))
+  }
+
+  async getRemoteApproval(remoteApprovalId) {
+    return copy(this.state.remoteApprovals.get(remoteApprovalId) ?? null)
+  }
+
+  async getRemoteApprovalByReferenceDigest(referenceDigest) {
+    return copy([...this.state.remoteApprovals.values()].find(
+      (approval) => approval.referenceDigest === referenceDigest
+    ) ?? null)
+  }
+
+  async listExpiredRemoteApprovals(now, limit) {
+    return copy([...this.state.remoteApprovals.values()]
+      .filter((approval) => approval.status === 'pending' && approval.expiresAt <= now)
+      .sort((left, right) => left.expiresAt.localeCompare(right.expiresAt))
+      .slice(0, limit))
+  }
+
+  async insertRemoteApproval(approval) {
+    if (this.state.remoteApprovals.has(approval.remoteApprovalId)) {
+      throw new Error('fake repository duplicate remote approval')
+    }
+    this.state.remoteApprovals.set(approval.remoteApprovalId, copy(approval))
+  }
+
+  async updateRemoteApproval(approval, expectedRevision) {
+    revisionUpdate(this.state.remoteApprovals, approval.remoteApprovalId, approval, expectedRevision)
   }
 
   async getProject(projectId) {

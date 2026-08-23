@@ -553,7 +553,8 @@ function initialState(user: UserPrincipal = userPrincipalFixture): Collaboration
     queue: [],
     receipts: [],
     outbox: [],
-    diagnostics: []
+    diagnostics: [],
+    remoteApprovals: []
   }
 }
 

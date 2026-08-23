@@ -118,6 +118,10 @@ export const providerManagedContainerResultSchema = z.object({
 }).strict()
 export type ProviderManagedContainerResult = z.infer<typeof providerManagedContainerResultSchema>
 
+/** Versioned, short-lived display reference. The server stores only its digest. */
+export const remoteApprovalReferenceSchema = z.string().regex(/^AP1-[A-Z2-9]{20}$/u)
+export type RemoteApprovalReference = z.infer<typeof remoteApprovalReferenceSchema>
+
 const providerEventEnvelopeShape = {
   protocolVersion: protocolVersionSchema,
   provider: providerIdSchema,
@@ -197,6 +201,19 @@ export const providerHumanAnswerRespondedEventSchema = z.object({
 }).strict()
 export type ProviderHumanAnswerRespondedEvent = z.infer<typeof providerHumanAnswerRespondedEventSchema>
 
+export const providerRemoteApprovalRespondedEventSchema = z.object({
+  ...providerEventEnvelopeShape,
+  type: z.literal('provider.remote_approval.responded'),
+  identity: providerIdentitySchema,
+  locator: providerLocatorSchema,
+  providerMessageId: providerMessageIdSchema,
+  approvalReference: remoteApprovalReferenceSchema,
+  decision: z.enum(['allow_once', 'deny_once'])
+}).strict()
+export type ProviderRemoteApprovalRespondedEvent = z.infer<
+  typeof providerRemoteApprovalRespondedEventSchema
+>
+
 export const providerLifecycleEventSchema = z.object({
   ...providerEventEnvelopeShape,
   type: z.literal('provider.lifecycle.changed'),
@@ -213,16 +230,23 @@ export const providerEventSchema = z.discriminatedUnion('type', [
   providerChallengeRespondedEventSchema,
   providerChallengeInvalidEventSchema,
   providerHumanAnswerRespondedEventSchema,
+  providerRemoteApprovalRespondedEventSchema,
   providerLifecycleEventSchema
 ])
 export type ProviderEvent = z.infer<typeof providerEventSchema>
+
+const providerMessagePresentationSchema = z.object({
+  disposition: z.literal('collapsible'),
+  summary: z.string().trim().min(1).max(120)
+}).strict()
 
 const providerLocatorMessageSendRequestSchema = z.object({
   protocolVersion: protocolVersionSchema,
   type: z.literal('provider.send.message'),
   locator: providerLocatorSchema,
   clientMessageId: providerOpaqueIdSchema,
-  text: nonEmptyTextSchema
+  text: nonEmptyTextSchema,
+  presentation: providerMessagePresentationSchema.optional()
 }).strict()
 
 const providerDirectMessageSendRequestSchema = z.object({
@@ -230,7 +254,8 @@ const providerDirectMessageSendRequestSchema = z.object({
   type: z.literal('provider.send.message'),
   recipient: providerDirectRecipientSchema,
   clientMessageId: providerOpaqueIdSchema,
-  text: nonEmptyTextSchema
+  text: nonEmptyTextSchema,
+  presentation: providerMessagePresentationSchema.optional()
 }).strict()
 
 export const providerSendRequestSchema = z.union([
@@ -246,6 +271,16 @@ export const providerSendRequestSchema = z.union([
   }).strict()
 ])
 export type ProviderSendRequest = z.infer<typeof providerSendRequestSchema>
+
+export const providerUpdateMessageRequestSchema = z.object({
+  protocolVersion: protocolVersionSchema,
+  type: z.literal('provider.update.message'),
+  locator: providerLocatorSchema,
+  providerMessageId: providerMessageIdSchema,
+  clientMessageId: providerOpaqueIdSchema,
+  text: nonEmptyTextSchema
+}).strict()
+export type ProviderUpdateMessageRequest = z.infer<typeof providerUpdateMessageRequestSchema>
 
 export const providerSendResultSchema = z.discriminatedUnion('type', [
   z.object({
@@ -387,7 +422,8 @@ export const humanEndpointProviderContractSchema = z.object({
     locatorDiscovery: z.boolean(),
     identityChallenge: z.literal(true),
     directMessages: z.literal(true),
-    managedContainers: z.boolean().optional()
+    managedContainers: z.boolean().optional(),
+    messageUpdates: z.boolean().optional()
   }).strict(),
   onboarding: z.object({
     realmLabel: displayNameSchema,
@@ -407,6 +443,7 @@ export interface HumanEndpointProvider {
   verifyIdentity(request: ProviderVerifyIdentityRequest): Promise<ProviderVerifyIdentityResult>
   events(request: Extract<ProviderLifecycleRequest, { type: 'provider.lifecycle.start' }>): AsyncIterable<ProviderEvent>
   send(request: ProviderSendRequest): Promise<ProviderSendResult>
+  updateMessage?(request: ProviderUpdateMessageRequest): Promise<ProviderSendResult>
   listLocators(request: ProviderLocatorListRequest): Promise<ProviderLocatorListResult>
   updateLocator(request: ProviderLocatorMutationRequest): Promise<ProviderLocatorMutationResult>
   manageContainer?(request: ProviderManagedContainerRequest): Promise<ProviderManagedContainerResult>

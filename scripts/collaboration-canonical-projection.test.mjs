@@ -139,7 +139,10 @@ test('10.2 canonical ProjectionCoordinator serializes one Session and deduplicat
   assert.equal(rig.cloudOutbox.deliveries.length, 2)
   assert.deepEqual(
     rig.cloudOutbox.deliveries.map((delivery) => delivery.command.text),
-    ['【SciForge Agent】\n第一条唯一回复', '【SciForge Agent】\n第二条唯一回复']
+    [
+      '【SciForge Agent · 最终报告】\n第一条唯一回复',
+      '【SciForge Agent · 最终报告】\n第二条唯一回复'
+    ]
   )
 
   await assert.rejects(
@@ -296,7 +299,10 @@ test('10.2 canonical store recovers queued/reconciling work with the stable dire
   const final = reopenedStore.snapshot()
   assert.equal(final.queue.find((item) => item.queueItemId === accepted.queueItemId)?.attempts, 2)
   assert.equal(recoveredOutbox.deliveries.length, 1)
-  assert.equal(recoveredOutbox.deliveries[0].command.text, '【SciForge Agent】\n恢复后的唯一回复')
+  assert.equal(
+    recoveredOutbox.deliveries[0].command.text,
+    '【SciForge Agent · 最终报告】\n恢复后的唯一回复'
+  )
 })
 
 test('10.2 different canonical projections can execute concurrently without retargeting either Session', async () => {

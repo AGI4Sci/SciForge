@@ -37,6 +37,11 @@ import type { ManagedGuiMcpLaunchConfig } from '../../managed-gui-mcp-config'
 const RUNTIME_API_KEY_ENV = 'SCIFORGE_RUNTIME_API_KEY'
 export const CODEX_PLAN_GATEWAY_PROVIDER_ID = CODEX_PLAN_PROVIDER_ID
 const CODEX_MANAGED_DIRS = ['sessions', 'memories', 'logs'] as const
+const WINDOWS_CODEX_RUNTIME_COMPANIONS = [
+  'codex-code-mode-host.exe',
+  'codex-command-runner.exe',
+  'codex-windows-sandbox-setup.exe'
+] as const
 const LEGACY_DIRECT_WORKER_ENV_PREFIXES = [
   ...DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
   ...MODEL_ROUTER_PRIVATE_ENV_PREFIXES,
@@ -360,14 +365,37 @@ async function materializePackagedWindowsCodex(source: string, homeDir: string):
   const runtimeDir = join(homeDir, '.sciforge', 'codex-runtime')
   const target = join(runtimeDir, 'codex.exe')
   await mkdir(runtimeDir, { recursive: true })
+
+  const sourceDirectory = dirname(source)
+  const codeModeHost = join(sourceDirectory, WINDOWS_CODEX_RUNTIME_COMPANIONS[0])
+  if (!(await executableFileExists(codeModeHost, 'win32'))) {
+    throw new Error(
+      `The packaged Codex runtime is missing ${WINDOWS_CODEX_RUNTIME_COMPANIONS[0]}.`
+    )
+  }
+
+  await Promise.all(WINDOWS_CODEX_RUNTIME_COMPANIONS.map(async (name) => {
+    const companionSource = join(sourceDirectory, name)
+    if (await executableFileExists(companionSource, 'win32')) {
+      await materializePackagedWindowsRuntimeFile(companionSource, join(runtimeDir, name))
+    }
+  }))
+  await materializePackagedWindowsRuntimeFile(source, target)
+  return target
+}
+
+async function materializePackagedWindowsRuntimeFile(
+  source: string,
+  target: string
+): Promise<void> {
   try {
     const [sourceInfo, targetInfo] = await Promise.all([stat(source), stat(target)])
-    if (sourceInfo.size === targetInfo.size && targetInfo.mtimeMs >= sourceInfo.mtimeMs) return target
+    if (sourceInfo.size === targetInfo.size && targetInfo.mtimeMs >= sourceInfo.mtimeMs) return
   } catch {
     // Missing or stale target: refresh it below.
   }
 
-  const temporary = join(runtimeDir, `codex-${process.pid}-${Date.now()}.tmp`)
+  const temporary = `${target}-${process.pid}-${Date.now()}.tmp`
   try {
     await copyFile(source, temporary)
     await rm(target, { force: true })
@@ -375,7 +403,6 @@ async function materializePackagedWindowsCodex(source: string, homeDir: string):
   } finally {
     await rm(temporary, { force: true }).catch(() => undefined)
   }
-  return target
 }
 
 function prependCommandDirectoryToPath(env: NodeJS.ProcessEnv, command: string): NodeJS.ProcessEnv {

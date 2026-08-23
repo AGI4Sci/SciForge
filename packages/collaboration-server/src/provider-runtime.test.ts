@@ -850,6 +850,7 @@ describe('provider runtime', () => {
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         type: 'projection.message.outbound',
         locator: LOCATOR,
+        kind: 'assistant_progress',
         text: '桌面消息'
       }),
       inboxMessage(2, 'msg-2', 'provider.notification.outbound', {
@@ -901,6 +902,13 @@ describe('provider runtime', () => {
 
     expect(provider.sendRequests.map((request) => request.clientMessageId)).toEqual(['msg-1', 'msg-1', 'msg-2'])
     expect(provider.sendRequests.map((request) => request.text)).toEqual(['桌面消息', '桌面消息', '需要你的决定'])
+    expect(provider.sendRequests.map((request) => (
+      'presentation' in request ? request.presentation : undefined
+    ))).toEqual([
+      { disposition: 'collapsible', summary: '中间进展' },
+      { disposition: 'collapsible', summary: '中间进展' },
+      undefined
+    ])
     expect(acknowledgements).toEqual([1, 2])
     expect(provider.sendRequests).toHaveLength(sendsAfterDelivery)
   })
@@ -1011,6 +1019,156 @@ describe('provider runtime', () => {
     expect(provider.sendRequests[0]?.text.endsWith(replyCommand)).toBe(true)
   })
 
+  it('retries a durable approval-card update and acknowledges it without replaying the decision', async () => {
+    const retryable: ProviderSendResult = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.send.failed',
+      clientMessageId: 'msg-approval-update',
+      retryable: true,
+      providerErrorCode: 'provider_unavailable',
+      safeMessage: 'Temporarily unavailable.'
+    }
+    const succeeded: ProviderSendResult = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.send.succeeded',
+      clientMessageId: 'msg-approval-update',
+      providerMessageId: '31415',
+      sentAt: '2026-08-15T00:00:01.000Z'
+    }
+    const provider = new FakeProvider([], [], undefined, [retryable, succeeded])
+    const ledger = new FakeRuntimeStore()
+    let ackedSequence = 0
+    ledger.pendingEndpointIds = () => ackedSequence ? [] : ['hep_1']
+    const message = inboxMessage(1, 'msg-approval-update', 'provider.message.update.outbound', {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.message.update.outbound',
+      remoteApprovalId: 'rap_abcdefghijkl',
+      locator: LOCATOR,
+      providerMessageId: '31415',
+      text: '本次权限审批已处理。',
+      fallbackText: '本次权限审批已处理。'
+    })
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider],
+      store: ledger,
+      repository: {
+        getEndpoint: async () => ({
+          humanEndpointId: 'hep_1', userId: 'usr_1', provider: 'fake', realmId: 'realm-1',
+          providerUserId: 'remote-user-1', assurance: 'verified' as const, status: 'active' as const,
+          revision: 1, verifiedAt: '2026-08-15T00:00:00.000Z', updatedAt: '2026-08-15T00:00:00.000Z'
+        }),
+        getInboxCursor: async () => ({
+          recipient: { kind: 'human_endpoint' as const, id: 'hep_1' },
+          nextSequence: 2, ackedSequence, updatedAt: '2026-08-15T00:00:00.000Z'
+        })
+      },
+      authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
+      outboxPollMs: 20,
+      service: {
+        ...emptyService(),
+        pullInbox: async () => ({ messages: ackedSequence ? [] : [message], ackedSequence, nextSequence: 2 }),
+        ackInboxMessage: async () => {
+          ackedSequence = 1
+          return { ackedSequence, nextSequence: 2 }
+        }
+      }
+    })
+    await runtime.start()
+    await waitUntil(() => ackedSequence === 1, 1_500)
+    await runtime.stop()
+    expect(provider.updateRequests).toHaveLength(2)
+    expect(provider.updateRequests[0]).toMatchObject({
+      providerMessageId: '31415',
+      clientMessageId: 'msg-approval-update'
+    })
+  })
+
+  it('appends one safe fallback after a terminal approval-card edit failure', async () => {
+    const failed: ProviderSendResult = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION, type: 'provider.send.failed',
+      clientMessageId: 'msg-approval-update-terminal', retryable: false,
+      providerErrorCode: 'message_not_editable', safeMessage: 'The provider rejected the edit.'
+    }
+    const provider = new FakeProvider([], [], undefined, [failed])
+    const ledger = new FakeRuntimeStore()
+    let ackedSequence = 0
+    let fallbackCount = 0
+    ledger.pendingEndpointIds = () => ackedSequence ? [] : ['hep_1']
+    const message = inboxMessage(1, 'msg-approval-update-terminal', 'provider.message.update.outbound', {
+      protocolVersion: CURRENT_PROTOCOL_VERSION, type: 'provider.message.update.outbound',
+      remoteApprovalId: 'rap_abcdefghijkl', locator: LOCATOR, providerMessageId: '27182',
+      text: '本次权限已拒绝。', fallbackText: '本次权限已拒绝。'
+    })
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider], store: ledger, outboxPollMs: 20,
+      repository: {
+        getEndpoint: async () => ({ humanEndpointId: 'hep_1', userId: 'usr_1', provider: 'fake',
+          realmId: 'realm-1', providerUserId: 'remote-user-1', assurance: 'verified' as const,
+          status: 'active' as const, revision: 1, verifiedAt: '2026-08-15T00:00:00.000Z',
+          updatedAt: '2026-08-15T00:00:00.000Z' }),
+        getInboxCursor: async () => ({ recipient: { kind: 'human_endpoint' as const, id: 'hep_1' },
+          nextSequence: 2, ackedSequence, updatedAt: '2026-08-15T00:00:00.000Z' })
+      },
+      authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
+      service: { ...emptyService(),
+        pullInbox: async () => ({ messages: ackedSequence ? [] : [message], ackedSequence, nextSequence: 2 }),
+        enqueueRemoteApprovalFallback: async () => { fallbackCount += 1 },
+        ackInboxMessage: async () => { ackedSequence = 1; return { ackedSequence, nextSequence: 2 } }
+      }
+    })
+    await runtime.start()
+    await waitUntil(() => ackedSequence === 1, 1_500)
+    await runtime.stop()
+    expect(provider.updateRequests).toHaveLength(1)
+    expect(fallbackCount).toBe(1)
+  })
+
+  it('recovers a missing fallback from a terminal edit delivery after restart', async () => {
+    const failed: ProviderSendResult = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION, type: 'provider.send.failed',
+      clientMessageId: 'msg-approval-update-crashed', retryable: false,
+      providerErrorCode: 'message_not_editable', safeMessage: 'The provider rejected the edit.'
+    }
+    const provider = new FakeProvider([], [], undefined, [])
+    const ledger = new FakeRuntimeStore()
+    await ledger.recordDelivery('fake', failed.clientMessageId, failed)
+    let ackedSequence = 0
+    let fallbackCount = 0
+    let fallbackIdempotencyKey: string | undefined
+    ledger.pendingEndpointIds = () => ackedSequence ? [] : ['hep_1']
+    const message = inboxMessage(1, failed.clientMessageId, 'provider.message.update.outbound', {
+      protocolVersion: CURRENT_PROTOCOL_VERSION, type: 'provider.message.update.outbound',
+      remoteApprovalId: 'rap_abcdefghijkl', locator: LOCATOR, providerMessageId: '27182',
+      text: '本次权限已拒绝。', fallbackText: '本次权限已拒绝。'
+    })
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider], store: ledger, outboxPollMs: 20,
+      repository: {
+        getEndpoint: async () => ({ humanEndpointId: 'hep_1', userId: 'usr_1', provider: 'fake',
+          realmId: 'realm-1', providerUserId: 'remote-user-1', assurance: 'verified' as const,
+          status: 'active' as const, revision: 1, verifiedAt: '2026-08-15T00:00:00.000Z',
+          updatedAt: '2026-08-15T00:00:00.000Z' }),
+        getInboxCursor: async () => ({ recipient: { kind: 'human_endpoint' as const, id: 'hep_1' },
+          nextSequence: 2, ackedSequence, updatedAt: '2026-08-15T00:00:00.000Z' })
+      },
+      authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
+      service: { ...emptyService(),
+        pullInbox: async () => ({ messages: ackedSequence ? [] : [message], ackedSequence, nextSequence: 2 }),
+        enqueueRemoteApprovalFallback: async (input) => {
+          fallbackCount += 1
+          fallbackIdempotencyKey = input.idempotencyKey
+        },
+        ackInboxMessage: async () => { ackedSequence = 1; return { ackedSequence, nextSequence: 2 } }
+      }
+    })
+    await runtime.start()
+    await waitUntil(() => ackedSequence === 1, 1_500)
+    await runtime.stop()
+    expect(provider.updateRequests).toHaveLength(0)
+    expect(fallbackCount).toBe(1)
+    expect(fallbackIdempotencyKey).toMatch(/^idem_remote_fallback_[a-f0-9]{64}$/u)
+  })
+
   it('uses the canonical crashed claim id when the same dedupe key is replayed with a new event id', async () => {
     const event = messageEvent('event-replayed-new', 'cursor-replayed-new', 'same-remote-message')
     const provider = new FakeProvider(event)
@@ -1081,6 +1239,7 @@ class FakeProvider implements HumanEndpointProvider {
     type: 'provider.locator.page',
     locators: []
   }
+  readonly updateRequests: ProviderUpdateMessageRequest[] = []
   diagnoseCalls = 0
 
   constructor(
@@ -1088,10 +1247,22 @@ class FakeProvider implements HumanEndpointProvider {
     private readonly sendResults: ProviderSendResult[] = [],
     private readonly managedContainerHandler?: (
       request: ProviderManagedContainerRequest
-    ) => Promise<ProviderManagedContainerResult>
+    ) => Promise<ProviderManagedContainerResult>,
+    private readonly updateResults: ProviderSendResult[] = []
   ) {
     this.eventsToYield = Array.isArray(event) ? event : [event]
     this.contract.capabilities.managedContainers = Boolean(managedContainerHandler)
+  }
+
+  async updateMessage(request: ProviderUpdateMessageRequest): Promise<ProviderSendResult> {
+    this.updateRequests.push(structuredClone(request))
+    return this.updateResults.shift() ?? {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.send.succeeded',
+      clientMessageId: request.clientMessageId,
+      providerMessageId: request.providerMessageId,
+      sentAt: '2026-08-15T00:00:01.000Z'
+    }
   }
 
   async *events(request: Extract<ProviderLifecycleRequest, { type: 'provider.lifecycle.start' }>): AsyncIterable<ProviderEvent> {
@@ -1282,7 +1453,11 @@ function emptyService() {
     applyProviderLocatorChange: async () => ({ kind: 'personal_projection' as const, resourceId: 'projection-1' }),
     pullInbox: async () => ({ messages: [], ackedSequence: 0, nextSequence: 1 }),
     ackInboxMessage: async () => ({ ackedSequence: 0, nextSequence: 1 }),
-    recordRejectedBoundary: async () => undefined
+    recordRejectedBoundary: async () => undefined,
+    decideRemoteCapabilityApproval: async () => ({}),
+    confirmRemoteApprovalCard: async () => undefined,
+    enqueueRemoteApprovalFallback: async () => undefined,
+    expireRemoteCapabilityApprovals: async () => 0
   }
 }
 

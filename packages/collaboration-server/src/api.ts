@@ -246,6 +246,18 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     case 'projection.list': return collectionResponse(command,
       (await service.listProjections(requiredActor(actor), command.ownerUserId)).map(toProjection))
     case 'projection.update': return entityResponse(command, toProjection(await service.updateProjection(requiredUser(actor), command)))
+    case 'capability.approval.create': {
+      const created = await service.createRemoteCapabilityApproval(requiredAgent(actor), command)
+      return response(command, { type: 'capability.approval.created', approval: created.approval })
+    }
+    case 'capability.approval.result': {
+      const result = await service.reportRemoteCapabilityApprovalResult(requiredAgent(actor), command)
+      return response(command, { type: 'rest.entity', entity: result.entity })
+    }
+    case 'capability.approval.withdraw': {
+      const result = await service.withdrawRemoteCapabilityApproval(requiredAgent(actor), command)
+      return response(command, { type: 'rest.entity', entity: result.entity })
+    }
     case 'projection.message.publish': {
       const device = requiredAgent(actor)
       await service.publishProjectionMessage(device, command)

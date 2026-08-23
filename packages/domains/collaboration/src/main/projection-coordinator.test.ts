@@ -94,7 +94,8 @@ test('projection.updated refreshes the remote revision before the next message e
 
 test('labels Generic Bot outbound text by its real Desktop or Agent origin without double-prefixing', () => {
   assert.equal(projectedOutboundText('user-message', 'hello'), '【电脑端】\nhello')
-  assert.equal(projectedOutboundText('assistant-reply', 'answer'), '【SciForge Agent】\nanswer')
+  assert.equal(projectedOutboundText('assistant-progress', 'working'), '【SciForge Agent · 中间进展】\nworking')
+  assert.equal(projectedOutboundText('assistant-reply', 'answer'), '【SciForge Agent · 最终报告】\nanswer')
   assert.equal(
     projectedOutboundText('user-message', '【电脑端】\nalready labeled'),
     '【电脑端】\nalready labeled'
@@ -153,7 +154,7 @@ test('startup transcript reconciliation preserves an existing receipt when histo
     threadId: 'fixed-thread-1',
     turnId: 'turn-existing',
     itemId: 'assistant-existing',
-    kind: 'assistant-message' as const,
+    kind: 'assistant-final' as const,
     text: 'original delivered reply',
     occurredAt: TEST_LATER_TIMESTAMP
   }
@@ -162,7 +163,7 @@ test('startup transcript reconciliation preserves an existing receipt when histo
   assert.equal(deliveries.length, 1)
   assert.equal(
     (deliveries[0]?.command as { text?: string } | undefined)?.text,
-    '【SciForge Agent】\noriginal delivered reply'
+    '【SciForge Agent · 最终报告】\noriginal delivered reply'
   )
   assert.equal(store.snapshot().queue.length, 1)
   await store.transact((draft) => {
@@ -197,6 +198,100 @@ test('startup transcript reconciliation preserves an existing receipt when histo
     }),
     /identity collision/u
   )
+})
+
+test('mirrors visible assistant progress as collapsible delivery before the final report', async () => {
+  const store = await projectionStore()
+  const deliveries: Array<{ command: { kind: string; text: string }; idempotencyKey: string }> = []
+  const coordinator = new ProjectionCoordinator({
+    store,
+    agentExecution: {
+      run: async () => { throw new Error('Transcript mirroring must not execute an Agent turn.') }
+    },
+    cloudOutbox: {
+      enqueueProjectionDelivery: async (command, idempotencyKey) => {
+        deliveries.push({ command, idempotencyKey })
+      }
+    },
+    localAgentId: () => TEST_IDS.agentId
+  })
+
+  await coordinator.mirrorCanonicalTurn({
+    runtimeId: 'codex',
+    threadId: 'fixed-thread-1',
+    turnId: 'turn-progress',
+    messages: [
+      {
+        itemId: 'assistant-progress-1',
+        turnId: 'turn-progress',
+        kind: 'assistant-progress',
+        text: '已完成代码核查。'
+      },
+      {
+        itemId: 'assistant-final-1',
+        turnId: 'turn-progress',
+        kind: 'assistant-final',
+        text: '最终报告。'
+      }
+    ]
+  })
+
+  assert.deepEqual(deliveries.map(({ command }) => ({
+    kind: command.kind,
+    text: command.text
+  })), [
+    {
+      kind: 'assistant_progress',
+      text: '【SciForge Agent · 中间进展】\n已完成代码核查。'
+    },
+    {
+      kind: 'assistant_final',
+      text: '【SciForge Agent · 最终报告】\n最终报告。'
+    }
+  ])
+  assert.equal(new Set(deliveries.map(({ idempotencyKey }) => idempotencyKey)).size, 2)
+})
+
+test('deduplicates live and canonical assistant identities for the same turn content', async () => {
+  const store = await projectionStore()
+  const deliveries: Array<{ command: { kind: string; text: string }; idempotencyKey: string }> = []
+  const coordinator = new ProjectionCoordinator({
+    store,
+    agentExecution: {
+      run: async () => { throw new Error('Transcript mirroring must not execute an Agent turn.') }
+    },
+    cloudOutbox: {
+      enqueueProjectionDelivery: async (command, idempotencyKey) => {
+        deliveries.push({ command, idempotencyKey })
+      }
+    },
+    localAgentId: () => TEST_IDS.agentId
+  })
+
+  await coordinator.mirrorDesktopEvent({
+    runtimeId: 'codex',
+    threadId: 'fixed-thread-1',
+    turnId: 'turn-progress',
+    itemId: 'live-snapshot-identity',
+    kind: 'assistant-progress',
+    text: '已完成代码核查。',
+    occurredAt: '2026-08-22T08:00:00.000Z'
+  })
+  await coordinator.reconcileCanonicalTurn({
+    runtimeId: 'codex',
+    threadId: 'fixed-thread-1',
+    turnId: 'turn-progress',
+    messages: [{
+      itemId: 'canonical-delta-identity',
+      turnId: 'turn-progress',
+      kind: 'assistant-progress',
+      text: '已完成代码核查。'
+    }]
+  })
+
+  assert.equal(deliveries.length, 1)
+  assert.equal(store.snapshot().queue.length, 1)
+  assert.equal(store.snapshot().receipts.length, 1)
 })
 
 const NOOP_OUTBOX: ProjectionCloudOutbox = {

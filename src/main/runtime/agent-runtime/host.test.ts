@@ -959,6 +959,112 @@ describe('AgentRuntimeHost', () => {
     await rm(root, { recursive: true, force: true })
   })
 
+  it('keeps remote Allow fail-closed and applies one exact eligible Allow or owner Deny through the canonical Broker', async () => {
+    const thread = {
+      id: 'remote-approval-thread',
+      runtimeId: 'codex' as const,
+      title: 'Remote approval',
+      updatedAt: '2026-08-20T00:00:00.000Z'
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [fakeAdapter('codex', thread)]
+    })
+    const published: Array<{ approvalId: string; remoteEligible: boolean; safeSummary: string; state: string }> = []
+    const dispose = host.subscribeRemoteCapabilityApprovals((approval) => {
+      published.push({
+        approvalId: approval.approvalId,
+        remoteEligible: approval.remoteEligible,
+        safeSummary: approval.safeSummary,
+        state: approval.state
+      })
+    })
+    const desktopOnly = host.requestCapabilityApproval({
+      context: {
+        requestId: 'request-desktop-only',
+        runtimeId: 'codex',
+        threadId: thread.id,
+        turnId: 'turn-desktop-only',
+        callId: 'call-desktop-only'
+      },
+      actionId: 'fixture.external.write',
+      invocationId: 'invocation-desktop-only',
+      mode: 'confirmation',
+      title: 'Sensitive fixture',
+      description: 'Desktop only.',
+      effect: 'external-write',
+      input: { secret: 'must-not-publish' }
+    })
+    const first = published[0]!
+    expect(first.remoteEligible).toBe(false)
+    expect(first.safeSummary).toBe('Sensitive fixture')
+    expect(JSON.stringify(published)).not.toContain('must-not-publish')
+    await expect(host.decideRemoteCapabilityApproval({
+      approvalId: first.approvalId,
+      runtimeId: 'codex',
+      threadId: thread.id,
+      turnId: 'turn-desktop-only',
+      capabilityRequestId: 'invocation-desktop-only',
+      decisionId: 'remote-decision-allow-rejected',
+      decision: 'allow_once'
+    })).resolves.toBe('not_eligible')
+    await expect(host.decideRemoteCapabilityApproval({
+      approvalId: first.approvalId,
+      runtimeId: 'codex',
+      threadId: thread.id,
+      turnId: 'turn-desktop-only',
+      capabilityRequestId: 'invocation-desktop-only',
+      decisionId: 'remote-decision-deny',
+      decision: 'deny_once'
+    })).resolves.toBe('applied')
+    await expect(desktopOnly).resolves.toBe('denied')
+
+    const eligible = host.requestCapabilityApproval({
+      context: {
+        requestId: 'request-eligible',
+        runtimeId: 'codex',
+        threadId: thread.id,
+        turnId: 'turn-eligible',
+        callId: 'call-eligible'
+      },
+      actionId: 'fixture.workspace.write',
+      invocationId: 'invocation-eligible',
+      mode: 'confirmation',
+      title: 'Eligible fixture',
+      description: 'Fixture only.',
+      effect: 'workspace-write',
+      input: { path: 'redacted' },
+      remoteApproval: {
+        eligible: true,
+        safeSummary: '写入脱敏测试结果'
+      }
+    })
+    const second = published.find((approval) => approval.safeSummary === '写入脱敏测试结果')!
+    await expect(host.decideRemoteCapabilityApproval({
+      approvalId: second.approvalId,
+      runtimeId: 'codex',
+      threadId: thread.id,
+      turnId: 'wrong-turn',
+      capabilityRequestId: 'invocation-eligible',
+      decisionId: 'remote-decision-wrong-turn',
+      decision: 'allow_once'
+    })).resolves.toBe('not_pending')
+    const exactDecision = {
+      approvalId: second.approvalId,
+      runtimeId: 'codex' as const,
+      threadId: thread.id,
+      turnId: 'turn-eligible',
+      capabilityRequestId: 'invocation-eligible',
+      decisionId: 'remote-decision-eligible',
+      decision: 'allow_once' as const
+    }
+    await expect(host.decideRemoteCapabilityApproval(exactDecision)).resolves.toBe('applied')
+    await expect(host.decideRemoteCapabilityApproval(exactDecision)).resolves.toBe('already_terminal')
+    await expect(eligible).resolves.toBe('allowed')
+    dispose()
+    host.dispose()
+  })
+
   it('cancels pending capability confirmations on abort, terminal turns, and disposal', async () => {
     const thread = {
       id: 'claude-thread',
@@ -5579,6 +5685,85 @@ describe('AgentRuntimeHost', () => {
     expect(vi.mocked(publish).mock.calls[0]![0].principal).toEqual(original)
     expect(getPrincipalContext).not.toHaveBeenCalled()
     host.dispose()
+  })
+
+  it('releases an exact completed watch as cancelled when its durable terminal event was lost', async () => {
+    const issuerEpoch = 'issuer-00000000000000000000000000000000'
+    const deliveryAttemptId = `delivery-attempt:${issuerEpoch}:1:00000000000000000000000000000000`
+    const watch: PendingTurnArtifactWatch = Object.freeze({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-completed-without-terminal-event',
+      issuerEpoch,
+      deliveryAttemptId,
+      deliveryAttemptOrdinal: 1,
+      boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
+      clientDirectiveId: 'directive-completed-without-terminal-event',
+      inputDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+      bindingSource: 'provider-accepted',
+      principal: null,
+      principalContext: { identityVersion: 1, principal: null },
+      key: 'watch-completed-without-terminal-event',
+      registeredAt: '2026-08-16T00:00:00.000Z'
+    })
+    const codex = fakeAdapter('codex', {
+      id: watch.threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      status: 'completed',
+      latestTurnStatus: 'completed',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    })
+    vi.mocked(codex.snapshot).mockResolvedValue({
+      id: watch.threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      status: 'completed',
+      latestTurnStatus: 'completed',
+      latestSeq: 8,
+      updatedAt: '2026-08-16T00:00:00.000Z',
+      turns: [{
+        id: watch.turnId,
+        threadId: watch.threadId,
+        status: 'completed',
+        items: [{
+          id: 'assistant-1',
+          turnId: watch.turnId,
+          kind: 'assistant_message',
+          text: 'The runtime completed but its terminal event was lost during restart.'
+        }]
+      }]
+    })
+    vi.mocked(codex.subscribeEvents).mockImplementation(async function* (_context, input) {
+      if (input.threadId === '__test-never__') {
+        yield { kind: 'heartbeat', runtimeId: 'codex', threadId: input.threadId }
+      }
+      if (input.signal?.aborted) return
+      await new Promise<void>((resolve) => {
+        input.signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+    const publish = vi.fn(async (_intent: TurnArtifactIntent) => undefined)
+    const turnArtifacts = fakeTurnArtifactPublisher(publish)
+    vi.mocked(turnArtifacts.pending).mockResolvedValue([watch])
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      turnArtifacts
+    })
+
+    await expect(host.recoverCompletedTurnArtifacts()).resolves.toBe(1)
+    await vi.waitFor(() => expect(turnArtifacts.publishLifecycleSettlement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeId: watch.runtimeId,
+        threadId: watch.threadId,
+        turnId: watch.turnId,
+        boundaryLeaseId: watch.boundaryLeaseId,
+        state: 'cancelled'
+      })
+    ), { timeout: 3_000 })
+    expect(publish).not.toHaveBeenCalled()
+    await host.dispose()
   })
 
   it('recovers the exact signed-out context revision without current-context backfill', async () => {

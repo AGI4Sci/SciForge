@@ -85,7 +85,8 @@ test('restart recovery reconciles in-flight projection, outbox, and Task identit
       createdAt: TEST_TIMESTAMP,
       updatedAt: TEST_TIMESTAMP
     }],
-    diagnostics: []
+    diagnostics: [],
+    remoteApprovals: []
   }
   const backend = new MemoryBackend(state)
   const store = new CollaborationLocalStore(backend)

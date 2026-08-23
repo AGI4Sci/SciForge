@@ -191,6 +191,7 @@ describe('canonical pairing and bidirectional Session commands', () => {
       occurredAt: TEST_TIMESTAMP
     }
     expect(restRequestSchema.safeParse({ ...base, kind: 'user_message' }).success).toBe(true)
+    expect(restRequestSchema.safeParse({ ...base, kind: 'assistant_progress' }).success).toBe(true)
     expect(restRequestSchema.safeParse({ ...base, kind: 'assistant_final', localTurnId: TEST_IDS.turnId }).success).toBe(true)
     expect(restRequestSchema.safeParse({ ...base, kind: 'stream_delta' }).success).toBe(false)
   })
@@ -254,7 +255,8 @@ describe('provider-neutral contract', () => {
       type: 'provider.send.message',
       locator: chineseProviderLocatorFixture,
       clientMessageId: 'client-message-1',
-      text: '最终回复'
+      text: '中间进展',
+      presentation: { disposition: 'collapsible', summary: '中间进展' }
     }).success).toBe(true)
     const directRecipient = providerDirectRecipientSchema.parse({
       type: 'provider_direct_recipient',

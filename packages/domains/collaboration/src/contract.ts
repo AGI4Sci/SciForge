@@ -92,7 +92,7 @@ export const collaborationProjectionQueueItemViewSchema = z.object({
   projectionId: idSchema,
   sequence: z.number().int().positive(),
   origin: z.enum(['desktop', 'human-endpoint', 'agent', 'system']),
-  kind: z.enum(['user-message', 'assistant-reply', 'system-status']),
+  kind: z.enum(['user-message', 'assistant-progress', 'assistant-reply', 'system-status']),
   state: z.enum([
     'queued',
     'executing',

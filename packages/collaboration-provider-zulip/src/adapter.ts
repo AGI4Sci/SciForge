@@ -26,6 +26,7 @@ import {
   type ProviderManagedContainerResult,
   type ProviderSendRequest,
   type ProviderSendResult,
+  type ProviderUpdateMessageRequest,
   type ProviderVerifyIdentityRequest,
   type ProviderVerifyIdentityResult
 } from '@sciforge/collaboration-contracts'
@@ -147,7 +148,8 @@ export const ZULIP_HUMAN_ENDPOINT_PROVIDER_CONTRACT: HumanEndpointProviderContra
     locatorDiscovery: true,
     identityChallenge: true,
     directMessages: true,
-    managedContainers: false
+    managedContainers: false,
+    messageUpdates: true
   },
   onboarding: {
     realmLabel: 'Zulip server URL',
@@ -283,6 +285,7 @@ function assertResolvedLocator(
 const BIND_COMMAND = /^\/bind (\S+)$/u
 const BIND_COMMAND_PREFIX = /^\/bind(?:\s|$)/u
 const HUMAN_ANSWER_COMMAND = /^sciforge-answer (hrq_[A-Za-z0-9]{12,64}) ([1-9][0-9]{0,15}) ([\s\S]+)$/u
+const REMOTE_APPROVAL_COMMAND = /^([12])\s+(AP1-[A-Z2-9]{20})$/iu
 
 function bindPairingResponse(text: string): { challengeId: string; challengeResponse: string } | null {
   const match = BIND_COMMAND.exec(text)
@@ -307,6 +310,18 @@ function humanAnswerResponse(text: string): {
     return null
   }
   return { humanRequestId: match[1]!, requestRevision, answer }
+}
+
+function remoteApprovalResponse(text: string): {
+  approvalReference: string
+  decision: 'allow_once' | 'deny_once'
+} | null {
+  const match = REMOTE_APPROVAL_COMMAND.exec(text.trim())
+  if (!match) return null
+  return {
+    approvalReference: match[2]!.toUpperCase(),
+    decision: match[1] === '1' ? 'allow_once' : 'deny_once'
+  }
 }
 
 function boundedText(raw: string): string {
@@ -1056,15 +1071,19 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       })
     }
     try {
+      const content = formatZulipOutboundContent(
+        request.text,
+        'presentation' in request ? request.presentation : undefined
+      )
       const result = 'recipient' in request
         ? await this.sendDirectMessage({
             recipient: request.recipient,
-            content: request.text,
+            content,
             idempotencyKey: request.clientMessageId
           })
         : await this.sendMessage({
             locator: request.locator as ZulipLocator,
-            content: request.text,
+            content,
             idempotencyKey: request.clientMessageId
           })
       return providerSendResultSchema.parse({
@@ -1083,6 +1102,48 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
         retryable: providerError?.retryable ?? false,
         providerErrorCode: providerError?.code ?? 'provider_unavailable',
         safeMessage: providerError?.message ?? 'Zulip provider operation failed.'
+      })
+    }
+  }
+
+  async updateMessage(request: ProviderUpdateMessageRequest): Promise<ProviderSendResult> {
+    if (
+      request.locator.provider !== 'zulip'
+      || request.locator.realmId !== this.realmId
+      || !/^(?:0|[1-9][0-9]*)$/u.test(request.providerMessageId)
+    ) {
+      return providerSendResultSchema.parse({
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        type: 'provider.send.failed',
+        clientMessageId: request.clientMessageId,
+        retryable: false,
+        providerErrorCode: 'invalid_locator',
+        safeMessage: 'The Zulip message reference is invalid for this provider instance.'
+      })
+    }
+    try {
+      await this.client.request(`api/v1/messages/${encodeURIComponent(request.providerMessageId)}`, {
+        method: 'PATCH',
+        body: new URLSearchParams({ content: boundedOutboundText(request.text) }),
+        schema: zulipUpdateMessageResponseSchema,
+        retry: 'never'
+      })
+      return providerSendResultSchema.parse({
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        type: 'provider.send.succeeded',
+        clientMessageId: request.clientMessageId,
+        providerMessageId: request.providerMessageId,
+        sentAt: this.now().toISOString()
+      })
+    } catch (error) {
+      const providerError = isZulipProviderError(error) ? error : null
+      return providerSendResultSchema.parse({
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        type: 'provider.send.failed',
+        clientMessageId: request.clientMessageId,
+        retryable: providerError?.retryable ?? false,
+        providerErrorCode: providerError?.code ?? 'provider_unavailable',
+        safeMessage: providerError?.message ?? 'Zulip provider message update failed.'
       })
     }
   }
@@ -1325,6 +1386,33 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
         answer: answer.answer
       })
     }
+    const approval = remoteApprovalResponse(text)
+    if (approval) {
+      const locator = await this.resolveLocatorAt({
+        provider: 'zulip',
+        realmId: this.realmId,
+        containerId: streamId,
+        topicDisplayName: topic
+      }, locatorOverlay)
+      return providerEventSchema.parse({
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        provider: 'zulip',
+        type: 'provider.remote_approval.responded',
+        eventId,
+        eventCursor,
+        occurredAt: canonicalOccurredAt(message, receivedAt),
+        identity: {
+          type: 'provider_identity',
+          provider: 'zulip',
+          realmId: this.realmId,
+          providerUserId: senderId,
+          displayName: message.sender_full_name.trim().slice(0, 200)
+        },
+        locator,
+        providerMessageId: remoteMessageId,
+        ...approval
+      })
+    }
     const locator = await this.resolveLocatorAt({
       provider: 'zulip',
       realmId: this.realmId,
@@ -1515,6 +1603,19 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       ...(detail === undefined ? {} : { detail: redactZulipDiagnostic(detail) })
     })
   }
+}
+
+export function formatZulipOutboundContent(
+  text: string,
+  presentation?: Readonly<{ disposition: 'collapsible'; summary: string }>
+): string {
+  if (!presentation) return text
+  const longestBacktickRun = Math.max(
+    0,
+    ...[...text.matchAll(/`+/gu)].map((match) => match[0].length)
+  )
+  const fence = '`'.repeat(Math.max(3, longestBacktickRun + 1))
+  return `${fence}spoiler ${presentation.summary.trim()}\n${text}\n${fence}`
 }
 
 export function createZulipHumanEndpointProvider(

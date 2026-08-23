@@ -14,6 +14,7 @@ import type {
   DomainMainPackageSettingsHost
 } from '@sciforge/domain-sdk/package-storage'
 import type {
+  DomainAgentTranscriptMessageEvent,
   DomainMainRuntimeDisposer,
   DomainMainRuntimeLifecycleContext
 } from '@sciforge/domain-sdk/host'
@@ -48,6 +49,7 @@ import {
   localProjectionFromRemote
 } from './projection-coordinator.js'
 import { CollaborationSettingsService } from './settings.js'
+import { RemoteApprovalCoordinator } from './remote-approval-coordinator.js'
 import {
   CollaborationLocalStore,
   FileCollaborationStateBackend,
@@ -74,6 +76,10 @@ export class CollaborationRuntime {
   private projections: ProjectionCoordinator | null = null
   private tasks: CollaborationTaskAdapter | null = null
   private context: DomainMainRuntimeLifecycleContext | null = null
+  private readonly transcriptSubscriptions = new Map<string, Readonly<{
+    controller: AbortController
+    task: Promise<void>
+  }>>()
   private active = false
   private localAgentIdentity: string | undefined
 
@@ -120,8 +126,22 @@ export class CollaborationRuntime {
       now: this.options.now
     })
     let tasks!: CollaborationTaskAdapter
+    const remoteApprovals = context.remoteCapabilityApprovals
+      ? new RemoteApprovalCoordinator({
+          store: this.store,
+          outbox,
+          host: context.remoteCapabilityApprovals,
+          localAgentId: () => this.localAgentIdentity,
+          now: this.options.now
+        })
+      : null
     const inboxHandler: CollaborationInboxHandler = {
       handle: async (message) => {
+        if (message.payload.type === 'capability.approval.decision') {
+          if (!remoteApprovals) throw new Error('Remote capability approval Host is unavailable.')
+          await remoteApprovals.handleInbox(message)
+          return
+        }
         if (message.payload.type === 'personal.message.received') {
           await projections.acceptPersonalInbox(message)
           return
@@ -196,10 +216,13 @@ export class CollaborationRuntime {
         clientDirectiveId: event.clientDirectiveId,
         messages: turn.messages
       })
+      this.syncTranscriptSubscriptions()
     })
+    const disposeRemoteApprovals = remoteApprovals?.subscribe() ?? (() => undefined)
 
     await this.reconcileTranscriptSnapshots()
     await projections.recover()
+    this.syncTranscriptSubscriptions()
     await connection.activate()
     // Task reconciliation consults canonical cloud state before executing. Run
     // it only after the connection has initialized; an offline activation keeps
@@ -208,6 +231,7 @@ export class CollaborationRuntime {
 
     return async () => {
       await disposeTurnEvents()
+      disposeRemoteApprovals()
       await this.dispose()
     }
   }
@@ -215,6 +239,13 @@ export class CollaborationRuntime {
   async dispose(): Promise<void> {
     if (!this.active) return
     this.active = false
+    for (const subscription of this.transcriptSubscriptions.values()) {
+      subscription.controller.abort()
+    }
+    await Promise.allSettled(
+      [...this.transcriptSubscriptions.values()].map((subscription) => subscription.task)
+    )
+    this.transcriptSubscriptions.clear()
     this.projections?.stop()
     this.tasks?.stop()
     await this.connection?.dispose()
@@ -415,7 +446,10 @@ export class CollaborationRuntime {
         bindingMode: input.mode
       }))
     })
-    if (input.mode === 'existing') await this.reconcileProjectionTranscript(projection.projectionId)
+    if (input.mode === 'existing') {
+      await this.reconcileProjectionTranscript(projection.projectionId)
+      this.syncTranscriptSubscriptions()
+    }
     return this.projectionView(projection)
   }
 
@@ -469,6 +503,7 @@ export class CollaborationRuntime {
         await this.replaceProjection(active)
         await this.requireProjections().recover()
         await this.reconcileProjectionTranscript(input.projectionId)
+        this.syncTranscriptSubscriptions()
         return this.projectionView(active)
       }
       if (local.projection.status !== 'paused') throw new Error('Pause a projection before relinking it.')
@@ -483,6 +518,7 @@ export class CollaborationRuntime {
         target.lastError = undefined
       })
       await this.reconcileProjectionTranscript(input.projectionId)
+      this.syncTranscriptSubscriptions()
       return this.projectionView(local.projection)
     }
     const response = await this.requireConnection().executeAsUser(restRequestSchema.parse({
@@ -500,6 +536,7 @@ export class CollaborationRuntime {
     const projection = requireProjectionResponse(response)
     await this.replaceProjection(projection)
     if (projection.status === 'active') await this.requireProjections().recover()
+    this.syncTranscriptSubscriptions()
     return this.projectionView(projection)
   }
 
@@ -673,15 +710,37 @@ export class CollaborationRuntime {
   }
 
   private async reconcileProjectionTranscript(projectionId: string): Promise<void> {
-    const projection = this.store.snapshot().projections.find((candidate) => (
+    const state = this.store.snapshot()
+    const projection = state.projections.find((candidate) => (
       candidate.projection.projectionId === projectionId
     ))
     if (!projection?.threadId || !this.context) return
+    const finalizedTurnIds = new Set(state.queue
+      .filter((item) => (
+        item.projectionId === projectionId &&
+        item.direction === 'outbound' &&
+        item.kind === 'assistant-reply' &&
+        Boolean(item.turnId)
+      ))
+      .map((item) => item.turnId!))
+    const recoverableTurnIds = new Set(state.queue
+      .filter((item) => (
+        item.projectionId === projectionId &&
+        item.direction === 'inbound' &&
+        item.origin === 'human-endpoint' &&
+        item.kind === 'user-message' &&
+        item.state === 'completed' &&
+        Boolean(item.turnId) &&
+        !finalizedTurnIds.has(item.turnId!)
+      ))
+      .map((item) => item.turnId!))
+    if (recoverableTurnIds.size === 0) return
     const thread = await this.context.agentThreads.read({
       runtimeId: projection.runtimeId,
       threadId: projection.threadId
     })
     for (const turn of thread.turns) {
+      if (!recoverableTurnIds.has(turn.id)) continue
       await this.requireProjections().reconcileCanonicalTurn({
         runtimeId: projection.runtimeId,
         threadId: projection.threadId,
@@ -725,6 +784,84 @@ export class CollaborationRuntime {
       projection,
       notifiedRevision
     )
+    this.syncTranscriptSubscriptions()
+  }
+
+  private syncTranscriptSubscriptions(): void {
+    if (!this.active || !this.context || !this.projections) return
+    const desired = new Map<string, Readonly<{ runtimeId: string; threadId: string }>>()
+    for (const projection of this.store.snapshot().projections) {
+      if (projection.projection.status !== 'active' || !projection.threadId) continue
+      const identity = transcriptSubscriptionKey(projection.runtimeId, projection.threadId)
+      desired.set(identity, Object.freeze({
+        runtimeId: projection.runtimeId,
+        threadId: projection.threadId
+      }))
+    }
+    for (const [identity, subscription] of this.transcriptSubscriptions) {
+      if (!desired.has(identity)) {
+        this.transcriptSubscriptions.delete(identity)
+        subscription.controller.abort()
+      }
+    }
+    for (const [identity, target] of desired) {
+      if (this.transcriptSubscriptions.has(identity)) continue
+      const controller = new AbortController()
+      const task = this.consumeTranscriptProgress(target, controller.signal)
+        .catch(() => undefined)
+        .finally(() => {
+          if (this.transcriptSubscriptions.get(identity)?.controller === controller) {
+            this.transcriptSubscriptions.delete(identity)
+          }
+        })
+      this.transcriptSubscriptions.set(identity, Object.freeze({ controller, task }))
+    }
+  }
+
+  private async consumeTranscriptProgress(
+    target: Readonly<{ runtimeId: string; threadId: string }>,
+    signal: AbortSignal
+  ): Promise<void> {
+    let afterSequence: number | undefined
+    while (this.active && !signal.aborted && this.context && this.projections) {
+      try {
+        if (afterSequence === undefined) {
+          const thread = await this.context.agentThreads.read(target)
+          const watermark = Number(thread.watermark)
+          if (Number.isSafeInteger(watermark) && watermark >= 0) afterSequence = watermark
+        }
+        for await (const message of this.context.agentThreads.subscribeMessages({
+          ...target,
+          ...(afterSequence === undefined ? {} : { afterSequence }),
+          signal
+        })) {
+          afterSequence = Math.max(afterSequence ?? 0, message.sequence)
+          await this.mirrorLiveProgress(target, message)
+        }
+      } catch {
+        if (signal.aborted || !this.active) return
+      }
+      await abortableDelay(1_000, signal)
+    }
+  }
+
+  private async mirrorLiveProgress(
+    target: Readonly<{ runtimeId: string; threadId: string }>,
+    message: DomainAgentTranscriptMessageEvent
+  ): Promise<void> {
+    if (message.kind !== 'assistant-progress' || !message.turnId) return
+    const matching = activeProjectionBindingsForSession(
+      this.store.snapshot().projections,
+      target.runtimeId,
+      target.threadId
+    )
+    if (matching.length !== 1) return
+    await this.requireProjections().mirrorCanonicalTurn({
+      runtimeId: target.runtimeId,
+      threadId: target.threadId,
+      turnId: message.turnId,
+      messages: [message]
+    })
   }
 
   private projectionView(projection: RemoteSessionProjection): CollaborationProjectionView {
@@ -859,6 +996,23 @@ function digest(value: string): string {
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+function transcriptSubscriptionKey(runtimeId: string, threadId: string): string {
+  return JSON.stringify([runtimeId.trim(), threadId.trim()])
+}
+
+function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', finish)
+      resolve()
+    }
+    const timer = setTimeout(finish, milliseconds)
+    signal.addEventListener('abort', finish, { once: true })
+  })
 }
 
 export function managedContainerEnsureIdempotencyKey(

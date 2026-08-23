@@ -20,7 +20,8 @@ import type {
   StoredHumanRequest,
   StoredHumanAnswer,
   StoredManagedContainer,
-  StoredManagedContainerJob
+  StoredManagedContainerJob,
+  StoredRemoteCapabilityApproval
 } from './model.js'
 
 export interface CollaborationReadRepository {
@@ -44,6 +45,9 @@ export interface CollaborationReadRepository {
   getProjectInputByProviderMessage(endpointId: string, providerMessageId: string): Promise<StoredProjectInput | null>
   getHumanRequest(humanRequestId: string): Promise<StoredHumanRequest | null>
   getHumanAnswerForRequest(humanRequestId: string): Promise<StoredHumanAnswer | null>
+  getRemoteApproval(remoteApprovalId: string): Promise<StoredRemoteCapabilityApproval | null>
+  getRemoteApprovalByReferenceDigest(referenceDigest: string): Promise<StoredRemoteCapabilityApproval | null>
+  listExpiredRemoteApprovals(now: string, limit: number): Promise<StoredRemoteCapabilityApproval[]>
   getProject(projectId: string): Promise<StoredProject | null>
   listActiveProjectsForCoordinator(agentId: string): Promise<StoredProject[]>
   getProjectMember(projectId: string, userId: string): Promise<StoredProjectMember | null>
@@ -87,6 +91,8 @@ export interface CollaborationTransaction extends CollaborationReadRepository {
   insertHumanRequest(request: StoredHumanRequest): Promise<void>
   updateHumanRequest(request: StoredHumanRequest, expectedRevision: number): Promise<void>
   insertHumanAnswer(answer: StoredHumanAnswer): Promise<void>
+  insertRemoteApproval(approval: StoredRemoteCapabilityApproval): Promise<void>
+  updateRemoteApproval(approval: StoredRemoteCapabilityApproval, expectedRevision: number): Promise<void>
   insertProject(project: StoredProject, members: StoredProjectMember[]): Promise<void>
   updateProject(project: StoredProject, expectedRevision: number): Promise<void>
   insertTask(task: StoredTask): Promise<void>

@@ -31,6 +31,7 @@ import type {
   StoredUser,
   StoredHumanRequest,
   StoredHumanAnswer,
+  StoredRemoteCapabilityApproval,
   TaskStatus
 } from './model.js'
 import type { CollaborationReadRepository, CollaborationRepository, CollaborationTransaction } from './repository.js'
@@ -46,6 +47,7 @@ export type CollaborationServiceOptions = {
   pairingTtlMs?: number
   inboxRetentionMs?: number
   receiptRetentionMs?: number
+  remoteApprovalReference?: () => string
 }
 
 type CommandResult<T extends Record<string, unknown>> = {
@@ -82,6 +84,7 @@ export class CollaborationService {
   private readonly pairingTtlMs: number
   private readonly inboxRetentionMs: number
   private readonly receiptRetentionMs: number
+  private readonly remoteApprovalReference: () => string
 
   constructor(options: CollaborationServiceOptions) {
     this.repository = options.repository
@@ -90,6 +93,362 @@ export class CollaborationService {
     this.pairingTtlMs = bounded(options.pairingTtlMs ?? 10 * 60_000, 60_000, 30 * 60_000)
     this.inboxRetentionMs = bounded(options.inboxRetentionMs ?? 30 * 86_400_000, 86_400_000, 90 * 86_400_000)
     this.receiptRetentionMs = bounded(options.receiptRetentionMs ?? 30 * 86_400_000, 86_400_000, 90 * 86_400_000)
+    this.remoteApprovalReference = options.remoteApprovalReference ?? issueRemoteApprovalReference
+  }
+
+  async createRemoteCapabilityApproval(actor: AgentActor, input: {
+    projectionId: string
+    runtimeId: string
+    threadId: string
+    turnId: string
+    capabilityRequestId: string
+    desktopApprovalId: string
+    safeSummary: string
+    effect: 'workspace-write' | 'external-write' | 'destructive'
+    remoteEligible: boolean
+    expiresAt: string
+    idempotencyKey: string
+  }): Promise<Record<string, unknown>> {
+    for (const [name, value] of Object.entries({
+      projectionId: input.projectionId,
+      runtimeId: input.runtimeId,
+      threadId: input.threadId,
+      turnId: input.turnId,
+      capabilityRequestId: input.capabilityRequestId,
+      desktopApprovalId: input.desktopApprovalId,
+      safeSummary: input.safeSummary
+    })) assertText(value, name, 1, name === 'safeSummary' ? 500 : 512)
+    const approvalReference = this.remoteApprovalReference()
+    if (!/^AP1-[A-Z2-9]{20}$/u.test(approvalReference)) {
+      throw new Error('Remote approval reference generator returned an invalid versioned reference.')
+    }
+    const result = await this.commit(actor, 'capability.approval.create', input.idempotencyKey, {
+      ...input,
+      approvalReference: '[REDACTED]'
+    }, async (tx, at) => {
+      const projection = required(await tx.getProjection(input.projectionId), 'Projection')
+      if (projection.status !== 'active' || projection.agentId !== actor.agentId) {
+        fail('permission_denied', 'The Agent does not own this active Projection.')
+      }
+      const agent = required(await tx.getAgent(actor.agentId), 'Agent')
+      if (agent.status !== 'active' || agent.ownerUserId !== projection.ownerUserId) {
+        fail('credential_revoked', 'The Projection Agent is not active for its owner.')
+      }
+      const expiresAtMs = Date.parse(input.expiresAt)
+      const createdAtMs = Date.parse(at)
+      if (!Number.isFinite(expiresAtMs) || expiresAtMs <= createdAtMs || expiresAtMs > createdAtMs + 5 * 60_000) {
+        fail('validation_failed', 'Remote approval expiry must be within five minutes.')
+      }
+      const approval: StoredRemoteCapabilityApproval = {
+        remoteApprovalId: newId('rap'),
+        ownerUserId: projection.ownerUserId,
+        agentId: actor.agentId,
+        projectionId: projection.projectionId,
+        locator: projection.locator,
+        locatorRevision: projection.locatorRevision,
+        runtimeId: input.runtimeId,
+        threadId: input.threadId,
+        turnId: input.turnId,
+        capabilityRequestId: input.capabilityRequestId,
+        desktopApprovalId: input.desktopApprovalId,
+        referenceDigest: digestSecret(approvalReference),
+        safeSummary: input.safeSummary,
+        effect: input.effect,
+        remoteEligible: input.remoteEligible,
+        status: input.remoteEligible ? 'pending' : 'desktop_only',
+        revision: 1,
+        expiresAt: input.expiresAt,
+        createdAt: at,
+        updatedAt: at
+      }
+      await tx.insertRemoteApproval(approval)
+      const cardText = input.remoteEligible
+        ? remoteApprovalCard(approval, approvalReference, projection.displayName)
+        : remoteApprovalTerminalText('desktop_only')
+      const message = await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+        'provider.notification.outbound', {
+          protocolVersion: '1.0',
+          type: 'provider.notification.outbound',
+          notificationKind: 'remote_capability_approval',
+          remoteApprovalId: approval.remoteApprovalId,
+          locator: approval.locator,
+          text: cardText
+        }, at)
+      return {
+        response: { protocolVersion: '1.0', type: 'capability.approval.created', approval: toRemoteApprovalEntity(approval) },
+        resourceKind: 'remote_capability_approval',
+        resourceId: approval.remoteApprovalId,
+        notifications: [{ recipient: message.recipient, sequence: message.sequence }]
+      }
+    })
+    return result
+  }
+
+  async decideRemoteCapabilityApproval(actor: HumanEndpointActor, input: {
+    approvalReference: string
+    decision: 'allow_once' | 'deny_once'
+    sourceLocator: ProviderLocatorValue
+    providerEventId: string
+  }): Promise<Record<string, unknown>> {
+    assertText(input.approvalReference, 'approvalReference', 24, 24)
+    const idempotencyKey = `idem_remote_approval_${stableDigest(input.providerEventId)}`
+    return this.commit(actor, 'capability.approval.decide', idempotencyKey, {
+      decision: input.decision,
+      providerEventId: input.providerEventId,
+      approvalReference: '[REDACTED]',
+      sourceLocator: input.sourceLocator
+    }, async (tx, at) => {
+      const approval = required(
+        await tx.getRemoteApprovalByReferenceDigest(digestSecret(input.approvalReference)),
+        'Remote approval'
+      )
+      authorize({
+        actor,
+        operation: 'capability_approval',
+        targetUserId: approval.ownerUserId,
+        requiredAssurance: 'verified',
+        remoteApprovalAllowed: input.decision === 'deny_once' || approval.remoteEligible
+      })
+      const projection = required(await tx.getProjection(approval.projectionId), 'Projection')
+      if (projection.status !== 'active' || projection.agentId !== approval.agentId) {
+        fail('revision_conflict', 'The approval Projection is no longer active for its Agent.')
+      }
+      if (
+        projection.locatorRevision !== approval.locatorRevision
+        || !sameLocator(projection.locator, approval.locator)
+      ) fail('revision_conflict', 'The approval locator revision is no longer current.')
+      if (actor.humanEndpointId !== projection.humanEndpointId) {
+        fail('permission_denied', 'The approval belongs to another human endpoint.')
+      }
+      if (!sameLocator(approval.locator, input.sourceLocator)) {
+        fail('permission_denied', 'The approval reply came from another Topic.')
+      }
+      if (approval.expiresAt <= at) {
+        const expired = { ...approval, status: 'expired' as const, revision: approval.revision + 1, updatedAt: at }
+        await tx.updateRemoteApproval(expired, approval.revision)
+        const notifications = approval.providerCardMessageId
+          ? [await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+              'provider.message.update.outbound', {
+                protocolVersion: '1.0', type: 'provider.message.update.outbound',
+                remoteApprovalId: approval.remoteApprovalId, locator: approval.locator,
+                providerMessageId: approval.providerCardMessageId,
+                text: remoteApprovalTerminalText('expired'), fallbackText: remoteApprovalTerminalText('expired')
+              }, at)]
+          : []
+        return {
+          response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(expired) },
+          resourceKind: 'remote_capability_approval',
+          resourceId: approval.remoteApprovalId,
+          notifications: notifications.map((message) => ({ recipient: message.recipient, sequence: message.sequence }))
+        }
+      }
+      if (approval.status !== 'pending') fail('revision_conflict', 'The remote approval is already terminal.')
+      const decisionId = `decision-${stableDigest(input.providerEventId)}`
+      const updated: StoredRemoteCapabilityApproval = {
+        ...approval,
+        status: input.decision === 'allow_once' ? 'approved' : 'denied',
+        decisionEventId: input.providerEventId,
+        decisionId,
+        revision: approval.revision + 1,
+        updatedAt: at
+      }
+      await tx.updateRemoteApproval(updated, approval.revision)
+      const message = await this.appendInbox(tx, { kind: 'agent', id: approval.agentId },
+        'capability.approval.decision', {
+          protocolVersion: '1.0',
+          type: 'capability.approval.decision',
+          remoteApprovalId: approval.remoteApprovalId,
+          desktopApprovalId: approval.desktopApprovalId,
+          projectionId: approval.projectionId,
+          runtimeId: approval.runtimeId,
+          threadId: approval.threadId,
+          turnId: approval.turnId,
+          capabilityRequestId: approval.capabilityRequestId,
+          decisionId,
+          decision: input.decision
+        }, at)
+      return {
+        response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(updated) },
+        resourceKind: 'remote_capability_approval',
+        resourceId: approval.remoteApprovalId,
+        notifications: [{ recipient: message.recipient, sequence: message.sequence }]
+      }
+    })
+  }
+
+  async reportRemoteCapabilityApprovalResult(actor: AgentActor, input: {
+    remoteApprovalId: string
+    decisionId: string
+    outcome: 'applied' | 'already_terminal' | 'not_pending' | 'not_eligible'
+    idempotencyKey: string
+  }): Promise<Record<string, unknown>> {
+    return this.commit(actor, 'capability.approval.result', input.idempotencyKey, input, async (tx, at) => {
+      const approval = required(await tx.getRemoteApproval(input.remoteApprovalId), 'Remote approval')
+      if (approval.agentId !== actor.agentId || approval.decisionId !== input.decisionId) {
+        fail('permission_denied', 'The decision result does not belong to this Agent.')
+      }
+      if (approval.status !== 'approved' && approval.status !== 'denied') {
+        return {
+          response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(approval) },
+          resourceKind: 'remote_capability_approval', resourceId: approval.remoteApprovalId
+        }
+      }
+      const status = input.outcome === 'applied'
+        ? 'completed'
+        : input.outcome === 'not_eligible' ? 'desktop_only' : 'superseded'
+      const terminalTextStatus = input.outcome === 'applied'
+        ? approval.status
+        : status
+      const updated: StoredRemoteCapabilityApproval = {
+        ...approval,
+        status,
+        revision: approval.revision + 1,
+        updatedAt: at
+      }
+      await tx.updateRemoteApproval(updated, approval.revision)
+      const notifications = approval.providerCardMessageId
+        ? [await this.appendInbox(tx, { kind: 'human_endpoint', id: (
+          required(await tx.getProjection(approval.projectionId), 'Projection')
+        ).humanEndpointId }, 'provider.message.update.outbound', {
+          protocolVersion: '1.0',
+          type: 'provider.message.update.outbound',
+          remoteApprovalId: approval.remoteApprovalId,
+          locator: approval.locator,
+          providerMessageId: approval.providerCardMessageId,
+          text: remoteApprovalTerminalText(terminalTextStatus),
+          fallbackText: remoteApprovalTerminalText(terminalTextStatus)
+        }, at)]
+        : []
+      return {
+        response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(updated) },
+        resourceKind: 'remote_capability_approval',
+        resourceId: approval.remoteApprovalId,
+        notifications: notifications.map((message) => ({ recipient: message.recipient, sequence: message.sequence }))
+      }
+    })
+  }
+
+  async withdrawRemoteCapabilityApproval(actor: AgentActor, input: {
+    remoteApprovalId: string
+    desktopApprovalId: string
+    idempotencyKey: string
+  }): Promise<Record<string, unknown>> {
+    return this.commit(actor, 'capability.approval.withdraw', input.idempotencyKey, input, async (tx, at) => {
+      const approval = required(await tx.getRemoteApproval(input.remoteApprovalId), 'Remote approval')
+      if (approval.agentId !== actor.agentId || approval.desktopApprovalId !== input.desktopApprovalId) {
+        fail('permission_denied', 'The remote approval does not belong to this canonical Desktop request.')
+      }
+      if (approval.status !== 'pending') {
+        return { response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(approval) } }
+      }
+      const updated: StoredRemoteCapabilityApproval = {
+        ...approval, status: 'superseded', revision: approval.revision + 1, updatedAt: at
+      }
+      await tx.updateRemoteApproval(updated, approval.revision)
+      const notifications = approval.providerCardMessageId
+        ? [await this.appendInbox(tx, { kind: 'human_endpoint', id: (
+          required(await tx.getProjection(approval.projectionId), 'Projection')
+        ).humanEndpointId }, 'provider.message.update.outbound', {
+          protocolVersion: '1.0', type: 'provider.message.update.outbound',
+          remoteApprovalId: approval.remoteApprovalId, locator: approval.locator,
+          providerMessageId: approval.providerCardMessageId,
+          text: remoteApprovalTerminalText('superseded'), fallbackText: remoteApprovalTerminalText('superseded')
+        }, at)] : []
+      return {
+        response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(updated) },
+        resourceKind: 'remote_capability_approval', resourceId: approval.remoteApprovalId,
+        notifications: notifications.map((message) => ({ recipient: message.recipient, sequence: message.sequence }))
+      }
+    })
+  }
+
+  async confirmRemoteApprovalCard(remoteApprovalId: string, providerMessageId: string): Promise<void> {
+    const notification = await this.repository.transaction(async (tx) => {
+      const approval = required(await tx.getRemoteApproval(remoteApprovalId), 'Remote approval')
+      if (approval.providerCardMessageId && approval.providerCardMessageId !== providerMessageId) {
+        fail('identity_conflict', 'The approval card message reference cannot be replaced.')
+      }
+      if (approval.providerCardMessageId) return null
+      const updated = {
+        ...approval,
+        providerCardMessageId: providerMessageId,
+        revision: approval.revision + 1,
+        updatedAt: this.timestamp()
+      }
+      await tx.updateRemoteApproval(updated, approval.revision)
+      if (approval.status === 'pending' || approval.status === 'desktop_only') return null
+      const projection = required(await tx.getProjection(approval.projectionId), 'Projection')
+      return this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+        'provider.message.update.outbound', {
+          protocolVersion: '1.0', type: 'provider.message.update.outbound',
+          remoteApprovalId: approval.remoteApprovalId, locator: approval.locator,
+          providerMessageId, text: remoteApprovalTerminalText(approval.status),
+          fallbackText: remoteApprovalTerminalText(approval.status)
+        }, updated.updatedAt)
+    })
+    if (notification) await this.notifier?.notifyInboxAvailable(notification.recipient, notification.sequence)
+  }
+
+  async enqueueRemoteApprovalFallback(input: {
+    remoteApprovalId: string
+    locator: ProviderLocatorValue
+    text: string
+    idempotencyKey: string
+  }): Promise<void> {
+    const actor: AuthContext = {
+      kind: 'system',
+      actorKey: 'provider-runtime:remote-approval-fallback'
+    }
+    await this.commit(actor, 'capability.approval.fallback', input.idempotencyKey, input, async (tx, at) => {
+      const approval = required(await tx.getRemoteApproval(input.remoteApprovalId), 'Remote approval')
+      if (!sameLocator(approval.locator, input.locator)) {
+        fail('permission_denied', 'The fallback notification locator does not match its approval.')
+      }
+      const projection = required(await tx.getProjection(approval.projectionId), 'Projection')
+      const notification = await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+        'provider.notification.outbound', {
+          protocolVersion: '1.0',
+          type: 'provider.notification.outbound',
+          notificationKind: 'remote_capability_approval_terminal_fallback',
+          remoteApprovalId: approval.remoteApprovalId,
+          locator: approval.locator,
+          text: input.text
+        }, at)
+      return {
+        response: { remoteApprovalId: approval.remoteApprovalId, fallbackQueued: true },
+        resourceKind: 'remote_capability_approval',
+        resourceId: approval.remoteApprovalId,
+        notifications: [{ recipient: notification.recipient, sequence: notification.sequence }]
+      }
+    })
+  }
+
+  async expireRemoteCapabilityApprovals(limit = 100): Promise<number> {
+    const at = this.timestamp()
+    const expired = await this.repository.listExpiredRemoteApprovals(at, bounded(limit, 1, 500))
+    let count = 0
+    for (const candidate of expired) {
+      const notification = await this.repository.transaction(async (tx) => {
+        const approval = await tx.getRemoteApproval(candidate.remoteApprovalId)
+        if (!approval || approval.status !== 'pending' || approval.expiresAt > at) return null
+        const updated: StoredRemoteCapabilityApproval = {
+          ...approval, status: 'expired', revision: approval.revision + 1, updatedAt: at
+        }
+        await tx.updateRemoteApproval(updated, approval.revision)
+        if (!approval.providerCardMessageId) return null
+        const projection = required(await tx.getProjection(approval.projectionId), 'Projection')
+        return this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+          'provider.message.update.outbound', {
+            protocolVersion: '1.0', type: 'provider.message.update.outbound',
+            remoteApprovalId: approval.remoteApprovalId, locator: approval.locator,
+            providerMessageId: approval.providerCardMessageId,
+            text: remoteApprovalTerminalText('expired'), fallbackText: remoteApprovalTerminalText('expired')
+          }, at)
+      })
+      count += 1
+      if (notification) await this.notifier?.notifyInboxAvailable(notification.recipient, notification.sequence)
+    }
+    return count
   }
 
   async beginPairing(input: {
@@ -869,7 +1228,7 @@ export class CollaborationService {
     projectionRevision: number
     localItemId: string
     localTurnId?: string
-    kind: 'user_message' | 'assistant_final' | 'system_status'
+    kind: 'user_message' | 'assistant_progress' | 'assistant_final' | 'system_status'
     text: string
     occurredAt: string
     idempotencyKey: string
@@ -2157,4 +2516,76 @@ function toHumanAnswerEntity(answer: StoredHumanAnswer): Record<string, unknown>
     answeredFromHumanEndpointId: answer.answeredFromHumanEndpointId, assurance: answer.assurance,
     answer: answer.answer, answeredAt: answer.answeredAt, revision: answer.revision,
     createdAt: answer.createdAt, updatedAt: answer.updatedAt }
+}
+
+function issueRemoteApprovalReference(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  const bytes = randomBytes(20)
+  let value = 'AP1-'
+  for (const byte of bytes) value += alphabet[byte! & 31]
+  return value
+}
+
+function sameLocator(left: ProviderLocatorValue, right: ProviderLocatorValue): boolean {
+  return left.provider === right.provider
+    && left.realmId === right.realmId
+    && left.containerId === right.containerId
+    && left.topicId === right.topicId
+}
+
+function remoteApprovalCard(
+  approval: StoredRemoteCapabilityApproval,
+  approvalReference: string,
+  sessionDisplayName: string
+): string {
+  return [
+    'SciForge 请求一次权限',
+    '',
+    `操作：${approval.safeSummary}`,
+    `Session：${sessionDisplayName}`,
+    `风险：${approval.effect}`,
+    '有效期：5 分钟',
+    '',
+    '回复：',
+    `1 ${approvalReference}    仅本次允许`,
+    `2 ${approvalReference}    拒绝`
+  ].join('\n')
+}
+
+function remoteApprovalTerminalText(status: StoredRemoteCapabilityApproval['status']): string {
+  switch (status) {
+    case 'approved': return '本次权限已允许。'
+    case 'completed': return '本次权限审批已处理。'
+    case 'denied': return '本次权限已拒绝。'
+    case 'expired': return '请求已过期，未执行。'
+    case 'desktop_only': return '该请求不可远程审批，请回到 Desktop 处理。'
+    case 'superseded': return '该请求已失效或已被替代，未执行。'
+    default: return '该请求此前已经进入终态。'
+  }
+}
+
+function toRemoteApprovalEntity(approval: StoredRemoteCapabilityApproval): Record<string, unknown> {
+  return {
+    type: 'remote_capability_approval',
+    remoteApprovalId: approval.remoteApprovalId,
+    ownerUserId: approval.ownerUserId,
+    agentId: approval.agentId,
+    projectionId: approval.projectionId,
+    locator: approval.locator,
+    runtimeId: approval.runtimeId,
+    threadId: approval.threadId,
+    turnId: approval.turnId,
+    capabilityRequestId: approval.capabilityRequestId,
+    desktopApprovalId: approval.desktopApprovalId,
+    safeSummary: approval.safeSummary,
+    effect: approval.effect,
+    remoteEligible: approval.remoteEligible,
+    status: approval.status,
+    expiresAt: approval.expiresAt,
+    ...(approval.providerCardMessageId ? { providerCardMessageId: approval.providerCardMessageId } : {}),
+    schemaVersion: 1,
+    revision: approval.revision,
+    createdAt: approval.createdAt,
+    updatedAt: approval.updatedAt
+  }
 }

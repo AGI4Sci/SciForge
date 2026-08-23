@@ -22,7 +22,7 @@ export type DesktopTranscriptEvent = Readonly<{
   threadId: string
   turnId?: string
   itemId: string
-  kind: 'user-message' | 'assistant-message'
+  kind: 'user-message' | 'assistant-progress' | 'assistant-final'
   text: string
   occurredAt: string
   clientDirectiveId?: string
@@ -33,7 +33,7 @@ export type ProjectionDeliveryCommand = Readonly<{
   projectionRevision: number
   localItemId: string
   localTurnId?: string
-  kind: 'user_message' | 'assistant_final' | 'system_status'
+  kind: 'user_message' | 'assistant_progress' | 'assistant_final' | 'system_status'
   text: string
   occurredAt: string
 }>
@@ -46,10 +46,14 @@ export type ProjectionCloudOutbox = Readonly<{
 }>
 
 export function projectedOutboundText(
-  kind: 'user-message' | 'assistant-reply',
+  kind: 'user-message' | 'assistant-progress' | 'assistant-reply',
   text: string
 ): string {
-  const prefix = kind === 'user-message' ? '【电脑端】' : '【SciForge Agent】'
+  const prefix = kind === 'user-message'
+    ? '【电脑端】'
+    : kind === 'assistant-progress'
+      ? '【SciForge Agent · 中间进展】'
+      : '【SciForge Agent · 最终报告】'
   return text.startsWith(prefix) ? text : `${prefix}\n${text}`
 }
 
@@ -282,9 +286,16 @@ export class ProjectionCoordinator {
         return null
       }
       const local = requireLocalProjection(draft, projection.projection.projectionId)
+      if (hasEquivalentAssistantReceipt(draft, local.projection.projectionId, event, hash)) {
+        return null
+      }
       const now = this.now().toISOString()
       const queueItemId = localOpaqueId('lqi')
-      const kind = event.kind === 'user-message' ? 'user-message' : 'assistant-reply'
+      const kind = event.kind === 'user-message'
+        ? 'user-message'
+        : event.kind === 'assistant-progress'
+          ? 'assistant-progress'
+          : 'assistant-reply'
       const item: CollaborationQueueItem = {
         queueItemId,
         projectionId: local.projection.projectionId,
@@ -326,8 +337,15 @@ export class ProjectionCoordinator {
         projectionRevision: queued.projectionRevision,
         localItemId: queued.item.localItemId!,
         ...(queued.item.turnId ? { localTurnId: queued.item.turnId } : {}),
-        kind: queued.item.kind === 'user-message' ? 'user_message' : 'assistant_final',
-        text: projectedOutboundText(queued.item.kind as 'user-message' | 'assistant-reply', queued.item.text),
+        kind: queued.item.kind === 'user-message'
+          ? 'user_message'
+          : queued.item.kind === 'assistant-progress'
+            ? 'assistant_progress'
+            : 'assistant_final',
+        text: projectedOutboundText(
+          queued.item.kind === 'system-status' ? 'assistant-reply' : queued.item.kind,
+          queued.item.text
+        ),
         occurredAt: queued.item.createdAt
       }, outboundIdempotencyKey(queued.item.queueItemId))
     } catch (error) {
@@ -663,6 +681,27 @@ function transcriptLocalItemId(event: DesktopTranscriptEvent): string {
 
 function desktopReceiptKey(event: Pick<DesktopTranscriptEvent, 'runtimeId' | 'threadId' | 'itemId'>): string {
   return `desktop:${event.runtimeId}:${event.threadId}:${event.itemId}`
+}
+
+function hasEquivalentAssistantReceipt(
+  state: CollaborationLocalState,
+  projectionId: string,
+  event: DesktopTranscriptEvent,
+  contentHash: string
+): boolean {
+  if (event.kind === 'user-message' || !event.turnId) return false
+  const expectedKind = event.kind === 'assistant-progress'
+    ? 'assistant-progress'
+    : 'assistant-reply'
+  return state.receipts.some((receipt) => {
+    if (
+      receipt.projectionId !== projectionId ||
+      receipt.turnId !== event.turnId ||
+      receipt.contentHash !== contentHash
+    ) return false
+    const item = state.queue.find((candidate) => candidate.queueItemId === receipt.queueItemId)
+    return item?.direction === 'outbound' && item.kind === expectedKind
+  })
 }
 
 function localOpaqueId(prefix: string): string {

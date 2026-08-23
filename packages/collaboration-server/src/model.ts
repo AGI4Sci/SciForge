@@ -303,6 +303,32 @@ export type StoredHumanAnswer = {
   updatedAt: string
 }
 
+export type StoredRemoteCapabilityApproval = {
+  remoteApprovalId: string
+  ownerUserId: string
+  agentId: string
+  projectionId: string
+  locator: ProviderLocatorValue
+  locatorRevision: number
+  runtimeId: string
+  threadId: string
+  turnId: string
+  capabilityRequestId: string
+  desktopApprovalId: string
+  referenceDigest: string
+  safeSummary: string
+  effect: 'workspace-write' | 'external-write' | 'destructive'
+  remoteEligible: boolean
+  status: 'pending' | 'approved' | 'denied' | 'expired' | 'superseded' | 'desktop_only' | 'delivery_pending' | 'completed'
+  providerCardMessageId?: string
+  decisionEventId?: string
+  decisionId?: string
+  revision: number
+  expiresAt: string
+  createdAt: string
+  updatedAt: string
+}
+
 export type InboxRecipient = {
   kind: 'user' | 'human_endpoint' | 'agent' | 'provider_identity'
   id: string
