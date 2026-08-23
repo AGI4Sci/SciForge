@@ -21,11 +21,11 @@ promotes readiness or changes a sibling operation's evidence.
 | **ContentSpaceProvider** | The Content Space-owned Provider SPI. It is the only Provider contract used by the Content Space service. |
 | **Provider integration** | A domain package that adapts one Provider Kind to `ContentSpaceProvider` and contributes it through normal manifest/generated composition. |
 | **Provider Instance** | One trusted external deployment/tenant. Its reference is non-secret and distinct from a user's local Connection. |
-| **Provider Directory Principal Reference** | A non-secret `{ providerInstanceRef, kind, principalId }` identity returned by typed Provider directory search. It names a Provider-owned user/organization principal but carries no Connection, credential, Host Principal, or authorization. |
-| **Shared Content Container Member** | A Provider directory `user` reference associated with one exact shared root. It is separate from Cloud Project membership and from the Project provisioning port's verified `contentUserId` mapping. |
+| **Provider Directory Principal Reference** | A non-secret `{ providerInstanceRef, kind, principalId }` identity backed by an authoritative Provider observation. It names a Provider-owned user/organization principal but carries no Connection, credential, Host Principal, or authorization. |
+| **Shared Content Container Member** | A Provider directory `user` reference associated with one exact shared root. It is separate from Cloud Project membership and carries no Project authority. |
 | **Connection** | A Connector-owned, node-local binding between the current Principal and one Provider Instance, including protected credentials. It is never portable or caller-selected. |
 | **Connector** | The provider-specific main-process boundary that owns endpoint/tenant policy, enrollment, credentials, session validation, transport, and Provider schema validation. It owns no Content Space business semantics. |
-| **Public Runtime** | SciForge-authored public contracts, adapters, process isolation, and bounded transport used for supplier-backed operations. It is code, not the supplier payload and not a second capability path. |
+| **Supplier-backed Connector Transport** | Connector-owned wire protocol, reviewed allowlist, asset verification, and process isolation. Provider-owned receipt-to-Content-Space semantics consume it through the token-free main contract. It is not a separate release unit, supplier payload, or second capability path. |
 | **Private Overlay** | Optional receipt-backed supplier assets under `internal/opencontent/**` in source mode and one fixed resources directory in an internal packaged build. It is runtime data, not a domain package or authorization switch. |
 | **Broker Resource** | A process-local, caller/Principal/audience-bound executable resource issued after selection or portable-reference reauthorization. Raw Provider IDs and portable references are not Broker authority. |
 | **ContentFileReference** | A portable identity for a live ordinary Provider file. It makes no immutable-version promise. |
@@ -58,30 +58,51 @@ Renderer or Agent capability request
   -> token-free OpenContent Connector facade
   -> Connector-owned current Connection and reauthorization
   -> typed OpenContent client
-       OR public OpenContent Runtime -> verified private overlay
+       OR Connector-owned supplier transport -> verified private overlay
   -> external Provider
 ```
 
 Ordinary file and Team-administration requests use the Connector's typed public
 client. Supplier-backed native-document and extended operations additionally
-pass through the public Runtime and, when installed, the private overlay. These
+pass through Connector-owned transport and Provider-owned semantic adapters and,
+when installed, the private overlay. These
 are branches behind the same Provider/Connector boundary, not parallel Agent or
 authorization paths.
 
-Shared-container membership also has one closed path. Extended contract v2
-makes every directory-search page literal-kind-specific, so typed `searchUsers`
-returns only Provider directory user references while department, position, and
-group searches reject user/mixed-kind output. `addMember`, `listMembers`, and
-`removeMember` consume or return that same shape on the existing Administration
-port. Content Space verifies that the authorized root, current Provider, input
-member, and Provider output all name the same Provider Instance. The integration
-may decode the opaque `principalId` into its private vendor identity only behind
-the Provider boundary, and its Connector uses only the current Principal-bound
-Connection. No Host cross-user mapping, raw account DTO, token, endpoint, or
-connection selector enters the capability payload.
+Shared-container membership also has one closed path. `addMember`,
+`listMembers`, and `removeMember` consume or return one authoritative Provider
+directory `user` reference on the existing Administration port. Content Space
+verifies that the authorized root, current Provider, input member, and Provider
+output all name the same Provider Instance. OpenContent's four supplier-backed
+directory searches remain blocked until exact item schemas and kind evidence are
+pinned; they cannot manufacture a reference by aliases or requested-kind
+assignment. The integration may decode an independently established opaque
+`principalId` into its private vendor identity only behind the Provider boundary,
+and its Connector uses only the current Principal-bound Connection. No Host
+cross-user mapping, raw account DTO, token, endpoint, or connection selector
+enters the capability payload.
+
+OpenContent treats Team and Team-user enumeration as a fail-closed precondition,
+not best-effort discovery. Any Administration operation that depends on those
+observations must prove a complete, stable, duplicate-free result or return
+`provider_contract_violation` before a remote write. A metadata-free full page
+whose completion is unknowable, or an empty page with a continuation signal,
+fails closed.
+
+Administration v3 membership page items are exactly `{ member }`, and mutation
+receipts reuse that reference with exact root/result fields; there is no public
+member-role or ownership-transfer operation. `updateSpace`,
+`pinSpace`, `unpinSpace`, `addMember`, and `removeMember` accept no
+`expectedRevision`, return no Administration revision, and declare
+`concurrency.revision: "none"`. OpenContent's typed Team supplier surface has no
+atomic expected-state field, so observation and reconciliation are not CAS.
+Content Space binds every one of the ten Administration outputs to the exact
+request and Broker authority, including page progress and unique identities.
+Read mismatches are `provider_unavailable`; write/destructive mismatches are
+`outcome_unknown`; neither is automatically retried.
 
 ```text
-typed searchUsers result
+authoritative Provider directory user reference
   -> Provider directory user reference
   -> root-scoped addMember
   -> ContentSpaceService same-Provider authority checks
@@ -92,11 +113,11 @@ typed searchUsers result
   -> root-scoped removeMember
 ```
 
-Project Content Directory provisioning intentionally does not reuse this
-ordinary-member identity. Its dormant Project-owned contract accepts Cloud
-`contentUserId` values only with separately verified Cloud-to-Provider identity
-mappings; Provider directory search cannot manufacture Project authority or
-Project membership.
+Project Content Directory provisioning is not implemented by Content Space or
+the OpenContent Provider. There is no provisioning operation, intent/report
+schema, or Provider port to reuse. Any future Project-owned integration requires
+a separately reviewed authoritative binding and identity contract; Provider
+directory search cannot manufacture Project authority or membership.
 
 A portable reference has a separate materialization path:
 
@@ -122,11 +143,16 @@ An admitted verification call remains `poc_only`; admission never rewrites it
 as `production_ready`. `blocked_by_contract` can never be admitted. The default
 composition installs no verification profile, so PoC operations fail closed.
 
-A trusted verification profile is a static package contribution. It binds one
-exact Provider Instance, full Host Principal snapshot and assurance, authority,
+A trusted verification profile is a static package contribution whose manifest
+declaration explicitly sets the generic `publicRelease: "forbidden"` policy.
+Content Space rejects a profile that omits or weakens that policy. Official
+prebuild and after-pack checks use standard domain discovery to reject every
+active contribution with that generic policy; the release guard contains no
+Content Space location, package, or domain-ID switch. The profile binds one exact
+Provider Instance, full Host Principal snapshot and assurance, authority,
 operation, audience, bounded validity window, and upload/download maxima. The
-matched byte maxima are execution limits, not descriptive metadata. Caller
-input, renderer state, prompts, Tasks, environment variables, ordinary config,
+matched byte maxima are execution limits, not descriptive metadata. Caller input,
+renderer state, prompts, Tasks, environment variables, ordinary config,
 attachment presence, or a sibling success cannot install or widen a profile.
 
 Zero-transfer `list-containers` bootstrap and exact-root reads may be profiled
@@ -152,7 +178,7 @@ To close the admission-to-dispatch race, Content Space first asks the pinned
 Provider for the current attestation and matches it against the static profile.
 It then carries that exact expected attestation only in the in-process Provider
 operation context. Immediately before each remote business dispatch (including
-a private Runtime subprocess), the Provider passes the expectation through the
+a Connector-owned supplier subprocess), the Provider passes the expectation through the
 canonical Connector boundary. The Connector revalidates the Principal,
 reauthenticates the actual current session, observes the current external
 account, recomputes the opaque values, and requires an exact match. Unbind,
@@ -168,14 +194,14 @@ authority.
 | Container bootstrap and exact-root reads | Not required | `poc_only` | Exact static profile; bootstrap/root authority; zero transfer may omit binding attestation |
 | Create folder | Not required | `poc_only` | Exact Broker root resource plus current binding attestation |
 | Upload new / download | Not required | `poc_only` | Exact Broker resource, current binding attestation, Workspace authority, and enforced profile byte limit |
-| Shared-root / Team administration | Not required | Ten operations are `poc_only` | Exact root/provider-administration Broker authority plus current binding attestation; Agent create input contains only the label, while member mutations accept only a same-instance Provider directory user reference returned by typed search/list paths |
+| Shared-root / Team administration | Not required | Ten operations are `poc_only` | Exact root/provider-administration Broker authority plus current binding attestation; Agent create input contains only the label, while member mutations accept only an authoritative same-instance Provider directory user reference |
 | Safe native-document operations | Required | Nine operations are `poc_only` | Exact feature/resource authority, profile, binding when required, and bounded transfers |
 | Hash-bound native-document mutations, including `edit` | Required | `blocked_by_contract` | Requires Provider-atomic `baseHash` compare-and-mutate; no profile can bypass it |
 | Native-document import | Required | `blocked_by_contract` | Requires a frozen source-identity/content postcondition; the pinned command remains inventory-only and is blocked before source transfer or subprocess dispatch |
-| Extended operations | Required except the two public Team-governance delegates | 53 are `poc_only` with overlay; `updateFileVersion` is blocked | Exact typed operation/resource/profile; writes and transfers require binding attestation |
+| Extended operations | Required except session-backed `getCurrentPrincipal` | 47 of 52 are `poc_only` with overlay; `updateFileVersion` and four unpinned directory searches are blocked | Exact typed operation/resource/profile; writes and transfers require binding attestation |
 | Same-file version update | Required | `blocked_by_contract` | Requires one frozen exact-version CAS contract and unambiguous `UPDATE` versus `UPGRADE` semantics |
 | Immutable artifact observation | Not required | `blocked_by_contract` | Requires immutable retention and exact version-specific retrieval before issuing `ArtifactReference` |
-| Project Content Directory provisioning | Not required | Provider operation blocked; provider-neutral port dormant | A future Project-owning context must supply authoritative binding and verified identities; no generic Agent entrypoint |
+| Project Content Directory provisioning | Not applicable | Absent | Requires a future separately reviewed Project-owning contract; no Content Space operation, Provider port, or generic Agent entrypoint exists |
 
 For Agent shared-root creation, the request contains only the shared-root label.
 The Broker owns invocation identity/idempotency and its current Principal
@@ -185,38 +211,40 @@ external session. An Agent cannot name itself, another user, a Coordinator, or
 an arbitrary Provider account as owner.
 
 After a root is authorized, member administration is distinct from creation:
-an Agent may supply one typed Provider directory user reference and an expected
-root revision to the existing add/remove capabilities. It cannot supply a Host
-`contentUserId`, select a Connection, or invite a principal from another
-Provider Instance. `listMembers` returns the same typed references so removal
-does not depend on a Host identity reverse map.
+an Agent may supply one typed Provider directory user reference to the existing
+add/remove capabilities. It cannot supply a Host `contentUserId`, revision,
+member role, Connection selector, or principal from another Provider Instance.
+`listMembers` returns only the same typed `member` references so removal does
+not depend on a Host identity reverse map.
 
 ## Behavior without the private overlay
 
 SciForge, Content Space, Provider discovery/enrollment, the public Connector,
 ordinary file candidates, and Team administration remain composed and usable
 according to their own admission state. Native-document support is not
-registered; the other 52 supplier-backed extended operations fail closed as
+registered. Session-backed `getCurrentPrincipal` remains the only extended PoC
+candidate without supplier assets; the other 51 extended operations fail closed as
 `provider_contract_missing` before supplier dispatch. Startup, build, and
 packaging do not search private `node_modules` or walk ancestor directories.
 
 With a valid overlay, static receipt/inventory/digest verification enables only
-the additional Runtime candidates. It does not install a verification profile,
+the additional supplier-backed candidates. It does not install a verification profile,
 promote readiness, create a Connection, or bypass Broker authority.
 
 ## Evidence and remaining gates
 
 The [OpenContent capability matrix](./opencontent-skill-capability-matrix.md) is the sole public
 ledger for exact packaged outcomes. In addition to the cumulative personal-root ordinary-operation
-subset, it records one attachment-backed current-principal read, one post-fix Team creation that
+subset, it records historical evidence for a retired attachment-backed current-principal route, one post-fix Team creation that
 reached packaged Agent terminal success, and one exact-once member add whose canonical post-write
-listing observed one owner, one internal member, and exactly one match for the added Provider user
-reference. Every live-verified operation remains `poc_only`; evidence does not spread to a sibling
+listing observed two distinct members and exactly one match for the added Provider user reference,
+without exposing a public role value. Every live-verified operation remains `poc_only`; evidence does not spread to a sibling
 operation, root, authority, audience, Principal, or binding, and `production_ready` remains zero.
 
-The ledger separately records packaged installed-attachment callability over 37 files, CLI version
-`1.0.0`, 86 supplier commands, and the 61-command admitted union. That smoke is static callability
-evidence, not a Provider live result. Additional file upload/download and native-document attempts
+The Connector-owned static contract freezes CLI version `1.0.0`, 86 supplier commands, and the
+56-command admitted adapter union. Static inventory characterization is not packaged or Provider-live
+callability evidence; any packaged callability claim must traverse the canonical Electron/Broker →
+Content Space → Provider → Connector path. Additional file upload/download and native-document attempts
 did not reach Provider business dispatch because external Agent operation-reference/cursor
 consumption was unstable; their Provider dispatch and remote-write counts were both zero. No
 native-document operation therefore gains a live-success claim: native callability remains

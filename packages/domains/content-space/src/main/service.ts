@@ -10,12 +10,12 @@ import { DomainExternalNavigationError } from '@sciforge/domain-sdk/external-nav
 import {
   contentSpaceAdministrationOperationStateListSchema,
   contentSpaceAdministrationAddMemberInputSchema,
+  contentSpaceAdministrationAddMemberReceiptSchema,
   contentSpaceAdministrationCreateSpaceInputSchema,
   contentSpaceAdministrationListMembersInputSchema,
   contentSpaceAdministrationListSpacesInputSchema,
   contentSpaceAdministrationMemberPageSchema,
   contentSpaceAdministrationMemberReferenceSchema,
-  contentSpaceAdministrationMemberSummarySchema,
   contentSpaceAdministrationObserveSpaceInputSchema,
   contentSpaceAdministrationOpenRootInputSchema,
   contentSpaceAdministrationPinSpaceInputSchema,
@@ -27,9 +27,6 @@ import {
   contentSpaceAdministrationUnpinSpaceInputSchema,
   contentSpaceAdministrationUpdateSpaceInputSchema,
   defineContentSpaceAdministrationPort,
-  defineProjectContentSpaceProvisioningPort,
-  projectContentSpaceProvisioningIntentSchema,
-  projectContentSpaceProvisioningReportSchema,
   type ContentSpaceAdministrationOperation
 } from '../administration-contract.js'
 import {
@@ -101,6 +98,7 @@ import {
   contentSpaceExtendedOperationStateListSchema,
   contentSpaceNativeDocumentOperationStateListSchema,
   contentSpaceProviderNativeDocumentReceiptSchema,
+  defineContentSpaceProviderAdministrationBinding,
   extendedOperationAuthority,
   extendedOperationEffect,
   nativeDocumentOperationEffect,
@@ -303,7 +301,7 @@ export class ContentSpaceService {
       receipt = effect === 'read'
         ? parseOutput(contentSpaceProviderNativeDocumentReceiptSchema, rawReceipt)
         : parseWriteOutput(contentSpaceProviderNativeDocumentReceiptSchema, rawReceipt)
-      assertNativeDocumentReceiptBinding(receipt, request.operation, context.invocationId,
+      assertNativeDocumentReceiptBinding(receipt, request, context.invocationId,
         target.primary.providerInstanceRef, effect)
 
       if (prepared.destination) {
@@ -512,7 +510,6 @@ export class ContentSpaceService {
     )
     let operationAvailable = false
     for (const state of operationStates) {
-      if (state.operation === 'provision-project') continue
       if (await this.#admittedContext(
         provider,
         state,
@@ -595,12 +592,8 @@ export class ContentSpaceService {
       fail('provider_unavailable', 'Provider administration binding is unavailable.')
     }
     let administration
-    let projectProvisioning
     try {
-      administration = defineContentSpaceAdministrationPort(bound.administration)
-      projectProvisioning = bound.projectProvisioning
-        ? defineProjectContentSpaceProvisioningPort(bound.projectProvisioning)
-        : undefined
+      administration = defineContentSpaceProviderAdministrationBinding(bound).administration
     } catch {
       fail('provider_unavailable', 'Provider administration binding is invalid.')
     }
@@ -608,8 +601,7 @@ export class ContentSpaceService {
       () => dispatchAdministrationOperation(
         input.operation,
         request,
-        administration,
-        projectProvisioning
+        administration
       ),
       context.signal,
       call.assertPrincipalCurrent,
@@ -621,7 +613,13 @@ export class ContentSpaceService {
     const output = effect === 'read'
       ? parseAdministrationOutput(input.operation, rawOutput, false)
       : parseAdministrationOutput(input.operation, rawOutput, true)
-    assertAdministrationOutputProvider(input.operation, output, providerInstanceRef, effect)
+    assertAdministrationOutputBinding(
+      input.operation,
+      request,
+      output,
+      providerInstanceRef,
+      effect
+    )
     return output
   }
 
@@ -2129,17 +2127,22 @@ function assertContentRootMutationAllowed(
 
 function assertNativeDocumentReceiptBinding(
   receipt: z.output<typeof contentSpaceProviderNativeDocumentReceiptSchema>,
-  operation: z.output<typeof nativeDocumentRequestSchema>['operation'],
+  request: NativeDocumentRequest | AgentNativeDocumentRequest,
   invocationId: string,
   providerInstanceRef: string,
   effect: ContentSpaceProviderFeatureEffect
 ): void {
-  const resultProvider = receipt.outcome === 'succeeded' &&
+  const resultDocument = receipt.outcome === 'succeeded' &&
     'document' in receipt.result
-    ? receipt.result.document.reference.providerInstanceRef
-    : providerInstanceRef
-  if (receipt.operation !== operation || receipt.invocationId !== invocationId ||
-    resultProvider !== providerInstanceRef) {
+    ? receipt.result.document.reference
+    : undefined
+  const requestedDocument = 'document' in request
+    ? request.document.reference
+    : undefined
+  if (receipt.operation !== request.operation || receipt.invocationId !== invocationId ||
+    (resultDocument !== undefined && resultDocument.providerInstanceRef !== providerInstanceRef) ||
+    (requestedDocument !== undefined && resultDocument !== undefined &&
+      !sameContentEntryReference(requestedDocument, resultDocument))) {
     fail(
       effect === 'read' ? 'provider_unavailable' : 'outcome_unknown',
       'Native-document Provider receipt is not bound to the invocation.',
@@ -2171,8 +2174,7 @@ function parseAdministrationRequest(
     'open-root': contentSpaceAdministrationOpenRootInputSchema,
     'list-members': contentSpaceAdministrationListMembersInputSchema,
     'add-member': contentSpaceAdministrationAddMemberInputSchema,
-    'remove-member': contentSpaceAdministrationRemoveMemberInputSchema,
-    'provision-project': projectContentSpaceProvisioningIntentSchema
+    'remove-member': contentSpaceAdministrationRemoveMemberInputSchema
   } as const
   return parseInput(schemas[operation], value)
 }
@@ -2191,9 +2193,8 @@ function parseAdministrationOutput(
     'unpin-space': contentSpaceAdministrationSpaceSummarySchema,
     'open-root': contentSpaceAdministrationRootOpenResultSchema,
     'list-members': contentSpaceAdministrationMemberPageSchema,
-    'add-member': contentSpaceAdministrationMemberSummarySchema,
-    'remove-member': contentSpaceAdministrationRemoveMemberReceiptSchema,
-    'provision-project': projectContentSpaceProvisioningReportSchema
+    'add-member': contentSpaceAdministrationAddMemberReceiptSchema,
+    'remove-member': contentSpaceAdministrationRemoveMemberReceiptSchema
   } as const
   return write ? parseWriteOutput(schemas[operation], value) : parseOutput(schemas[operation], value)
 }
@@ -2201,8 +2202,7 @@ function parseAdministrationOutput(
 async function dispatchAdministrationOperation(
   operation: ContentSpaceAdministrationOperation,
   request: any,
-  administration: ReturnType<typeof defineContentSpaceAdministrationPort>,
-  projectProvisioning: ReturnType<typeof defineProjectContentSpaceProvisioningPort> | undefined
+  administration: ReturnType<typeof defineContentSpaceAdministrationPort>
 ): Promise<unknown> {
   switch (operation) {
     case 'list-spaces': return administration.listSpaces(request)
@@ -2215,12 +2215,6 @@ async function dispatchAdministrationOperation(
     case 'list-members': return administration.listMembers(request)
     case 'add-member': return administration.addMember(request)
     case 'remove-member': return administration.removeMember(request)
-    case 'provision-project': {
-      if (!projectProvisioning) {
-        fail('blocked_by_contract', 'Project Content Space provisioning is unavailable.')
-      }
-      return projectProvisioning.provisionProjectContentSpace(request)
-    }
   }
 }
 
@@ -2229,8 +2223,7 @@ function assertAdministrationTarget(
   request: any,
   target: ContentSpaceProviderFeatureTarget
 ): void {
-  if (operation === 'list-spaces' || operation === 'create-space' ||
-    operation === 'provision-project') {
+  if (operation === 'list-spaces' || operation === 'create-space') {
     if (target.kind !== 'provider-administration') {
       fail('unauthorized', 'This administration operation requires Provider authority.')
     }
@@ -2255,40 +2248,111 @@ function assertAdministrationTarget(
   }
 }
 
-function assertAdministrationOutputProvider(
+function assertAdministrationOutputBinding(
   operation: ContentSpaceAdministrationOperation,
+  request: any,
   output: any,
   providerInstanceRef: string,
   effect: ContentSpaceProviderFeatureEffect
 ): void {
-  const roots: unknown[] = []
-  const members: unknown[] = []
-  if (operation === 'list-spaces') {
-    roots.push(...output.items.map((item: any) => item.root))
-  } else if (operation === 'list-members') {
-    members.push(...output.items.map((item: any) => item.member))
-    roots.push(output.root)
-  } else if (operation === 'add-member') {
-    members.push(output.member)
-  } else if (operation === 'remove-member') {
-    members.push(output.member)
-    roots.push(output.root)
-  } else if (operation === 'provision-project') {
-    if (output.root) roots.push(output.root)
-  } else if (output.root) {
-    roots.push(output.root)
-  }
   try {
-    if (roots.some((root) =>
-      parsePortableContentContainerReference(root).providerInstanceRef !== providerInstanceRef
-    ) || members.some((member) =>
-      contentSpaceAdministrationMemberReferenceSchema.parse(member).providerInstanceRef !==
-        providerInstanceRef
-    )) throw new Error('Provider drift')
+    const parseRoot = (value: unknown): ContentContainerReference => {
+      const root = parsePortableContentContainerReference(value)
+      if (root.providerInstanceRef !== providerInstanceRef) throw new Error('Provider drift')
+      return root
+    }
+    const parseMember = (value: unknown) => {
+      const member = contentSpaceAdministrationMemberReferenceSchema.parse(value)
+      if (member.providerInstanceRef !== providerInstanceRef) throw new Error('Provider drift')
+      return member
+    }
+    const assertExactRoot = (actual: unknown, expected: unknown): void => {
+      if (!sameContainer(parseRoot(actual), parseRoot(expected))) throw new Error('Root drift')
+    }
+    const assertExactMember = (actual: unknown, expected: unknown): void => {
+      const returnedMember = parseMember(actual)
+      const requestedMember = parseMember(expected)
+      if (returnedMember.kind !== requestedMember.kind ||
+        returnedMember.principalId !== requestedMember.principalId) {
+        throw new Error('Member drift')
+      }
+    }
+    const assertPage = (
+      itemCount: number,
+      nextCursor: string | undefined,
+      page: Readonly<{ limit: number; cursor?: string }>
+    ): void => {
+      if (itemCount > page.limit ||
+        (nextCursor !== undefined && nextCursor === page.cursor) ||
+        (itemCount === 0 && nextCursor !== undefined)) {
+        throw new Error('Page drift')
+      }
+    }
+
+    switch (operation) {
+      case 'list-spaces': {
+        const roots: ContentContainerReference[] = output.items.map(
+          (item: any) => parseRoot(item.root)
+        )
+        assertPage(output.items.length, output.nextCursor, request.page)
+        if (!allUnique(roots.map((root) =>
+          `${root.providerInstanceRef}\u0000${root.containerId}`
+        ))) throw new Error('Duplicate roots')
+        break
+      }
+      case 'create-space':
+        parseRoot(output.root)
+        if (output.label !== request.label ||
+          output.contentOwnerUserId !== request.contentOwnerUserId) {
+          throw new Error('Created space drift')
+        }
+        break
+      case 'observe-space':
+        assertExactRoot(output.root, request.root)
+        break
+      case 'update-space':
+        assertExactRoot(output.root, request.root)
+        if (output.label !== request.label) throw new Error('Updated label drift')
+        break
+      case 'pin-space':
+        assertExactRoot(output.root, request.root)
+        if (output.pinned !== true) throw new Error('Pinned state drift')
+        break
+      case 'unpin-space':
+        assertExactRoot(output.root, request.root)
+        if (output.pinned !== false) throw new Error('Unpinned state drift')
+        break
+      case 'open-root':
+        assertExactRoot(output.root, request.root)
+        break
+      case 'list-members': {
+        assertExactRoot(output.root, request.root)
+        const members: Array<ReturnType<typeof parseMember>> = output.items.map(
+          (item: any) => parseMember(item.member)
+        )
+        assertPage(output.items.length, output.nextCursor, request.page)
+        if (!allUnique(members.map((member) =>
+          `${member.providerInstanceRef}\u0000${member.kind}\u0000${member.principalId}`
+        ))) throw new Error('Duplicate members')
+        break
+      }
+      case 'add-member':
+        assertExactRoot(output.root, request.root)
+        assertExactMember(output.member, request.member)
+        break
+      case 'remove-member':
+        assertExactRoot(output.root, request.root)
+        assertExactMember(output.member, request.member)
+        break
+      default: {
+        const exhaustive: never = operation
+        throw new Error(`Unsupported administration operation: ${exhaustive}`)
+      }
+    }
   } catch {
     fail(
       effect === 'read' ? 'provider_unavailable' : 'outcome_unknown',
-      'Provider administration output changed authority.',
+      'Provider administration output is not bound to the request or authority.',
       'never'
     )
   }
@@ -2386,25 +2450,32 @@ async function boundedProviderCall<Value>(
   expireBoundedOperationSignal(signal)
   if (signal?.aborted) {
     fail(
-      outcomeUncertainOnAbort ? 'outcome_unknown' : 'cancelled',
-      outcomeUncertainOnAbort
-        ? 'The Provider operation outcome cannot be proven.'
-        : 'The Provider operation was cancelled or exceeded its deadline.'
+      'cancelled',
+      'The Provider operation was cancelled or exceeded its deadline.'
     )
   }
   await assertCurrentPrincipal(assertPrincipalCurrent, false, signal)
+  let operationInvoked = false
+  const invokeOperation = () => {
+    operationInvoked = true
+    return operation()
+  }
   let result: Value | undefined
   let operationFailed = false
   let operationErrorValue: unknown
   try {
     result = signal
-      ? await raceProviderOperation(operation, signal, outcomeUncertainOnAbort)
-      : await operation()
+      ? await raceProviderOperation(invokeOperation, signal, outcomeUncertainOnAbort)
+      : await invokeOperation()
   } catch (error) {
     operationFailed = true
     operationErrorValue = error
   }
-  await assertCurrentPrincipal(assertPrincipalCurrent, outcomeUncertainOnAbort, signal)
+  await assertCurrentPrincipal(
+    assertPrincipalCurrent,
+    outcomeUncertainOnAbort && operationInvoked,
+    signal
+  )
   if (operationFailed) throw operationErrorValue
   return result as Value
 }
@@ -2416,6 +2487,7 @@ function raceProviderOperation<Value>(
 ): Promise<Value> {
   return new Promise<Value>((resolve, reject) => {
     let completed = false
+    let operationInvoked = false
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined
     const complete = (action: () => void) => {
       if (completed) return
@@ -2424,12 +2496,15 @@ function raceProviderOperation<Value>(
       if (deadlineTimer) clearTimeout(deadlineTimer)
       action()
     }
-    const onAbort = () => complete(() => reject(operationError(
-      outcomeUncertainOnAbort ? 'outcome_unknown' : 'cancelled',
-      outcomeUncertainOnAbort
-        ? 'The Provider operation outcome cannot be proven.'
-        : 'The Provider operation was cancelled or exceeded its deadline.'
-    )))
+    const onAbort = () => complete(() => {
+      const outcomeUncertain = outcomeUncertainOnAbort && operationInvoked
+      reject(operationError(
+        outcomeUncertain ? 'outcome_unknown' : 'cancelled',
+        outcomeUncertain
+          ? 'The Provider operation outcome cannot be proven.'
+          : 'The Provider operation was cancelled or exceeded its deadline.'
+      ))
+    })
     signal.addEventListener('abort', onAbort, { once: true })
     const lease = boundedOperationSignalLeases.get(signal)
     if (lease) {
@@ -2450,6 +2525,7 @@ function raceProviderOperation<Value>(
     try {
       // Invoke synchronously after the final abort check so an already-cancelled
       // write cannot be queued for a later microtask dispatch.
+      operationInvoked = true
       dispatched = operation()
     } catch (error) {
       complete(() => reject(error))

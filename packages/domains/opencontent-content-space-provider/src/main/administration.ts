@@ -1,8 +1,7 @@
-import { createHash } from 'node:crypto'
-
 import {
   CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION,
   CONTENT_SPACE_ADMINISTRATION_OPERATIONS,
+  contentSpaceAdministrationAddMemberReceiptSchema,
   contentSpaceAdministrationMemberReferenceSchema,
   contentSpaceAdministrationMemberPageSchema,
   contentSpaceAdministrationMemberSummarySchema,
@@ -12,7 +11,6 @@ import {
   contentSpaceAdministrationSpacePageSchema,
   contentSpaceAdministrationSpaceSummarySchema,
   defineContentSpaceAdministrationPort,
-  type ContentSpaceAdministrationMemberRole,
   type ContentSpaceAdministrationPort
 } from '@sciforge/domain-content-space/administration-contract'
 import {
@@ -27,27 +25,35 @@ import type {
   ContentSpaceProviderAdministrationBinding
 } from '@sciforge/domain-content-space/provider-features'
 import {
-  OpenContentConnectorError,
-  type OpenContentContentSpaceFacade
+  OpenContentConnectorError
 } from '@sciforge/domain-opencontent-connector/contract'
+import type { OpenContentContentSpaceFacade } from '@sciforge/domain-opencontent-connector/main-contract'
 import {
   OPENCONTENT_TEAM_PAGE_SIZE_MAX,
   type OpenContentBoundTeamAdministration,
   type OpenContentIdentityId,
   type OpenContentTeam,
-  type OpenContentTeamId,
   type OpenContentTeamRoot,
   type OpenContentTeamUser
 } from '@sciforge/domain-opencontent-connector/team-administration-contract'
 
 import {
   OpenContentIdentityBindingError,
-  createCurrentPrincipalOpenContentIdentityBinding,
-  type OpenContentIdentityBindingPort
+  createCurrentPrincipalOpenContentIdentityBinding
 } from './identity-binding.js'
 import { parseOpenContentDirectoryIdentity } from './directory-principal.js'
 import { toOpenContentExpectedBinding } from './external-binding.js'
-import { createOpenContentProjectProvisioning } from './project-provisioning.js'
+import {
+  listCompleteOpenContentTeams,
+  listCompleteOpenContentTeamUsers
+} from './team-pagination.js'
+import {
+  assertOpenContentTeamAdministrationAuthority,
+  assertOpenContentTeamObservation,
+  findOpenContentTeamByRoot,
+  resolveOpenContentTeamRoot
+} from './team-resolution.js'
+import { observeAfterOpenContentTeamMutation } from './team-mutation.js'
 
 const MAX_PAGES = 10_000
 const TEAM_CURSOR = /^oct_(\d+)_(\d+)$/u
@@ -56,12 +62,8 @@ const OPENCONTENT_ADMINISTRATION_OPERATION_STATES =
   contentSpaceAdministrationOperationStateListSchema.parse(
     CONTENT_SPACE_ADMINISTRATION_OPERATIONS.map((operation) => ({
       operation,
-      readiness: operation === 'provision-project'
-        ? 'blocked_by_contract' as const
-        : 'poc_only' as const,
-      reasonCode: operation === 'provision-project'
-        ? 'provider_contract_missing' as const
-        : 'verification_profile_required' as const
+      readiness: 'poc_only' as const,
+      reasonCode: 'verification_profile_required' as const
     }))
   )
 
@@ -74,13 +76,7 @@ type BoundSession = Readonly<{
 export function createOpenContentAdministrationFeature(options: Readonly<{
   providerInstanceRef: string
   facade: OpenContentContentSpaceFacade
-  identities?: OpenContentIdentityBindingPort
 }>): ContentSpaceAdministrationFeature {
-  const identities = options.identities ?? createCurrentPrincipalOpenContentIdentityBinding()
-  const provisioning = createOpenContentProjectProvisioning({
-    connection: options.facade,
-    identities
-  })
   return Object.freeze({
     describeOperations: (context) => {
       assertProviderInstance(context.providerInstanceRef, options.providerInstanceRef)
@@ -92,15 +88,7 @@ export function createOpenContentAdministrationFeature(options: Readonly<{
         administration: createBoundAdministrationPort({
           context,
           providerInstanceRef: options.providerInstanceRef,
-          facade: options.facade,
-          identities
-        }),
-        projectProvisioning: provisioning.bindProjectProvisioningPort({
-          principal: context.principal,
-          providerInstanceRef: context.providerInstanceRef,
-          ...toOpenContentExpectedBinding(context),
-          signal: context.signal,
-          assertPrincipalCurrent: context.assertPrincipalCurrent
+          facade: options.facade
         })
       })
     }
@@ -111,8 +99,8 @@ function createBoundAdministrationPort(options: Readonly<{
   context: ContentSpaceProviderOperationContext
   providerInstanceRef: string
   facade: OpenContentContentSpaceFacade
-  identities: OpenContentIdentityBindingPort
 }>): ContentSpaceAdministrationPort {
+  const identities = createCurrentPrincipalOpenContentIdentityBinding()
   const withSession = async <Value>(
     operation: (session: BoundSession) => Value | Promise<Value>
   ): Promise<Value> => {
@@ -135,15 +123,17 @@ function createBoundAdministrationPort(options: Readonly<{
     rawRoot: unknown
   ): Promise<Readonly<{ team: OpenContentTeam; root: OpenContentTeamRoot }>> => {
     const expectedRoot = parseRoot(rawRoot, options.providerInstanceRef)
-    const match = await findTeamByRoot(
+    const match = await findOpenContentTeamByRoot(
       session.administration,
       expectedRoot.containerId,
-      options.context
+      session.externalIdentityId,
+      options.context.signal
     )
+    if (!match) throw operationError('invalid_reference', 'The Team root does not exist.', 'never')
     const team = await session.administration.observeTeam(withSignal(options.context, {
       teamId: match.team.teamId
     }))
-    assertObservedTeam(team, match.team)
+    assertOpenContentTeamObservation(team, match.team)
     return Object.freeze({ team, root: match.root })
   }
 
@@ -152,8 +142,14 @@ function createBoundAdministrationPort(options: Readonly<{
     team: OpenContentTeam,
     knownRoot?: OpenContentTeamRoot
   ) => {
-    const root = knownRoot ?? await resolveRoot(session.administration, team, options.context)
-    const contentOwnerUserId = await options.identities.resolveExternalIdentityContentUser({
+    assertOpenContentTeamAdministrationAuthority(team, session.externalIdentityId)
+    const root = knownRoot ?? await resolveOpenContentTeamRoot(
+      session.administration,
+      team,
+      session.externalIdentityId,
+      options.context.signal
+    )
+    const contentOwnerUserId = await identities.resolveExternalIdentityContentUser({
       externalIdentityId: team.ownerIdentityId,
       ...identityContext(options.context, session.externalIdentityId)
     })
@@ -164,8 +160,7 @@ function createBoundAdministrationPort(options: Readonly<{
       }),
       label: team.name,
       contentOwnerUserId,
-      pinned: team.isStuck,
-      revision: teamRevision(team)
+      pinned: team.isStuck
     })
   }
 
@@ -182,6 +177,9 @@ function createBoundAdministrationPort(options: Readonly<{
           pageSize: OPENCONTENT_TEAM_PAGE_SIZE_MAX,
           teamType: 2 as const
         }))
+        providerPage.teams.forEach((team) => {
+          assertOpenContentTeamAdministrationAuthority(team, session.externalIdentityId)
+        })
         if (cursor.offset > providerPage.teams.length) throw connectorError('provider_contract_violation')
         const available = providerPage.teams.slice(cursor.offset)
         const selected = available.slice(0, page.limit - items.length)
@@ -210,7 +208,7 @@ function createBoundAdministrationPort(options: Readonly<{
       })
     }),
     createSpace: async (input) => withSession(async (session) => {
-      const ownerIdentityId = await options.identities.resolveContentUserIdentity({
+      const ownerIdentityId = await identities.resolveContentUserIdentity({
         contentUserId: input.contentOwnerUserId,
         ...identityContext(options.context, session.externalIdentityId)
       })
@@ -221,32 +219,31 @@ function createBoundAdministrationPort(options: Readonly<{
           'after-human-action'
         )
       }
-      let matches = await findTeamsByName(
+      const existingMatches = await findTeamsByName(
         session.administration,
         input.label,
+        session.externalIdentityId,
         options.context
       )
-      if (matches.length > 1) throw connectorError('conflict')
-      if (matches.length === 0) {
-        await session.administration.createTeam(withSignal(options.context, { name: input.label }))
-        matches = await findTeamsByName(session.administration, input.label, options.context)
-        if (matches.length === 0) throw connectorError('outcome_unknown')
-        if (matches.length > 1) throw connectorError('conflict')
-      }
-      const listed = matches[0]
-      if (!listed) throw connectorError('provider_contract_violation')
-      const team = await session.administration.observeTeam(withSignal(options.context, {
-        teamId: listed.teamId
-      }))
-      assertObservedTeam(team, listed)
-      if (team.ownerIdentityId !== ownerIdentityId) {
-        throw operationError(
-          'unauthorized',
-          'The existing OpenContent Team owner does not match the requested owner.',
-          'after-human-action'
+      if (existingMatches.length > 0) throw connectorError('conflict')
+      await session.administration.createTeam(withSignal(options.context, { name: input.label }))
+      return observeAfterOpenContentTeamMutation(async () => {
+        const matches = await findTeamsByName(
+          session.administration,
+          input.label,
+          session.externalIdentityId,
+          options.context
         )
-      }
-      return summary(session, team)
+        if (matches.length !== 1) throw connectorError('outcome_unknown')
+        const listed = matches[0]
+        if (!listed) throw connectorError('outcome_unknown')
+        const team = await session.administration.observeTeam(withSignal(options.context, {
+          teamId: listed.teamId
+        }))
+        assertOpenContentTeamObservation(team, listed)
+        if (team.ownerIdentityId !== ownerIdentityId) throw connectorError('outcome_unknown')
+        return summary(session, team)
+      })
     }),
     observeSpace: async ({ root }) => withSession(async (session) => {
       const observed = await observe(session, root)
@@ -254,17 +251,25 @@ function createBoundAdministrationPort(options: Readonly<{
     }),
     updateSpace: async (input) => withSession(async (session) => {
       const observed = await observe(session, input.root)
-      assertExpectedRevision(observed.team, input.expectedRevision)
       if (input.label !== observed.team.name) {
         await session.administration.editTeam(withSignal(options.context, {
           teamId: observed.team.teamId,
           folderId: observed.team.folderId,
           name: input.label
         }))
+        return observeAfterOpenContentTeamMutation(async () => {
+          const team = await session.administration.observeTeam(withSignal(options.context, {
+            teamId: observed.team.teamId
+          }))
+          assertOpenContentTeamObservation(team, observed.team)
+          if (team.name !== input.label) throw connectorError('outcome_unknown')
+          return summary(session, team, observed.root)
+        })
       }
       const team = await session.administration.observeTeam(withSignal(options.context, {
         teamId: observed.team.teamId
       }))
+      assertOpenContentTeamObservation(team, observed.team)
       if (team.name !== input.label) {
         throw connectorError('outcome_unknown')
       }
@@ -272,29 +277,45 @@ function createBoundAdministrationPort(options: Readonly<{
     }),
     pinSpace: async (input) => withSession(async (session) => {
       const observed = await observe(session, input.root)
-      assertExpectedRevision(observed.team, input.expectedRevision)
       if (!observed.team.isStuck) {
         await session.administration.stickTeam(withSignal(options.context, {
           teamId: observed.team.teamId
         }))
+        return observeAfterOpenContentTeamMutation(async () => {
+          const team = await session.administration.observeTeam(withSignal(options.context, {
+            teamId: observed.team.teamId
+          }))
+          assertOpenContentTeamObservation(team, observed.team)
+          if (!team.isStuck) throw connectorError('outcome_unknown')
+          return summary(session, team, observed.root)
+        })
       }
       const team = await session.administration.observeTeam(withSignal(options.context, {
         teamId: observed.team.teamId
       }))
+      assertOpenContentTeamObservation(team, observed.team)
       if (!team.isStuck) throw connectorError('outcome_unknown')
       return summary(session, team, observed.root)
     }),
     unpinSpace: async (input) => withSession(async (session) => {
       const observed = await observe(session, input.root)
-      assertExpectedRevision(observed.team, input.expectedRevision)
       if (observed.team.isStuck) {
         await session.administration.unstickTeam(withSignal(options.context, {
           teamId: observed.team.teamId
         }))
+        return observeAfterOpenContentTeamMutation(async () => {
+          const team = await session.administration.observeTeam(withSignal(options.context, {
+            teamId: observed.team.teamId
+          }))
+          assertOpenContentTeamObservation(team, observed.team)
+          if (team.isStuck) throw connectorError('outcome_unknown')
+          return summary(session, team, observed.root)
+        })
       }
       const team = await session.administration.observeTeam(withSignal(options.context, {
         teamId: observed.team.teamId
       }))
+      assertOpenContentTeamObservation(team, observed.team)
       if (team.isStuck) throw connectorError('outcome_unknown')
       return summary(session, team, observed.root)
     }),
@@ -304,8 +325,7 @@ function createBoundAdministrationPort(options: Readonly<{
         root: toPortableContentContainerReference({
           providerInstanceRef: options.providerInstanceRef,
           containerId: observed.root.folderGuid
-        }),
-        revision: teamRevision(observed.team)
+        })
       })
     }),
     listMembers: async ({ root, page: rawPage }) => withSession(async (session) => {
@@ -326,7 +346,6 @@ function createBoundAdministrationPort(options: Readonly<{
         for (const user of selected) {
           items.push(memberSummary(
             options.providerInstanceRef,
-            observed.team,
             user
           ))
         }
@@ -359,49 +378,46 @@ function createBoundAdministrationPort(options: Readonly<{
     }),
     addMember: async (input) => withSession(async (session) => {
       const observed = await observe(session, input.root)
-      assertExpectedRevision(observed.team, input.expectedRevision)
       const identityId = parseDirectoryMemberIdentity(
         input.member,
         options.providerInstanceRef
       )
-      let users = await listAllUsers(
-        session.administration,
-        observed.team.teamId,
-        options.context
-      )
+      let users = await listCompleteOpenContentTeamUsers(session.administration, {
+        teamId: observed.team.teamId,
+        ...(options.context.signal === undefined ? {} : { signal: options.context.signal })
+      })
       let addedUser = users.find((user) => user.identityId === identityId)
-      if (addedUser && teamMemberRole(observed.team, addedUser) !== 'internal') {
-        throw operationError(
-          'conflict',
-          'The OpenContent Team member already has a different role.',
-          'after-human-action'
-        )
-      }
       if (!addedUser) {
         await session.administration.addTeamUsers(withSignal(options.context, {
           teamId: observed.team.teamId,
           identityIds: [identityId]
         }))
-        users = await listAllUsers(
-          session.administration,
-          observed.team.teamId,
-          options.context
-        )
-        addedUser = users.find((user) => user.identityId === identityId)
-        if (!addedUser) throw connectorError('outcome_unknown')
-        if (teamMemberRole(observed.team, addedUser) !== 'internal') {
-          throw connectorError('provider_contract_violation')
-        }
+        addedUser = await observeAfterOpenContentTeamMutation(async () => {
+          const team = await session.administration.observeTeam(withSignal(options.context, {
+            teamId: observed.team.teamId
+          }))
+          assertOpenContentTeamObservation(team, observed.team)
+          users = await listCompleteOpenContentTeamUsers(session.administration, {
+            teamId: observed.team.teamId,
+            ...(options.context.signal === undefined ? {} : { signal: options.context.signal })
+          })
+          const reconciled = users.find((user) => user.identityId === identityId)
+          if (!reconciled) {
+            throw connectorError('outcome_unknown')
+          }
+          return reconciled
+        })
       }
-      return contentSpaceAdministrationMemberSummarySchema.parse({
-        member: input.member,
-        role: 'internal',
-        revision: teamRevision(observed.team)
+      return contentSpaceAdministrationAddMemberReceiptSchema.parse({
+        root: toPortableContentContainerReference({
+          providerInstanceRef: options.providerInstanceRef,
+          containerId: observed.root.folderGuid
+        }),
+        member: input.member
       })
     }),
     removeMember: async (input) => withSession(async (session) => {
       const observed = await observe(session, input.root)
-      assertExpectedRevision(observed.team, input.expectedRevision)
       const identityId = parseDirectoryMemberIdentity(
         input.member,
         options.providerInstanceRef
@@ -413,24 +429,28 @@ function createBoundAdministrationPort(options: Readonly<{
           'after-human-action'
         )
       }
-      let users = await listAllUsers(
-        session.administration,
-        observed.team.teamId,
-        options.context
-      )
+      let users = await listCompleteOpenContentTeamUsers(session.administration, {
+        teamId: observed.team.teamId,
+        ...(options.context.signal === undefined ? {} : { signal: options.context.signal })
+      })
       if (users.some((user) => user.identityId === identityId)) {
         await session.administration.removeTeamUsers(withSignal(options.context, {
           teamId: observed.team.teamId,
           identityIds: [identityId]
         }))
-        users = await listAllUsers(
-          session.administration,
-          observed.team.teamId,
-          options.context
-        )
-        if (users.some((user) => user.identityId === identityId)) {
-          throw connectorError('outcome_unknown')
-        }
+        await observeAfterOpenContentTeamMutation(async () => {
+          const team = await session.administration.observeTeam(withSignal(options.context, {
+            teamId: observed.team.teamId
+          }))
+          assertOpenContentTeamObservation(team, observed.team)
+          users = await listCompleteOpenContentTeamUsers(session.administration, {
+            teamId: observed.team.teamId,
+            ...(options.context.signal === undefined ? {} : { signal: options.context.signal })
+          })
+          if (users.some((user) => user.identityId === identityId)) {
+            throw connectorError('outcome_unknown')
+          }
+        })
       }
       return contentSpaceAdministrationRemoveMemberReceiptSchema.parse({
         root: toPortableContentContainerReference({
@@ -438,113 +458,31 @@ function createBoundAdministrationPort(options: Readonly<{
           containerId: observed.root.folderGuid
         }),
         member: input.member,
-        removed: true,
-        revision: teamRevision(observed.team)
+        removed: true
       })
     })
   })
 }
 
-async function findTeamByRoot(
-  administration: OpenContentBoundTeamAdministration,
-  folderGuid: string,
-  context: ContentSpaceProviderOperationContext
-): Promise<Readonly<{ team: OpenContentTeam; root: OpenContentTeamRoot }>> {
-  let match: Readonly<{ team: OpenContentTeam; root: OpenContentTeamRoot }> | undefined
-  let pageNumber = 1
-  for (let pages = 0; pages < MAX_PAGES; pages += 1) {
-    const page = await administration.listTeams(withSignal(context, {
-      pageNumber,
-      pageSize: OPENCONTENT_TEAM_PAGE_SIZE_MAX,
-      teamType: 2 as const
-    }))
-    for (const team of page.teams) {
-      const root = await resolveRoot(administration, team, context)
-      if (root.folderGuid !== folderGuid) continue
-      if (match !== undefined) throw connectorError('provider_contract_violation')
-      match = Object.freeze({ team, root })
-    }
-    if (page.nextPage === undefined) {
-      if (!match) throw operationError('invalid_reference', 'The Team root does not exist.', 'never')
-      return match
-    }
-    if (page.nextPage !== pageNumber + 1) throw connectorError('provider_contract_violation')
-    pageNumber = page.nextPage
-  }
-  throw connectorError('bounds_exceeded')
-}
-
 async function findTeamsByName(
   administration: OpenContentBoundTeamAdministration,
   name: string,
+  currentOwnerIdentityId: OpenContentIdentityId,
   context: ContentSpaceProviderOperationContext
 ): Promise<readonly OpenContentTeam[]> {
-  const matches: OpenContentTeam[] = []
-  const seen = new Set<OpenContentTeamId>()
-  let pageNumber = 1
-  for (let pages = 0; pages < MAX_PAGES; pages += 1) {
-    const page = await administration.listTeams(withSignal(context, {
-      pageNumber,
-      pageSize: OPENCONTENT_TEAM_PAGE_SIZE_MAX,
-      teamType: 2 as const,
-      keyword: name
-    }))
-    for (const team of page.teams) {
-      if (seen.has(team.teamId)) throw connectorError('provider_contract_violation')
-      seen.add(team.teamId)
-      if (team.name === name) matches.push(team)
-    }
-    if (page.nextPage === undefined) return Object.freeze(matches)
-    if (page.nextPage !== pageNumber + 1) throw connectorError('provider_contract_violation')
-    pageNumber = page.nextPage
-  }
-  throw connectorError('bounds_exceeded')
-}
-
-async function listAllUsers(
-  administration: OpenContentBoundTeamAdministration,
-  teamId: OpenContentTeamId,
-  context: ContentSpaceProviderOperationContext
-): Promise<readonly OpenContentTeamUser[]> {
-  const users: OpenContentTeamUser[] = []
-  const seen = new Set<OpenContentIdentityId>()
-  let pageNumber = 1
-  for (let pages = 0; pages < MAX_PAGES; pages += 1) {
-    const page = await administration.listTeamUsers(withSignal(context, {
-      teamId,
-      pageNumber,
-      pageSize: OPENCONTENT_TEAM_PAGE_SIZE_MAX
-    }))
-    for (const user of page.users) {
-      if (seen.has(user.identityId)) throw connectorError('provider_contract_violation')
-      seen.add(user.identityId)
-      users.push(user)
-    }
-    if (page.nextPage === undefined) return Object.freeze(users)
-    if (page.nextPage !== pageNumber + 1) throw connectorError('provider_contract_violation')
-    pageNumber = page.nextPage
-  }
-  throw connectorError('bounds_exceeded')
-}
-
-async function resolveRoot(
-  administration: OpenContentBoundTeamAdministration,
-  team: OpenContentTeam,
-  context: ContentSpaceProviderOperationContext
-): Promise<OpenContentTeamRoot> {
-  const root = await administration.resolveTeamRoot(withSignal(context, {
-    teamId: team.teamId,
-    folderId: team.folderId
-  }))
-  if (root.teamId !== team.teamId || root.folderId !== team.folderId) {
-    throw connectorError('provider_contract_violation')
-  }
-  return root
+  const teams = await listCompleteOpenContentTeams(administration, {
+    teamType: 2,
+    keyword: name,
+    ...(context.signal === undefined ? {} : { signal: context.signal })
+  })
+  teams.forEach((team) => {
+    assertOpenContentTeamAdministrationAuthority(team, currentOwnerIdentityId)
+  })
+  return Object.freeze(teams.filter((team) => team.name === name))
 }
 
 function memberSummary(
   providerInstanceRef: string,
-  team: OpenContentTeam,
   user: OpenContentTeamUser
 ) {
   return contentSpaceAdministrationMemberSummarySchema.parse({
@@ -552,9 +490,7 @@ function memberSummary(
       providerInstanceRef,
       kind: 'user',
       principalId: String(user.identityId)
-    },
-    role: teamMemberRole(team, user),
-    revision: teamRevision(team)
+    }
   })
 }
 
@@ -579,17 +515,6 @@ function parseDirectoryMemberIdentity(
     )
   }
   return identityId
-}
-
-function teamMemberRole(
-  team: OpenContentTeam,
-  user: OpenContentTeamUser
-): ContentSpaceAdministrationMemberRole {
-  if (user.identityId === team.ownerIdentityId) return 'owner'
-  if (user.userType === 2) return 'manager'
-  if (user.userType === 3) return 'internal'
-  if (user.userType === 4) return 'external'
-  throw connectorError('provider_contract_violation')
 }
 
 function identityContext(
@@ -630,36 +555,6 @@ function parseCursor(rawCursor: string | undefined, pattern: RegExp): ProviderCu
 
 function formatCursor(prefix: 'oct' | 'ocm', cursor: ProviderCursor): string {
   return `${prefix}_${cursor.pageNumber}_${cursor.offset}`
-}
-
-function assertObservedTeam(observed: OpenContentTeam, listed: OpenContentTeam): void {
-  if (observed.teamId !== listed.teamId || observed.folderId !== listed.folderId) {
-    throw connectorError('provider_contract_violation')
-  }
-}
-
-function assertExpectedRevision(team: OpenContentTeam, expectedRevision: string): void {
-  if (teamRevision(team) !== expectedRevision) {
-    throw operationError(
-      'conflict',
-      'The OpenContent Team changed after it was observed.',
-      'after-human-action'
-    )
-  }
-}
-
-function teamRevision(team: OpenContentTeam): string {
-  const digest = createHash('sha256').update(JSON.stringify([
-    team.teamId,
-    team.folderId,
-    team.name,
-    team.ownerIdentityId,
-    team.status,
-    team.permission,
-    team.teamType,
-    team.isStuck
-  ])).digest('hex').slice(0, 32)
-  return `oc_${digest}`
 }
 
 function withSignal<Input extends object>(

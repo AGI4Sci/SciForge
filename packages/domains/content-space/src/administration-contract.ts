@@ -13,7 +13,6 @@ import {
 } from './contract.js'
 
 export const CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION = '3.0.0' as const
-export const PROJECT_CONTENT_SPACE_PROVISIONING_CONTRACT_VERSION = '1.0.0' as const
 
 export const CONTENT_SPACE_ADMINISTRATION_OPERATIONS = Object.freeze([
   'list-spaces',
@@ -25,8 +24,7 @@ export const CONTENT_SPACE_ADMINISTRATION_OPERATIONS = Object.freeze([
   'open-root',
   'list-members',
   'add-member',
-  'remove-member',
-  'provision-project'
+  'remove-member'
 ] as const)
 
 export const contentSpaceAdministrationOperationSchema = z.enum(
@@ -78,31 +76,7 @@ const consumerResourceIdSchema = z.string()
   .max(256)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)
 
-const projectProvisioningIdempotencyKeySchema = z.string()
-  .trim()
-  .min(16)
-  .max(128)
-  .regex(/^idem_[A-Za-z0-9._:-]+$/u)
-
-const projectLabelSchema = z.string().trim().min(1).max(256)
-
-export const projectContentSpaceProvisioningIntentSchema = z.object({
-  projectId: consumerResourceIdSchema,
-  projectLabel: projectLabelSchema,
-  contentOwnerUserId: consumerResourceIdSchema,
-  contentMemberUserIds: z.array(consumerResourceIdSchema)
-    .max(1_000)
-    .refine((values) => new Set(values).size === values.length, {
-      message: 'Content member users must be unique.'
-    })
-    .readonly(),
-  intentRevision: z.number().int().positive(),
-  idempotencyKey: projectProvisioningIdempotencyKeySchema
-}).strict().readonly()
-
-export type ProjectContentSpaceProvisioningIntent = z.infer<
-  typeof projectContentSpaceProvisioningIntentSchema
->
+const administrationSpaceLabelSchema = z.string().trim().min(1).max(256)
 
 export const portableContentContainerReferenceEnvelopeSchema = z.unknown().transform(
   (input, context): PortableResourceReferenceEnvelope => {
@@ -120,74 +94,11 @@ export const portableContentContainerReferenceEnvelopeSchema = z.unknown().trans
   }
 )
 
-export const projectContentSpaceProvisioningStatusSchema = z.enum([
-  'ready',
-  'pending',
-  'failed',
-  'ownership_sync_required',
-  'broken',
-  'outcome_unknown'
-])
-
-export const projectContentSpaceMemberProvisioningReportSchema = z.object({
-  contentUserId: consumerResourceIdSchema,
-  status: z.enum(['ready', 'pending', 'failed']),
-  reasonCode: z.string().trim().min(1).max(128)
-    .regex(/^[a-z][a-z0-9_]*$/u)
-    .optional()
-}).strict().readonly()
-
-export const projectContentSpaceProvisioningReportSchema = z.object({
-  projectId: consumerResourceIdSchema,
-  intentRevision: z.number().int().positive(),
-  status: projectContentSpaceProvisioningStatusSchema,
-  root: portableContentContainerReferenceEnvelopeSchema.optional(),
-  contentOwnerUserId: consumerResourceIdSchema,
-  members: z.array(projectContentSpaceMemberProvisioningReportSchema)
-    .max(1_000)
-    .refine((values) => new Set(values.map((value) => value.contentUserId)).size === values.length, {
-      message: 'Content member reports must be unique.'
-    })
-    .readonly()
-}).strict().superRefine((report, context) => {
-  if (['ready', 'ownership_sync_required', 'broken'].includes(report.status) && !report.root) {
-    context.addIssue({
-      code: 'custom',
-      path: ['root'],
-      message: `A ${report.status} Project requires a portable Content Container root.`
-    })
-  }
-  if (report.status === 'ready' && report.members.some((member) => member.status !== 'ready')) {
-    context.addIssue({
-      code: 'custom',
-      path: ['members'],
-      message: 'A ready Project requires every member to be ready.'
-    })
-  }
-}).readonly()
-
-export type ProjectContentSpaceProvisioningStatus = z.infer<
-  typeof projectContentSpaceProvisioningStatusSchema
->
-export type ProjectContentSpaceMemberProvisioningReport = z.infer<
-  typeof projectContentSpaceMemberProvisioningReportSchema
->
-export type ProjectContentSpaceProvisioningReport = z.infer<
-  typeof projectContentSpaceProvisioningReportSchema
->
-
-const administrationRevisionSchema = z.string()
-  .trim()
-  .min(1)
-  .max(128)
-  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)
-
 export const contentSpaceAdministrationSpaceSummarySchema = z.object({
   root: portableContentContainerReferenceEnvelopeSchema,
-  label: projectLabelSchema,
+  label: administrationSpaceLabelSchema,
   contentOwnerUserId: consumerResourceIdSchema,
-  pinned: z.boolean(),
-  revision: administrationRevisionSchema
+  pinned: z.boolean()
 }).strict().readonly()
 
 export const contentSpaceAdministrationSpacePageSchema = z.object({
@@ -200,7 +111,7 @@ export const contentSpaceAdministrationListSpacesInputSchema = z.object({
 }).strict().readonly()
 
 const administrationCreateSpaceInputShape = Object.freeze({
-  label: projectLabelSchema
+  label: administrationSpaceLabelSchema
 })
 
 /** Agent business input omits owner and invocation identity; Broker context supplies both. */
@@ -219,13 +130,11 @@ export const contentSpaceAdministrationObserveSpaceInputSchema = z.object({
 
 export const contentSpaceAdministrationUpdateSpaceInputSchema = z.object({
   root: portableContentContainerReferenceEnvelopeSchema,
-  expectedRevision: administrationRevisionSchema,
-  label: projectLabelSchema
+  label: administrationSpaceLabelSchema
 }).strict().readonly()
 
 const contentSpaceAdministrationRootMutationInputSchema = z.object({
-  root: portableContentContainerReferenceEnvelopeSchema,
-  expectedRevision: administrationRevisionSchema
+  root: portableContentContainerReferenceEnvelopeSchema
 }).strict().readonly()
 
 export const contentSpaceAdministrationPinSpaceInputSchema =
@@ -238,24 +147,14 @@ export const contentSpaceAdministrationOpenRootInputSchema = z.object({
 }).strict().readonly()
 
 export const contentSpaceAdministrationRootOpenResultSchema = z.object({
-  root: portableContentContainerReferenceEnvelopeSchema,
-  revision: administrationRevisionSchema
+  root: portableContentContainerReferenceEnvelopeSchema
 }).strict().readonly()
-
-export const contentSpaceAdministrationMemberRoleSchema = z.enum([
-  'owner',
-  'manager',
-  'internal',
-  'external'
-])
 
 export const contentSpaceAdministrationMemberReferenceSchema =
   contentSpaceDirectoryUserReferenceSchema
 
 export const contentSpaceAdministrationMemberSummarySchema = z.object({
-  member: contentSpaceAdministrationMemberReferenceSchema,
-  role: contentSpaceAdministrationMemberRoleSchema,
-  revision: administrationRevisionSchema
+  member: contentSpaceAdministrationMemberReferenceSchema
 }).strict().readonly()
 
 export const contentSpaceAdministrationMemberPageSchema = z.object({
@@ -271,8 +170,7 @@ export const contentSpaceAdministrationListMembersInputSchema = z.object({
 
 const contentSpaceAdministrationMemberMutationInputSchema = z.object({
   root: portableContentContainerReferenceEnvelopeSchema,
-  member: contentSpaceAdministrationMemberReferenceSchema,
-  expectedRevision: administrationRevisionSchema
+  member: contentSpaceAdministrationMemberReferenceSchema
 }).strict().readonly()
 
 export const contentSpaceAdministrationAddMemberInputSchema =
@@ -280,11 +178,15 @@ export const contentSpaceAdministrationAddMemberInputSchema =
 export const contentSpaceAdministrationRemoveMemberInputSchema =
   contentSpaceAdministrationMemberMutationInputSchema
 
+export const contentSpaceAdministrationAddMemberReceiptSchema = z.object({
+  root: portableContentContainerReferenceEnvelopeSchema,
+  member: contentSpaceAdministrationMemberReferenceSchema
+}).strict().readonly()
+
 export const contentSpaceAdministrationRemoveMemberReceiptSchema = z.object({
   root: portableContentContainerReferenceEnvelopeSchema,
   member: contentSpaceAdministrationMemberReferenceSchema,
-  removed: z.literal(true),
-  revision: administrationRevisionSchema
+  removed: z.literal(true)
 }).strict().readonly()
 
 export type ContentSpaceAdministrationSpaceSummary = z.infer<
@@ -314,9 +216,6 @@ export type ContentSpaceAdministrationOpenRootInput = z.infer<
 export type ContentSpaceAdministrationRootOpenResult = z.infer<
   typeof contentSpaceAdministrationRootOpenResultSchema
 >
-export type ContentSpaceAdministrationMemberRole = z.infer<
-  typeof contentSpaceAdministrationMemberRoleSchema
->
 export type ContentSpaceAdministrationMemberSummary = z.infer<
   typeof contentSpaceAdministrationMemberSummarySchema
 >
@@ -331,6 +230,9 @@ export type ContentSpaceAdministrationAddMemberInput = z.infer<
 >
 export type ContentSpaceAdministrationRemoveMemberInput = z.infer<
   typeof contentSpaceAdministrationRemoveMemberInputSchema
+>
+export type ContentSpaceAdministrationAddMemberReceipt = z.infer<
+  typeof contentSpaceAdministrationAddMemberReceiptSchema
 >
 export type ContentSpaceAdministrationRemoveMemberReceipt = z.infer<
   typeof contentSpaceAdministrationRemoveMemberReceiptSchema
@@ -364,7 +266,7 @@ export type ContentSpaceAdministrationPort = Readonly<{
   ): Promise<ContentSpaceAdministrationMemberPage>
   addMember(
     input: ContentSpaceAdministrationAddMemberInput
-  ): Promise<ContentSpaceAdministrationMemberSummary>
+  ): Promise<ContentSpaceAdministrationAddMemberReceipt>
   removeMember(
     input: ContentSpaceAdministrationRemoveMemberInput
   ): Promise<ContentSpaceAdministrationRemoveMemberReceipt>
@@ -389,24 +291,6 @@ export function defineContentSpaceAdministrationPort(
     input.contractVersion !== CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION ||
     methods.some((method) => typeof input[method] !== 'function')) {
     throw new TypeError('Content Space administration port is invalid.')
-  }
-  return Object.freeze(input)
-}
-
-export type ProjectContentSpaceProvisioningPort = Readonly<{
-  contractVersion: typeof PROJECT_CONTENT_SPACE_PROVISIONING_CONTRACT_VERSION
-  provisionProjectContentSpace(
-    intent: ProjectContentSpaceProvisioningIntent
-  ): Promise<ProjectContentSpaceProvisioningReport>
-}>
-
-export function defineProjectContentSpaceProvisioningPort(
-  input: ProjectContentSpaceProvisioningPort
-): ProjectContentSpaceProvisioningPort {
-  if (!isExactPort(input, ['contractVersion', 'provisionProjectContentSpace']) ||
-    input.contractVersion !== PROJECT_CONTENT_SPACE_PROVISIONING_CONTRACT_VERSION ||
-    typeof input.provisionProjectContentSpace !== 'function') {
-    throw new TypeError('Project Content Space provisioning port is invalid.')
   }
   return Object.freeze(input)
 }

@@ -29,7 +29,6 @@ import {
   OPENCONTENT_CLI_MAX_STDOUT_BYTES,
   OPENCONTENT_CLI_RUNNER_PROTOCOL,
   type OpenContentCliCommand,
-  type OpenContentCliInvocation,
   type OpenContentCliProcessPort,
   type OpenContentCliProcessRequest
 } from './cli-runner.js'
@@ -38,12 +37,12 @@ import {
   DOCFLOW_NATIVE_DOCUMENT_COMMANDS,
   type DocflowCommand,
   type DocflowDataFile
-} from './docflow-native-document-adapter.js'
+} from '../supplier-docflow-protocol.js'
 import {
   OPENCONTENT_CLI_RESULT_PROTOCOL,
   type OpenContentExtendedDataFile
-} from './extended-operation-adapter.js'
-import type { OpenContentSkillError } from './contract.js'
+} from '../supplier-extended-operation-protocol.js'
+import type { OpenContentSupplierInvocation } from '../main-contract.js'
 import {
   OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR,
   type OpenContentSkillRuntimeFileIntegrity,
@@ -121,19 +120,49 @@ const MUTATION_COMMANDS = new Set<OpenContentCliCommand>([
   'docflow-image-download',
 ])
 
-const FORBIDDEN_CALLER_PATH_KEYS = new Set([
+const FORBIDDEN_CALLER_ARGUMENT_KEY_FRAGMENTS = Object.freeze([
+  'accesskey',
+  'apikey',
+  'authorization',
+  'cookie',
+  'credential',
+  'encryptionkey',
+  'header',
+  'password',
+  'path',
+  'privatekey',
+  'secret',
+  'session',
+  'signingkey',
+  'token'
+])
+
+const FORBIDDEN_CALLER_ARGUMENT_KEYS = new Set([
+  'args',
+  'argv',
+  'auth',
+  'command',
   'cwd',
+  'detached',
   'entrypoint',
+  'env',
+  'environment',
   'executable',
-  'filePath',
-  'filePaths',
-  'input',
-  'operationsFile',
-  'outputPath',
-  'planFile',
-  'selectorFile',
-  'snapshotPath',
-  'templateFile'
+  'execargv',
+  'execpath',
+  'gid',
+  'killsignal',
+  'nodeoptions',
+  'operationsfile',
+  'planfile',
+  'selectorfile',
+  'shell',
+  'signal',
+  'stdio',
+  'templatefile',
+  'uid',
+  'windowshide',
+  'workingdirectory'
 ])
 
 const SCRUBBED_RESULT_PATH_KEYS = new Set([
@@ -202,8 +231,15 @@ export interface NodeOpenContentCliProcessPort extends OpenContentCliProcessPort
   dispose(): void
 }
 
+type OpenContentCliProcessErrorCode =
+  | 'invalid-input'
+  | 'blocked-by-contract'
+  | 'provider-contract-violation'
+  | 'outcome-unknown'
+  | 'cancelled'
+
 export class OpenContentCliProcessError extends Error {
-  readonly code: OpenContentSkillError['code']
+  readonly code: OpenContentCliProcessErrorCode
   readonly retry = 'never' as const
   readonly attemptCount = 1 as const
   readonly dispatched: boolean
@@ -211,7 +247,7 @@ export class OpenContentCliProcessError extends Error {
   readonly stderrTruncated: boolean
 
   constructor(input: Readonly<{
-    code: OpenContentSkillError['code']
+    code: OpenContentCliProcessErrorCode
     message: string
     dispatched: boolean
     stdoutTruncated?: boolean
@@ -377,7 +413,7 @@ export function createNodeOpenContentCliProcessPortInternal(
 
 function assertRequest(
   request: OpenContentCliProcessRequest,
-  invocation: OpenContentCliInvocation,
+  invocation: OpenContentSupplierInvocation,
   trustedEntrypoint: string
 ): void {
   if (request.protocol !== OPENCONTENT_CLI_RUNNER_PROTOCOL ||
@@ -415,13 +451,33 @@ function assertRequest(
       dispatched: false
     })
   }
-  for (const key of Object.keys(invocation.args)) {
-    if (FORBIDDEN_CALLER_PATH_KEYS.has(key)) {
-      throw new OpenContentCliProcessError({
-        code: 'invalid-input',
-        message: 'Local filesystem paths are runner-owned.',
-        dispatched: false
-      })
+  assertSupplierArgumentsAreUnprivileged(invocation.args)
+}
+
+function assertSupplierArgumentsAreUnprivileged(args: Record<string, unknown>): void {
+  const pending: unknown[] = [args]
+  while (pending.length > 0) {
+    const candidate = pending.pop()
+    if (Array.isArray(candidate)) {
+      pending.push(...candidate)
+      continue
+    }
+    if (typeof candidate !== 'object' || candidate === null) continue
+    for (const [key, value] of Object.entries(candidate)) {
+      const normalizedKey = key.normalize('NFKC').toLowerCase().replace(/[^a-z0-9]/gu, '')
+      if (
+        FORBIDDEN_CALLER_ARGUMENT_KEYS.has(normalizedKey) ||
+        FORBIDDEN_CALLER_ARGUMENT_KEY_FRAGMENTS.some((fragment) =>
+          normalizedKey.includes(fragment)
+        )
+      ) {
+        throw new OpenContentCliProcessError({
+          code: 'invalid-input',
+          message: 'Supplier arguments may contain only unprivileged business data.',
+          dispatched: false
+        })
+      }
+      pending.push(value)
     }
   }
 }
@@ -605,7 +661,7 @@ type MaterializedInvocation = Readonly<{
 }>
 
 async function materializeInvocation(input: Readonly<{
-  invocation: OpenContentCliInvocation
+  invocation: OpenContentSupplierInvocation
   invocationRoot: string
   managed: ManagedStore
   now: () => number
@@ -955,7 +1011,7 @@ type CapturedOutputs = Readonly<{
 }>
 
 async function captureOutputs(input: Readonly<{
-  invocation: OpenContentCliInvocation
+  invocation: OpenContentSupplierInvocation
   parsed: unknown
   invocationRoot: string
   materialized: MaterializedInvocation
@@ -1037,7 +1093,7 @@ async function captureOutputs(input: Readonly<{
 }
 
 function pinnedProbeTemplateFile(
-  invocation: OpenContentCliInvocation,
+  invocation: OpenContentSupplierInvocation,
   output: Record<string, unknown>
 ): string | undefined {
   const args = asRecord(invocation.args)
@@ -1086,7 +1142,7 @@ function pinnedProbeTemplateFile(
 }
 
 function isPinnedPlanResult(
-  invocation: OpenContentCliInvocation,
+  invocation: OpenContentSupplierInvocation,
   output: Record<string, unknown>
 ): boolean {
   const args = asRecord(invocation.args)
@@ -1242,7 +1298,7 @@ async function deliverOutput(
 }
 
 function outputMediaType(
-  invocation: OpenContentCliInvocation,
+  invocation: OpenContentSupplierInvocation,
   parsedRecord: Record<string, unknown> | undefined
 ): string {
   const reported = [parsedRecord?.contentType, parsedRecord?.mediaType]
@@ -1309,7 +1365,7 @@ async function confinedFile(root: string, candidate: string): Promise<string> {
 }
 
 function buildResult(
-  invocation: OpenContentCliInvocation,
+  invocation: OpenContentSupplierInvocation,
   captured: CapturedOutputs
 ): unknown {
   const record = asRecord(captured.json)

@@ -8,7 +8,7 @@ type IdentityBindingContext = Readonly<{
   signal?: AbortSignal
 }>
 
-export type OpenContentIdentityBindingPort = Readonly<{
+type CurrentPrincipalOpenContentIdentityBinding = Readonly<{
   resolveContentUserIdentity(input: IdentityBindingContext & Readonly<{
     contentUserId: string
   }>): Promise<OpenContentIdentityId>
@@ -27,7 +27,7 @@ export class OpenContentIdentityBindingError extends Error {
 }
 
 export function createCurrentPrincipalOpenContentIdentityBinding():
-OpenContentIdentityBindingPort {
+CurrentPrincipalOpenContentIdentityBinding {
   return Object.freeze({
     resolveContentUserIdentity: async (input) => {
       if (input.signal?.aborted) throw new DOMException('Operation cancelled.', 'AbortError')

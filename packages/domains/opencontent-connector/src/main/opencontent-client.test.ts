@@ -248,35 +248,12 @@ describe('OpenContent client enrollment', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
-  it('resolves personal and Team roots to stable folder GUID facts', async () => {
+  it('resolves the personal root to one stable folder GUID fact', async () => {
     const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/flatsdk/api/services/User/GetTopPersonalFolderId')) {
         expect(JSON.parse(String(init?.body))).toEqual({ token: 'fixture-token-value' })
         return jsonResponse({ result: 0, msg: '', data: '1001' })
-      }
-      if (url.endsWith('/flatsdk/api/services/Team/GetMyTeamList')) {
-        return jsonResponse({
-          result: 0,
-          msg: '',
-          data: {
-            pageNum: 1,
-            pageSize: 20,
-            totalCount: 1,
-            teamList: [{
-              teamId: 19,
-              folderId: 2213,
-              teamName: 'sciforge test',
-              teamStatus: 1,
-              teamOwner: 41,
-              permission: 7,
-              teamType: 0,
-              isStick: false
-            }],
-            sortName: 'team_name',
-            sortDesc: 'false'
-          }
-        })
       }
       if (url.endsWith('/flatsdk/api/services/DocList/GetFolderInfoById')) {
         const { folderId } = JSON.parse(String(init?.body)) as { folderId: number }
@@ -285,10 +262,10 @@ describe('OpenContent client enrollment', () => {
           msg: '',
           data: {
             id: folderId,
-            folderGuid: folderId === 1001 ? 'personal-folder-guid' : 'team-folder-guid',
+            folderGuid: 'personal-folder-guid',
             parentFolderId: 0,
-            folderType: folderId === 1001 ? 1 : 2,
-            teamId: folderId === 1001 ? 0 : 19,
+            folderType: 1,
+            teamId: 0,
             permission: 7,
             childFolderCount: 0,
             childFileCount: 0
@@ -302,22 +279,13 @@ describe('OpenContent client enrollment', () => {
       fetch
     })
 
-    await expect(client.listRootFolders({
+    await expect(client.listPersonalRootFolder({
       token: 'fixture-token-value',
-      teamPage: 1,
-      teamPageSize: 20,
       assertPrincipalCurrent: principalIsCurrent
     })).resolves.toEqual({
-      roots: [{
-        source: 'personal-root',
-        folderGuid: 'personal-folder-guid',
-        label: 'Personal library'
-      }, {
-        source: 'team-root',
-        folderGuid: 'team-folder-guid',
-        label: 'sciforge test'
-      }],
-      nextTeamPage: undefined
+      source: 'personal-root',
+      folderGuid: 'personal-folder-guid',
+      label: 'Personal library'
     })
   })
 
@@ -439,11 +407,8 @@ describe('OpenContent client enrollment', () => {
     })
     const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
 
-    await expect(client.listRootFolders({
+    await expect(client.listPersonalRootFolder({
       token: 'fixture-token-value',
-      teamPage: 1,
-      teamPageSize: 20,
-      includeTeams: false,
       assertPrincipalCurrent
     })).rejects.toMatchObject({ code: 'unauthorized' })
 

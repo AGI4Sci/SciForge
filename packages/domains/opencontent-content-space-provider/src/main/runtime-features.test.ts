@@ -1,24 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import {
-  DOCFLOW_COMMAND_RESULT_PROTOCOL
-} from '@sciforge/opencontent-skill-runtime/main/docflow-native-document-adapter'
 import type {
   ContentSpaceExtendedOperationsExecutor,
   ContentSpaceNativeDocumentExecutor
 } from '@sciforge/domain-content-space/provider-features'
 import {
   OPENCONTENT_PROVIDER_INSTANCE_REF,
-  OpenContentConnectorError,
-  type OpenContentSkillRuntimeTransport,
-  type OpenContentContentSpaceFacade
+  OpenContentConnectorError
 } from '@sciforge/domain-opencontent-connector/contract'
+import type {
+  OpenContentContentSpaceFacade,
+  OpenContentSupplierCommandTransport
+} from '@sciforge/domain-opencontent-connector/main-contract'
 import {
-  openContentFolderIdSchema,
   openContentIdentityIdSchema,
-  openContentTeamIdSchema,
-  type OpenContentBoundTeamAdministration,
-  type OpenContentTeamUserType
+  type OpenContentBoundTeamAdministration
 } from '@sciforge/domain-opencontent-connector/team-administration-contract'
 
 import { createOpenContentRuntimeFeatures } from './runtime-features.js'
@@ -30,6 +26,7 @@ const principal = Object.freeze({
   deviceId: 'runtime-feature-no-assets-test',
   identityVersion: 1
 })
+const DOCFLOW_COMMAND_RESULT_PROTOCOL = 'docflow-command-result:v1' as const
 const teamRoot = Object.freeze({
   providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
   containerId: 'team-root-guid'
@@ -48,20 +45,16 @@ const existingDocument = Object.freeze({
     fileId: 'existing-document'
   })
 })
-const teamId = openContentTeamIdSchema.parse(9000019)
-const folderId = openContentFolderIdSchema.parse(9002213)
 const currentIdentityId = openContentIdentityIdSchema.parse(42)
-const memberIdentityId = openContentIdentityIdSchema.parse(84)
-const ownerIdentityId = openContentIdentityIdSchema.parse(91)
 
 describe('OpenContent optional runtime features', () => {
   it('declares native import blocked when the Provider contract is missing', async () => {
-    const useSkillRuntime: NonNullable<OpenContentContentSpaceFacade['useSkillRuntime']> =
+    const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
       async () => { throw new Error('Readiness description must not open the runtime.') }
     const native = requiredNativeFeature(createOpenContentRuntimeFeatures({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       facade: nativeFacadeFixture({
-        useSkillRuntime,
+        useSupplierTransport,
         listFolderEntries: vi.fn()
       })
     }))
@@ -73,12 +66,69 @@ describe('OpenContent optional runtime features', () => {
     })
   })
 
+  it('keeps raw directory searches blocked while current-principal remains session-backed', async () => {
+    const invoke = vi.fn<OpenContentSupplierCommandTransport['invoke']>()
+    let supplierTransportSessionCount = 0
+    const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
+      async (_session, operation) => {
+        supplierTransportSessionCount += 1
+        return operation({ invoke })
+      }
+    const useTeamAdministration: OpenContentContentSpaceFacade['useTeamAdministration'] =
+      async (_input, operation) => operation({
+        externalIdentityId: currentIdentityId,
+        administration: teamAdministrationFixture({})
+      })
+    const features = createOpenContentRuntimeFeatures({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: {
+        ...nativeFacadeFixture({
+          useSupplierTransport,
+          listFolderEntries: vi.fn()
+        }),
+        useTeamAdministration
+      }
+    })
+
+    const states = await features.extendedOperations!.describeOperations(operationContext())
+    expect(states).toContainEqual({
+      operation: 'getCurrentPrincipal',
+      readiness: 'poc_only',
+      reasonCode: 'verification_profile_required'
+    })
+    for (const operation of [
+      'searchUsers',
+      'searchDepartments',
+      'searchPositions',
+      'searchGroups'
+    ] as const) {
+      expect(states).toContainEqual({
+        operation,
+        readiness: 'blocked_by_contract',
+        reasonCode: 'provider_contract_missing'
+      })
+    }
+    await expect(features.extendedOperations!.execute(currentPrincipalInput()))
+      .resolves.toMatchObject({
+        ok: true,
+        value: {
+          reference: {
+            providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+            kind: 'user',
+            principalId: String(currentIdentityId)
+          }
+        }
+      })
+    expect(supplierTransportSessionCount).toBe(0)
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
   it('returns native create success only after the created file is listed under the exact authorized parent', async () => {
     const signal = new AbortController().signal
     const assertPrincipalCurrent = vi.fn(async () => undefined)
     let attachmentSessionActive = false
     const transport = nativeCreateTransport()
-    const useSkillRuntime: NonNullable<OpenContentContentSpaceFacade['useSkillRuntime']> =
+    const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
       async (session, operation) => {
         expect(session).toMatchObject({
           principal,
@@ -121,7 +171,7 @@ describe('OpenContent optional runtime features', () => {
     )
     const native = requiredNativeFeature(createOpenContentRuntimeFeatures({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      facade: nativeFacadeFixture({ useSkillRuntime, listFolderEntries })
+      facade: nativeFacadeFixture({ useSupplierTransport, listFolderEntries })
     }))
 
     await expect(native.execute(nativeCreateInput({
@@ -144,7 +194,7 @@ describe('OpenContent optional runtime features', () => {
     const signal = new AbortController().signal
     const assertPrincipalCurrent = vi.fn(async () => undefined)
     const transport = nativeCreateTransport()
-    const useSkillRuntime: NonNullable<OpenContentContentSpaceFacade['useSkillRuntime']> =
+    const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
       async (_session, operation) => operation(transport)
     const listFolderEntries = vi.fn<OpenContentContentSpaceFacade['listFolderEntries']>(
       async ({ parentFolderGuid, page }) => page === 1
@@ -170,7 +220,7 @@ describe('OpenContent optional runtime features', () => {
     )
     const native = requiredNativeFeature(createOpenContentRuntimeFeatures({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      facade: nativeFacadeFixture({ useSkillRuntime, listFolderEntries })
+      facade: nativeFacadeFixture({ useSupplierTransport, listFolderEntries })
     }))
 
     await expect(native.execute(nativeCreateInput({
@@ -187,7 +237,7 @@ describe('OpenContent optional runtime features', () => {
     const assertPrincipalCurrent = vi.fn(async () => undefined)
     const transport = nativeCreateTransport()
     let attachmentRuntimeSessions = 0
-    const useSkillRuntime: NonNullable<OpenContentContentSpaceFacade['useSkillRuntime']> =
+    const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
       async (_session, operation) => {
         attachmentRuntimeSessions += 1
         return operation(transport)
@@ -195,7 +245,7 @@ describe('OpenContent optional runtime features', () => {
     const listFolderEntries = vi.fn<OpenContentContentSpaceFacade['listFolderEntries']>()
     const native = requiredNativeFeature(createOpenContentRuntimeFeatures({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      facade: nativeFacadeFixture({ useSkillRuntime, listFolderEntries })
+      facade: nativeFacadeFixture({ useSupplierTransport, listFolderEntries })
     }))
 
     await expect(native.execute(nativeImportInput({
@@ -222,7 +272,7 @@ describe('OpenContent optional runtime features', () => {
     const signal = new AbortController().signal
     const assertPrincipalCurrent = vi.fn(async () => undefined)
     const transport = nativeCreateTransport()
-    const useSkillRuntime: NonNullable<OpenContentContentSpaceFacade['useSkillRuntime']> =
+    const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
       async (_session, operation) => operation(transport)
     const listFolderEntries = vi.fn<OpenContentContentSpaceFacade['listFolderEntries']>(
       async ({ parentFolderGuid, page }) => ({
@@ -240,7 +290,7 @@ describe('OpenContent optional runtime features', () => {
     )
     const native = requiredNativeFeature(createOpenContentRuntimeFeatures({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      facade: nativeFacadeFixture({ useSkillRuntime, listFolderEntries })
+      facade: nativeFacadeFixture({ useSupplierTransport, listFolderEntries })
     }))
 
     await expect(native.execute(nativeCreateInput({
@@ -270,7 +320,7 @@ describe('OpenContent optional runtime features', () => {
       const signal = new AbortController().signal
       const assertPrincipalCurrent = vi.fn(async () => undefined)
       const transport = nativeCreateTransport()
-      const useSkillRuntime: NonNullable<OpenContentContentSpaceFacade['useSkillRuntime']> =
+      const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
         async (_session, operation) => operation(transport)
       const listFolderEntries = vi.fn<OpenContentContentSpaceFacade['listFolderEntries']>(
         async () => failure === 'parent echo drift'
@@ -287,7 +337,7 @@ describe('OpenContent optional runtime features', () => {
       )
       const native = requiredNativeFeature(createOpenContentRuntimeFeatures({
         providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-        facade: nativeFacadeFixture({ useSkillRuntime, listFolderEntries })
+        facade: nativeFacadeFixture({ useSupplierTransport, listFolderEntries })
       }))
 
       await expect(native.execute(nativeCreateInput({
@@ -313,7 +363,7 @@ describe('OpenContent optional runtime features', () => {
       const signal = new AbortController().signal
       const assertPrincipalCurrent = vi.fn(async () => undefined)
       const transport = nativeCreateTransport()
-      const useSkillRuntime: NonNullable<OpenContentContentSpaceFacade['useSkillRuntime']> =
+      const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
         async (_session, operation) => operation(transport)
       const listFolderEntries = vi.fn<OpenContentContentSpaceFacade['listFolderEntries']>()
         .mockResolvedValueOnce({
@@ -324,7 +374,7 @@ describe('OpenContent optional runtime features', () => {
         .mockRejectedValueOnce(new Error('An invalid cursor must not dispatch another read.'))
       const native = requiredNativeFeature(createOpenContentRuntimeFeatures({
         providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-        facade: nativeFacadeFixture({ useSkillRuntime, listFolderEntries })
+        facade: nativeFacadeFixture({ useSupplierTransport, listFolderEntries })
       }))
 
       await expect(native.execute(nativeCreateInput({
@@ -351,13 +401,13 @@ describe('OpenContent optional runtime features', () => {
       const signal = new AbortController().signal
       const assertPrincipalCurrent = vi.fn(async () => undefined)
       const transport = nativeCreateTransport()
-      const useSkillRuntime: NonNullable<OpenContentContentSpaceFacade['useSkillRuntime']> =
+      const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
         async (_session, operation) => operation(transport)
       const listFolderEntries = vi.fn<OpenContentContentSpaceFacade['listFolderEntries']>()
         .mockRejectedValue(error)
       const native = requiredNativeFeature(createOpenContentRuntimeFeatures({
         providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-        facade: nativeFacadeFixture({ useSkillRuntime, listFolderEntries })
+        facade: nativeFacadeFixture({ useSupplierTransport, listFolderEntries })
       }))
 
       await expect(native.execute(nativeCreateInput({
@@ -391,12 +441,12 @@ describe('OpenContent optional runtime features', () => {
       const signal = new AbortController().signal
       const assertPrincipalCurrent = vi.fn(async () => undefined)
       const transport = nativeCreateFailureTransport(dispatched)
-      const useSkillRuntime: NonNullable<OpenContentContentSpaceFacade['useSkillRuntime']> =
+      const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
         async (_session, operation) => operation(transport)
       const listFolderEntries = vi.fn<OpenContentContentSpaceFacade['listFolderEntries']>()
       const native = requiredNativeFeature(createOpenContentRuntimeFeatures({
         providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-        facade: nativeFacadeFixture({ useSkillRuntime, listFolderEntries })
+        facade: nativeFacadeFixture({ useSupplierTransport, listFolderEntries })
       }))
 
       await expect(native.execute(nativeCreateInput({
@@ -415,12 +465,12 @@ describe('OpenContent optional runtime features', () => {
       const signal = new AbortController().signal
       const assertPrincipalCurrent = vi.fn(async () => undefined)
       const transport = nativeReadTransport()
-      const useSkillRuntime: NonNullable<OpenContentContentSpaceFacade['useSkillRuntime']> =
+      const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
         async (_session, invoke) => invoke(transport)
       const listFolderEntries = vi.fn<OpenContentContentSpaceFacade['listFolderEntries']>()
       const native = requiredNativeFeature(createOpenContentRuntimeFeatures({
         providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-        facade: nativeFacadeFixture({ useSkillRuntime, listFolderEntries })
+        facade: nativeFacadeFixture({ useSupplierTransport, listFolderEntries })
       }))
 
       await expect(native.execute(nativeReadInput({
@@ -433,103 +483,53 @@ describe('OpenContent optional runtime features', () => {
     }
   )
 
-  it('keeps both public Team governance adapters available but declares them PoC-only', async () => {
-    let memberUserType: OpenContentTeamUserType = 3
-    let currentOwnerIdentityId = currentIdentityId
-    const setTeamUserRole = vi.fn<OpenContentBoundTeamAdministration['setTeamUserRole']>(
-      async ({ userType }) => { memberUserType = userType }
-    )
-    const transferTeamOwner = vi.fn<OpenContentBoundTeamAdministration['transferTeamOwner']>(
-      async ({ ownerIdentityId: nextOwnerIdentityId }) => {
-        currentOwnerIdentityId = nextOwnerIdentityId
-      }
-    )
-    const administration = teamAdministrationFixture({
-      listTeams: vi.fn(async ({ pageNumber, pageSize }) => ({
-        pageNumber,
-        pageSize,
-        totalCount: 1,
-        teams: [teamValue(currentOwnerIdentityId)]
-      })),
-      observeTeam: vi.fn(async () => teamValue(currentOwnerIdentityId)),
-      listTeamUsers: vi.fn(async ({ pageNumber, pageSize }) => ({
-        pageNumber,
-        pageSize,
-        totalCount: 1,
-        users: [{ identityId: memberIdentityId, userType: memberUserType }]
-      })),
-      resolveTeamRoot: vi.fn(async () => ({
-        teamId,
-        folderId,
-        folderGuid: teamRoot.containerId
-      })),
-      setTeamUserRole,
-      transferTeamOwner
-    })
+  it('keeps only session-backed current-principal available without attachment assets', async () => {
+    const administration = teamAdministrationFixture({})
+    let teamAdministrationSessionCount = 0
     const useTeamAdministration: OpenContentContentSpaceFacade['useTeamAdministration'] =
-      async (_input, operation) => operation({
-        externalIdentityId: currentIdentityId,
-        administration
-      })
+      async (_input, operation) => {
+        teamAdministrationSessionCount += 1
+        return operation({
+          externalIdentityId: currentIdentityId,
+          administration
+        })
+      }
     const facade = facadeFixture(useTeamAdministration)
     const features = createOpenContentRuntimeFeatures({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       facade
     })
 
-    expect(Object.hasOwn(facade, 'useSkillRuntime')).toBe(false)
+    expect(Object.hasOwn(facade, 'useSupplierTransport')).toBe(false)
     expect(features.nativeDocuments).toBeUndefined()
     const extended = features.extendedOperations
     expect(extended).toBeDefined()
     const states = await extended!.describeOperations(operationContext())
-    expect(states).toHaveLength(54)
+    expect(states).toHaveLength(52)
     expect(states.filter(({ readiness }) => readiness === 'poc_only'))
       .toEqual([
         {
-          operation: 'updateTeamMemberRole',
-          readiness: 'poc_only',
-          reasonCode: 'verification_profile_required'
-        },
-        {
-          operation: 'transferTeamOwnership',
+          operation: 'getCurrentPrincipal',
           readiness: 'poc_only',
           reasonCode: 'verification_profile_required'
         }
       ])
     expect(states.filter(({ readiness }) => readiness === 'blocked_by_contract'))
-      .toHaveLength(52)
+      .toHaveLength(51)
 
-    await expect(extended!.execute(teamInput({
-      invocationId: 'invocation_no_assets_role_0001',
-      operation: 'updateTeamMemberRole',
-      request: {
-        teamRoot,
-        member: {
-          providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-          kind: 'user',
-          principalId: String(memberIdentityId)
-        },
-        role: 'manager'
-      }
-    }))).resolves.toMatchObject({ ok: true, value: { role: 'manager' } })
-    expect(setTeamUserRole).toHaveBeenCalledOnce()
-
-    await expect(extended!.execute(teamInput({
-      invocationId: 'invocation_no_assets_owner_0001',
-      operation: 'transferTeamOwnership',
-      request: {
-        teamRoot,
-        newOwner: {
-          providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-          kind: 'user',
-          principalId: String(ownerIdentityId)
-        }
-      }
-    }))).resolves.toMatchObject({
+    await expect(extended!.execute(currentPrincipalInput())).resolves.toEqual({
       ok: true,
-      value: { owner: { principalId: String(ownerIdentityId) } }
+      value: {
+        reference: {
+          providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+          kind: 'user',
+          principalId: String(currentIdentityId)
+        },
+        displayName: 'Current OpenContent user'
+      }
     })
-    expect(transferTeamOwner).toHaveBeenCalledOnce()
+
+    expect(teamAdministrationSessionCount).toBe(1)
 
     await expect(extended!.execute(blockedCliInput())).resolves.toMatchObject({
       ok: false,
@@ -548,17 +548,16 @@ function operationContext() {
   })
 }
 
-function teamInput(input: Readonly<{
-  invocationId: string
-  operation: 'updateTeamMemberRole' | 'transferTeamOwnership'
-  request: unknown
-}>): Parameters<ContentSpaceExtendedOperationsExecutor['execute']>[0] {
+function currentPrincipalInput(): Parameters<ContentSpaceExtendedOperationsExecutor['execute']>[0] {
   return {
-    effect: 'external-write',
-    context: { ...operationContext(), invocationId: input.invocationId },
+    effect: 'read',
+    context: {
+      ...operationContext(),
+      invocationId: 'invocation_current_principal_0001'
+    },
     target: { kind: 'content', root: teamRoot, primary: teamRoot, authorized: [teamRoot] },
-    operation: input.operation,
-    request: input.request
+    operation: 'getCurrentPrincipal',
+    request: { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF }
   }
 }
 
@@ -597,7 +596,7 @@ function facadeFixture(
 }
 
 function nativeFacadeFixture(
-  overrides: Pick<OpenContentContentSpaceFacade, 'useSkillRuntime' | 'listFolderEntries'>
+  overrides: Pick<OpenContentContentSpaceFacade, 'useSupplierTransport' | 'listFolderEntries'>
 ): OpenContentContentSpaceFacade {
   const useTeamAdministration: OpenContentContentSpaceFacade['useTeamAdministration'] =
     async () => {
@@ -731,10 +730,10 @@ function nativeImportInput(input: Readonly<{
   }
 }
 
-function nativeCreateTransport(): OpenContentSkillRuntimeTransport & Readonly<{
-  invoke: ReturnType<typeof vi.fn<OpenContentSkillRuntimeTransport['invoke']>>
+function nativeCreateTransport(): OpenContentSupplierCommandTransport & Readonly<{
+  invoke: ReturnType<typeof vi.fn<OpenContentSupplierCommandTransport['invoke']>>
 }> {
-  const invoke = vi.fn<OpenContentSkillRuntimeTransport['invoke']>(async (invocation) => {
+  const invoke = vi.fn<OpenContentSupplierCommandTransport['invoke']>(async (invocation) => {
     if (invocation.command === 'docflow-create') {
       return {
         protocol: DOCFLOW_COMMAND_RESULT_PROTOCOL,
@@ -789,10 +788,10 @@ function nativeCreateTransport(): OpenContentSkillRuntimeTransport & Readonly<{
 
 function nativeCreateFailureTransport(
   dispatched: boolean
-): OpenContentSkillRuntimeTransport & Readonly<{
-  invoke: ReturnType<typeof vi.fn<OpenContentSkillRuntimeTransport['invoke']>>
+): OpenContentSupplierCommandTransport & Readonly<{
+  invoke: ReturnType<typeof vi.fn<OpenContentSupplierCommandTransport['invoke']>>
 }> {
-  const invoke = vi.fn<OpenContentSkillRuntimeTransport['invoke']>(async (invocation) => ({
+  const invoke = vi.fn<OpenContentSupplierCommandTransport['invoke']>(async (invocation) => ({
     protocol: DOCFLOW_COMMAND_RESULT_PROTOCOL,
     command: invocation.command,
     ok: false,
@@ -806,10 +805,10 @@ function nativeCreateFailureTransport(
   return Object.freeze({ invoke })
 }
 
-function nativeReadTransport(): OpenContentSkillRuntimeTransport & Readonly<{
-  invoke: ReturnType<typeof vi.fn<OpenContentSkillRuntimeTransport['invoke']>>
+function nativeReadTransport(): OpenContentSupplierCommandTransport & Readonly<{
+  invoke: ReturnType<typeof vi.fn<OpenContentSupplierCommandTransport['invoke']>>
 }> {
-  const invoke = vi.fn<OpenContentSkillRuntimeTransport['invoke']>(async (invocation) => {
+  const invoke = vi.fn<OpenContentSupplierCommandTransport['invoke']>(async (invocation) => {
     if (invocation.command === 'docflow-read') {
       return {
         protocol: DOCFLOW_COMMAND_RESULT_PROTOCOL,
@@ -871,21 +870,6 @@ function teamAdministrationFixture(
     addTeamUsers: vi.fn(),
     removeTeamUsers: vi.fn(),
     resolveTeamRoot: vi.fn(),
-    setTeamUserRole: vi.fn(),
-    transferTeamOwner: vi.fn(),
     ...overrides
   }
-}
-
-function teamValue(ownerIdentityId: typeof currentIdentityId) {
-  return Object.freeze({
-    teamId,
-    folderId,
-    name: 'Research Team',
-    ownerIdentityId,
-    status: 1,
-    permission: 15,
-    teamType: 2,
-    isStuck: false
-  })
 }

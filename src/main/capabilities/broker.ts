@@ -576,15 +576,11 @@ export class CapabilityBroker {
     rawHandle: CapabilityResourceHandle
   ): Readonly<{
     resourceRef: string
-    resourceKind: string
-    semanticRevision: string
   }> {
     const caller = this.#hostResourceCaller(rawCaller)
     const { state } = this.#resolveHandle(caller, rawHandle)
     return Object.freeze({
-      resourceRef: state.resourceRef,
-      resourceKind: state.resourceKind,
-      semanticRevision: state.semanticRevision
+      resourceRef: state.resourceRef
     })
   }
 

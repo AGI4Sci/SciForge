@@ -1,29 +1,30 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS,
-  contentSpaceExtendedErrorCodeSchema
+  CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS
 } from '@sciforge/domain-content-space/extended-operations-contract'
 
 import {
-  OPENCONTENT_CLI_RESULT_PROTOCOL,
-  OPENCONTENT_EXTENDED_OPERATION_COMMANDS,
+  openContentExtendedCommandInvocationSchema
+} from '@sciforge/domain-opencontent-connector/main-contract'
+import {
+  openContentIdentityIdSchema
+} from '@sciforge/domain-opencontent-connector/team-administration-contract'
+import {
   OPENCONTENT_EXTENDED_OPERATION_MAPPINGS,
-  createOpenContentExtendedOperationAdapter,
-  type OpenContentExtendedCommandInvocation
+  createOpenContentExtendedOperationAdapter
 } from './extended-operation-adapter.js'
 
 const PROVIDER = 'provider-instance-a'
 const INVOCATION = 'invocation_extended_0001'
-const OWNER = Object.freeze({
-  role: 'adapter-owner' as const,
-  moduleId: 'sciforge.opencontent-content-space-provider' as const,
-  moduleVersion: '1.0.0'
-})
 const FILE = Object.freeze({ providerInstanceRef: PROVIDER, fileId: 'file-a' })
 const FILE_B = Object.freeze({ providerInstanceRef: PROVIDER, fileId: 'file-b' })
 const FOLDER = Object.freeze({ providerInstanceRef: PROVIDER, containerId: 'folder-a' })
 const SOURCE_SHA256 = 'd'.repeat(64)
+const OPENCONTENT_CLI_RESULT_PROTOCOL = 'opencontent-cli-result:v1' as const
+type OpenContentExtendedCommandInvocation = ReturnType<
+  typeof openContentExtendedCommandInvocationSchema.parse
+>
 
 function success(invocation: OpenContentExtendedCommandInvocation, json: unknown) {
   return Object.freeze({
@@ -46,7 +47,6 @@ function adapterWith(
   return {
     invoke,
     adapter: createOpenContentExtendedOperationAdapter({
-      owner: OWNER,
       providerInstanceRef: PROVIDER,
       transport: { invoke },
       now: () => new Date('2026-08-20T00:00:00.000Z')
@@ -59,9 +59,9 @@ function failureCode(value: unknown): unknown {
 }
 
 describe('OpenContent extended-operation adapter', () => {
-  it('exhaustively maps and result-admits all 54 public operations without raw or team deletion', () => {
+  it('exhaustively maps every public operation without vendor Team routing', () => {
     const publicKeys = Object.keys(CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS).sort()
-    expect(publicKeys).toHaveLength(54)
+    expect(publicKeys).toHaveLength(52)
     expect(Object.keys(OPENCONTENT_EXTENDED_OPERATION_MAPPINGS).sort()).toEqual(publicKeys)
 
     for (const key of publicKeys) {
@@ -76,72 +76,10 @@ describe('OpenContent extended-operation adapter', () => {
           retry: 'never'
         }
       })).not.toThrow()
-      for (const command of mapping.commands) {
-        expect(OPENCONTENT_EXTENDED_OPERATION_COMMANDS).toContain(command)
-      }
     }
     expect(JSON.stringify(OPENCONTENT_EXTENDED_OPERATION_MAPPINGS)).not.toMatch(
-      /raw|argv|environment|team.delete/iu
+      /raw|argv|environment|team/iu
     )
-  })
-
-  it('admits only the provider adapter owner and lets team routing omit a CLI transport', async () => {
-    expect(() => createOpenContentExtendedOperationAdapter({
-      owner: {
-        role: 'transport-owner',
-        moduleId: 'sciforge.opencontent-connector',
-        moduleVersion: '1.0.0'
-      },
-      providerInstanceRef: PROVIDER
-    })).toThrow(/Content Space provider/u)
-
-    const updateMemberRole = vi.fn(async () => ({ applied: true as const }))
-    const transferOwnership = vi.fn(async () => ({ applied: true as const }))
-    const adapter = createOpenContentExtendedOperationAdapter({
-      owner: OWNER,
-      providerInstanceRef: PROVIDER,
-      teamGovernance: {
-        updateMemberRole,
-        transferOwnership
-      }
-    })
-    for (const [index, [role, userType]] of ([
-      ['manager', 2],
-      ['internal', 3],
-      ['external', 4]
-    ] as const).entries()) {
-      const result = await adapter.execute({
-        invocationId: `${INVOCATION}_${index}`,
-        operation: 'updateTeamMemberRole',
-        request: {
-          teamRoot: FOLDER,
-          member: { providerInstanceRef: PROVIDER, kind: 'user', principalId: 'person-a' },
-          role
-        }
-      })
-      expect(result).toMatchObject({ ok: true, value: { role } })
-      expect(updateMemberRole).toHaveBeenNthCalledWith(index + 1, {
-        invocationId: `${INVOCATION}_${index}`,
-        teamRootId: 'folder-a',
-        memberPrincipalId: 'person-a',
-        userType
-      })
-    }
-    expect(updateMemberRole).toHaveBeenCalledTimes(3)
-
-    const ownership = await adapter.execute({
-      invocationId: 'invocation_extended_team_0002',
-      operation: 'transferTeamOwnership',
-      request: {
-        teamRoot: FOLDER,
-        newOwner: { providerInstanceRef: PROVIDER, kind: 'user', principalId: 'person-b' }
-      }
-    })
-    expect(ownership).toMatchObject({
-      ok: true,
-      value: { owner: { principalId: 'person-b' } }
-    })
-    expect(transferOwnership).toHaveBeenCalledOnce()
   })
 
   it('rejects Provider authority drift before transport and validates request schemas', async () => {
@@ -162,39 +100,6 @@ describe('OpenContent extended-operation adapter', () => {
     })
     expect(failureCode(invalid)).toBe('invalid_input')
     expect(invoke).not.toHaveBeenCalled()
-  })
-
-  it('preserves every exact public typed error raised by the Team governance port', async () => {
-    const updateMemberRole = vi.fn(async () => ({ applied: true as const }))
-    const adapter = createOpenContentExtendedOperationAdapter({
-      owner: OWNER,
-      providerInstanceRef: PROVIDER,
-      teamGovernance: {
-        updateMemberRole,
-        transferOwnership: async () => ({ applied: true })
-      }
-    })
-
-    for (const [index, code] of contentSpaceExtendedErrorCodeSchema.options.entries()) {
-      updateMemberRole.mockRejectedValueOnce(Object.assign(
-        new Error(`Typed Team error: ${code}`),
-        { code }
-      ))
-      const result = await adapter.execute({
-        invocationId: `${INVOCATION}_error_${index}`,
-        operation: 'updateTeamMemberRole',
-        request: {
-          teamRoot: FOLDER,
-          member: { providerInstanceRef: PROVIDER, kind: 'user', principalId: 'person-a' },
-          role: 'internal'
-        }
-      })
-      expect(result).toMatchObject({ ok: false, error: { code } })
-      if (code === 'invalid_reference') {
-        expect(result).toMatchObject({ error: { retry: 'never' } })
-      }
-    }
-    expect(updateMemberRole).toHaveBeenCalledTimes(contentSpaceExtendedErrorCodeSchema.options.length)
   })
 
   it('normalizes discovery information into provider-neutral strict references', async () => {
@@ -279,7 +184,6 @@ describe('OpenContent extended-operation adapter', () => {
       'file-tag-list': { success: true, data: { items: [{ tagId: 'tag-a', tagName: 'reviewed' }] } },
       'my-publish-list': { success: true, data: { items: [{ Publish_Code: 'Apublication', Publish_Name: 'Release' }] } },
       albums: { success: true, data: { albums: [{ fsId: 'album-a', name: 'Default', fileCount: 2, folderCount: 1, isDefault: true }] } },
-      'search-user': { success: true, data: { items: [{ identityId: 'person-a', name: 'Ada', account: 'ada' }] } },
       'perm-cates': { success: true, data: [{ cateId: 'edit-a', name: 'Edit' }] },
       'collab-list': {
         success: true,
@@ -308,7 +212,6 @@ describe('OpenContent extended-operation adapter', () => {
       ['listTags', { target: FILE, page: { limit: 10 } }],
       ['listPublications', { providerInstanceRef: PROVIDER, page: { limit: 10 } }],
       ['listAlbums', { providerInstanceRef: PROVIDER, page: { limit: 10 } }],
-      ['searchUsers', { providerInstanceRef: PROVIDER, query: 'Ada', page: { limit: 10 } }],
       ['listPermissionCategories', { providerInstanceRef: PROVIDER, targetKind: 'file' }],
       ['listCollaborationEntries', { providerInstanceRef: PROVIDER, filter: 'all', page: { limit: 10 } }],
       ['listKnowledgeCollections', { providerInstanceRef: PROVIDER, page: { limit: 10 } }]
@@ -319,6 +222,105 @@ describe('OpenContent extended-operation adapter', () => {
       expect(() => CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS[operation].resultSchema.parse(result))
         .not.toThrow()
     }
+  })
+
+  it('resolves current-principal authority from the authenticated Provider session without supplier dispatch', async () => {
+    const currentIdentityId = vi.fn(async () => openContentIdentityIdSchema.parse(9000041))
+    const invoke = vi.fn(async () => {
+      throw new Error('Supplier transport must not run for current-principal resolution.')
+    })
+    const adapter = createOpenContentExtendedOperationAdapter({
+      providerInstanceRef: PROVIDER,
+      currentPrincipal: { currentIdentityId },
+      transport: { invoke }
+    })
+
+    await expect(adapter.execute({
+      invocationId: INVOCATION,
+      operation: 'getCurrentPrincipal',
+      request: { providerInstanceRef: PROVIDER }
+    })).resolves.toEqual({
+      ok: true,
+      value: {
+        reference: {
+          providerInstanceRef: PROVIDER,
+          kind: 'user',
+          principalId: '9000041'
+        },
+        displayName: 'Current OpenContent user'
+      }
+    })
+    expect(OPENCONTENT_EXTENDED_OPERATION_MAPPINGS.getCurrentPrincipal.commands).toEqual([])
+    expect(OPENCONTENT_EXTENDED_OPERATION_MAPPINGS.getCurrentPrincipal.route)
+      .toBe('current-principal')
+    expect(currentIdentityId).toHaveBeenCalledOnce()
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('rejects alias-shaped or conflicting current-principal authority from the semantic port', async () => {
+    const invalidAuthorities = [
+      { identityId: 41 },
+      { IdentityId: 41 },
+      { identityId: 41, IdentityId: 42 },
+      { id: 41 },
+      { Id: 41 },
+      { guid: 'synthetic-guid-a' },
+      { Guid: 'synthetic-guid-b' },
+      { identityId: 41, displayName: 'Synthetic User', name: 'Conflicting Synthetic User' },
+      { identityId: 41, Name: 'Synthetic User' },
+      { identityId: 41, userName: 'Synthetic User' },
+      { identityId: 41, UserName: 'Synthetic User' }
+    ]
+
+    for (const invalidAuthority of invalidAuthorities) {
+      const adapter = createOpenContentExtendedOperationAdapter({
+        providerInstanceRef: PROVIDER,
+        currentPrincipal: {
+          currentIdentityId: async () => invalidAuthority as never
+        }
+      })
+      await expect(adapter.execute({
+        invocationId: INVOCATION,
+        operation: 'getCurrentPrincipal',
+        request: { providerInstanceRef: PROVIDER }
+      })).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: 'provider_contract_violation',
+          retry: 'never'
+        }
+      })
+    }
+  })
+
+  it('blocks unpinned directory result contracts before supplier dispatch', async () => {
+    const { adapter, invoke } = adapterWith(() => {
+      throw new Error('Supplier transport must not run.')
+    })
+
+    for (const operation of [
+      'searchUsers',
+      'searchDepartments',
+      'searchPositions',
+      'searchGroups'
+    ] as const) {
+      await expect(adapter.execute({
+        invocationId: INVOCATION,
+        operation,
+        request: {
+          providerInstanceRef: PROVIDER,
+          query: 'Ada',
+          page: { limit: 10 }
+        }
+      })).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: 'blocked_by_contract',
+          retry: 'never'
+        }
+      })
+    }
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('executes one mutation attempt and never replays an unknown write outcome', async () => {

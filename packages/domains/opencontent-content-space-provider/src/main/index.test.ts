@@ -8,14 +8,23 @@ import {
 } from '@sciforge/domain-sdk/provider-composition'
 import {
   OPENCONTENT_PROVIDER_INSTANCE_REF,
-  OPENCONTENT_PROVIDER_KIND,
-  type OpenContentContentSpaceFacade
+  OPENCONTENT_PROVIDER_KIND
 } from '@sciforge/domain-opencontent-connector/contract'
+import type { OpenContentContentSpaceFacade } from '@sciforge/domain-opencontent-connector/main-contract'
 import { openContentIdentityIdSchema } from '@sciforge/domain-opencontent-connector/team-administration-contract'
 
 import { createDomainMainEntry } from './index.js'
 
 describe('OpenContent Content Space Provider factory', () => {
+  it('keeps identity binding construction outside the public main-entry arguments', () => {
+    type MainEntryArguments = Parameters<typeof createDomainMainEntry>
+    const hasOnlyHostArgument: Extract<MainEntryArguments['length'], 2> extends never
+      ? true
+      : false = true
+
+    expect(hasOnlyHostArgument).toBe(true)
+  })
+
   it('composes the Principal-bound administration feature through the existing internal facade', async () => {
     const externalIdentityId = openContentIdentityIdSchema.parse(42)
     const useTeamAdministration: OpenContentContentSpaceFacade['useTeamAdministration'] =
@@ -31,9 +40,7 @@ describe('OpenContent Content Space Provider factory', () => {
           listTeamUsers: vi.fn(),
           addTeamUsers: vi.fn(),
           removeTeamUsers: vi.fn(),
-          resolveTeamRoot: vi.fn(),
-          setTeamUserRole: vi.fn(),
-          transferTeamOwner: vi.fn()
+          resolveTeamRoot: vi.fn()
         }
       })
     const facade: OpenContentContentSpaceFacade = {
@@ -62,12 +69,23 @@ describe('OpenContent Content Space Provider factory', () => {
       defineCapability: (options: unknown) => options,
       internalServices: Object.freeze({ register: vi.fn(), acquire })
     })
-    const entry = createDomainMainEntry(host, {
+    const accessed = new Set<PropertyKey>()
+    const untypedOptions = new Proxy({
       identities: {
-        resolveContentUserIdentity: vi.fn(async () => externalIdentityId),
-        resolveExternalIdentityContentUser: vi.fn(async () => 'content-owner')
+        resolveContentUserIdentity: vi.fn(async () => openContentIdentityIdSchema.parse(999)),
+        resolveExternalIdentityContentUser: vi.fn(async () => 'injected-content-user')
+      }
+    }, {
+      get(target, property, receiver) {
+        accessed.add(property)
+        return Reflect.get(target, property, receiver)
       }
     })
+    const createWithUntypedOptions = createDomainMainEntry as unknown as (
+      host: DomainMainHost,
+      options: unknown
+    ) => ReturnType<typeof createDomainMainEntry>
+    const entry = createWithUntypedOptions(host, untypedOptions)
     const factory = entry.contributions[0]!.value
     const instance = defineProviderInstanceDirectoryEntry({
       contractVersion: PROVIDER_FACTORY_CONTRACT_VERSION,
@@ -100,8 +118,9 @@ describe('OpenContent Content Space Provider factory', () => {
     })
 
     expect(acquireFacade).toHaveBeenCalledOnce()
+    expect(accessed).not.toContain('identities')
     expect(binding?.administration.contractVersion).toBe('3.0.0')
-    expect(binding?.projectProvisioning?.contractVersion).toBe('1.0.0')
+    expect(binding && Object.keys(binding)).toEqual(['administration'])
   })
 
   it('rejects a second same-kind Instance before acquiring the credential-bearing facade', () => {

@@ -359,8 +359,7 @@ export const contentSpaceExtendedOperationFamilySchema = z.enum([
   'organization-directory',
   'permissions',
   'collaboration',
-  'knowledge',
-  'team-governance'
+  'knowledge'
 ])
 
 export const contentSpaceExtendedOperationEffectSchema = z.enum([
@@ -464,10 +463,7 @@ export const CONTENT_SPACE_EXTENDED_OPERATIONS = Object.freeze({
 
   listKnowledgeCollections: operation('listKnowledgeCollections', 'content-space.list-knowledge-collections', 'knowledge', 'read'),
   searchKnowledgeCollections: operation('searchKnowledgeCollections', 'content-space.search-knowledge-collections', 'knowledge', 'read'),
-  browseKnowledgeCollection: operation('browseKnowledgeCollection', 'content-space.browse-knowledge-collection', 'knowledge', 'read'),
-
-  updateTeamMemberRole: operation('updateTeamMemberRole', 'content-space.update-team-member-role', 'team-governance', 'external-write'),
-  transferTeamOwnership: operation('transferTeamOwnership', 'content-space.transfer-team-ownership', 'team-governance', 'external-write')
+  browseKnowledgeCollection: operation('browseKnowledgeCollection', 'content-space.browse-knowledge-collection', 'knowledge', 'read')
 })
 
 // Metadata
@@ -1122,11 +1118,18 @@ const contentSpaceDirectorySearchBase = {
 }
 export const contentSpaceSearchUsersRequestSchema = z.object({
   ...contentSpaceDirectorySearchBase,
-  within: z.object({
-    kind: z.enum(['department', 'position']),
-    principal: contentSpaceDirectoryPrincipalReferenceSchema,
-    recursive: z.boolean()
-  }).strict().readonly().optional()
+  within: z.discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('department'),
+      principal: contentSpaceDirectoryDepartmentReferenceSchema,
+      recursive: z.boolean()
+    }).strict().readonly(),
+    z.object({
+      kind: z.literal('position'),
+      principal: contentSpaceDirectoryPositionReferenceSchema,
+      recursive: z.boolean()
+    }).strict().readonly()
+  ]).optional()
 }).strict().readonly()
 export const contentSpaceSearchDepartmentsRequestSchema = z.object(
   contentSpaceDirectorySearchBase
@@ -1331,34 +1334,6 @@ export const contentSpaceBrowseKnowledgeCollectionResultSchema = contentSpaceExt
   contentSpaceEntryInfoPageSchema
 )
 
-// Bounded team governance. Team deletion is deliberately absent.
-
-export const contentSpaceTeamMemberRoleSchema = z.enum(['manager', 'internal', 'external'])
-export const contentSpaceUpdateTeamMemberRoleRequestSchema = z.object({
-  teamRoot: contentContainerReferenceSchema,
-  member: contentSpaceDirectoryUserReferenceSchema,
-  role: contentSpaceTeamMemberRoleSchema
-}).strict().readonly()
-export const contentSpaceUpdateTeamMemberRoleReceiptSchema = z.object({
-  teamRoot: contentContainerReferenceSchema,
-  member: contentSpaceDirectoryUserReferenceSchema,
-  role: contentSpaceTeamMemberRoleSchema
-}).strict().readonly()
-export const contentSpaceUpdateTeamMemberRoleResultSchema = contentSpaceExtendedResultSchema(
-  contentSpaceUpdateTeamMemberRoleReceiptSchema
-)
-export const contentSpaceTransferTeamOwnershipRequestSchema = z.object({
-  teamRoot: contentContainerReferenceSchema,
-  newOwner: contentSpaceDirectoryUserReferenceSchema
-}).strict().readonly()
-export const contentSpaceTransferTeamOwnershipReceiptSchema = z.object({
-  teamRoot: contentContainerReferenceSchema,
-  owner: contentSpaceDirectoryUserReferenceSchema
-}).strict().readonly()
-export const contentSpaceTransferTeamOwnershipResultSchema = contentSpaceExtendedResultSchema(
-  contentSpaceTransferTeamOwnershipReceiptSchema
-)
-
 export type ContentSpaceExtendedOperationContract = ContentSpaceExtendedOperationDescriptor &
 Readonly<{
   requestSchema: z.ZodType
@@ -1489,12 +1464,7 @@ export const CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS = Object.freeze({
   searchKnowledgeCollections: operationContract(CONTENT_SPACE_EXTENDED_OPERATIONS.searchKnowledgeCollections,
     contentSpaceSearchKnowledgeCollectionsRequestSchema, contentSpaceSearchKnowledgeCollectionsResultSchema),
   browseKnowledgeCollection: operationContract(CONTENT_SPACE_EXTENDED_OPERATIONS.browseKnowledgeCollection,
-    contentSpaceBrowseKnowledgeCollectionRequestSchema, contentSpaceBrowseKnowledgeCollectionResultSchema),
-
-  updateTeamMemberRole: operationContract(CONTENT_SPACE_EXTENDED_OPERATIONS.updateTeamMemberRole,
-    contentSpaceUpdateTeamMemberRoleRequestSchema, contentSpaceUpdateTeamMemberRoleResultSchema),
-  transferTeamOwnership: operationContract(CONTENT_SPACE_EXTENDED_OPERATIONS.transferTeamOwnership,
-    contentSpaceTransferTeamOwnershipRequestSchema, contentSpaceTransferTeamOwnershipResultSchema)
+    contentSpaceBrowseKnowledgeCollectionRequestSchema, contentSpaceBrowseKnowledgeCollectionResultSchema)
 })
 
 export type ContentSpaceExtendedOperationKey = keyof typeof CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS

@@ -1,9 +1,8 @@
 import { lstatSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
-import packageManifest from '../package.json' with { type: 'json' }
-import { OPENCONTENT_SKILL_SOURCE_ZIP_SHA256 } from './contract.js'
+import packageManifest from '../../package.json' with { type: 'json' }
 
-export const OPENCONTENT_SKILL_BUNDLED_ASSET_VERSION = 'opencontent-base-1.0.1' as const
+const OPENCONTENT_SKILL_BUNDLED_ASSET_VERSION = 'opencontent-base-1.0.1' as const
 
 export type OpenContentSkillRuntimeFileRole =
   | 'cli-entrypoint'
@@ -35,7 +34,6 @@ const runtimeFile = (role: OpenContentSkillRuntimeFileRole): OpenContentSkillRun
 export const OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR = Object.freeze({
   version: OPENCONTENT_SKILL_BUNDLED_ASSET_VERSION,
   cliVersion: '1.0.0' as const,
-  sourceZipSha256: OPENCONTENT_SKILL_SOURCE_ZIP_SHA256,
   installation: packageOwnedRuntimeTrust.installation,
   trustedRuntimeFiles,
   moduleFormat: 'commonjs' as const,
@@ -47,7 +45,7 @@ export const OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR = Object.freeze({
   cliSingleAttemptPatchRelativePath: runtimeFile('cli-single-attempt-patch').relativePath
 })
 
-export type OpenContentSkillBundledAssetPaths = Readonly<{
+type OpenContentSkillBundledAssetPaths = Readonly<{
   root: string
   cliEntrypoint: string
   docflowEntrypoint: string

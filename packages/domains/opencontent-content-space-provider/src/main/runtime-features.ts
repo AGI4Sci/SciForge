@@ -2,14 +2,14 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 
 import {
   createDocflowNativeDocumentAdapter
-} from '@sciforge/opencontent-skill-runtime/main/docflow-native-document-adapter'
+} from './docflow-native-document-adapter.js'
 import {
   createOpenContentExtendedOperationAdapter,
-  type OpenContentTeamGovernancePort
-} from '@sciforge/opencontent-skill-runtime/main/extended-operation-adapter'
+  type OpenContentCurrentPrincipalPort
+} from './extended-operation-adapter.js'
 import {
   createNativeDocumentProviderAdapter
-} from '@sciforge/opencontent-skill-runtime/main/native-document-provider-adapter'
+} from './native-document-provider-adapter.js'
 import {
   NATIVE_DOCUMENT_CONTRACT_VERSION,
   NATIVE_DOCUMENT_OPERATIONS,
@@ -33,29 +33,22 @@ import type {
   ContentSpaceProviderNativeDocumentReceipt
 } from '@sciforge/domain-content-space/provider-features'
 import {
-  OpenContentConnectorError,
-  type OpenContentContentSpaceFacade,
-  type OpenContentSkillRuntimeContext,
-  type OpenContentSkillRuntimeTransport
+  OpenContentConnectorError
 } from '@sciforge/domain-opencontent-connector/contract'
-import {
-  OPENCONTENT_TEAM_PAGE_SIZE_MAX,
-  type OpenContentBoundTeamAdministration,
-  type OpenContentIdentityId,
-  type OpenContentTeam
-} from '@sciforge/domain-opencontent-connector/team-administration-contract'
-
-import { domainPackageDefinition } from '../definition.js'
-import { parseOpenContentDirectoryIdentity } from './directory-principal.js'
+import type {
+  OpenContentContentSpaceFacade,
+  OpenContentSupplierCommandTransport,
+  OpenContentSupplierExecutionContext
+} from '@sciforge/domain-opencontent-connector/main-contract'
 import { toOpenContentExpectedBinding } from './external-binding.js'
 
-const ADAPTER_OWNER = Object.freeze({
-  role: 'adapter-owner' as const,
-  moduleId: 'sciforge.opencontent-content-space-provider' as const,
-  moduleVersion: domainPackageDefinition.module.version
-})
-const TEAM_OPERATION_KEYS = new Set(['updateTeamMemberRole', 'transferTeamOwnership'])
-const MAX_TEAM_PAGES = 10_000
+const SESSION_BACKED_OPERATION_KEYS = new Set(['getCurrentPrincipal'])
+const CONTRACT_BLOCKED_DIRECTORY_OPERATIONS = new Set([
+  'searchUsers',
+  'searchDepartments',
+  'searchPositions',
+  'searchGroups'
+])
 const MAX_NATIVE_PARENT_POSTCONDITION_PAGES = 10_000
 const NATIVE_PARENT_POSTCONDITION_PAGE_SIZE = 100
 const CONTRACT_BLOCKED_NATIVE_OPERATIONS = new Set<
@@ -138,12 +131,12 @@ const OPENCONTENT_EXTENDED_OPERATIONS = Object.freeze([
   'resolveCollaborationInvitation',
   'listKnowledgeCollections',
   'searchKnowledgeCollections',
-  'browseKnowledgeCollection',
-  'updateTeamMemberRole',
-  'transferTeamOwnership'
+  'browseKnowledgeCollection'
 ] as const satisfies readonly (keyof typeof CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS)[])
 const EXTENDED_OPERATION_STATES = Object.freeze(
-  OPENCONTENT_EXTENDED_OPERATIONS.map((operation) => operation === 'updateFileVersion'
+  OPENCONTENT_EXTENDED_OPERATIONS.map((operation) => (
+    operation === 'updateFileVersion' || CONTRACT_BLOCKED_DIRECTORY_OPERATIONS.has(operation)
+  )
     ? Object.freeze({
         operation,
         readiness: 'blocked_by_contract' as const,
@@ -155,8 +148,8 @@ const EXTENDED_OPERATION_STATES = Object.freeze(
         reasonCode: 'verification_profile_required' as const
       }))
 ) satisfies readonly ContentSpaceExtendedOperationState[]
-const TEAM_ONLY_EXTENDED_OPERATION_STATES = Object.freeze(
-  OPENCONTENT_EXTENDED_OPERATIONS.map((operation) => TEAM_OPERATION_KEYS.has(operation)
+const SESSION_BACKED_EXTENDED_OPERATION_STATES = Object.freeze(
+  OPENCONTENT_EXTENDED_OPERATIONS.map((operation) => SESSION_BACKED_OPERATION_KEYS.has(operation)
     ? Object.freeze({
         operation,
         readiness: 'poc_only' as const,
@@ -173,9 +166,9 @@ export function createOpenContentRuntimeFeatures(input: Readonly<{
   providerInstanceRef: string
   facade: OpenContentContentSpaceFacade
 }>): Pick<ContentSpaceProviderFeatures, 'nativeDocuments' | 'extendedOperations'> {
-  const useSkillRuntime = input.facade.useSkillRuntime
+  const useSupplierTransport = input.facade.useSupplierTransport
 
-  const activeTransport = new AsyncLocalStorage<OpenContentSkillRuntimeTransport>()
+  const activeTransport = new AsyncLocalStorage<OpenContentSupplierCommandTransport>()
   const docflow = createDocflowNativeDocumentAdapter({
     invoke: (invocation) => {
       const transport = activeTransport.getStore()
@@ -188,7 +181,7 @@ export function createOpenContentRuntimeFeatures(input: Readonly<{
       return transport.invoke(invocation)
     }
   })
-  const nativeAdapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow })
+  const nativeAdapter = createNativeDocumentProviderAdapter({ docflow })
 
   const nativeDocuments: ContentSpaceNativeDocumentExecutor = Object.freeze({
     describeOperations: (context) => {
@@ -200,7 +193,7 @@ export function createOpenContentRuntimeFeatures(input: Readonly<{
     execute: async (execution) => {
       const session = featureSessionContext(execution, input.providerInstanceRef)
       if (execution.operation === 'import') return nativeImportBlockedFailure(execution)
-      if (!useSkillRuntime) {
+      if (!useSupplierTransport) {
         return nativeFeatureFailure(
           execution,
           new OpenContentConnectorError(
@@ -210,7 +203,7 @@ export function createOpenContentRuntimeFeatures(input: Readonly<{
         )
       }
       try {
-        const receipt = await useSkillRuntime(session, (transport) =>
+        const receipt = await useSupplierTransport(session, (transport) =>
           activeTransport.run(transport, () => nativeAdapter.execute(execution)))
         if (execution.operation !== 'create' ||
           receipt.outcome !== 'succeeded' ||
@@ -260,18 +253,17 @@ export function createOpenContentRuntimeFeatures(input: Readonly<{
       if (context.providerInstanceRef !== input.providerInstanceRef) {
         throw operationError('invalid_input', 'The Provider feature target changed instances.')
       }
-      return useSkillRuntime
+      return useSupplierTransport
         ? EXTENDED_OPERATION_STATES
-        : TEAM_ONLY_EXTENDED_OPERATION_STATES
+        : SESSION_BACKED_EXTENDED_OPERATION_STATES
     },
     execute: async (execution) => {
       const session = featureSessionContext(execution, input.providerInstanceRef)
-      const execute = (transport?: OpenContentSkillRuntimeTransport) =>
+      const execute = (transport?: OpenContentSupplierCommandTransport) =>
         createOpenContentExtendedOperationAdapter({
-          owner: ADAPTER_OWNER,
           providerInstanceRef: input.providerInstanceRef,
           ...(transport ? { transport } : {}),
-          teamGovernance: createTeamGovernance({
+          currentPrincipal: createCurrentPrincipalPort({
             facade: input.facade,
             session
           })
@@ -283,9 +275,9 @@ export function createOpenContentRuntimeFeatures(input: Readonly<{
           ...(execution.destination ? { destination: execution.destination } : {})
       })
       try {
-        return TEAM_OPERATION_KEYS.has(execution.operation) || !useSkillRuntime
+        return SESSION_BACKED_OPERATION_KEYS.has(execution.operation) || !useSupplierTransport
           ? await execute()
-          : await useSkillRuntime(session, execute)
+          : await useSupplierTransport(session, execute)
       } catch (error) {
         return extendedFeatureFailure(execution.operation, execution.effect, error)
       }
@@ -293,7 +285,7 @@ export function createOpenContentRuntimeFeatures(input: Readonly<{
   })
 
   return Object.freeze({
-    ...(useSkillRuntime ? { nativeDocuments } : {}),
+    ...(useSupplierTransport ? { nativeDocuments } : {}),
     extendedOperations
   })
 }
@@ -301,7 +293,7 @@ export function createOpenContentRuntimeFeatures(input: Readonly<{
 function featureSessionContext(
   execution: Readonly<{ context: ContentSpaceProviderFeatureExecutionContext['context'] }>,
   providerInstanceRef: string
-): OpenContentSkillRuntimeContext {
+): OpenContentSupplierExecutionContext {
   if (execution.context.providerInstanceRef !== providerInstanceRef) {
     throw operationError('invalid_input', 'The Provider feature target changed instances.')
   }
@@ -323,162 +315,21 @@ function featureSessionContext(
   })
 }
 
-function createTeamGovernance(input: Readonly<{
+function createCurrentPrincipalPort(input: Readonly<{
   facade: OpenContentContentSpaceFacade
-  session: OpenContentSkillRuntimeContext
-}>): OpenContentTeamGovernancePort {
-  const withAdministration = <Value>(
-    operation: (session: Readonly<{
-      externalIdentityId: OpenContentIdentityId
-      administration: OpenContentBoundTeamAdministration
-    }>) => Promise<Value>
-  ) => input.facade.useTeamAdministration({
-    principal: input.session.principal,
-    providerInstanceRef: input.session.providerInstanceRef,
-    ...(input.session.expectedBindingAttestation === undefined
-      ? {}
-      : { expectedBindingAttestation: input.session.expectedBindingAttestation }),
-    signal: input.session.signal,
-    assertPrincipalCurrent: input.session.assertPrincipalCurrent
-  }, operation)
-
-  const governance: OpenContentTeamGovernancePort = Object.freeze({
-    updateMemberRole: async ({ teamRootId, memberPrincipalId, userType }:
-      Parameters<OpenContentTeamGovernancePort['updateMemberRole']>[0]) => {
-      const identityId = parseProviderDirectoryIdentity(memberPrincipalId)
-      return withAdministration(async (connection) => {
-        const team = await resolveTeamByRoot(
-          connection.administration,
-          teamRootId,
-          input.session.signal
-        )
-        await connection.administration.setTeamUserRole(withSignal(input.session.signal, {
-          teamId: team.teamId,
-          identityIds: [identityId],
-          userType
-        }))
-        const observedType = await observeTeamUserType(
-          connection.administration,
-          team.teamId,
-          identityId,
-          input.session.signal
-        )
-        if (observedType !== userType) {
-          throw featureError(
-            'outcome_unknown',
-            'OpenContent did not prove the requested Team member role.'
-          )
-        }
-        return Object.freeze({ applied: true as const })
-      })
-    },
-    transferOwnership: async ({ teamRootId, newOwnerPrincipalId }:
-      Parameters<OpenContentTeamGovernancePort['transferOwnership']>[0]) => {
-      const ownerIdentityId = parseProviderDirectoryIdentity(newOwnerPrincipalId)
-      return withAdministration(async (connection) => {
-        const team = await resolveTeamByRoot(
-          connection.administration,
-          teamRootId,
-          input.session.signal
-        )
-        await connection.administration.transferTeamOwner(withSignal(input.session.signal, {
-          teamId: team.teamId,
-          ownerIdentityId
-        }))
-        const observed = await connection.administration.observeTeam(withSignal(
-          input.session.signal,
-          { teamId: team.teamId }
-        ))
-        if (observed.ownerIdentityId !== ownerIdentityId) {
-          throw featureError(
-            'outcome_unknown',
-            'OpenContent did not prove the requested Team ownership transfer.'
-          )
-        }
-        return Object.freeze({ applied: true as const })
-      })
-    }
+  session: OpenContentSupplierExecutionContext
+}>): OpenContentCurrentPrincipalPort {
+  return Object.freeze({
+    currentIdentityId: () => input.facade.useTeamAdministration({
+      principal: input.session.principal,
+      providerInstanceRef: input.session.providerInstanceRef,
+      ...(input.session.expectedBindingAttestation === undefined
+        ? {}
+        : { expectedBindingAttestation: input.session.expectedBindingAttestation }),
+      signal: input.session.signal,
+      assertPrincipalCurrent: input.session.assertPrincipalCurrent
+    }, async ({ externalIdentityId }) => externalIdentityId)
   })
-  return governance
-}
-
-function parseProviderDirectoryIdentity(value: string): OpenContentIdentityId {
-  const identityId = parseOpenContentDirectoryIdentity(value)
-  if (identityId === undefined) {
-    throw featureError(
-      'invalid_reference',
-      'The OpenContent directory Principal identity is not canonical.'
-    )
-  }
-  return identityId
-}
-
-async function resolveTeamByRoot(
-  administration: OpenContentBoundTeamAdministration,
-  folderGuid: string,
-  signal: AbortSignal
-): Promise<OpenContentTeam> {
-  let pageNumber = 1
-  let match: OpenContentTeam | undefined
-  for (let pageCount = 0; pageCount < MAX_TEAM_PAGES; pageCount += 1) {
-    const page = await administration.listTeams(withSignal(signal, {
-      pageNumber,
-      pageSize: OPENCONTENT_TEAM_PAGE_SIZE_MAX
-    }))
-    for (const team of page.teams) {
-      const root = await administration.resolveTeamRoot(withSignal(signal, {
-        teamId: team.teamId,
-        folderId: team.folderId
-      }))
-      if (root.folderGuid !== folderGuid) continue
-      if (match) {
-        throw featureError(
-          'provider_contract_violation',
-          'OpenContent returned duplicate Teams for one root.'
-        )
-      }
-      match = team
-    }
-    if (page.nextPage === undefined) {
-      if (!match) throw featureError('invalid_reference', 'The OpenContent Team root is unavailable.')
-      return match
-    }
-    if (page.nextPage <= pageNumber) {
-      throw featureError('provider_contract_violation', 'OpenContent Team paging did not advance.')
-    }
-    pageNumber = page.nextPage
-  }
-  throw featureError('provider_contract_violation', 'OpenContent Team paging exceeded its bound.')
-}
-
-async function observeTeamUserType(
-  administration: OpenContentBoundTeamAdministration,
-  teamId: OpenContentTeam['teamId'],
-  identityId: OpenContentIdentityId,
-  signal: AbortSignal
-): Promise<number | undefined> {
-  let pageNumber = 1
-  for (let pageCount = 0; pageCount < MAX_TEAM_PAGES; pageCount += 1) {
-    const page = await administration.listTeamUsers(withSignal(signal, {
-      teamId,
-      pageNumber,
-      pageSize: OPENCONTENT_TEAM_PAGE_SIZE_MAX
-    }))
-    const user = page.users.find((candidate) => candidate.identityId === identityId)
-    if (user) return user.userType
-    if (page.nextPage === undefined) return undefined
-    if (page.nextPage <= pageNumber) {
-      throw featureError('provider_contract_violation', 'OpenContent Team user paging did not advance.')
-    }
-    pageNumber = page.nextPage
-  }
-  throw featureError('provider_contract_violation', 'OpenContent Team user paging exceeded its bound.')
-}
-
-function withSignal<Value extends object>(signal: AbortSignal, value: Value): Value & {
-  signal: AbortSignal
-} {
-  return Object.freeze({ ...value, signal })
 }
 
 function nativeFeatureFailure(
@@ -646,10 +497,6 @@ function extendedFeatureFailure(
           : 'never'
     }
   })
-}
-
-function featureError(code: string, message: string): Error & { code: string } {
-  return Object.assign(new Error(message), { code })
 }
 
 function nativePostconditionUnknown(): OpenContentConnectorError {

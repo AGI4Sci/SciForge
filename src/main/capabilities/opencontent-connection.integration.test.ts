@@ -11,11 +11,8 @@ import {
   OPENCONTENT_CONNECTION_CAPABILITY_IDS,
   OPENCONTENT_PROVIDER_INSTANCE_REF
 } from '@sciforge/domain-opencontent-connector/contract'
-import {
-  createDomainMainEntry,
-  type OpenContentCapabilityFactory
-} from '@sciforge/domain-opencontent-connector/main'
-import { describe, expect, it, vi } from 'vitest'
+import { createDomainMainEntry } from '@sciforge/domain-opencontent-connector/main'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { CapabilityCallerContextInput } from '../../shared/capability-broker'
 import { CapabilityBroker } from './broker'
@@ -47,6 +44,7 @@ const caller: CapabilityCallerContextInput = Object.freeze({
 
 const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+afterEach(() => vi.unstubAllGlobals())
 
 describe('OpenContent connection through the Host capability Broker', () => {
   it('binds and reads status through the compile-time trusted profile without endpoint environment', async () => {
@@ -260,6 +258,7 @@ describe('OpenContent connection through the Host capability Broker', () => {
 })
 
 function createHarness(fetchImplementation: typeof fetch) {
+  vi.stubGlobal('fetch', fetchImplementation)
   const settings = inMemorySettings()
   const credentials = inMemoryCredentials()
   const services = inMemoryInternalServices()
@@ -277,19 +276,23 @@ function createHarness(fetchImplementation: typeof fetch) {
     packageSecrets,
     internalServices: services
   })
-  const entry = createDomainMainEntry(host, { fetch: fetchImplementation })
+  const entry = createDomainMainEntry(host)
   const factory = entry.contributions
     .map((contribution) => contribution.value)
-    .find((value) => typeof value === 'object' && value !== null &&
-      'createDefinitions' in value) as
-      | OpenContentCapabilityFactory<CapabilityDefinition>
-      | undefined
+    .find(hasCapabilityDefinitions)
   if (!factory) throw new Error('OpenContent capability factory is missing from its main entry.')
   const registry = new CapabilityRegistry(factory.createDefinitions())
   const broker = new CapabilityBroker(registry, {
     resolveCurrentPrincipal: () => principal
   })
   return { broker, settings, credentials }
+}
+
+function hasCapabilityDefinitions(value: unknown): value is Readonly<{
+  createDefinitions(): readonly CapabilityDefinition[]
+}> {
+  return typeof value === 'object' && value !== null &&
+    'createDefinitions' in value && typeof value.createDefinitions === 'function'
 }
 
 function inMemorySettings(): DomainMainPackageSettingsHost & Readonly<{

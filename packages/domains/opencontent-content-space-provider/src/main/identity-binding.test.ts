@@ -35,7 +35,7 @@ describe('default OpenContent identity binding', () => {
     })).resolves.toBe(principal.subject)
   })
 
-  it('returns a typed missing-binding failure for every other Project member', async () => {
+  it('returns a typed missing-binding failure for every non-current identity', async () => {
     const identities = createCurrentPrincipalOpenContentIdentityBinding()
 
     await expect(identities.resolveContentUserIdentity({

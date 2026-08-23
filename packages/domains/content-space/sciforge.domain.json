@@ -11,7 +11,7 @@
     "displayName": "Content Space",
     "version": "3.0.0",
     "hostApi": {
-      "minimum": "1.3.0",
+      "minimum": "1.5.0",
       "maximumExclusive": "2.0.0"
     },
     "priority": 300

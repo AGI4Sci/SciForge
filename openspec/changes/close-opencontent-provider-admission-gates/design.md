@@ -1,6 +1,6 @@
 ## Context
 
-The archived OpenContent Content Space change established separate public Connector, Provider, and SciForge Runtime packages with optional supplier assets under `internal/**`. At change inception, the code violated that target in four places: readiness was used as production dispatch admission without live evidence, private packages still participated in the public npm workspace, source resolution had a second `node_modules` path, and packaging could execute or publicly release installed supplier assets. Content Space already has provider-neutral per-operation readiness and canonical Broker/service/provider routing, so the correction extends those contracts rather than adding a parallel verification path.
+OpenContent integrates through two independently owned public domain packages: the Provider owns receipt-to-Content-Space semantics, and the Connector owns authentication plus typed supplier transport. Optional supplier assets remain runtime data under `internal/**`; they are not a third package owner. At change inception, readiness was used as production dispatch admission without live evidence, private packages still participated in the public npm workspace, source resolution had a second `node_modules` path, and packaging could execute or publicly release installed supplier assets. Content Space already has provider-neutral per-operation readiness and canonical Broker/service/provider routing, so the correction extends those contracts rather than adding a parallel verification path.
 
 ## Goals / Non-Goals
 
@@ -10,7 +10,7 @@ The archived OpenContent Content Space change established separate public Connec
 - Express verification admission as a generic Content Space policy evaluated inside the canonical service path.
 - Restore a reproducible public dependency graph and one asset location per application mode.
 - Make internal packaging manifest/receipt-driven, static, and safe for public release workflows.
-- Keep Project authority in the future Project-owning context and retain only the provider-neutral dormant provisioning port.
+- Keep Project authority outside the current integration and remove the unused provisioning surface until a Project-owning context proposes an authoritative contract.
 
 **Non-Goals:**
 
@@ -36,19 +36,23 @@ Live PoC acceptance uses a disposable trusted compile-time profile package in an
 
 `edit` joins the existing non-atomic native mutation set. The probe/plan adapter remains implemented and tested, but dispatch stops before the supplier runtime until a Provider-atomic compare-and-mutate contract exists. `updateFileVersion` keeps its source-level unconditional failure and readiness block; stale generated `dist` artifacts are not accepted as alternate runtime implementations.
 
-### Remove generic Agent Project provisioning, not the provider-neutral SPI
+### Remove unused Project provisioning instead of retaining a second write path
 
-The static Agent capability and its generated governance entry are deleted. The Content Space administration contract and optional Provider port remain because a future Project-owned adapter can invoke them with authoritative binding and identity evidence. The unused `coordinatorAgentId` is removed from the provider-neutral intent because it neither authorizes nor affects provisioning.
+No installed Project-owning consumer invokes this surface, while the OpenContent implementation can directly create Teams and mutate membership outside the ordinary Administration operation contract. The static Agent capability, administration operation, intent/report schemas, optional Provider port, OpenContent implementation, tests, and generated governance entry are therefore deleted together. Content Space validates the Provider administration binding as an exact `{ administration }` object and rejects extra legacy ports before dispatch. A future Project-owned integration must introduce its authoritative binding and identity contract in a separately reviewed change rather than revive the removed path or alias ordinary Team writes.
 
-### Use Provider directory references for ordinary shared-container membership
+### Use authoritative Provider directory references for ordinary shared-container membership
 
-Extended contract v2 gives the four Provider directory searches distinct literal-kind summary/page/result schemas; `searchUsers` therefore returns a statically and dynamically typed non-secret user reference containing the Provider Instance and opaque Provider principal ID. Ordinary member add, list, and remove carry that same reference through the existing Administration port. Content Space verifies same-instance root/input/output authority, while the Provider integration alone translates the opaque ID behind its token-free Connector boundary. This avoids a Host-wide cross-user identity map, raw account DTOs, and a second extended-operation invite path.
+Extended contract v2 gives the four provider-neutral directory searches distinct literal-kind summary/page/result schemas. The current OpenContent supplier evidence does not freeze the exact success item or pagination shapes for those searches, so the OpenContent Provider marks all four `blocked_by_contract` and stops before supplier dispatch. Ordinary member add, list, and remove still carry one authoritative same-instance `user` reference through the existing Administration port. `listMembers` may establish that reference from its strict Provider Team-user response. `getCurrentPrincipal` instead uses a narrow package-private semantic port backed by the Connector-revalidated current session's canonical external identity and dispatches no supplier command; a future search may establish references only after its exact raw contract is frozen. Content Space verifies same-instance root/input/output authority, while the Provider integration alone translates the opaque ID behind its token-free Connector boundary. This avoids guessed aliases, requested-kind laundering, a Host-wide cross-user identity map, raw account DTOs, and a second extended-operation invite path.
 
-Project provisioning remains deliberately different: Cloud Collaboration owns its `contentUserId` values and must supply separately verified Cloud-to-Provider mappings with an authoritative Project binding. Ordinary Provider directory search cannot synthesize Project membership or authority.
+Ordinary Administration treats every required Team or Team-user enumeration as a fail-closed precondition. Pagination must prove a complete, stable, duplicate-free result before remote mutation; a metadata-free full page or empty page with a continuation signal fails closed. Membership page items are exactly `{ member }`, and mutation receipts reuse that same typed reference alongside their exact root/result fields. The public contract exposes no role mutation or ownership transfer.
 
-### Build public runtime inclusion from generic package metadata
+OpenContent's typed Team supplier surface exposes no atomic expected-state field. Administration v3 therefore removes `expectedRevision` from `updateSpace`, `pinSpace`, `unpinSpace`, `addMember`, and `removeMember`, removes every Administration result revision, and declares `concurrency.revision: "none"` for those Agent capabilities. Observation and post-write reconciliation prove bounded receipts, not CAS. Content Space validates exact request-and-authority binding for every one of the ten Administration outputs; a mismatch on a read maps to `provider_unavailable`, while a mismatch after an external write or destructive operation maps to `outcome_unknown`, with no automatic retry.
 
-Public source-owned main runtime dependencies will be declared by package-owned metadata consumed by the existing generated domain composition/build configuration. Electron Vite derives its no-external/bundle set from that generated data. A hard-coded OpenContent package name in Host configuration is rejected because adding another domain/runtime must not require a central edit.
+No Project identity-mapping contract is installed in Content Space or the OpenContent Provider. Ordinary Provider directory search and membership cannot synthesize Project membership or authority; a future Project-owning integration must define that boundary independently.
+
+### Keep supplier execution inside the owning domain packages
+
+The Connector owns the typed supplier protocol, executable allowlist, verified assets, runner, and process isolation. The Provider owns the native-document and extended-operation semantic adapters and consumes only the Connector's token-free `./main-contract`. Both packages enter the application through standard manifests and generated composition; the standalone OpenContent runtime package and root-level private deep-import smoke are deleted. A hard-coded OpenContent package name in Host configuration is rejected because adding another domain must not require a central edit.
 
 ### Discover internal packages by directory without executing them
 
@@ -65,16 +69,16 @@ Installation records a complete trusted inventory and digest receipt. Build/afte
 - [A stale profile could authorize a rebound external account] → Match a Provider-authenticated opaque subject/revision and require the Connector to recheck the same expected binding in the current serialized credential session before business dispatch.
 - [A local acceptance profile could leak into a public artifact] → Discover profile contributions from canonical manifests and fail every official public release before build/sign/upload and after packaging.
 - [Removing root workspaces breaks current internal build commands] → Delete executable attachment builds and replace them with manifest-discovered, SciForge-owned static validation in the same change.
-- [Generated bundle metadata can become stale] → Include it in standard generation/checks and assert the main build contains no bare imports for public source runtimes.
+- [Generated domain composition can become stale] → Include it in standard generation/checks and assert the main build contains no bare imports that bypass public package entrypoints.
 - [Existing locally installed overlays may lack complete receipts] → Fail packaging with actionable reinstall guidance; source use may remain available only after the same static validation.
 
 ## Migration Plan
 
 1. Add failing readiness, Project capability, source resolver, workspace, public-release, and packaged integrity tests.
-2. Apply fail-closed Provider states and remove the generic Project provisioning capability.
+2. Apply fail-closed Provider states and remove the entire unused Project provisioning surface.
 3. Add strict package-owned static verification-profile composition with no default profile, Provider-authenticated binding evidence for unsafe PoC operations, and Connector execution-time revalidation.
 4. Remove public/internal workspace coupling and make internal build/validation directory-based and static.
-5. Generate generic public-runtime bundle metadata, rebuild source and packaged artifacts, and run composition/boundary checks.
-6. Align evidence and operator documentation; run disposable packaged PoC acceptance where the reviewed environment evidence permits, while retaining CAS/edit and production promotion as blocked until their stronger contracts exist.
+5. Regenerate domain composition, rebuild source and packaged artifacts, and run package-boundary checks proving no standalone runtime or private cross-package import remains.
+6. Align evidence and operator documentation; run disposable packaged PoC acceptance where the reviewed environment evidence permits, while retaining same-file CAS/edit and production promotion as blocked until their stronger contracts exist.
 
 Rollback is a normal commit revert before release. No persisted user data schema changes, remote migrations, or compatibility aliases are introduced.

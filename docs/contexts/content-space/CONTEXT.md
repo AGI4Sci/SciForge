@@ -25,12 +25,12 @@ A Content Container whose Provider-native access model permits an explicit multi
 _Avoid_: Content Space, Collaboration Project, universal Team
 
 **Provider Directory Principal Reference**:
-A non-secret typed reference to one user, department, position, or group in a specific Provider Instance directory. It contains only `providerInstanceRef`, a closed principal kind, and the Provider-owned opaque `principalId`; display metadata, Host Principal identity, local Connection identity, endpoint, and credentials are not part of the reference or its authority. Each typed directory search returns a kind-specific summary/page/result (`user`, `department`, `position`, or `group`) and rejects mixed-kind items.
+A non-secret typed reference to one user, department, position, or group in a specific Provider Instance directory. It contains only `providerInstanceRef`, a closed principal kind, and the Provider-owned opaque `principalId`; display metadata, Host Principal identity, local Connection identity, endpoint, and credentials are not part of the reference or its authority. Any operation that issues such references must prove a kind-specific summary/page/result (`user`, `department`, `position`, or `group`) and reject mixed-kind items. A current-user reference may instead come from an exact canonical identity in the Connector-revalidated current Provider session; it never comes from first-defined supplier aliases or an untyped account DTO.
 _Avoid_: SciForge user ID, OpenContent token, local account selector, portable authorization
 
 **Shared Content Container Member**:
-A Provider directory `user` reference associated with one exact shared Content Container. Ordinary member add, list, and remove operations use this reference end to end and require the member and root to name the same Provider Instance. A listed member reference is reusable by the same canonical mutation contracts, but the reference itself grants no root, account, or Provider authority.
-_Avoid_: Project Member, Host `contentUserId`, email-as-identity, raw Provider account DTO
+A Provider directory `user` reference associated with one exact shared Content Container. Ordinary member add, list, and remove operations use this reference end to end and require the member and root to name the same Provider Instance. Administration v3 membership page items are exactly `{ member }`, while mutation receipts reuse that same reference alongside the exact root/result fields; neither exposes a member role or Administration revision, and the five root/member mutations declare no optimistic-concurrency revision. A listed member reference is reusable by the same canonical mutation contracts, but the reference itself grants no root, account, or Provider authority.
+_Avoid_: Project Member, Host `contentUserId`, email-as-identity, raw Provider account DTO, role-bearing member DTO
 
 **Content Container Scope**:
 The provider-neutral classification `personal` or `shared` describing whether a Content Container is private to the enrolled External Account or eligible for an explicit multi-user association. Scope is descriptive and never substitutes for Provider authorization.
@@ -39,10 +39,6 @@ _Avoid_: OpenContent Team type, Project membership, ACL
 **Content Container Reference**:
 A non-secret typed reference to a Content Container, containing only a Provider Instance Reference and stable provider container identity. Cloud Collaboration may own a Project Content Space Binding to it; Content Space does not own Project state.
 _Avoid_: endpoint, path as authority, local connection, Project ID
-
-**Project Content Directory**:
-A shared Content Container selected or provisioned for one Collaboration Project. Cloud Collaboration supplies its desired content owner from the Project Owner and its desired member set from explicit Project Members; Content Space never infers either from an Agent, requester, prompt, or Provider listing. It remains Provider-owned and access-controlled, cannot be bound to a second Project, and is never deleted as a consequence of Project archival or deletion.
-_Avoid_: Collaboration Project, Agent-owned Team library, Workspace, synchronized folder
 
 **Provider-Native Document**:
 An editable document type whose specialized creation, reading, or change operations are supplied by the selected ContentSpaceProvider. It remains a Content Space resource and does not instantiate a provider-neutral Shared Document or DocumentProvider.
@@ -87,10 +83,6 @@ _Avoid_: development mode bypass, caller-selected profile, Provider-specific Hos
 **Broker Resource**:
 A process-local executable resource bound to one caller, current Principal, audience, and exact Content Space authority. It is issued only after Human selection or portable-reference reauthorization and is never interchangeable with a raw Provider ID or portable reference.
 _Avoid_: portable authority, raw GUID, Connection, reusable provider-wide grant
-
-**Project Content Space Provisioning Port**:
-A provider-neutral dormant SPI through which a future Project-owning context may reconcile one Project Content Directory from an authoritative binding and verified mappings between Cloud-owned `contentUserId` values and Provider identities. This Project-specific identity contract is deliberately separate from ordinary shared-container member administration. It is not an Agent capability and accepts no prompt-authored Project authority.
-_Avoid_: Agent self-provisioning, Content Space owns Project membership, provider Team API tool
 
 **Agent Root Candidate**:
 A bounded, non-authorizing projection of one trusted Provider Instance, `personal | shared` scope, Human-visible `libraryLabel`, and optional opaque page cursor. It lets a Personal Session ask the Human to select an exact root without exposing or accepting a Provider folder identity, and it never substitutes for confirmed root authorization.

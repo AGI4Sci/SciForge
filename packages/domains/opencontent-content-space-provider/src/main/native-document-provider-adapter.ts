@@ -29,16 +29,13 @@ import {
 } from '@sciforge/domain-content-space/provider-features'
 
 import {
-  OPENCONTENT_SKILL_RUNTIME_ADAPTER_OWNER_MODULE_ID,
-  admitOpenContentSkillRuntimeOwner,
-  type OpenContentSkillRuntimeOwner
-} from './contract.js'
-import {
   docflowCommandInvocationSchema,
   docflowNativeDocumentReceiptSchema,
   type DocflowCommandInvocation,
-  type DocflowNativeDocumentAdapter,
   type DocflowNativeDocumentReceipt
+} from '@sciforge/domain-opencontent-connector/main-contract'
+import type {
+  DocflowNativeDocumentAdapter
 } from './docflow-native-document-adapter.js'
 
 type FeatureInput = Parameters<ContentSpaceNativeDocumentExecutor['execute']>[0]
@@ -94,7 +91,6 @@ type ManagedStateStore<Value> = Readonly<{
 type ManagedStateReservation = Readonly<{ kind: 'probe'; token: symbol }>
 
 export type NativeDocumentProviderAdapterBinding = Readonly<{
-  owner: OpenContentSkillRuntimeOwner | unknown
   docflow: DocflowNativeDocumentAdapter
 }>
 
@@ -302,12 +298,6 @@ export function mapNativeDocumentExportFormat(
 export function createNativeDocumentProviderAdapter(
   binding: NativeDocumentProviderAdapterBinding
 ): NativeDocumentProviderAdapter {
-  const owner = admitOpenContentSkillRuntimeOwner(binding.owner)
-  if (owner.role !== 'adapter-owner' ||
-    owner.moduleId !== OPENCONTENT_SKILL_RUNTIME_ADAPTER_OWNER_MODULE_ID) {
-    throw new TypeError('The native-document provider adapter requires the declared adapter owner.')
-  }
-
   const probeStates = createManagedStateStore<ProbeState>()
 
   return Object.freeze({

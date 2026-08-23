@@ -27,6 +27,11 @@ export function composeContentSpaceVerificationPolicy(
     if (!hasLocation(contribution.contract, MAIN_CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION)) {
       return []
     }
+    if (contribution.publicRelease !== 'forbidden') {
+      throw new TypeError(
+        'Content Space verification profile contributions must forbid public release.'
+      )
+    }
     if (contribution.kind !== MAIN_EXTENSION_CONTRIBUTION_KIND ||
       contribution.version !== CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION) {
       throw new TypeError('Content Space verification profile metadata is invalid.')

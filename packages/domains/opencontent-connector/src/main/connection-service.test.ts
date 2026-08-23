@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto'
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 
 import {
   DomainMainProviderCredentialError,
@@ -21,6 +21,13 @@ const principal = Object.freeze({
 })
 
 describe('OpenContent connection service', () => {
+  it('exposes one atomic current-session operation surface', () => {
+    expectTypeOf<ReturnType<typeof createOpenContentConnectionService>>()
+      .toHaveProperty('useCurrentSession')
+    expectTypeOf<ReturnType<typeof createOpenContentConnectionService>>()
+      .not.toHaveProperty('useCurrentToken')
+  })
+
   it('rejects an unknown status target before reading connection storage', async () => {
     const settings = inMemorySettings()
     const read = vi.spyOn(settings, 'read')
@@ -89,7 +96,7 @@ describe('OpenContent connection service', () => {
       client: stubClient({ isTokenValid })
     })
 
-    await expect(service.useCurrentToken({
+    await expect(service.useCurrentSession({
       principal,
       providerInstanceRef: 'opencontent-edoc2-secondary',
       assertPrincipalCurrent: () => undefined
@@ -313,7 +320,11 @@ describe('OpenContent connection service', () => {
         authenticateExistingAccount,
         isTokenValid: async () => true,
         observeCurrentExternalAccount: async () => fixtureExternalAccount('external-user-b'),
-        listRootFolders: async () => ({ roots: [] }),
+        listPersonalRootFolder: async () => ({
+          source: 'personal-root',
+          folderGuid: 'personal-folder-guid',
+          label: 'Personal library'
+        }),
         listFolderEntries: async ({ parentFolderGuid }) => ({
           parentFolderGuid,
           entries: []
@@ -549,7 +560,11 @@ describe('OpenContent connection service', () => {
         }),
         isTokenValid: async () => true,
         observeCurrentExternalAccount: async () => fixtureExternalAccount('external-user-a'),
-        listRootFolders: async () => ({ roots: [] }),
+        listPersonalRootFolder: async () => ({
+          source: 'personal-root',
+          folderGuid: 'personal-folder-guid',
+          label: 'Personal library'
+        }),
         listFolderEntries: async ({ parentFolderGuid }) => ({
           parentFolderGuid,
           entries: []
@@ -571,18 +586,18 @@ describe('OpenContent connection service', () => {
       assertPrincipalCurrent: () => undefined
     })
 
-    await expect(service.useCurrentToken({
+    await expect(service.useCurrentSession({
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
-    }, async (token) => token.length)).resolves.toBe(18)
+    }, async ({ token }) => token.length)).resolves.toBe(18)
     const otherPrincipal = Object.freeze({ ...principal, subject: 'local-account-b' })
     await expect(service.status({
       principal: otherPrincipal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
     })).resolves.toEqual({ state: 'disconnected' })
-    await expect(service.useCurrentToken({
+    await expect(service.useCurrentSession({
       principal: otherPrincipal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
@@ -599,7 +614,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
     })).resolves.toEqual({ state: 'disconnected' })
-    await expect(service.useCurrentToken({
+    await expect(service.useCurrentSession({
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
@@ -891,7 +906,11 @@ describe('OpenContent connection service', () => {
         }),
         isTokenValid,
         observeCurrentExternalAccount: async () => fixtureExternalAccount('external-user-a'),
-        listRootFolders: async () => ({ roots: [] }),
+        listPersonalRootFolder: async () => ({
+          source: 'personal-root',
+          folderGuid: 'personal-folder-guid',
+          label: 'Personal library'
+        }),
         listFolderEntries: async ({ parentFolderGuid }) => ({
           parentFolderGuid,
           entries: []
@@ -951,7 +970,11 @@ describe('OpenContent connection service', () => {
           'external-user-a',
           'fixture-user-a'
         ).account,
-        listRootFolders: async () => ({ roots: [] }),
+        listPersonalRootFolder: async () => ({
+          source: 'personal-root',
+          folderGuid: 'personal-folder-guid',
+          label: 'Personal library'
+        }),
         listFolderEntries: async ({ parentFolderGuid }) => ({
           parentFolderGuid,
           entries: []
@@ -977,7 +1000,7 @@ describe('OpenContent connection service', () => {
       'The operating-system secure storage service is unavailable.'
     ))
 
-    await expect(service.useCurrentToken({
+    await expect(service.useCurrentSession({
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
@@ -1093,7 +1116,11 @@ function stubClient(
     }),
     isTokenValid: async () => true,
     observeCurrentExternalAccount: async () => fixtureExternalAccount('external-user-a'),
-    listRootFolders: async () => ({ roots: [] }),
+    listPersonalRootFolder: async () => ({
+      source: 'personal-root',
+      folderGuid: 'personal-folder-guid',
+      label: 'Personal library'
+    }),
     listFolderEntries: async ({ parentFolderGuid }) => ({ parentFolderGuid, entries: [] }),
     observeEntry: async ({ kind, resourceGuid }) => kind === 'container'
       ? { kind, folderGuid: resourceGuid, label: 'Folder' }

@@ -13,23 +13,29 @@ The following are normal SciForge source and may remain in the open-source proje
 
 - `packages/domains/opencontent-connector/`;
 - `packages/domains/opencontent-content-space-provider/`;
-- `packages/opencontent-skill-runtime/`, which contains SciForge-authored contracts, adapters,
-  process isolation, and asset-loading code, but no supplier payload;
 - `docs/OpenContent SDK离线文档v9.0.0.0.md` and other OpenContent integration documentation;
 - provider-neutral Content Space contracts, Host/Broker routing, tests, and generated capability
   descriptions.
 
 OpenContent is one Content Space Provider. Keeping this integration public does not make it a Host
 dependency or prevent SciForge from replacing the Provider in a future release.
+The Connector domain package owns supplier wire contracts, asset loading, process isolation, and
+transport. The Provider domain package owns receipt normalization and Content Space semantics.
+There is no separately versioned OpenContent runtime feature package.
 
 ## Keep private
 
 Only these items must be excluded from every public distribution:
 
 - the original supplier attachment archive and its byte-for-byte extracted files;
-- the internal asset package, supplier-derived patch data, provenance, file inventory, checksums,
+- the internal asset package, supplier-derived patch data, complete receipt/provenance inventory,
   and group-distribution metadata stored under `internal/opencontent/**`;
 - any group-only archive and checksum sidecar generated from that internal overlay.
+
+The public Connector package retains only the minimal immutable trust anchors required to reject a
+forged or byte-drifted installation: the expected overlay identity and the SHA-256/size of the five
+executable contract files it can load. These anchors disclose no attachment bytes and are not a
+replacement for the private complete receipt, inventory, archive, or checksum sidecar.
 
 `internal/opencontent/**` is the complete repository-relative hide/delete list. It is ignored by
 Git and is installed or removed as one optional internal overlay. Do not move copies of its payload
@@ -48,18 +54,26 @@ and OpenContent has zero `production_ready` operations:
   operation;
 - the six ordinary personal/Team-library operations and all ten Team Administration operations are
   `poc_only` / `verification_profile_required`;
-- the public Team member-role and ownership-transfer delegates are also PoC-only;
-- Content Space exposes no generic Agent Project-provisioning capability; the provider-neutral
-  provisioning port is dormant and Provider operation `provision-project` is blocked until a
-  Project-owning consumer supplies an authoritative binding;
+- session-backed `getCurrentPrincipal` is PoC-only and dispatches no supplier command, so it remains
+  available without the attachment;
+- Team Administration membership represents member identity only through the typed `member` reference; no public member-role
+  or ownership-transfer delegate exists, and its five root/member mutations declare
+  `concurrency.revision: "none"` because the supplier exposes no Administration CAS field;
+- Content Space and the OpenContent Provider expose no Project-provisioning capability,
+  operation, intent/report schema, or Provider port; a future Project-owning integration requires
+  a separately reviewed authoritative contract;
 - no Team deletion operation exists.
 
 Installing a valid internal overlay additionally enables the supplier-backed native-document and
-extended-operation runtime. Nine safely contract-shaped native-document operations and 53 extended
+extended-operation mechanism. Nine safely contract-shaped native-document operations and 47 of 52 extended
 operations remain PoC-only. Native `edit`, the other nine hash-bound native mutations, import
-without a source/content postcondition, and `updateFileVersion` remain `blocked_by_contract`;
+without a source/content postcondition, `updateFileVersion`, and the four directory searches with
+unpinned item shapes remain `blocked_by_contract`;
 attachment presence cannot admit them. Immutable
 version observation is also blocked, so OpenContent cannot issue an `ArtifactReference`.
+
+The Connector-owned static characterization freezes 86 supplier inventory commands and an exact
+56-command admitted adapter union. Inventory presence is not packaged callability or live evidence.
 
 A PoC invocation requires a separately reviewed package-owned Content Space profile that matches
 the exact Provider Instance, complete Host Principal snapshot and assurance, authority, operation,

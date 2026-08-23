@@ -19,12 +19,17 @@ import {
   OPENCONTENT_CLI_MAX_STDERR_BYTES,
   OPENCONTENT_CLI_MAX_STDOUT_BYTES,
   OPENCONTENT_CLI_RUNNER_PROTOCOL,
-  type OpenContentCliInvocation,
   type OpenContentCliProcessRequest
 } from './cli-runner.js'
+import type {
+  OpenContentSupplierInvocation
+} from '../main-contract.js'
+import type {
+  OpenContentExtendedCommandInvocation
+} from '../supplier-extended-operation-protocol.js'
 import {
   docflowTransportResultSchema,
-} from './docflow-native-document-adapter.js'
+} from '../supplier-docflow-protocol.js'
 import {
   OpenContentCliProcessError,
   type NodeOpenContentCliProcessPortOptions
@@ -104,9 +109,14 @@ describe('Node OpenContent CLI process port', () => {
 
   it('keeps the 86-command snapshot inventory separate from the admitted adapter union', async () => {
     expect(OPENCONTENT_CLI_COMMANDS).toHaveLength(86)
-    expect(OPENCONTENT_CLI_ADMITTED_COMMANDS).toHaveLength(61)
+    expect(OPENCONTENT_CLI_ADMITTED_COMMANDS).toHaveLength(56)
     for (const excluded of [
       'docflow-last-delivery',
+      'user-info',
+      'search-user',
+      'search-department',
+      'search-position',
+      'search-user-group',
       'docflow-failure-list',
       'docflow-failure-get',
       'docflow-failure-prune',
@@ -174,6 +184,31 @@ describe('Node OpenContent CLI process port', () => {
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
   })
 
+  it('rejects the retired user-info envelope before source reads, temporary files, or dispatch', async () => {
+    const fixture = await createFixture()
+    const afterSnapshotRead = vi.fn()
+    const removeInvocationRoot = vi.fn()
+    const assertPrincipalCurrent = vi.fn()
+    const port = createNodeOpenContentCliProcessPortInternal({
+      trustedEntrypoint: fixture.entrypoint,
+      temporaryRoot: fixture.invocationsRoot,
+      trustedSnapshotIntegrity: fixtureSnapshotIntegrity(fixture.entrypoint),
+      afterSnapshotRead,
+      removeInvocationRoot
+    })
+
+    await expect(port.run(request({
+      invocationId: 'invocation_retired_user_info_port',
+      command: 'user-info',
+      args: {},
+      dataFiles: []
+    } as never, fixture.entrypoint, undefined, assertPrincipalCurrent))).rejects.toThrow()
+    expect(afterSnapshotRead).not.toHaveBeenCalled()
+    expect(removeInvocationRoot).not.toHaveBeenCalled()
+    expect(assertPrincipalCurrent).not.toHaveBeenCalled()
+    expect(await readdir(fixture.invocationsRoot)).toEqual([])
+  })
+
   it('executes an extended command once with fixed argv, minimal env, and a private snapshot', async () => {
     const fixture = await createFixture()
     const port = createNodeOpenContentCliProcessPort({
@@ -220,6 +255,81 @@ describe('Node OpenContent CLI process port', () => {
       'runtime-patches',
       'scripts'
     ])
+  })
+
+  it('rejects privileged supplier argument keys recursively before transfer or process dispatch', async () => {
+    const fixture = await createFixture()
+    const afterSnapshotRead = vi.fn()
+    const removeInvocationRoot = vi.fn()
+    const port = createNodeOpenContentCliProcessPortInternal({
+      trustedEntrypoint: fixture.entrypoint,
+      temporaryRoot: fixture.invocationsRoot,
+      trustedSnapshotIntegrity: fixtureSnapshotIntegrity(fixture.entrypoint),
+      afterSnapshotRead,
+      removeInvocationRoot
+    })
+    const forbiddenArguments: OpenContentExtendedCommandInvocation['args'][] = [
+      { token: 'caller-token' },
+      { password: 'caller-password' },
+      { authorization: 'Bearer caller-token' },
+      { env: { SYSTEM_USER_TOKEN: 'caller-token' } },
+      { argv: ['--eval'] },
+      { filters: [{ PATH: '/tmp/untrusted' }] },
+      { filters: [{ api_key: 'caller-key' }] },
+      { nested: { System_User_Token: 'caller-token' } },
+      { nested: { requestHeaders: { cookie: 'caller-cookie' } } },
+      { nested: { sessionId: 'caller-session' } },
+      { nested: { entryPoint: '/tmp/untrusted.js' } },
+      { nested: { operationsFile: '/tmp/untrusted.json' } }
+    ]
+
+    for (const [index, args] of forbiddenArguments.entries()) {
+      const read = vi.fn(async () => new Uint8Array([1]))
+      const assertPrincipalCurrent = vi.fn()
+      await expect(port.run(request({
+        invocationId: `invocation_privileged_args_${index}`,
+        command: 'upload',
+        args,
+        dataFiles: [{
+          role: 'source',
+          encoding: 'managed-stream',
+          name: 'source.bin',
+          size: 1,
+          read
+        }]
+      }, fixture.entrypoint, undefined, assertPrincipalCurrent))).rejects.toMatchObject({
+        code: 'invalid-input',
+        dispatched: false
+      })
+      expect(read).not.toHaveBeenCalled()
+      expect(assertPrincipalCurrent).not.toHaveBeenCalled()
+    }
+
+    expect(afterSnapshotRead).not.toHaveBeenCalled()
+    expect(removeInvocationRoot).not.toHaveBeenCalled()
+    expect(await readdir(fixture.invocationsRoot)).toEqual([])
+  })
+
+  it('preserves ordinary business key and input fields', async () => {
+    const fixture = await createFixture()
+    const port = createNodeOpenContentCliProcessPort({
+      trustedEntrypoint: fixture.entrypoint,
+      temporaryRoot: fixture.invocationsRoot
+    })
+    const args = {
+      key: 'business',
+      input: { kind: 'business' },
+      monkey: 'x',
+      sortKey: 'name'
+    }
+
+    await expect(port.run(request({
+      invocationId: 'invocation_business_keys_a',
+      command: 'file-info',
+      args,
+      dataFiles: []
+    }, fixture.entrypoint))).resolves.toMatchObject({ json: { args } })
+    expect(await readdir(fixture.invocationsRoot)).toEqual([])
   })
 
   it('copies only the fixed structural-probe helper into the private runtime', async () => {
@@ -1407,7 +1517,7 @@ describe('Node OpenContent CLI process port', () => {
 })
 
 function request(
-  invocation: OpenContentCliInvocation,
+  invocation: OpenContentSupplierInvocation,
   entrypoint: string,
   deadlineAt = new Date(Date.now() + 10_000).toISOString(),
   assertPrincipalCurrent: OpenContentCliProcessRequest['assertPrincipalCurrent'] = () => undefined,

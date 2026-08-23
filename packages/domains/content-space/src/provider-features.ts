@@ -16,10 +16,10 @@ import {
   nativeDocumentOutcomeUnknownErrorSchema,
   nativeDocumentSuccessResultSchema
 } from './native-document-contract.js'
-import type {
-  ContentSpaceAdministrationOperationState,
-  ContentSpaceAdministrationPort,
-  ProjectContentSpaceProvisioningPort
+import {
+  defineContentSpaceAdministrationPort,
+  type ContentSpaceAdministrationOperationState,
+  type ContentSpaceAdministrationPort
 } from './administration-contract.js'
 import type {
   ArtifactReference,
@@ -117,8 +117,24 @@ export type ContentSpaceExtendedOperationState = Readonly<{
 
 export type ContentSpaceProviderAdministrationBinding = Readonly<{
   administration: ContentSpaceAdministrationPort
-  projectProvisioning?: ProjectContentSpaceProvisioningPort
 }>
+
+export function defineContentSpaceProviderAdministrationBinding(
+  input: unknown
+): ContentSpaceProviderAdministrationBinding {
+  const keys = typeof input === 'object' && input !== null && !Array.isArray(input)
+    ? Reflect.ownKeys(input)
+    : []
+  if (typeof input !== 'object' || input === null || Array.isArray(input) ||
+    keys.length !== 1 || keys[0] !== 'administration') {
+    throw new TypeError('Content Space Provider administration binding is invalid.')
+  }
+  return Object.freeze({
+    administration: defineContentSpaceAdministrationPort(
+      Reflect.get(input, 'administration') as ContentSpaceAdministrationPort
+    )
+  })
+}
 
 export type ContentSpaceAdministrationFeature = Readonly<{
   /** Trusted, side-effect-free declaration used before any administration binding. */
@@ -421,9 +437,7 @@ const EXTENDED_OPERATION_EFFECTS = Object.freeze({
   resolveCollaborationInvitation: 'read',
   listKnowledgeCollections: 'read',
   searchKnowledgeCollections: 'read',
-  browseKnowledgeCollection: 'read',
-  updateTeamMemberRole: 'external-write',
-  transferTeamOwnership: 'external-write'
+  browseKnowledgeCollection: 'read'
 } as const satisfies Readonly<Record<
   ContentSpaceExtendedOperationKey,
   ContentSpaceProviderFeatureEffect
@@ -502,9 +516,7 @@ const EXTENDED_AUTHORITY_EXTRACTORS = Object.freeze({
   searchKnowledgeCollections: (request) => providerAuthority(request.providerInstanceRef),
   browseKnowledgeCollection: (request) => request.parent
     ? entryAuthority(request.parent)
-    : providerAuthority(request.collection.providerInstanceRef),
-  updateTeamMemberRole: (request) => entryAuthority(request.teamRoot),
-  transferTeamOwnership: (request) => entryAuthority(request.teamRoot)
+    : providerAuthority(request.collection.providerInstanceRef)
 } satisfies Readonly<Record<ContentSpaceExtendedOperationKey, AuthorityExtractor>>)
 
 export function nativeDocumentOperationEffect(

@@ -1,7 +1,7 @@
 # opencontent-connector Specification
 
 ## Purpose
-Defines the OpenContent integration package that enrolls existing accounts and owns Principal-bound authentication, secure Token use, validated transport, and one Host-mediated Content Space adapter facade.
+Defines the OpenContent integration package that enrolls existing accounts and owns Principal-bound authentication, secure Token use, validated HTTP and supplier transport, and one Host-mediated Content Space Provider facade.
 ## Requirements
 ### Requirement: Connector is one independently composed integration package
 
@@ -66,6 +66,17 @@ Every admitted operation SHALL validate HTTP status, OpenContent business result
 
 - **WHEN** either condition occurs
 - **THEN** the Connector SHALL return a bounded typed failure and SHALL NOT emit a resource reference
+
+### Requirement: Supplier execution has one Connector-owned transport
+
+The Connector SHALL own the typed supplier invocation/result protocol, executable command allowlist, verified asset resolution, runtime snapshot, bounded runner, and isolated process transport. It SHALL expose to the owning Provider only a token-free `./main-contract` facade and typed supplier invocation surface. Asset paths, argv, environment, credentials, raw process results, runner construction, snapshots, and integrity override hooks SHALL remain package-private. The Provider SHALL own receipt-to-Content-Space semantics and SHALL NOT create a second supplier process, raw CLI path, or transport.
+
+The pinned supplier snapshot SHALL freeze exactly 86 inventory commands and an exact 56-command admitted adapter union. The wider inventory MAY contain commands that are not executable. Only the package-owned reviewed union MAY reach the process transport; commands without an exact Provider semantic contract SHALL fail before source transfer, temporary-file creation, or subprocess dispatch. Static CLI inventory characterization SHALL remain a Connector package test and SHALL NOT be represented as canonical packaged callability.
+
+#### Scenario: Provider requests a command outside the executable union
+
+- **WHEN** the typed Provider adapter requests a supplier command that is present only in inventory
+- **THEN** the Connector SHALL reject it before process launch and SHALL NOT reinterpret it through an alias or generic argv surface
 
 ### Requirement: Writes and two-stage transfers preserve safety and uncertainty
 

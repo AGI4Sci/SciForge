@@ -110,8 +110,9 @@ function verifyPackagedInternalRuntimes(context) {
   )
 }
 
-async function verifyOfficialPublicReleaseComposition() {
+async function verifyOfficialPublicReleaseComposition(options = {}) {
   await publicReleaseGuard.runConfiguredPublicReleaseGuard({
+    ...options,
     createComposition: () =>
       internalRuntimePackaging.internalRuntimeComposition
   })

@@ -4,6 +4,11 @@ import {
   OpenContentConnectorError
 } from '../contract.js'
 import { assertOpenContentPrincipalCurrent } from './connection-service.js'
+import { readOpenContentFolderInfo } from './folder-info-reader.js'
+import {
+  OPENCONTENT_PROVIDER_REQUEST_TIMEOUT_MS,
+  requestOpenContentProviderJson
+} from './provider-json-transport.js'
 import {
   OPENCONTENT_INTERNAL_TEAM_USER_TYPE,
   OPENCONTENT_TEAM_MUTATION_SIZE_MAX,
@@ -35,9 +40,6 @@ export type OpenContentTeamAdministration = Readonly<{
     OpenContentBoundTeamAdministration[Operation]
   >
 }>
-
-const MAX_RESPONSE_BYTES = 1_000_000
-const REQUEST_TIMEOUT_MS = 15_000
 
 const requestTokenSchema = z.string().trim().min(16).max(4096)
 const teamNameSchema = z.string().trim().min(1).max(256)
@@ -99,23 +101,6 @@ const resolveTeamRootInputSchema = z.object({
   signal: z.instanceof(AbortSignal).optional()
 }).strict()
 
-const setTeamUserRoleInputSchema = z.object({
-  token: requestTokenSchema,
-  teamId: openContentTeamIdSchema,
-  identityIds: z.array(openContentIdentityIdSchema).min(1)
-    .max(OPENCONTENT_TEAM_MUTATION_SIZE_MAX)
-    .refine((ids) => new Set(ids).size === ids.length),
-  userType: z.union([z.literal(2), z.literal(3), z.literal(4)]),
-  signal: z.instanceof(AbortSignal).optional()
-}).strict()
-
-const transferTeamOwnerInputSchema = z.object({
-  token: requestTokenSchema,
-  teamId: openContentTeamIdSchema,
-  ownerIdentityId: openContentIdentityIdSchema,
-  signal: z.instanceof(AbortSignal).optional()
-}).strict()
-
 const providerEnvelopeSchema = z.object({
   result: z.number().int(),
   msg: z.string().max(2048).nullable().optional(),
@@ -143,42 +128,16 @@ const providerTeamPageSchema = z.object({
 }).passthrough()
 
 const providerTeamUserSchema = z.object({
-  identityId: openContentIdentityIdSchema.optional(),
-  userIdentityId: openContentIdentityIdSchema.optional(),
-  userId: openContentIdentityIdSchema.optional(),
+  identityId: openContentIdentityIdSchema,
   userType: openContentTeamUserTypeSchema,
-  displayName: z.string().trim().min(1).max(256).optional(),
-  name: z.string().trim().min(1).max(256).optional(),
-  userName: z.string().trim().min(1).max(256).optional(),
-  account: z.string().trim().min(1).max(256).optional()
-}).passthrough().refine((user) => (
-  user.identityId !== undefined ||
-  user.userIdentityId !== undefined ||
-  user.userId !== undefined
-))
+  displayName: z.string().trim().min(1).max(256).optional()
+}).strict()
 
 const providerTeamUserPageSchema = z.object({
   pageNum: z.number().int().min(1).max(100_000).optional(),
   pageSize: z.number().int().min(1).max(OPENCONTENT_TEAM_PAGE_SIZE_MAX).optional(),
   totalCount: z.number().int().nonnegative().safe().optional(),
-  total: z.number().int().nonnegative().safe().optional(),
-  list: z.array(providerTeamUserSchema).max(OPENCONTENT_TEAM_PAGE_SIZE_MAX).optional(),
-  datas: z.array(providerTeamUserSchema).max(OPENCONTENT_TEAM_PAGE_SIZE_MAX).optional(),
-  items: z.array(providerTeamUserSchema).max(OPENCONTENT_TEAM_PAGE_SIZE_MAX).optional(),
-  teamUser: z.array(providerTeamUserSchema).max(OPENCONTENT_TEAM_PAGE_SIZE_MAX).optional(),
-  teamUserList: z.array(providerTeamUserSchema).max(OPENCONTENT_TEAM_PAGE_SIZE_MAX).optional()
-}).passthrough().refine((page) => (
-  page.list !== undefined ||
-  page.datas !== undefined ||
-  page.items !== undefined ||
-  page.teamUser !== undefined ||
-  page.teamUserList !== undefined
-))
-
-const providerFolderInfoSchema = z.object({
-  id: openContentFolderIdSchema,
-  folderGuid: z.string().trim().min(1).max(256),
-  teamId: openContentTeamIdSchema
+  teamUser: z.array(providerTeamUserSchema).max(OPENCONTENT_TEAM_PAGE_SIZE_MAX)
 }).passthrough()
 
 export function bindOpenContentTeamAdministration(
@@ -201,9 +160,7 @@ export function bindOpenContentTeamAdministration(
     listTeamUsers: (input) => invoke(() => administration.listTeamUsers({ ...input, token })),
     addTeamUsers: (input) => invoke(() => administration.addTeamUsers({ ...input, token })),
     removeTeamUsers: (input) => invoke(() => administration.removeTeamUsers({ ...input, token })),
-    resolveTeamRoot: (input) => invoke(() => administration.resolveTeamRoot({ ...input, token })),
-    setTeamUserRole: (input) => invoke(() => administration.setTeamUserRole({ ...input, token })),
-    transferTeamOwner: (input) => invoke(() => administration.transferTeamOwner({ ...input, token }))
+    resolveTeamRoot: (input) => invoke(() => administration.resolveTeamRoot({ ...input, token }))
   })
 }
 
@@ -216,7 +173,7 @@ export function createOpenContentTeamAdministration(options: Readonly<{
   const fetchImplementation = options.fetch ?? globalThis.fetch
   const requestTimeoutMs = parseInput(
     z.number().int().min(1).max(120_000),
-    options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS
+    options.requestTimeoutMs ?? OPENCONTENT_PROVIDER_REQUEST_TIMEOUT_MS
   )
 
   const administration: OpenContentTeamAdministration = {
@@ -244,45 +201,42 @@ export function createOpenContentTeamAdministration(options: Readonly<{
         throw connectorError('provider_contract_violation')
       }
       const teams = page.teamList.map(normalizeTeam)
+      const filterMismatch = (
+        input.teamType === 1 && teams.some((team) => !team.isStuck)
+      ) || (
+        (input.teamType === 2 || input.teamType === 3) &&
+        teams.some((team) => team.teamType !== input.teamType)
+      )
+      if (filterMismatch) {
+        throw connectorError('provider_contract_violation')
+      }
+      assertExactPageCount(page.pageNum, page.pageSize, page.totalCount, teams.length)
+      const consumed = (page.pageNum - 1) * page.pageSize + teams.length
       return openContentTeamPageSchema.parse({
         pageNumber: page.pageNum,
         pageSize: page.pageSize,
         totalCount: page.totalCount,
         teams,
-        ...(page.pageNum * page.pageSize < page.totalCount
+        ...(consumed < page.totalCount
           ? { nextPage: page.pageNum + 1 }
           : {})
       })
     },
     createTeam: async (rawInput: z.input<typeof createTeamInputSchema>): Promise<void> => {
       const input = parseInput(createTeamInputSchema, rawInput)
-      if (input.signal?.aborted) throw connectorError('cancelled')
-      let envelope: z.infer<typeof providerEnvelopeSchema>
-      try {
-        envelope = await readEnvelope({
-          baseUrl,
-          fetchImplementation,
-          requestTimeoutMs,
-          path: '/flatsdk/api/services/Team/CreateTeam',
-          body: {
-            token: input.token,
-            teamName: input.name,
-            ...(input.icon === undefined ? {} : { teamIcon: input.icon }),
-            ...(input.remark === undefined ? {} : { teamRemark: input.remark })
-          },
-          signal: input.signal
-        })
-      } catch (error) {
-        if (error instanceof OpenContentConnectorError && (
-          error.code === 'unauthorized' ||
-          error.code === 'rate_limited' ||
-          error.code === 'conflict' ||
-          error.code === 'cancelled'
-        )) throw error
-        throw connectorError('outcome_unknown')
-      }
-      if (envelope.result === 806) throw connectorError('conflict')
-      requireBusinessSuccess(envelope.result)
+      await executeMutation({
+        baseUrl,
+        fetchImplementation,
+        requestTimeoutMs,
+        path: '/flatsdk/api/services/Team/CreateTeam',
+        body: {
+          token: input.token,
+          teamName: input.name,
+          ...(input.icon === undefined ? {} : { teamIcon: input.icon }),
+          ...(input.remark === undefined ? {} : { teamRemark: input.remark })
+        },
+        signal: input.signal
+      })
     },
     observeTeam: async (rawInput) => {
       const input = parseInput(observeTeamInputSchema, rawInput)
@@ -361,22 +315,24 @@ export function createOpenContentTeamAdministration(options: Readonly<{
       if (pageNumber !== input.pageNumber || pageSize !== input.pageSize) {
         throw connectorError('provider_contract_violation')
       }
-      const rawUsers = page.list ?? page.datas ?? page.items ?? page.teamUser ?? page.teamUserList ?? []
-      const users = rawUsers.map(normalizeTeamUser)
-      const suppliedTotalCount = page.totalCount ?? page.total
-      if (page.teamUser !== undefined && suppliedTotalCount === undefined &&
-        users.length >= pageSize) {
+      const users = page.teamUser.map(normalizeTeamUser)
+      const suppliedTotalCount = page.totalCount
+      if (suppliedTotalCount === undefined && (
+        pageNumber !== 1 || users.length >= pageSize
+      )) {
         throw connectorError('provider_contract_violation')
       }
-      const totalCount = suppliedTotalCount ?? (page.teamUser === undefined
-        ? users.length
-        : (pageNumber - 1) * pageSize + users.length)
+      const totalCount = suppliedTotalCount ?? users.length
+      if (suppliedTotalCount !== undefined) {
+        assertExactPageCount(pageNumber, pageSize, totalCount, users.length)
+      }
+      const consumed = (pageNumber - 1) * pageSize + users.length
       return openContentTeamUserPageSchema.parse({
         pageNumber,
         pageSize,
         totalCount,
         users,
-        ...(pageNumber * pageSize < totalCount ? { nextPage: pageNumber + 1 } : {})
+        ...(consumed < totalCount ? { nextPage: pageNumber + 1 } : {})
       })
     },
     addTeamUsers: async (rawInput) => {
@@ -418,16 +374,25 @@ export function createOpenContentTeamAdministration(options: Readonly<{
     },
     resolveTeamRoot: async (rawInput) => {
       const input = parseInput(resolveTeamRootInputSchema, rawInput)
-      const envelope = await readEnvelope({
-        baseUrl,
-        fetchImplementation,
-        requestTimeoutMs,
-        path: '/flatsdk/api/services/DocList/GetFolderInfoById',
-        body: { token: input.token, folderId: input.folderId },
-        signal: input.signal
+      const receipt = await readOpenContentFolderInfo({
+        token: input.token,
+        folderId: input.folderId,
+        signal: input.signal,
+        request: ({ path, body, signal }) => requestOpenContentProviderJson({
+          baseUrl,
+          fetchImplementation,
+          path,
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+          signal,
+          timeoutMs: requestTimeoutMs,
+          errorFactory: connectorError
+        })
       })
-      requireBusinessSuccess(envelope.result)
-      const folder = parseProvider(providerFolderInfoSchema, envelope.data)
+      requireBusinessSuccess(receipt.result)
+      const folder = receipt.folder
+      if (!folder) throw connectorError('provider_contract_violation')
       if (folder.id !== input.folderId || folder.teamId !== input.teamId) {
         throw connectorError('provider_contract_violation')
       }
@@ -435,37 +400,6 @@ export function createOpenContentTeamAdministration(options: Readonly<{
         teamId: input.teamId,
         folderId: folder.id,
         folderGuid: folder.folderGuid
-      })
-    },
-    setTeamUserRole: async (rawInput) => {
-      const input = parseInput(setTeamUserRoleInputSchema, rawInput)
-      await executeMutation({
-        baseUrl,
-        fetchImplementation,
-        requestTimeoutMs,
-        path: '/flatsdk/api/services/Team/SetTeamUserRole',
-        body: {
-          token: input.token,
-          teamId: input.teamId,
-          userIds: input.identityIds,
-          userType: input.userType
-        },
-        signal: input.signal
-      })
-    },
-    transferTeamOwner: async (rawInput) => {
-      const input = parseInput(transferTeamOwnerInputSchema, rawInput)
-      await executeMutation({
-        baseUrl,
-        fetchImplementation,
-        requestTimeoutMs,
-        path: '/flatsdk/api/services/Team/EditTeamOwner',
-        body: {
-          token: input.token,
-          teamId: input.teamId,
-          userId: input.ownerIdentityId
-        },
-        signal: input.signal
       })
     }
   }
@@ -486,15 +420,10 @@ function normalizeTeam(team: z.infer<typeof providerTeamSchema>) {
 }
 
 function normalizeTeamUser(user: z.infer<typeof providerTeamUserSchema>) {
-  const identityId = user.identityId ?? user.userIdentityId ?? user.userId
-  if (identityId === undefined) throw connectorError('provider_contract_violation')
   return openContentTeamUserSchema.parse({
-    identityId,
+    identityId: user.identityId,
     userType: user.userType,
-    ...(user.displayName ?? user.name ?? user.userName
-      ? { displayName: user.displayName ?? user.name ?? user.userName }
-      : {}),
-    ...(user.account === undefined ? {} : { account: user.account })
+    ...(user.displayName === undefined ? {} : { displayName: user.displayName })
   })
 }
 
@@ -509,18 +438,16 @@ async function executeMutation(input: Readonly<{
   if (input.signal?.aborted) throw connectorError('cancelled')
   let envelope: z.infer<typeof providerEnvelopeSchema>
   try {
-    envelope = await readEnvelope(input)
+    envelope = await readEnvelope({ ...input, http409IsConflict: true })
   } catch (error) {
     if (error instanceof OpenContentConnectorError && (
       error.code === 'unauthorized' ||
       error.code === 'rate_limited' ||
-      error.code === 'conflict' ||
-      error.code === 'cancelled'
+      error.code === 'conflict'
     )) throw error
     throw connectorError('outcome_unknown')
   }
-  if (envelope.result === 806) throw connectorError('conflict')
-  requireBusinessSuccess(envelope.result)
+  if (envelope.result !== 0) throw connectorError('outcome_unknown')
 }
 
 async function readEnvelope(input: Readonly<{
@@ -530,70 +457,36 @@ async function readEnvelope(input: Readonly<{
   path: string
   body: unknown
   signal?: AbortSignal
+  http409IsConflict?: boolean
 }>): Promise<z.infer<typeof providerEnvelopeSchema>> {
-  const response = await requestJson(input)
+  const response = await requestOpenContentProviderJson({
+    baseUrl: input.baseUrl,
+    fetchImplementation: input.fetchImplementation,
+    path: input.path,
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input.body),
+    signal: input.signal,
+    timeoutMs: input.requestTimeoutMs,
+    http409IsConflict: input.http409IsConflict,
+    errorFactory: connectorError
+  })
   return parseProvider(providerEnvelopeSchema, response)
-}
-
-async function requestJson(input: Readonly<{
-  baseUrl: URL
-  fetchImplementation: typeof fetch
-  requestTimeoutMs: number
-  path: string
-  body: unknown
-  signal?: AbortSignal
-}>): Promise<unknown> {
-  const timeout = AbortSignal.timeout(input.requestTimeoutMs)
-  const signal = input.signal ? AbortSignal.any([input.signal, timeout]) : timeout
-  let response: Response
-  try {
-    response = await input.fetchImplementation(new URL(input.path, input.baseUrl), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(input.body),
-      redirect: 'error',
-      credentials: 'omit',
-      referrerPolicy: 'no-referrer',
-      signal
-    })
-  } catch {
-    if (input.signal?.aborted) throw connectorError('cancelled')
-    throw connectorError('provider_unavailable')
-  }
-  if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
-      throw connectorError('unauthorized')
-    }
-    if (response.status === 429) throw connectorError('rate_limited')
-    if (response.status === 409) throw connectorError('conflict')
-    throw connectorError('provider_unavailable')
-  }
-  const declaredLength = response.headers.get('content-length')
-  if (declaredLength !== null && (
-    !/^\d+$/u.test(declaredLength) || Number(declaredLength) > MAX_RESPONSE_BYTES
-  )) {
-    await response.body?.cancel().catch(() => undefined)
-    throw connectorError('provider_contract_violation')
-  }
-  let text: string
-  try {
-    text = await response.text()
-  } catch {
-    if (input.signal?.aborted) throw connectorError('cancelled')
-    throw connectorError('provider_unavailable')
-  }
-  if (new TextEncoder().encode(text).byteLength > MAX_RESPONSE_BYTES) {
-    throw connectorError('provider_contract_violation')
-  }
-  try {
-    return JSON.parse(text)
-  } catch {
-    throw connectorError('provider_contract_violation')
-  }
 }
 
 function requireBusinessSuccess(result: number): void {
   if (result !== 0) throw connectorError('unauthorized')
+}
+
+function assertExactPageCount(
+  pageNumber: number,
+  pageSize: number,
+  totalCount: number,
+  returnedCount: number
+): void {
+  const offset = (pageNumber - 1) * pageSize
+  const expectedCount = Math.min(pageSize, Math.max(totalCount - offset, 0))
+  if (returnedCount !== expectedCount) throw connectorError('provider_contract_violation')
 }
 
 function parseProvider<Schema extends z.ZodType>(

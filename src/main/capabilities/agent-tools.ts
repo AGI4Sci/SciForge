@@ -122,9 +122,7 @@ const agentOperationRefSchema = z.string().regex(/^op_[A-Za-z0-9_-]{20,}$/u)
 const agentSchemaRefSchema = z.string().regex(/^schema_[A-Za-z0-9_-]{20,}$/u)
 const agentResourceRefSchema = z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/u)
 const agentResourceHandleDescriptionSchema = z.object({
-  resourceRef: agentResourceRefSchema,
-  resourceKind: z.string().trim().min(1).max(192),
-  semanticRevision: z.string().trim().min(1).max(256)
+  resourceRef: agentResourceRefSchema
 }).strict()
 
 const agentDiscoverRequestSchema = capabilityDiscoveryQuerySchema.extend({

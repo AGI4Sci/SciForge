@@ -15,11 +15,6 @@ export type OpenContentTeamId = z.infer<typeof openContentTeamIdSchema>
 export type OpenContentFolderId = z.infer<typeof openContentFolderIdSchema>
 export type OpenContentIdentityId = z.infer<typeof openContentIdentityIdSchema>
 
-export const openContentTeamPageRequestSchema = z.object({
-  pageNumber: z.number().int().min(1).max(100_000),
-  pageSize: z.number().int().min(1).max(OPENCONTENT_TEAM_PAGE_SIZE_MAX)
-}).strict().readonly()
-
 export const openContentTeamSchema = z.object({
   teamId: openContentTeamIdSchema,
   folderId: openContentFolderIdSchema,
@@ -55,8 +50,7 @@ export type OpenContentTeamUserType = z.infer<typeof openContentTeamUserTypeSche
 export const openContentTeamUserSchema = z.object({
   identityId: openContentIdentityIdSchema,
   userType: openContentTeamUserTypeSchema,
-  displayName: z.string().trim().min(1).max(256).optional(),
-  account: z.string().trim().min(1).max(256).optional()
+  displayName: z.string().trim().min(1).max(256).optional()
 }).strict().readonly()
 
 export type OpenContentTeamUser = z.infer<typeof openContentTeamUserSchema>
@@ -135,13 +129,4 @@ export type OpenContentBoundTeamAdministration = Readonly<{
     teamId: OpenContentTeamId
     folderId: OpenContentFolderId
   }>): Promise<OpenContentTeamRoot>
-  setTeamUserRole(input: OpenContentBoundRequest & Readonly<{
-    teamId: OpenContentTeamId
-    identityIds: readonly OpenContentIdentityId[]
-    userType: 2 | 3 | 4
-  }>): Promise<void>
-  transferTeamOwner(input: OpenContentBoundRequest & Readonly<{
-    teamId: OpenContentTeamId
-    ownerIdentityId: OpenContentIdentityId
-  }>): Promise<void>
 }>

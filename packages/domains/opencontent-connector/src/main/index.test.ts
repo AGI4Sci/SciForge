@@ -14,19 +14,22 @@ import {
   OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRACT,
   OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRIBUTION
 } from '../definition.js'
-import {
-  OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE,
-  createOpenContentCapabilityFactory,
-  type OpenContentCapabilityOptions
-} from './index.js'
+import { createDomainMainEntry } from './index.js'
 import * as openContentMainModule from './index.js'
+import { createOpenContentCapabilityFactory } from './connection-capabilities.js'
 import { createOpenContentContentSpaceFacade } from './facade.js'
 import type { OpenContentConnectionService } from './connection-service.js'
-import type { OpenContentClient } from './opencontent-client.js'
+import {
+  createOpenContentClient,
+  type OpenContentClient
+} from './opencontent-client.js'
 import type {
   OpenContentBoundTeamAdministration
 } from '../team-administration-contract.js'
-import type { OpenContentTeamAdministration } from './team-administration.js'
+import {
+  createOpenContentTeamAdministration,
+  type OpenContentTeamAdministration
+} from './team-administration.js'
 
 const principal = Object.freeze({
   authority: 'sciforge.local-account',
@@ -43,8 +46,16 @@ const bindingAttestation = Object.freeze({
 })
 
 describe('OpenContent connection capabilities', () => {
-  it('does not expose raw facade construction from the public main entrypoint', () => {
-    expect(openContentMainModule).not.toHaveProperty('createOpenContentContentSpaceFacade')
+  it('keeps transport and supplier runtime construction outside the public main-entry contract', () => {
+    type MainEntryArguments = Parameters<typeof createDomainMainEntry>
+    const hasOnlyHostArgument:
+      Extract<MainEntryArguments['length'], 2> extends never ? true : false = true
+
+    expect(hasOnlyHostArgument).toBe(true)
+  })
+
+  it('publishes only the canonical package activation function from the public main entrypoint', () => {
+    expect(Object.keys(openContentMainModule)).toEqual(['createDomainMainEntry'])
   })
 
   it('keeps the v3 internal facade version aligned with its manifest contract', () => {
@@ -55,16 +66,6 @@ describe('OpenContent connection capabilities', () => {
     })
     expect(OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRIBUTION.version)
       .toBe(OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION)
-  })
-
-  it('ships one stable compile-time verification profile', () => {
-    expect(OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE).toEqual({
-      id: 'edoc2-test1-verification',
-      providerInstanceRef: 'opencontent-edoc2-demo',
-      displayName: 'OpenContent',
-      origin: 'https://test1.edoc2.com'
-    })
-    expect(Object.isFrozen(OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE)).toBe(true)
   })
 
   it('keeps enrollment UI-only and marks credential input as sensitive', () => {
@@ -249,7 +250,7 @@ describe('OpenContent main-only Content Space facade', () => {
       teamAdministration: teamAdministration()
     })
 
-    expect(facade.useSkillRuntime).toBeUndefined()
+    expect(facade.useSupplierTransport).toBeUndefined()
     expect(facade.attestExternalBinding).toBeTypeOf('function')
     expect(facade.useTeamAdministration).toBeTypeOf('function')
     expect(facade.listRootFolders).toBeTypeOf('function')
@@ -272,7 +273,7 @@ describe('OpenContent main-only Content Space facade', () => {
       connections,
       teamAdministration: rawAdministration,
       skillRuntime: {
-        useSkillRuntime: async (_input, operation) => operation({
+        useSupplierTransport: async (_input, operation) => operation({
           invoke: async () => {
             throw new Error('The skill runtime is not used by this test.')
           }
@@ -333,8 +334,12 @@ describe('OpenContent main-only Content Space facade', () => {
 
   it('passes the live Principal assertion into ordinary invocation-scoped client requests', async () => {
     const connections = connectionService()
-    vi.mocked(connections.useCurrentToken).mockImplementation(async (_input, operation) => (
-      operation('opaque-content-space-token')
+    vi.mocked(connections.useCurrentSession).mockImplementation(async (_input, operation) => (
+      operation(Object.freeze({
+        token: 'opaque-content-space-token',
+        externalIdentityId: 9000041,
+        bindingAttestation
+      }))
     ))
     const listFolderEntries = vi.fn<OpenContentClient['listFolderEntries']>(async (input) => {
       await input.assertPrincipalCurrent()
@@ -360,16 +365,105 @@ describe('OpenContent main-only Content Space facade', () => {
     expect(listFolderEntries).toHaveBeenCalledWith(expect.objectContaining({
       assertPrincipalCurrent
     }))
-    expect(connections.useCurrentToken).toHaveBeenCalledWith(
+    expect(connections.useCurrentSession).toHaveBeenCalledWith(
       expect.objectContaining({ expectedBindingAttestation: bindingAttestation }),
       expect.any(Function)
     )
     expect(assertPrincipalCurrent).toHaveBeenCalledOnce()
   })
+
+  it('lists ordinary Team roots through the canonical Team administration receipt contract', async () => {
+    const requestedPaths: string[] = []
+    const fetch = vi.fn(async (rawUrl: string | URL | Request) => {
+      const url = new URL(String(rawUrl))
+      requestedPaths.push(url.pathname)
+      if (url.pathname.endsWith('/flatsdk/api/services/Team/GetMyTeamList')) {
+        return new Response(JSON.stringify({
+          result: 0,
+          msg: '',
+          data: {
+            pageNum: 1,
+            pageSize: 1,
+            totalCount: 2,
+            teamList: [{
+              teamId: 9000019,
+              folderId: 9002213,
+              teamName: 'SciForge Research',
+              teamStatus: 1,
+              teamOwner: 9000041,
+              permission: 15,
+              teamType: 0,
+              isStick: false
+            }],
+            sortName: 'team_name',
+            sortDesc: false
+          }
+        }), { headers: { 'content-type': 'application/json' } })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderInfoById')) {
+        return new Response(JSON.stringify({
+          result: 0,
+          msg: '',
+          data: {
+            id: 9002213,
+            folderGuid: '11111111-2222-4333-8444-555555555555',
+            parentFolderId: 0,
+            folderType: 1,
+            teamId: 9000019,
+            permission: 15,
+            childFolderCount: 0,
+            childFileCount: 0
+          }
+        }), { headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`Unexpected OpenContent request: ${url.pathname}`)
+    })
+    const connections = connectionService()
+    vi.mocked(connections.useCurrentSession).mockImplementation(async (_input, operation) => (
+      operation(Object.freeze({
+        token: 'opaque-content-space-token',
+        externalIdentityId: 9000041,
+        bindingAttestation
+      }))
+    ))
+    const facade = createOpenContentContentSpaceFacade({
+      client: createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch }),
+      connections,
+      teamAdministration: createOpenContentTeamAdministration({
+        baseUrl: 'https://opencontent.invalid',
+        fetch
+      })
+    })
+    const assertPrincipalCurrent = vi.fn(async () => { await Promise.resolve() })
+
+    await expect(facade.listRootFolders({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedBindingAttestation: bindingAttestation,
+      teamPage: 1,
+      teamPageSize: 1,
+      includePersonal: false,
+      includeTeams: true,
+      assertPrincipalCurrent
+    })).resolves.toEqual({
+      roots: [{
+        source: 'team-root',
+        folderGuid: '11111111-2222-4333-8444-555555555555',
+        label: 'SciForge Research'
+      }],
+      nextTeamPage: 2
+    })
+    expect(requestedPaths).toEqual([
+      '/flatsdk/api/services/Team/GetMyTeamList',
+      '/flatsdk/api/services/DocList/GetFolderInfoById'
+    ])
+    expect(connections.useCurrentSession).toHaveBeenCalledOnce()
+    expect(assertPrincipalCurrent).toHaveBeenCalledTimes(2)
+  })
 })
 
 function capabilityDefinitions(connections: OpenContentConnectionService) {
-  return createOpenContentCapabilityFactory<OpenContentCapabilityOptions>({
+  return createOpenContentCapabilityFactory({
     defineCapability: (options) => options,
     connections
   }).createDefinitions()
@@ -389,7 +483,6 @@ function connectionService(): OpenContentConnectionService {
         name: 'Scientist'
       }
     })),
-    useCurrentToken: vi.fn(),
     useCurrentSession: vi.fn(),
     unbind: vi.fn(async () => ({
       state: 'disconnected' as const,
@@ -414,8 +507,6 @@ function teamAdministration(): OpenContentTeamAdministration {
     listTeamUsers: vi.fn(),
     addTeamUsers: vi.fn(async () => undefined),
     removeTeamUsers: vi.fn(async () => undefined),
-    resolveTeamRoot: vi.fn(),
-    setTeamUserRole: vi.fn(async () => undefined),
-    transferTeamOwner: vi.fn(async () => undefined)
+    resolveTeamRoot: vi.fn()
   }
 }

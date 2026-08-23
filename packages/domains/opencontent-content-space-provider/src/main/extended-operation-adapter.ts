@@ -6,179 +6,27 @@ import {
   type ContentSpaceExtendedErrorCode,
   type ContentSpaceExtendedOperationKey
 } from '@sciforge/domain-content-space/extended-operations-contract'
+import { contentSpaceInvocationIdSchema } from '@sciforge/domain-content-space/contract'
 
 import {
-  admitOpenContentSkillRuntimeOwner,
-  type OpenContentSkillRuntimeOwner
-} from './contract.js'
+  openContentExtendedCommandInvocationSchema,
+  openContentExtendedCommandSuccessSchema,
+  type OpenContentExtendedCommandTransport,
+  type OpenContentExtendedDataFile,
+  type OpenContentExtendedDownloadDestination,
+  type OpenContentExtendedOperationCommand,
+  type OpenContentExtendedUploadSource
+} from '@sciforge/domain-opencontent-connector/main-contract'
+import {
+  openContentIdentityIdSchema,
+  type OpenContentIdentityId
+} from '@sciforge/domain-opencontent-connector/team-administration-contract'
 
-/**
- * Attachment-owned commands which this adapter may ask the private runner to
- * execute.  Raw methods, URLs, argv, environment variables, and paths are not
- * part of this contract.
- */
-export const OPENCONTENT_EXTENDED_OPERATION_COMMANDS = Object.freeze([
-  'file-search',
-  'file-rag-scope',
-  'file-info',
-  'file-internal-link',
-  'folder-info',
-  'recent-files',
-  'meta-types',
-  'meta-attrs',
-  'meta-modeldata',
-  'meta-info',
-  'meta-edit',
-  'rename',
-  'copy',
-  'move',
-  'delete',
-  'create-shortcut',
-  'file-edit',
-  'folder-edit',
-  'sec-level-list',
-  'upload',
-  'download',
-  'attach-list',
-  'attach-remove',
-  'relation-list',
-  'relation-create',
-  'relation-remove',
-  'file-tag-list',
-  'file-tag-set',
-  'file-tag-delete',
-  'publish',
-  'my-publish-list',
-  'cancel-publish',
-  'create-share',
-  'my-share-list',
-  'cancel-share',
-  'albums',
-  'album-files',
-  'favorite-add',
-  'favorite-remove',
-  'user-info',
-  'search-user',
-  'search-department',
-  'search-position',
-  'search-user-group',
-  'perm-cates',
-  'perm-list',
-  'perm-set',
-  'collab-list',
-  'collab-search',
-  'collab-link',
-  'kbox-list',
-  'file-list'
-] as const)
-
-export const openContentExtendedOperationCommandSchema = z.enum(
-  OPENCONTENT_EXTENDED_OPERATION_COMMANDS
-)
-export type OpenContentExtendedOperationCommand = z.infer<
-  typeof openContentExtendedOperationCommandSchema
->
-
-const invocationIdSchema = z.string()
-  .trim()
-  .min(16)
-  .max(128)
-  .regex(/^[A-Za-z0-9][A-Za-z0-9_-]+$/u)
-
-const commandArgsSchema = z.record(z.string(), z.json())
-const safeTransferNameSchema = z.string().trim().min(1).max(256)
-  .refine((value) => value !== '.' && value !== '..' && !/[\\/]/u.test(value) &&
-    [...value].every((character) => {
-      const code = character.codePointAt(0) ?? 0
-      return code > 31 && code !== 127
-    }))
-const transferReadSchema = z.custom<OpenContentExtendedUploadSource['read']>(
-  (value) => typeof value === 'function',
-  'A managed upload source requires a read function.'
-)
-const transferWriteSchema = z.custom<OpenContentExtendedDownloadDestination['write']>(
-  (value) => typeof value === 'function',
-  'A managed download destination requires a write function.'
-)
-
-export const openContentExtendedDataFileSchema = z.discriminatedUnion('role', [
-  z.object({
-    role: z.literal('source'),
-    encoding: z.literal('managed-stream'),
-    name: safeTransferNameSchema,
-    size: z.number().int().nonnegative().max(1_073_741_824),
-    read: transferReadSchema
-  }).strict().readonly(),
-  z.object({
-    role: z.literal('destination'),
-    encoding: z.literal('managed-stream'),
-    name: safeTransferNameSchema,
-    write: transferWriteSchema
-  }).strict().readonly()
-])
-export type OpenContentExtendedDataFile = z.infer<typeof openContentExtendedDataFileSchema>
-
-/** Ordinary attachment commands currently accept no caller supplied files. */
-export const openContentExtendedCommandInvocationSchema = z.object({
-  invocationId: invocationIdSchema,
-  command: openContentExtendedOperationCommandSchema,
-  args: commandArgsSchema,
-  dataFiles: z.array(openContentExtendedDataFileSchema).max(1).readonly()
-}).strict().superRefine((invocation, issue) => {
-  const roles = invocation.dataFiles.map((file) => file.role)
-  const needsSource = invocation.command === 'upload'
-  const needsDestination = invocation.command === 'download'
-  const expected = needsSource ? ['source'] : needsDestination ? ['destination'] : []
-  if (roles.length !== expected.length || roles.some((role, index) => role !== expected[index])) {
-    issue.addIssue({
-      code: 'custom',
-      path: ['dataFiles'],
-      message: `${invocation.command} requires data-file roles: ${expected.join(', ') || '(none)'}.`
-    })
-  }
-}).readonly()
-
-export type OpenContentExtendedCommandInvocation = z.infer<
-  typeof openContentExtendedCommandInvocationSchema
->
-
-export const OPENCONTENT_CLI_RESULT_PROTOCOL = 'opencontent-cli-result:v1' as const
-
-/** The success receipt shared with the private CLI runner. */
-export const openContentExtendedCommandSuccessSchema = z.object({
-  protocol: z.literal(OPENCONTENT_CLI_RESULT_PROTOCOL),
-  invocationId: invocationIdSchema,
-  command: openContentExtendedOperationCommandSchema,
-  attemptCount: z.literal(1),
-  outcome: z.literal('succeeded'),
-  json: z.json(),
-  structuredDeliveryItems: z.array(z.json()).max(8).readonly(),
-  managedDataFiles: z.array(z.json()).max(8).readonly()
-}).strict().readonly()
-
-export type OpenContentExtendedCommandSuccess = z.infer<
-  typeof openContentExtendedCommandSuccessSchema
->
-
-export interface OpenContentExtendedCommandTransport {
-  invoke(invocation: OpenContentExtendedCommandInvocation): Promise<unknown>
+export interface OpenContentCurrentPrincipalPort {
+  currentIdentityId(): Promise<OpenContentIdentityId>
 }
 
-export interface OpenContentTeamGovernancePort {
-  updateMemberRole(input: Readonly<{
-    invocationId: string
-    teamRootId: string
-    memberPrincipalId: string
-    userType: 2 | 3 | 4
-  }>): Promise<Readonly<{ applied: true }>>
-  transferOwnership(input: Readonly<{
-    invocationId: string
-    teamRootId: string
-    newOwnerPrincipalId: string
-  }>): Promise<Readonly<{ applied: true }>>
-}
-
-type MappingRoute = 'cli' | 'team-administration'
+type MappingRoute = 'cli' | 'current-principal'
 
 export type OpenContentExtendedOperationMapping = Readonly<{
   operation: ContentSpaceExtendedOperationKey
@@ -202,21 +50,19 @@ function cliMapping(
   })
 }
 
-function teamMapping(
-  operation: ContentSpaceExtendedOperationKey
-): OpenContentExtendedOperationMapping {
+function currentPrincipalMapping(): OpenContentExtendedOperationMapping {
   return Object.freeze({
-    operation,
-    route: 'team-administration',
+    operation: 'getCurrentPrincipal',
+    route: 'current-principal',
     commands: [],
     mutationCommands: []
   })
 }
 
 /**
- * Exhaustive public-operation to private-command map. Some mappings are
- * bounded compositions; at most one of the enumerated mutation alternatives
- * may execute in a composition.
+ * Exhaustive public-operation to package-private execution route and command
+ * map. Some CLI mappings are bounded compositions; at most one of the
+ * enumerated mutation alternatives may execute in a composition.
  */
 export const OPENCONTENT_EXTENDED_OPERATION_MAPPINGS = Object.freeze({
   searchEntries: cliMapping('searchEntries', ['file-search', 'file-info', 'folder-info']),
@@ -261,11 +107,11 @@ export const OPENCONTENT_EXTENDED_OPERATION_MAPPINGS = Object.freeze({
   listAlbumEntries: cliMapping('listAlbumEntries', ['album-files', 'file-info', 'folder-info']),
   addFavorite: cliMapping('addFavorite', ['favorite-add'], 'favorite-add'),
   removeFavorite: cliMapping('removeFavorite', ['album-files', 'favorite-remove'], 'favorite-remove'),
-  getCurrentPrincipal: cliMapping('getCurrentPrincipal', ['user-info']),
-  searchUsers: cliMapping('searchUsers', ['search-user']),
-  searchDepartments: cliMapping('searchDepartments', ['search-department']),
-  searchPositions: cliMapping('searchPositions', ['search-position']),
-  searchGroups: cliMapping('searchGroups', ['search-user-group']),
+  getCurrentPrincipal: currentPrincipalMapping(),
+  searchUsers: cliMapping('searchUsers', []),
+  searchDepartments: cliMapping('searchDepartments', []),
+  searchPositions: cliMapping('searchPositions', []),
+  searchGroups: cliMapping('searchGroups', []),
   listPermissionCategories: cliMapping('listPermissionCategories', ['perm-cates']),
   listPermissions: cliMapping('listPermissions', ['perm-list']),
   changePermissions: cliMapping('changePermissions', ['perm-set'], 'perm-set'),
@@ -277,9 +123,7 @@ export const OPENCONTENT_EXTENDED_OPERATION_MAPPINGS = Object.freeze({
   browseKnowledgeCollection: cliMapping(
     'browseKnowledgeCollection',
     ['kbox-list', 'file-list', 'file-info', 'folder-info']
-  ),
-  updateTeamMemberRole: teamMapping('updateTeamMemberRole'),
-  transferTeamOwnership: teamMapping('transferTeamOwnership')
+  )
 } satisfies Readonly<Record<ContentSpaceExtendedOperationKey, OpenContentExtendedOperationMapping>>)
 
 const ERROR_RETRY = Object.freeze({
@@ -513,22 +357,12 @@ function containerReference(providerInstanceRef: string, containerId: string) {
 function directoryPrincipal(
   providerInstanceRef: string,
   kind: 'user' | 'department' | 'position' | 'group',
-  item: Record<string, unknown>
+  principalId: string,
+  displayName: string
 ) {
-  const principalId = requiredString(item, ['identityId', 'IdentityId', 'id', 'Id', 'guid', 'Guid'], 'Principal identity')
-  const displayName = requiredString(item, ['displayName', 'name', 'Name', 'userName', 'UserName'], 'Principal name')
   return Object.freeze({
     reference: Object.freeze({ providerInstanceRef, kind, principalId }),
-    displayName,
-    ...(optionalString(item, ['loginName', 'account', 'Account'])
-      ? { accountName: optionalString(item, ['loginName', 'account', 'Account']) }
-      : {}),
-    ...(optionalString(item, ['departmentName', 'DepartmentName'])
-      ? { departmentName: optionalString(item, ['departmentName', 'DepartmentName']) }
-      : {}),
-    ...(optionalString(item, ['positionName', 'PositionName'])
-      ? { positionName: optionalString(item, ['positionName', 'PositionName']) }
-      : {})
+    displayName
   })
 }
 
@@ -734,29 +568,13 @@ export type OpenContentExtendedOperationAdapter = Readonly<{
   }>): Promise<unknown>
 }>
 
-export type OpenContentExtendedUploadSource = Readonly<{
-  name: string
-  size: number
-  sha256?: string
-  read(input: Readonly<{ offset: number; length: number }>): Promise<Uint8Array>
-}>
-
-export type OpenContentExtendedDownloadDestination = Readonly<{
-  write(chunk: Uint8Array): Promise<void>
-}>
-
 export function createOpenContentExtendedOperationAdapter(input: Readonly<{
-  owner: OpenContentSkillRuntimeOwner
   providerInstanceRef: string
   transport?: OpenContentExtendedCommandTransport
-  teamGovernance?: OpenContentTeamGovernancePort
+  currentPrincipal?: OpenContentCurrentPrincipalPort
   now?: () => Date
 }>): OpenContentExtendedOperationAdapter {
-  const { providerInstanceRef, transport, teamGovernance } = input
-  const owner = admitOpenContentSkillRuntimeOwner(input.owner)
-  if (owner.role !== 'adapter-owner') {
-    throw new TypeError('Only the OpenContent Content Space provider may own the extended adapter.')
-  }
+  const { providerInstanceRef, transport, currentPrincipal } = input
   const now = input.now ?? (() => new Date())
 
   async function invoke(
@@ -803,7 +621,7 @@ export function createOpenContentExtendedOperationAdapter(input: Readonly<{
         return contract.resultSchema.parse(failure('invalid_input', 'The extended-operation request is invalid.'))
       }
       try {
-        invocationIdSchema.parse(execution.invocationId)
+        contentSpaceInvocationIdSchema.parse(execution.invocationId)
         assertProviderAuthority(parsedRequest.data, providerInstanceRef)
         const value = await executeOperation({
           providerInstanceRef,
@@ -815,7 +633,7 @@ export function createOpenContentExtendedOperationAdapter(input: Readonly<{
               if (mapping.mutationCommands.includes(command)) mutationTransportReturned = true
             })
           },
-          teamGovernance,
+          currentPrincipal,
           now,
           source: execution.source,
           destination: execution.destination
@@ -870,7 +688,7 @@ type ExecuteContext = Readonly<{
     args: Record<string, unknown>,
     dataFiles?: readonly OpenContentExtendedDataFile[]
   ): Promise<unknown>
-  teamGovernance?: OpenContentTeamGovernancePort
+  currentPrincipal?: OpenContentCurrentPrincipalPort
   now(): Date
   source?: OpenContentExtendedUploadSource
   destination?: OpenContentExtendedDownloadDestination
@@ -923,10 +741,14 @@ async function executeOperation(context: ExecuteContext): Promise<unknown> {
     case 'addFavorite': return executeAddFavorite(context)
     case 'removeFavorite': return executeRemoveFavorite(context)
     case 'getCurrentPrincipal': return executeCurrentPrincipal(context)
-    case 'searchUsers': return executePrincipalSearch(context, 'user')
-    case 'searchDepartments': return executePrincipalSearch(context, 'department')
-    case 'searchPositions': return executePrincipalSearch(context, 'position')
-    case 'searchGroups': return executePrincipalSearch(context, 'group')
+    case 'searchUsers':
+    case 'searchDepartments':
+    case 'searchPositions':
+    case 'searchGroups':
+      throw new ProviderPayloadError(
+        'blocked_by_contract',
+        'The pinned supplier contract does not define an exact directory result schema.'
+      )
     case 'listPermissionCategories': return executePermissionCategories(context)
     case 'listPermissions': return executeListPermissions(context)
     case 'changePermissions': return executeChangePermissions(context)
@@ -936,8 +758,6 @@ async function executeOperation(context: ExecuteContext): Promise<unknown> {
     case 'listKnowledgeCollections': return executeKnowledgeCollections(context, false)
     case 'searchKnowledgeCollections': return executeKnowledgeCollections(context, true)
     case 'browseKnowledgeCollection': return executeBrowseKnowledge(context)
-    case 'updateTeamMemberRole': return executeTeamMemberRole(context)
-    case 'transferTeamOwnership': return executeTeamOwnership(context)
   }
   return unreachableOperation(operation)
 }
@@ -1065,7 +885,7 @@ async function observeEntryInfo(
         ? { modifiedAt: normalizeTimestamp(first(payload, ['fileModifyTime', 'modifyTime'])) }
         : {}),
       ...(modifiedById && modifiedByName
-        ? { modifiedBy: directoryPrincipal(context.providerInstanceRef, 'user', { identityId: modifiedById, name: modifiedByName }) }
+        ? { modifiedBy: directoryPrincipal(context.providerInstanceRef, 'user', modifiedById, modifiedByName) }
         : {}),
       ...(optionalString(payload, ['fileLastVerId', 'fileVerId', 'currentVersionId'])
         ? { currentVersionId: optionalString(payload, ['fileLastVerId', 'fileVerId', 'currentVersionId']) }
@@ -2112,45 +1932,22 @@ async function executeRemoveFavorite(context: ExecuteContext): Promise<unknown> 
 }
 
 async function executeCurrentPrincipal(context: ExecuteContext): Promise<unknown> {
-  const raw = record(await context.invoke(context.invocationId, 'user-info', {}), 'Current user')
-  return directoryPrincipal(context.providerInstanceRef, 'user', raw)
-}
-
-async function executePrincipalSearch(
-  context: ExecuteContext,
-  kind: 'user' | 'department' | 'position' | 'group'
-): Promise<unknown> {
-  const page = record(context.request.page, 'Directory page')
-  const index = pageNumber(page)
-  const limit = requiredNumber(page, ['limit'], 'Directory page limit')
-  if (limit > 100) throw new ProviderPayloadError('bounds_exceeded', 'OpenContent directory pages are limited to 100 items.')
-  const command = kind === 'user'
-    ? 'search-user'
-    : kind === 'department' ? 'search-department' : kind === 'position' ? 'search-position' : 'search-user-group'
-  const args: Record<string, unknown> = kind === 'group'
-    ? { groupName: context.request.query }
-    : { keyword: context.request.query }
-  if (kind === 'user') {
-    args.pageIndex = index
-    args.pageSize = limit
-    if (isRecord(context.request.within)) {
-      const principal = record(context.request.within.principal, 'Directory scope')
-      args.orgType = context.request.within.kind === 'department' ? 2 : 4
-      args.orgId = requiredString(principal, ['principalId'], 'Directory scope identity')
-      args.recursive = context.request.within.recursive
-    }
-  } else if (index !== 1) {
-    throw new ProviderPayloadError('bounds_exceeded', 'This OpenContent directory search has no stable continuation cursor.')
+  if (!context.currentPrincipal) {
+    throw new ProviderPayloadError(
+      'blocked_by_contract',
+      'The authenticated OpenContent current-principal session is unavailable.'
+    )
   }
-  const raw = await context.invoke(context.invocationId, command, args)
-  const payload = isRecord(raw) ? raw : {}
-  const candidates = providerArray(raw, ['items', 'users', 'departments', 'positions', 'groups', 'data'])
-  const sliced = kind === 'user' ? candidates : candidates.slice(0, limit)
-  const items = sliced.map((candidate) => directoryPrincipal(context.providerInstanceRef, kind, record(candidate)))
-  const total = optionalNumber(payload, ['totalCount', 'total'])
+  const identityId = openContentIdentityIdSchema.parse(
+    await context.currentPrincipal.currentIdentityId()
+  )
   return Object.freeze({
-    items: Object.freeze(items),
-    ...(nextCursor(total, index, limit) ? { nextCursor: nextCursor(total, index, limit) } : {})
+    reference: Object.freeze({
+      providerInstanceRef: context.providerInstanceRef,
+      kind: 'user' as const,
+      principalId: String(identityId)
+    }),
+    displayName: 'Current OpenContent user'
   })
 }
 
@@ -2274,7 +2071,7 @@ async function executeCollaborationList(context: ExecuteContext, search: boolean
       file: fileReference(context.providerInstanceRef, requiredString(item, ['FileId', 'fileId'], 'Collaboration file identity')),
       name: requiredString(item, ['DocflowFileName', 'fileName'], 'Collaboration file name'),
       createdAt,
-      owner: directoryPrincipal(context.providerInstanceRef, 'user', { identityId: ownerId, name: ownerName }),
+      owner: directoryPrincipal(context.providerInstanceRef, 'user', ownerId, ownerName),
       read: booleanValue(first(item, ['DocflowRead', 'read'])),
       deleted: booleanValue(first(item, ['isDeleted', 'deleted']))
     })
@@ -2383,38 +2180,4 @@ async function executeBrowseKnowledge(context: ExecuteContext): Promise<unknown>
     items: Object.freeze(items),
     ...(nextCursor(total, index, limit) ? { nextCursor: nextCursor(total, index, limit) } : {})
   })
-}
-
-async function executeTeamMemberRole(context: ExecuteContext): Promise<unknown> {
-  if (!context.teamGovernance) throw new ProviderPayloadError('blocked_by_contract', 'Team governance is unavailable.')
-  const teamRoot = record(context.request.teamRoot, 'Team root')
-  const member = record(context.request.member, 'Team member')
-  await context.teamGovernance.updateMemberRole({
-    invocationId: context.invocationId,
-    teamRootId: requiredString(teamRoot, ['containerId'], 'Team root identity'),
-    memberPrincipalId: requiredString(member, ['principalId'], 'Team member identity'),
-    userType: teamUserType(context.request.role)
-  })
-  return Object.freeze({ teamRoot, member, role: context.request.role })
-}
-
-function teamUserType(role: unknown): 2 | 3 | 4 {
-  switch (role) {
-    case 'manager': return 2
-    case 'internal': return 3
-    case 'external': return 4
-    default: throw new ProviderPayloadError('invalid_input', 'Unknown Team member role.')
-  }
-}
-
-async function executeTeamOwnership(context: ExecuteContext): Promise<unknown> {
-  if (!context.teamGovernance) throw new ProviderPayloadError('blocked_by_contract', 'Team governance is unavailable.')
-  const teamRoot = record(context.request.teamRoot, 'Team root')
-  const owner = record(context.request.newOwner, 'New team owner')
-  await context.teamGovernance.transferOwnership({
-    invocationId: context.invocationId,
-    teamRootId: requiredString(teamRoot, ['containerId'], 'Team root identity'),
-    newOwnerPrincipalId: requiredString(owner, ['principalId'], 'Team owner identity')
-  })
-  return Object.freeze({ teamRoot, owner })
 }

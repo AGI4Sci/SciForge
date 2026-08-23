@@ -21,7 +21,7 @@ This directory preserves architectural decisions together with their lifecycle. 
 | 0027 | accepted | Provider integration owns Human enrollment UI while credentials and transport stay main-process only. |
 | 0028 | accepted | Cloud Collaboration owns exclusive Project-to-shared-directory bindings; Provider ACL and content lifecycle remain external. |
 | 0029 | accepted | Agent content access begins at a Human-confirmed Broker root resource and expands only through authorized directory descendants. |
-| 0030 | accepted | Provider-native documents run through Content Space; attachment-backed operations are gated by exact readiness while the supplier attachment remains an optional private overlay. |
+| 0030 | accepted | Provider-native documents run through Content Space; the Provider owns semantic adapters, the Connector owns supplier transport, and the optional private overlay changes inventory without changing readiness or authority. |
 
 ## Current authority order
 

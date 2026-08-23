@@ -9,10 +9,10 @@ import {
   OPENCONTENT_CLI_MAX_STDOUT_BYTES,
   OPENCONTENT_CLI_RUNNER_PROTOCOL,
   createOpenContentCliRunner,
+  type OpenContentCliExecutionContext,
   type OpenContentCliProcessRequest,
   type OpenContentCliRunnerBinding
 } from './cli-runner.js'
-import type { OpenContentSkillMainExecutionContext } from './contract.js'
 
 const testAssetRoot = mkdtempSync(resolve(tmpdir(), 'sciforge-cli-runner-assets-'))
 for (const relativePath of [
@@ -39,8 +39,8 @@ function createTestRunner(binding: Omit<OpenContentCliRunnerBinding, 'assets'>) 
 
 function executionContext(
   signal: AbortSignal,
-  assertPrincipalCurrent: OpenContentSkillMainExecutionContext['assertPrincipalCurrent'] = vi.fn()
-): OpenContentSkillMainExecutionContext {
+  assertPrincipalCurrent: OpenContentCliExecutionContext['assertPrincipalCurrent'] = vi.fn()
+): OpenContentCliExecutionContext {
   return {
     providerInstanceRef: 'provider-instance-a',
     invocationId: 'invocation-runner-a',
@@ -58,11 +58,6 @@ describe('OpenContent CLI runner seam', () => {
       return { protocol: 'docflow-command-result:v1' }
     })
     const runner = createTestRunner({
-      owner: {
-        role: 'transport-owner',
-        moduleId: 'sciforge.opencontent-connector',
-        moduleVersion: '1.0.0'
-      },
       execution: executionContext(new AbortController().signal, assertPrincipalCurrent),
       connectionMaterial: {
         site: 'https://provider.invalid',
@@ -97,11 +92,6 @@ describe('OpenContent CLI runner seam', () => {
   it('rejects caller-controlled process fields before reaching the privileged port', async () => {
     const run = vi.fn()
     const runner = createTestRunner({
-      owner: {
-        role: 'transport-owner',
-        moduleId: 'sciforge.opencontent-connector',
-        moduleVersion: '1.0.0'
-      },
       execution: executionContext(new AbortController().signal),
       connectionMaterial: {
         site: 'https://provider.invalid',
@@ -127,11 +117,6 @@ describe('OpenContent CLI runner seam', () => {
     controller.abort()
     const run = vi.fn()
     const runner = createTestRunner({
-      owner: {
-        role: 'transport-owner',
-        moduleId: 'sciforge.opencontent-connector',
-        moduleVersion: '1.0.0'
-      },
       execution: executionContext(controller.signal),
       connectionMaterial: {
         site: 'https://provider.invalid',
@@ -155,11 +140,6 @@ describe('OpenContent CLI runner seam', () => {
       throw new Error('private Host identity detail')
     })
     const runner = createTestRunner({
-      owner: {
-        role: 'transport-owner',
-        moduleId: 'sciforge.opencontent-connector',
-        moduleVersion: '1.0.0'
-      },
       execution: executionContext(
         new AbortController().signal,
         assertPrincipalCurrent
@@ -184,11 +164,6 @@ describe('OpenContent CLI runner seam', () => {
   it('uses the same fixed process seam for an extended-operation command', async () => {
     const run = vi.fn().mockResolvedValue({ protocol: 'opencontent-cli-result:v1' })
     const runner = createTestRunner({
-      owner: {
-        role: 'transport-owner',
-        moduleId: 'sciforge.opencontent-connector',
-        moduleVersion: '1.0.0'
-      },
       execution: executionContext(new AbortController().signal),
       connectionMaterial: {
         site: 'https://provider.invalid',
@@ -210,14 +185,34 @@ describe('OpenContent CLI runner seam', () => {
     expect(run.mock.calls[0]?.[0].invocation).toEqual(invocation)
   })
 
+  it('rejects the retired user-info envelope before the privileged process port', async () => {
+    const run = vi.fn()
+    const assertPrincipalCurrent = vi.fn()
+    const runner = createTestRunner({
+      execution: executionContext(
+        new AbortController().signal,
+        assertPrincipalCurrent
+      ),
+      connectionMaterial: {
+        site: 'https://provider.invalid',
+        systemUserToken: 'ephemeral-token'
+      },
+      processPort: { run }
+    })
+
+    await expect(runner.invoke({
+      invocationId: 'invocation_retired_user_info_runner',
+      command: 'user-info',
+      args: {},
+      dataFiles: []
+    } as never)).rejects.toThrow()
+    expect(assertPrincipalCurrent).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+  })
+
   it('rejects snapshot diagnostics and raw HTTP passthrough before the process seam', async () => {
     const run = vi.fn()
     const runner = createTestRunner({
-      owner: {
-        role: 'transport-owner',
-        moduleId: 'sciforge.opencontent-connector',
-        moduleVersion: '1.0.0'
-      },
       execution: executionContext(new AbortController().signal),
       connectionMaterial: {
         site: 'https://provider.invalid',
@@ -263,30 +258,4 @@ describe('OpenContent CLI runner seam', () => {
     expect(run).not.toHaveBeenCalled()
   })
 
-  it('rejects the adapter owner and every non-Connector module at the transport seam', () => {
-    const base = {
-      execution: executionContext(new AbortController().signal),
-      connectionMaterial: {
-        site: 'https://provider.invalid',
-        systemUserToken: 'ephemeral-token'
-      },
-      processPort: { run: vi.fn() }
-    }
-    expect(() => createTestRunner({
-      ...base,
-      owner: {
-        role: 'adapter-owner',
-        moduleId: 'sciforge.opencontent-content-space-provider',
-        moduleVersion: '1.0.0'
-      }
-    })).toThrow('Only the OpenContent Connector may own the CLI transport.')
-    expect(() => createTestRunner({
-      ...base,
-      owner: {
-        role: 'transport-owner',
-        moduleId: 'sciforge.other-module',
-        moduleVersion: '1.0.0'
-      } as never
-    })).toThrow()
-  })
 })

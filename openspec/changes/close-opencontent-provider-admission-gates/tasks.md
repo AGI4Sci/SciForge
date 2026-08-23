@@ -8,17 +8,18 @@
 
 ## 2. Project Authority Boundary
 
-- [x] 2.1 Remove `content-space.agent-provision-project` from the capability contract, registration, tests, governance, and generated documentation.
-- [x] 2.2 Retain the provider-neutral provisioning port, remove the unused coordinator field, and prove the dormant port creates no generic Agent authority.
-- [x] 2.3 Make all four directory searches literal-kind typed, use the `searchUsers` same-instance user reference for the existing ordinary add/list/remove member path, reject legacy Host `contentUserId` mutation payloads, and keep Project provisioning identity mappings separate.
+- [x] 2.1 Remove Project provisioning from the Content Space capability and Administration contracts, service dispatch, Provider binding, OpenContent implementation, tests, governance, and generated documentation.
+- [x] 2.2 Enforce an exact Provider administration binding with no extra legacy port and prove malformed bindings fail closed before Provider dispatch.
+- [x] 2.3 Make all four provider-neutral directory searches literal-kind typed, block the four OpenContent search operations before supplier dispatch until exact success item/pagination receipts are frozen, use only an independently authoritative same-instance user reference for ordinary add/list/remove membership, reject legacy Host `contentUserId` mutation payloads, and keep ordinary membership incapable of creating Project authority.
 - [x] 2.4 Use a value-free live-response shape fingerprint and test-first regression to support the Provider's `teamUser` member collection key while preserving fail-closed behavior for a metadata-free full page whose pagination completion is unknowable.
+- [x] 2.5 Remove the public member-role/ownership delegates and every Administration revision/CAS field; require complete stable Team or Team-user pagination before dependent mutation, exact `{ member }` page items, and exact request binding for all ten Administration outputs with read/write error classification.
 
 ## 3. Public and Private Runtime Isolation
 
 - [x] 3.1 Remove `internal/**` from the public root workspace and add boundary/lockfile tests that reject internal package participation.
 - [x] 3.2 Change internal runtime composition to retain manifest-discovered package directories for static validation without a root workspace link or executable attachment build.
 - [x] 3.3 Remove private `node_modules` source resolution and add shadow-package, absent-overlay, fixed-source-root, and packaged-no-fallback tests.
-- [x] 3.4 Express public source-runtime bundling through package-owned/generated metadata and assert the Electron main artifact has no bare source-runtime import.
+- [x] 3.4 Move supplier protocol/transport/process ownership into the Connector and semantic adapters into the Provider, delete the standalone runtime workspace and root deep-import smoke, and assert generated composition contains no stale runtime package or private cross-boundary import.
 
 ## 4. Internal Packaging and Release Safety
 
@@ -36,14 +37,14 @@
 
 ## 6. Verification and Delivery
 
-- [x] 6.1 Run focused Content Space, OpenContent Provider/Connector/runtime, internal packaging, release, and boundary tests plus package/root typechecks and changed-file lint.
-- [x] 6.2 Build and smoke source Electron with and without an overlay, then build and inspect a packaged application through the canonical runtime path.
+- [x] 6.1 Run focused Content Space, OpenContent Provider/Connector supplier-transport/semantic-adapter, internal packaging, release, and boundary tests plus package/root typechecks and changed-file lint.
+- [x] 6.2 Build and smoke source Electron with and without an overlay, then build and inspect a packaged application through the canonical Broker → Content Space → Provider → Connector path.
 - [x] 6.3 Run full regression, OpenSpec strict validation, domain composition freshness, capability governance, and final diff/secret/private-asset audits.
 - [x] 6.4 Use disposable static verification-profile composition to run packaged Broker → Content Space → Provider → Connector live acceptance for root discovery, bounded upload/download, native-document skill use, and Team creation; record each exact outcome without promoting readiness.
   - Completed packaged canonical live evidence: `list-containers`, `observe-entry`, `list-entries`, `upload-new`, and `download` are `live_verified`; each remains `poc_only` / `verification_profile_required`.
   - Native packaged outcomes, not live success: `native-document:create` returned `outcome_unknown` with one unique new `.mdoc` attributable to the attempt; `native-document:read` and `native-document:probe` returned `provider_contract_error`; `native-document:plan` was not executed.
   - The earlier Team-create invocation remains remote-commit/read-only-reconciliation evidence only. After its delivery defect was fixed, exactly one new packaged `createSpace` Agent invocation reached terminal success and is `live_verified`.
-  - One B-side attachment-backed `getCurrentPrincipal` invocation completed through `user-info` and returned a typed current-principal result. One owner-side `addMember` invocation then issued exactly one successful `SaveTeamUserList` write; post-write `listMembers` observed one owner, one internal member, and exactly one match for the B-side Provider user reference. No duplicate member write occurred.
+  - One earlier B-side attachment-backed `getCurrentPrincipal` invocation completed through the now-retired `user-info` mapping and returned a typed current-principal result. The final Provider path instead derives this reference from the Connector-revalidated current session's strict canonical external identity and dispatches no supplier command. One current-account `addMember` invocation then issued exactly one successful `SaveTeamUserList` write; post-write `listMembers` observed two distinct members and exactly one match for the B-side Provider user reference. No duplicate member write occurred, and no public role value is inferred from that historical response.
   - A later attempt to extend current-run file upload/download and native evidence did not reach Provider business dispatch because external Agent operation-reference/cursor consumption was unstable. Provider business-dispatch and remote-write counts were both zero, so the attempt adds no live row; prior cumulative ordinary live evidence remains valid and native evidence remains static/composed plus the explicitly non-live historical outcomes above.
   - Readiness snapshot: `production_ready` remains zero; exact live evidence does not promote readiness or any sibling operation.
 - [x] 6.5 Commit the scoped change and push only to the fork branch; do not update or push upstream.
@@ -51,6 +52,6 @@
 - [x] 6.7 Confirm the supplier CAS/version contract and UPDATE-versus-UPGRADE semantics before implementing or admitting same-file mutation.
   - Confirmed negatively for the current pinned snapshot by no-network static characterization: the receipt-verified `opencontent-attachment-assets` version `1.0.1` update documentation and CLI expose no expected immutable version, revision, `baseHash`, or `If-Match` input; `FileVerId`/`fileVerId` is response-only.
   - The pinned CLI sends `UPDATE` and automatically retries a same-name `610`/`ExistedFileId` result as `UPDATE`, while the public offline SDK overview says `UPGRADE` and its detailed request table says `UPDATE`. The current contract is therefore absent and the spelling remains conflicted, not frozen.
-  - No two-account mutation was dispatched: without an atomic expected-state field it would test last-writer behavior rather than CAS. `updateFileVersion` and every hash-bound native mutation remain `blocked_by_contract`; this snapshot result is neither a future supplier guarantee nor a readiness promotion.
+  - No concurrent two-writer same-file CAS experiment was dispatched: without an atomic expected-state field it would test only last-writer behavior rather than CAS. `updateFileVersion` and every hash-bound native mutation remain `blocked_by_contract`; this snapshot result is neither a future supplier guarantee nor a readiness promotion.
 - [x] 6.8 While that contract is absent, attempt native `edit` only as a packaged pre-dispatch fail-closed acceptance with zero remote mutation. The packaged request failed closed as `blocked_by_contract` before adapter invocation or supplier process launch, with zero remote mutation.
-- [x] 6.9 Run the packaged installed-attachment callability smoke: verify 37 packaged inventory files, attachment CLI version `1.0.0`, all 86 supplier commands, and the exact 61-command admitted union without Provider credentials or business dispatch. Record it as static callability evidence only, with no readiness promotion.
+- [x] 6.9 Keep the no-credential supplier inventory characterization inside the Connector package: freeze attachment CLI version `1.0.0`, all 86 supplier commands, and the exact 56-command admitted adapter union. Do not treat direct CLI execution as packaged/canonical callability or readiness evidence.

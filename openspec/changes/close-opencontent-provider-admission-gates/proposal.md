@@ -9,9 +9,10 @@ At the start of this change, the OpenContent integration treated implemented ada
 - Add a trusted verification profile gate that can admit only an exact Provider Instance, full Host Principal/assurance, Broker-authoritative root, operation, audience, and bounded transfer policy through the normal Broker → Content Space → Provider → Connector path. Caller input and ordinary environment/configuration cannot enable it.
 - Add Provider-authenticated opaque external binding evidence and Connector session-time revalidation so a reviewed PoC mutation/transfer/administration profile cannot survive Principal or external-account rebind drift.
 - Report Provider readiness evidence separately from current invocation admission; renderer controls use admission without presenting PoC evidence as production readiness.
-- **BREAKING**: remove the generic `content-space.agent-provision-project` capability while retaining the provider-neutral provisioning port for a future Cloud-owned Project Content Space Binding.
+- **BREAKING**: remove Project provisioning from Content Space and the OpenContent Provider entirely: the generic Agent capability, administration operation, intent/report schemas, Provider port, implementation, and tests. A future Project-owning integration requires a separately reviewed authoritative contract.
+- **BREAKING**: keep ordinary Administration at ten exact operations but remove the public member-role/ownership delegates and every Administration revision/CAS field. Membership page items are exactly `{ member }`, mutation receipts reuse that reference beside exact root/result fields, the five root/member mutations declare `concurrency.revision: "none"`, and every Administration result is exactly bound to its request and authority.
 - Remove private packages from the public root workspace, resolve source assets only from the Host-injected repository root, and replace executable attachment builds with manifest-discovered SciForge-owned static validation outside the public npm graph.
-- Guarantee public source-owned runtime dependencies are bundled through package-owned/generated composition rather than an OpenContent-specific Host switch.
+- Restore package ownership so the Connector owns supplier wire/transport/process isolation and the Provider owns receipt-to-Content-Space semantic adapters; remove the standalone OpenContent runtime package rather than adding a third integration owner.
 - Add fail-closed public-release and packaged-resource integrity checks so optional supplier assets cannot be published accidentally or executed during install/packaging outside the canonical Connector transport.
 - Reject disposable Content Space verification-profile packages from official public releases while allowing isolated local packaged acceptance through the canonical production path.
 - Align ADRs, capability evidence, runbooks, tests, and generated capability documentation with the final design.
@@ -24,12 +25,12 @@ At the start of this change, the OpenContent integration treated implemented ada
 
 ### Modified Capabilities
 
-- `content-space`: Adds the trusted verification-profile admission gate and removes caller-authored Project provisioning authority from generic Agent capabilities.
-- `opencontent-connector`: Restricts optional supplier-asset resolution to one source path and one packaged path while keeping the public SciForge runtime in the main bundle.
-- `opencontent-content-space-provider`: Corrects operation readiness, atomic mutation, immutable artifact, and Project authority requirements.
+- `content-space`: Adds the trusted verification-profile admission gate and removes the unused Project provisioning surface instead of retaining a second external-write path without an installed owner.
+- `opencontent-connector`: Owns the single typed supplier execution transport, restricts optional supplier-asset resolution to one source path and one packaged path, and exposes only a token-free main contract to the Provider.
+- `opencontent-content-space-provider`: Owns supplier receipt semantics, blocks four directory searches whose exact success receipts are not frozen, removes the unused Project provisioning implementation, and corrects atomic mutation and immutable artifact requirements.
 
 ## Impact
 
-- Affects Content Space contracts/service/capability registration, the OpenContent Provider and Connector, public runtime bundling, internal overlay packaging and release scripts, capability governance, ADRs, and operator documentation.
+- Affects Content Space contracts/service/capability registration, the OpenContent Provider and Connector ownership boundary, internal overlay packaging and release scripts, capability governance, ADRs, and operator documentation.
 - Ordinary product callers will see non-production operations as unavailable unless a reviewed verification profile admits one exact `poc_only` invocation; only a separately reviewed evidence-backed code and documentation change can promote that operation.
 - Does not add Project Content Space Binding, Task file intents, a Task port, Shared Documents, or any A/B/C/E compatibility layer.

@@ -2,7 +2,7 @@ import { z } from 'zod'
 import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import { workspaceLocatorSchema } from '@sciforge/domain-sdk/workspace-host'
 
-export const CAPABILITY_BROKER_CONTRACT_VERSION = 1
+export const CAPABILITY_BROKER_CONTRACT_VERSION = 2
 
 export type CapabilityJsonValue =
   | null

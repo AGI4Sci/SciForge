@@ -586,14 +586,10 @@ describe('CapabilityAgentToolSurface', () => {
         describeResourceHandle: vi.fn((_caller, resource) => (
           resource.token === surfaceHandle.token
             ? {
-                resourceRef: surfaceObservation.resourceRef,
-                resourceKind: surfaceObservation.resourceKind,
-                semanticRevision: surfaceObservation.semanticRevision
+                resourceRef: surfaceObservation.resourceRef
               }
             : {
-                resourceRef: documentObservation.resourceRef,
-                resourceKind: documentObservation.resourceKind,
-                semanticRevision: documentObservation.semanticRevision
+                resourceRef: documentObservation.resourceRef
               }
         )),
         bindResourceRef: vi.fn(async () => documentHandle),
@@ -849,9 +845,7 @@ describe('CapabilityAgentToolSurface', () => {
           await Promise.resolve()
           leaseCurrent = false
           return {
-            resourceRef: `res_${'n'.repeat(26)}`,
-            resourceKind: 'document',
-            semanticRevision: nestedHandle.semanticRevision
+            resourceRef: `res_${'n'.repeat(26)}`
           }
         })
       },
@@ -1243,9 +1237,7 @@ describe('CapabilityAgentToolSurface', () => {
           await Promise.resolve()
           leaseCurrent = false
           return {
-            resourceRef: `res_${'s'.repeat(26)}`,
-            resourceKind: 'document',
-            semanticRevision: outputHandle.semanticRevision
+            resourceRef: `res_${'s'.repeat(26)}`
           }
         })
       },
@@ -2109,9 +2101,7 @@ function brokerStub(): CapabilityAgentBroker {
     discover: vi.fn(async () => []),
     observe: vi.fn(),
     describeResourceHandle: vi.fn((_caller, resource) => ({
-      resourceRef: `res_${resource.token.slice('cap_'.length)}`,
-      resourceKind: 'document',
-      semanticRevision: resource.semanticRevision
+      resourceRef: `res_${resource.token.slice('cap_'.length)}`
     })),
     bindResourceRef: vi.fn(() => {
       throw new CapabilityAgentToolError('unknown_resource_ref', 'The resource reference is unknown or expired.')

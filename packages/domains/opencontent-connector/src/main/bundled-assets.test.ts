@@ -21,7 +21,7 @@ import {
   resolveOpenContentSkillBundledAssetPaths
 } from './bundled-assets.js'
 
-const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
 describe('OpenContent bundled assets', () => {
   it('resolves every fixed CommonJS runtime file inside an explicit private asset root', () => {

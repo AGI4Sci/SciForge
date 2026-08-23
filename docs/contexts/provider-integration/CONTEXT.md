@@ -84,9 +84,9 @@ _Avoid_: Broker Resource, capability handle, arbitrary URI, metadata bag
 A process-local, audience-bound executable reference issued only after a portable reference has been validated, locally resolved, and reauthorized for the current Human Principal.
 _Avoid_: portable reference, cloud resource ID, persistent handle
 
-**Public Integration Runtime**:
-Public SciForge-authored contracts, adapters, and bounded process/transport implementations used behind a Connector. It is implementation infrastructure, not a Provider Contract, capability surface, or supplier payload.
-_Avoid_: private attachment, Agent runtime, second Connector, vendor SDK passthrough
+**Supplier-backed Connector Transport**:
+Public SciForge-authored wire contracts, reviewed command allowlist, asset verification, and bounded process transport owned by a Connector. Receipt-to-domain semantics remain owned by the consuming Provider integration. It is never a separately versioned feature package, Provider Contract, capability surface, or supplier payload.
+_Avoid_: public runtime package, private attachment, Agent runtime, second Connector, vendor SDK passthrough
 
 **Private Supplier Overlay**:
 Optional receipt-backed supplier runtime data installed outside the public dependency graph and loaded only from fixed source or packaged locations. Its presence changes candidate runtime inventory, never readiness, admission, identity, or authority.

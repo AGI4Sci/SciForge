@@ -77,18 +77,6 @@ const readyAdministrationStates = Object.freeze(
     reasonCode: 'available' as const
   }))
 )
-const provisionOnlyAdministrationStates = Object.freeze(
-  CONTENT_SPACE_ADMINISTRATION_OPERATIONS.map((operation) => Object.freeze({
-    operation,
-    readiness: operation === 'provision-project'
-      ? 'production_ready' as const
-      : 'poc_only' as const,
-    reasonCode: operation === 'provision-project'
-      ? 'available' as const
-      : 'verification_profile_required' as const
-  }))
-)
-
 type CapabilityContext = Readonly<{
   caller: Readonly<{
     audience: 'ui' | 'agent' | 'system'
@@ -157,18 +145,6 @@ describe('Content Space main composition', () => {
     expect(createProvider).not.toHaveBeenCalled()
   })
 
-  it('keeps Project provisioning SPI dormant without a generic Agent capability', async () => {
-    const definitions = await activateDefinitions(
-      createDomainMainEntry(mainHost()).contributions,
-      contributionHost(providerContributions(() => providerFixture()))
-    )
-
-    expect(definitions.map(({ id }) => id)).not.toContain(
-      'content-space.agent-provision-project'
-    )
-    expect(CONTENT_SPACE_ADMINISTRATION_OPERATIONS).toContain('provision-project')
-  })
-
   it('admits an exact PoC list-containers profile through composed Broker capability routing', async () => {
     const currentTime = Date.now()
     const profileContribution = defineContentSpaceVerificationProfileContribution({
@@ -216,7 +192,8 @@ describe('Content Space main composition', () => {
           'fixture.verification-profile',
           profileContribution,
           profileContribution,
-          CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION
+          CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+          'forbidden'
         )
       ])
     )
@@ -904,16 +881,6 @@ describe('Content Space main composition', () => {
               retry: 'never' as const
             })
           }))
-    let extendedOutcome: 'outcome_unknown' | 'provider_unavailable' = 'outcome_unknown'
-    const extendedExecute: ContentSpaceExtendedOperationsExecutor['execute'] = vi.fn(async () =>
-      Object.freeze({
-        ok: false as const,
-        error: Object.freeze({
-          code: extendedOutcome,
-          message: 'The rename operation did not succeed.',
-          retry: 'never' as const
-        })
-      }))
     const close = vi.fn(async () => undefined)
     const openWorkspaceUploadSource = vi.fn(async () => Object.freeze({
       name: 'report.md',
@@ -941,8 +908,7 @@ describe('Content Space main composition', () => {
         listEntries,
         uploadNewFile,
         features: {
-          nativeDocuments: nativeDocumentsFixture(nativeExecute),
-          extendedOperations: extendedOperationsFixture(extendedExecute)
+          nativeDocuments: nativeDocumentsFixture(nativeExecute)
         }
       })))
     )
@@ -1020,56 +986,6 @@ describe('Content Space main composition', () => {
       changed: false
     })
     expect(failedNativeWrite).not.toHaveProperty('semanticRevision')
-
-    const extendedWrite = definition(
-      definitions,
-      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite
-    )
-    const extendedRequest = {
-      operation: 'updateTeamMemberRole',
-      request: {
-        teamRoot: root,
-        member: {
-          providerInstanceRef: PROVIDER_INSTANCE_REF,
-          kind: 'user',
-          principalId: 'member-one'
-        },
-        role: 'internal'
-      }
-    }
-    const unknownExtendedWrite = await extendedWrite.handler(
-      extendedRequest,
-      capabilityContext(undefined, 'agent', {
-        callerId: 'agent:content-flow',
-        workspaceId: '/workspace',
-        resource: rootResource
-      })
-    )
-    expect(unknownExtendedWrite).toMatchObject({
-      output: {
-        ok: true,
-        value: { ok: false, error: { code: 'outcome_unknown', retry: 'never' } }
-      },
-      changed: false
-    })
-    expect(unknownExtendedWrite).not.toHaveProperty('semanticRevision')
-    extendedOutcome = 'provider_unavailable'
-    const failedExtendedWrite = await extendedWrite.handler(
-      extendedRequest,
-      capabilityContext(undefined, 'agent', {
-        callerId: 'agent:content-flow',
-        workspaceId: '/workspace',
-        resource: rootResource
-      })
-    )
-    expect(failedExtendedWrite).toMatchObject({
-      output: {
-        ok: true,
-        value: { ok: false, error: { code: 'provider_unavailable' } }
-      },
-      changed: false
-    })
-    expect(failedExtendedWrite).not.toHaveProperty('semanticRevision')
 
     const createdFolder = await definition(
       definitions,
@@ -1232,17 +1148,21 @@ describe('Content Space main composition', () => {
       root: portableRoot,
       label: 'Research Team',
       contentOwnerUserId: 'user:owner',
-      pinned: false,
-      revision: 'revision:1'
+      pinned: false
     })
     const updateSpace = vi.fn(async (
       input: Parameters<ContentSpaceAdministrationPort['updateSpace']>[0]
     ) => Object.freeze({
       ...summary,
-      label: input.label,
-      revision: 'revision:2'
+      label: input.label
     }))
-    const createSpace = vi.fn(async () => summary)
+    const createSpace = vi.fn(async (
+      input: Parameters<ContentSpaceAdministrationPort['createSpace']>[0]
+    ) => Object.freeze({
+      ...summary,
+      label: input.label,
+      contentOwnerUserId: input.contentOwnerUserId
+    }))
     const administration = administrationPortFixture({ createSpace, updateSpace })
     const bind = vi.fn(async () => Object.freeze({
       administration
@@ -1326,6 +1246,7 @@ describe('Content Space main composition', () => {
       definitions,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminUpdateSpace
     )
+    expect(updateCapability.inputSchema.safeParse({ label: 'Renamed Team' }).success).toBe(true)
     expect(updateCapability.inputSchema.safeParse({
       expectedRevision: 'revision:1',
       label: 'Renamed Team',
@@ -1338,7 +1259,6 @@ describe('Content Space main composition', () => {
     }).success).toBe(false)
 
     const updated = await updateCapability.handler({
-      expectedRevision: 'revision:1',
       label: 'Renamed Team'
     }, capabilityContext(undefined, 'agent', {
       callerId: 'agent:administration',
@@ -1356,7 +1276,6 @@ describe('Content Space main composition', () => {
     })
     expect(updateSpace).toHaveBeenCalledWith({
       root: portableRoot,
-      expectedRevision: 'revision:1',
       label: 'Renamed Team'
     })
     expect(bind).toHaveBeenCalledWith(expect.objectContaining({
@@ -1375,7 +1294,7 @@ describe('Content Space main composition', () => {
       kind: 'user' as const,
       principalId: 'provider-user-b'
     })
-    const input = { member, expectedRevision: 'revision:1' }
+    const input = { member }
 
     for (const capabilityId of [
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
@@ -1385,7 +1304,10 @@ describe('Content Space main composition', () => {
       expect(capability.version).toBe('2.0.0')
       expect(capability.inputSchema.parse(input)).toEqual(input)
       expect(capability.inputSchema.safeParse({
-        contentUserId: 'user-member-b',
+        contentUserId: 'user-member-b'
+      }).success).toBe(false)
+      expect(capability.inputSchema.safeParse({
+        member,
         expectedRevision: 'revision:1'
       }).success).toBe(false)
     }
@@ -1413,44 +1335,6 @@ describe('Content Space main composition', () => {
       definitions,
       CONTENT_SPACE_CAPABILITY_IDS.agentExtendedDestructive
     ).version).toBe('1.0.0')
-  })
-
-  it('does not issue Agent administration authority from dormant Project provisioning', async () => {
-    const bind = vi.fn(async () => Object.freeze({
-      administration: administrationPortFixture()
-    }))
-    const definitions = await activateDefinitions(
-      createDomainMainEntry(mainHost()).contributions,
-      contributionHost(providerContributions(() => providerFixture({
-        features: {
-          administration: {
-            describeOperations: () => provisionOnlyAdministrationStates,
-            bind
-          }
-        }
-      })))
-    )
-    const issueResource = vi.fn((registration) =>
-      resourceHandle('p', registration.semanticRevision))
-
-    const result = await definition(
-      definitions,
-      CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration
-    ).handler({ providerInstanceRef: PROVIDER_INSTANCE_REF }, capabilityContext(
-      undefined,
-      'agent',
-      { issueResource }
-    ))
-
-    expect(result).toMatchObject({
-      output: {
-        ok: false,
-        error: { code: 'blocked_by_contract', retry: 'never' }
-      },
-      changed: false
-    })
-    expect(issueResource).not.toHaveBeenCalled()
-    expect(bind).not.toHaveBeenCalled()
   })
 
   it('bounds Provider administration grants to the same finite capacity as content resources', async () => {
@@ -2185,8 +2069,7 @@ function administrationPortFixture(
     root,
     label: 'Research Team',
     contentOwnerUserId: 'user:owner',
-    pinned: false,
-    revision: 'revision:1'
+    pinned: false
   })
   const port: ContentSpaceAdministrationPort = {
     contractVersion: CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION,
@@ -2196,7 +2079,7 @@ function administrationPortFixture(
     updateSpace: async () => summary,
     pinSpace: async () => Object.freeze({ ...summary, pinned: true }),
     unpinSpace: async () => summary,
-    openRoot: async () => Object.freeze({ root, revision: summary.revision }),
+    openRoot: async () => Object.freeze({ root }),
     listMembers: async () => Object.freeze({
       root,
       items: Object.freeze([{
@@ -2204,21 +2087,17 @@ function administrationPortFixture(
           providerInstanceRef: PROVIDER_INSTANCE_REF,
           kind: 'user' as const,
           principalId: 'provider-owner'
-        }),
-        role: 'owner' as const,
-        revision: summary.revision
+        })
       }])
     }),
     addMember: async (input) => Object.freeze({
-      member: input.member,
-      role: 'internal' as const,
-      revision: 'revision:2'
+      root,
+      member: input.member
     }),
     removeMember: async (input) => Object.freeze({
       root,
       member: input.member,
-      removed: true as const,
-      revision: 'revision:2'
+      removed: true as const
     }),
     ...overrides
   }
@@ -2386,7 +2265,8 @@ function contribution(
   id: string,
   contract: DomainPackageJsonValue,
   value: unknown,
-  version: string = PROVIDER_FACTORY_CONTRACT_VERSION
+  version: string = PROVIDER_FACTORY_CONTRACT_VERSION,
+  publicRelease?: 'allowed' | 'forbidden'
 ): DomainMainContribution {
   return Object.freeze({
     id,
@@ -2394,6 +2274,7 @@ function contribution(
     packageName: '@fixture/content-space-provider',
     owner: Object.freeze({ moduleId: 'fixture.content-space', moduleVersion: '1.0.0' }),
     version,
+    ...(publicRelease === undefined ? {} : { publicRelease }),
     contract,
     value
   })

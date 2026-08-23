@@ -98,16 +98,11 @@ describe('IdentityRendererProjection', () => {
       accountCount: 1,
       currentAccount: account
     }
-    const client: IdentityRendererClient = {
+    const client: IdentityRendererClient = clientFixture({
       inspect: vi.fn(async () => committed),
       listAccounts: vi.fn(async () => { throw new Error('refresh failed') }),
-      createAccount: vi.fn(async () => committed),
-      selectAccount: vi.fn(),
-      renameAccount: vi.fn(),
-      exitAccount: vi.fn(),
-      dismissFirstPrompt: vi.fn(),
-      backupAndReset: vi.fn()
-    }
+      createAccount: vi.fn(async () => committed)
+    })
     const projection = new IdentityRendererProjection(client)
 
     await expect(projection.createAccount('Alice')).resolves.toBeUndefined()

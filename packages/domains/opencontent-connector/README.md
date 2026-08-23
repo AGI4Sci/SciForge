@@ -10,9 +10,12 @@ development endpoint profile, not Content Space operation admission. It does
 not make any operation `production_ready`, install a trusted Content Space
 verification policy, or allow a caller to enable `poc_only` operations.
 
-The Connector and SciForge-authored `@sciforge/opencontent-skill-runtime` are
-public source. Optional supplier assets remain outside the public workspace and
-lockfile. Source mode resolves them only below the absolute Host-injected
+The Connector owns the SciForge-authored supplier wire contract, asset
+verification, isolated process transport, and runtime snapshot mechanism. Its
+public `./main-contract` exposes only the token-free Provider facade and typed
+supplier invocations; asset resolution, command running, process control, and
+snapshots are package-private. Optional supplier assets remain outside the
+public workspace and lockfile. Source mode resolves them only below the absolute Host-injected
 repository root at
 `internal/opencontent/packages/opencontent-skill-assets/assets/opencontent-base-1.0.1`;
 before returning that location, the Connector uses the public generic integrity
@@ -23,6 +26,13 @@ packaged mode resolves them only from
 `node_modules`, walks ancestors, or falls back to the other mode. Missing or
 invalid, changed, extra, unreceipted, or wrong-version assets fail closed before
 supplier dispatch.
+
+The pinned CLI characterization freezes 86 inventory commands and the exact
+56-command admitted adapter union. Inventory is not an execution allowlist or
+packaged-live claim. Separately, the token-free typed Team Administration facade
+exposes no public member-role/ownership operation and no revision/CAS field; the
+supplier Team surface provides no atomic expected-state input for SciForge to
+promote into an Administration concurrency promise.
 
 The removed `opencontent-default` Instance is retired rather than aliased or
 migrated. Its Token is never used for `opencontent-edoc2-demo`; the connector
@@ -49,7 +59,7 @@ remote dispatch, the Connector revalidates the Host Principal, authenticates
 the actual current session, observes the current external account, recomputes
 the opaque values, and requires an exact match. Unbind, rebind, credential
 replacement, account change, or Connection-revision drift fails before the
-Provider operation or private Runtime subprocess.
+Provider operation or Connector-owned supplier subprocess.
 
 See the [attachment distribution boundary](../../../docs/opencontent-attachment-distribution.md)
 for installation, integrity, packaging, and public-release rules, and the

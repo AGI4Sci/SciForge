@@ -5,41 +5,35 @@ import type { DomainMainHost } from '@sciforge/domain-sdk/host'
 import { verifyInstalledInternalOverlaySync } from '@sciforge/internal-runtime-integrity'
 import {
   createOpenContentCliRunner,
-  type OpenContentCliCommandTransport,
-  type OpenContentCliInvocation,
   type OpenContentCliProcessPort
-} from '@sciforge/opencontent-skill-runtime/main/cli-runner'
+} from './cli-runner.js'
 import type {
   OpenContentSkillBundledAssetLocation
-} from '@sciforge/opencontent-skill-runtime/main/bundled-assets'
+} from './bundled-assets.js'
 import {
   OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR
-} from '@sciforge/opencontent-skill-runtime/main/bundled-assets'
+} from './bundled-assets.js'
 
 import {
   OPENCONTENT_PROVIDER_INSTANCE_REF,
-  OpenContentConnectorError,
-  type OpenContentContentSpaceFacade,
-  type OpenContentSkillRuntimeTransport
+  OpenContentConnectorError
 } from '../contract.js'
-import { domainPackageDefinition } from '../definition.js'
+import type {
+  OpenContentContentSpaceFacade,
+  OpenContentSupplierCommandTransport,
+  OpenContentSupplierInvocation
+} from '../main-contract.js'
 import {
   assertOpenContentPrincipalCurrent,
   type OpenContentConnectionService
 } from './connection-service.js'
-
-const TRANSPORT_OWNER = Object.freeze({
-  role: 'transport-owner' as const,
-  moduleId: 'sciforge.opencontent-connector' as const,
-  moduleVersion: domainPackageDefinition.module.version
-})
 
 const SOURCE_OVERLAY = OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.installation
 const SOURCE_ASSET_PACKAGE_RELATIVE_PATH =
   `${SOURCE_OVERLAY.overlayRoot}/packages/opencontent-skill-assets`
 
 export type OpenContentSkillRuntimeSession = Readonly<{
-  useSkillRuntime: NonNullable<OpenContentContentSpaceFacade['useSkillRuntime']>
+  useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']>
 }>
 
 export function resolveOpenContentSkillRuntimeAssets(
@@ -127,7 +121,7 @@ export function createOpenContentSkillRuntimeSession(options: Readonly<{
   assertAssetsCurrent?: () => void
 }>): OpenContentSkillRuntimeSession {
   return Object.freeze({
-    useSkillRuntime: async (input, operation) => {
+    useSupplierTransport: async (input, operation) => {
       if (input.providerInstanceRef !== OPENCONTENT_PROVIDER_INSTANCE_REF) {
         throw new OpenContentConnectorError(
           'invalid_input',
@@ -144,8 +138,7 @@ export function createOpenContentSkillRuntimeSession(options: Readonly<{
         assertPrincipalCurrent,
         signal: input.signal
       }, async ({ token }) => {
-        let runner: OpenContentCliCommandTransport | undefined = createOpenContentCliRunner({
-          owner: TRANSPORT_OWNER,
+        let runner: OpenContentSupplierCommandTransport | undefined = createOpenContentCliRunner({
           assets: options.assets,
           execution: {
             providerInstanceRef: input.providerInstanceRef,
@@ -160,8 +153,8 @@ export function createOpenContentSkillRuntimeSession(options: Readonly<{
           },
           processPort: options.processPort
         })
-        const transport: OpenContentSkillRuntimeTransport = Object.freeze({
-          invoke: (invocation: OpenContentCliInvocation) => {
+        const transport: OpenContentSupplierCommandTransport = Object.freeze({
+          invoke: (invocation: OpenContentSupplierInvocation) => {
             options.assertAssetsCurrent?.()
             const activeRunner = runner
             if (!activeRunner) {

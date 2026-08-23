@@ -23,17 +23,19 @@ import {
 } from '@sciforge/internal-runtime-integrity'
 import type {
   OpenContentCliProcessPort
-} from '@sciforge/opencontent-skill-runtime/main/cli-runner'
+} from './cli-runner.js'
 import {
   assertOpenContentSkillBundledAssetsPresent,
   OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR
-} from '@sciforge/opencontent-skill-runtime/main/bundled-assets'
+} from './bundled-assets.js'
 
 import {
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
-  type OpenContentContentSpaceFacade,
-  type OpenContentSkillRuntimeTransport
+  OPENCONTENT_PROVIDER_INSTANCE_REF
 } from '../contract.js'
+import type {
+  OpenContentContentSpaceFacade,
+  OpenContentSupplierCommandTransport
+} from '../main-contract.js'
 import type { OpenContentConnectionService } from './connection-service.js'
 import { createDomainMainEntry } from './index.js'
 import {
@@ -45,7 +47,7 @@ const principal = Object.freeze({
   authority: 'sciforge.identity-access',
   subject: 'local-account-a',
   assurance: 'local-selection' as const,
-  deviceId: 'opencontent-skill-runtime-test',
+  deviceId: 'opencontent-supplier-transport-test',
   identityVersion: 1
 })
 const bindingAttestation = Object.freeze({
@@ -79,31 +81,66 @@ describe('OpenContent main-only skill runtime session', () => {
   it('publishes the source repository runtime through the Connector facade', () => {
     const entry = mainEntryFixture(assetFixture.repositoryRoot)
 
-    createDomainMainEntry(entry.host, {
-      skillRuntime: { processPort: { run: vi.fn() } }
-    })
+    createDomainMainEntry(entry.host)
 
     expect(entry.registeredService()).toMatchObject({
-      useSkillRuntime: expect.any(Function),
+      useSupplierTransport: expect.any(Function),
       useTeamAdministration: expect.any(Function),
       listRootFolders: expect.any(Function)
     })
   })
 
+  it('does not read untyped transport or supplier runtime overrides at the public main entrypoint', () => {
+    const entry = mainEntryFixture(assetFixture.repositoryRoot)
+    const accessed = new Set<PropertyKey>()
+    const untypedOptions = new Proxy({
+      fetch: vi.fn(),
+      skillRuntime: {
+        processPort: { run: vi.fn() },
+        executablePath: '/untrusted/node',
+        temporaryRoot: '/untrusted/tmp'
+      }
+    }, {
+      get(target, property, receiver) {
+        accessed.add(property)
+        return Reflect.get(target, property, receiver)
+      }
+    })
+
+    const createWithUntypedOptions = createDomainMainEntry as unknown as (
+      host: DomainMainHost,
+      options: unknown
+    ) => ReturnType<typeof createDomainMainEntry>
+    createWithUntypedOptions(entry.host, untypedOptions)
+
+    expect(accessed).not.toContain('fetch')
+    expect(accessed).not.toContain('skillRuntime')
+    expect(entry.registeredService()?.useSupplierTransport).toBeTypeOf('function')
+  })
+
+  it('requires the Host executable when the receipted source runtime is installed', () => {
+    const entry = mainEntryFixture(assetFixture.repositoryRoot)
+    const { getExecutablePath, ...hostWithoutExecutable } = entry.host
+
+    expect(getExecutablePath).toBeTypeOf('function')
+    expect(() => createDomainMainEntry(hostWithoutExecutable))
+      .toThrow('OpenContent Connector requires the Host executable.')
+    expect(entry.registeredService()).toBeUndefined()
+  })
+
   it('revalidates the source receipt before the first attachment dispatch', async () => {
     const repositoryRoot = mkdtempSync(resolve(tmpdir(), 'sciforge-opencontent-dispatch-drift-'))
-    const run = vi.fn()
     try {
       cpSync(assetFixture.repositoryRoot, repositoryRoot, { recursive: true })
       const entry = mainEntryFixture(repositoryRoot)
-      createDomainMainEntry(entry.host, { skillRuntime: { processPort: { run } } })
+      createDomainMainEntry(entry.host)
       writeFileSync(resolve(
         repositoryRoot,
         'internal/opencontent/packages/opencontent-skill-assets/assets/',
         'opencontent-base-1.0.1/cli/bin/oc.js'
       ), 'module.exports = { driftedAfterActivation: true }\n', { mode: 0o644 })
 
-      await expect(entry.registeredService()!.useSkillRuntime!({
+      await expect(entry.registeredService()!.useSupplierTransport!({
         principal,
         providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
         invocationId: 'invocation_skill_runtime_dispatch_drift_0001',
@@ -116,7 +153,6 @@ describe('OpenContent main-only skill runtime session', () => {
         args: { fileId: 'file-a' },
         dataFiles: []
       }))).rejects.toThrow(/changed file/u)
-      expect(run).not.toHaveBeenCalled()
     } finally {
       rmSync(repositoryRoot, { recursive: true, force: true })
     }
@@ -127,6 +163,20 @@ describe('OpenContent main-only skill runtime session', () => {
       getAppRoot: () => assetFixture.shadowOnlyRepositoryRoot,
       isPackaged: () => false
     })).toBeUndefined()
+  })
+
+  it('keeps the production Connector facade registered when the source overlay is absent', () => {
+    const entry = mainEntryFixture(assetFixture.shadowOnlyRepositoryRoot)
+
+    createDomainMainEntry(entry.host)
+
+    expect(entry.registeredService()).toMatchObject({
+      attestExternalBinding: expect.any(Function),
+      useTeamAdministration: expect.any(Function),
+      listRootFolders: expect.any(Function),
+      uploadNewFile: expect.any(Function)
+    })
+    expect(entry.registeredService()?.useSupplierTransport).toBeUndefined()
   })
 
   it('fails source resolution closed when the optional overlay path is a broken symlink', () => {
@@ -184,9 +234,7 @@ describe('OpenContent main-only skill runtime session', () => {
       ), { recursive: true })
       const entry = mainEntryFixture(repositoryRoot)
 
-      expect(() => createDomainMainEntry(entry.host, {
-        skillRuntime: { processPort: { run: vi.fn() } }
-      })).toThrow(/missing file/u)
+      expect(() => createDomainMainEntry(entry.host)).toThrow(/missing file/u)
       expect(entry.registeredService()).toBeUndefined()
     } finally {
       rmSync(repositoryRoot, { recursive: true, force: true })
@@ -271,9 +319,8 @@ describe('OpenContent main-only skill runtime session', () => {
   it('fails Connector activation closed for an incomplete source overlay', () => {
     const entry = mainEntryFixture(assetFixture.incompleteRepositoryRoot)
 
-    expect(() => createDomainMainEntry(entry.host, {
-      skillRuntime: { processPort: { run: vi.fn() } }
-    })).toThrow('Bundled OpenContent assets are unavailable or invalid.')
+    expect(() => createDomainMainEntry(entry.host))
+      .toThrow('Bundled OpenContent assets are unavailable or invalid.')
     expect(entry.registeredService()).toBeUndefined()
   })
 
@@ -329,9 +376,8 @@ describe('OpenContent main-only skill runtime session', () => {
       true
     )
 
-    expect(() => createDomainMainEntry(entry.host, {
-      skillRuntime: { processPort: { run: vi.fn() } }
-    })).toThrow('Bundled OpenContent assets are unavailable or invalid.')
+    expect(() => createDomainMainEntry(entry.host))
+      .toThrow('Bundled OpenContent assets are unavailable or invalid.')
     expect(entry.registeredService()).toBeUndefined()
   })
 
@@ -352,9 +398,9 @@ describe('OpenContent main-only skill runtime session', () => {
       assets: { mode: 'source', assetRoot: assetFixture.assetRoot },
       site: 'https://provider.invalid'
     })
-    let retainedTransport: OpenContentSkillRuntimeTransport | undefined
+    let retainedTransport: OpenContentSupplierCommandTransport | undefined
 
-    const output = await session.useSkillRuntime({
+    const output = await session.useSupplierTransport({
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       expectedBindingAttestation: bindingAttestation,
@@ -400,7 +446,7 @@ describe('OpenContent main-only skill runtime session', () => {
       site: 'https://provider.invalid'
     })
 
-    await expect(session.useSkillRuntime({
+    await expect(session.useSupplierTransport({
       principal,
       providerInstanceRef: 'another-provider',
       invocationId: 'invocation_skill_runtime_0003',
@@ -431,7 +477,7 @@ describe('OpenContent main-only skill runtime session', () => {
       if (!principalIsCurrent) throw new Error('private Host Principal diagnostic')
     })
 
-    const error = await session.useSkillRuntime({
+    const error = await session.useSupplierTransport({
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       invocationId: 'invocation_skill_runtime_principal_0001',
@@ -466,7 +512,6 @@ function connectionService(token: string): OpenContentConnectionService {
     status: vi.fn(),
     attestExternalBinding: vi.fn(async () => bindingAttestation),
     bindExistingAccount: vi.fn(),
-    useCurrentToken: vi.fn(),
     useCurrentSession: vi.fn(async (_input, operation) => operation({
       token,
       externalIdentityId: 42,

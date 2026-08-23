@@ -1,6 +1,6 @@
 # SciForge Context Map
 
-> Current-state audit: 2026-08-21. This map distinguishes implemented authority, current provider-native capabilities, and deferred provider-neutral targets. It is not a catalog of every SciForge domain or integration package.
+> Current-state audit: 2026-08-23. This map distinguishes implemented authority, current provider-native capabilities, and deferred provider-neutral targets. It is not a catalog of every SciForge domain or integration package.
 
 ## Identity and Access
 
@@ -46,7 +46,7 @@ Glossary: `docs/contexts/provider-integration/CONTEXT.md`
 - Provider Integrations are selected at compile time through manifest/generated composition. Host Core owns only generic contribution catalogs and never routes by provider kind, vendor, resource extension, or domain ID.
 - When one vendor needs shared authentication or transport, its Provider adapters may consume a provider-specific main-only Connector. The Connector owns no document or file business semantics and is never called directly by Shared Documents, Content Space, renderer, Agent Runtime, or cloud orchestration.
 - Provider Binding Attestation is token-free, non-portable evidence for one exact Provider Instance, complete current Principal, opaque external subject, and opaque Connection revision. Admission matches it through the pinned Provider, and the Connector re-attests the actual current session immediately before business dispatch so unbind/rebind drift fails closed.
-- A public integration Runtime may execute typed supplier-backed operations only behind the same Provider and Connector path. An optional private supplier overlay changes runtime inventory only; it never becomes a domain package, readiness promotion, Connection, or authorization path.
+- Supplier-backed operations remain inside the same Provider and Connector path: the Provider integration owns receipt-to-domain semantics, while the Connector owns the typed supplier protocol, allowlist, asset verification, and bounded process transport. There is no separately versioned integration Runtime package. An optional private supplier overlay changes inventory only; it never becomes a domain package, readiness promotion, Connection, or authorization path.
 - A consuming cloud, Project, Task, evidence, or record context owns its business association to a typed resource reference; neither content context imports those consumer models.
 - Portable Resource Reference Envelopes are durable, versioned, non-authorizing cross-context values. A receiving full SciForge node validates the registered reference kind, resolves its trusted Provider Instance and current Human Principal's local Provider Connection, reauthorizes with the provider, and only then issues a process-local Broker resource reference.
 - Cloud Collaboration owns the Project Content Space Binding and is the sole source of Project shared Content Container provisioning intent: its Project Owner supplies the desired content owner and its explicit Project Members supply the desired member set. Content Space must not import Project or infer owner/member identity from an Agent, requester, prompt, or Provider listing; Project archival/deletion never deletes the Provider Content Container or its content.

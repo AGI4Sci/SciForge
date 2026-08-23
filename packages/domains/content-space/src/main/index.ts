@@ -86,17 +86,13 @@ import {
   type ContentSpaceResult
 } from '../contract.js'
 import {
+  contentSpaceAdministrationAddMemberReceiptSchema,
   contentSpaceAdministrationAddMemberInputSchema,
   contentSpaceAgentAdministrationCreateSpaceInputSchema,
-  contentSpaceAdministrationCreateSpaceInputSchema,
   contentSpaceAdministrationListMembersInputSchema,
   contentSpaceAdministrationListSpacesInputSchema,
   contentSpaceAdministrationMemberPageSchema,
-  contentSpaceAdministrationMemberSummarySchema,
-  contentSpaceAdministrationPinSpaceInputSchema,
-  contentSpaceAdministrationRemoveMemberInputSchema,
   contentSpaceAdministrationRemoveMemberReceiptSchema,
-  contentSpaceAdministrationRootOpenResultSchema,
   contentSpaceAdministrationSpacePageSchema,
   contentSpaceAdministrationSpaceSummarySchema,
   contentSpaceAdministrationUnpinSpaceInputSchema,
@@ -1364,7 +1360,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminListSpaces,
         title: 'List Authorized Provider Content Spaces',
-        description: 'Lists personal and Team spaces through the exact authorized Provider administration resource.',
+        description: 'Lists personal and shared content spaces through the exact authorized Provider administration resource.',
         audiences: ['agent'],
         scope: 'resource',
         resourceKinds: [CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND],
@@ -1390,7 +1386,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace,
         title: 'Create Content Space',
-        description: 'Creates one personal or Team space through the authorized Provider and returns an exact root resource.',
+        description: 'Creates one personal or shared content space through the authorized Provider and returns an exact root resource.',
         audiences: ['agent'],
         scope: 'resource',
         resourceKinds: [CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND],
@@ -1491,7 +1487,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         approval: 'none',
         autonomousWrite: 'resource-authorized',
         concurrency: { revision: 'none', idempotency: 'required' },
-        inputSchema: AGENT_ADMINISTRATION_ROOT_MUTATION_INPUT_SCHEMA,
+        inputSchema: zEmptyObject,
         outputSchema: contentSpaceResultSchema(ADMINISTRATION_SPACE_SUMMARY_WIRE_SCHEMA),
         handler: async (input, context) => {
           const record = requireAgentRootAdministrationResource(context)
@@ -1518,7 +1514,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         approval: 'none',
         autonomousWrite: 'resource-authorized',
         concurrency: { revision: 'none', idempotency: 'required' },
-        inputSchema: AGENT_ADMINISTRATION_ROOT_MUTATION_INPUT_SCHEMA,
+        inputSchema: zEmptyObject,
         outputSchema: contentSpaceResultSchema(ADMINISTRATION_SPACE_SUMMARY_WIRE_SCHEMA),
         handler: async (input, context) => {
           const record = requireAgentRootAdministrationResource(context)
@@ -1537,7 +1533,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminOpenRoot,
         title: 'Open Authorized Content Space Root',
-        description: 'Resolves the current administration revision for the exact authorized root.',
+        description: 'Resolves the exact authorized Content Space root through Provider administration.',
         audiences: ['agent'],
         scope: 'resource',
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
@@ -1564,7 +1560,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers,
         version: '2.0.0',
         title: 'List Authorized Content Space Members',
-        description: 'Lists members for the exact authorized personal or Team root.',
+        description: 'Lists members for the exact authorized shared-content root.',
         audiences: ['agent'],
         scope: 'resource',
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
@@ -1600,7 +1596,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         autonomousWrite: 'resource-authorized',
         concurrency: { revision: 'none', idempotency: 'required' },
         inputSchema: AGENT_ADMINISTRATION_MEMBER_MUTATION_INPUT_SCHEMA,
-        outputSchema: contentSpaceResultSchema(contentSpaceAdministrationMemberSummarySchema),
+        outputSchema: contentSpaceResultSchema(ADMINISTRATION_ADD_MEMBER_WIRE_SCHEMA),
         handler: async (input, context) => {
           const record = requireAgentRootAdministrationResource(context)
           return capabilityMutationResult(
@@ -1989,13 +1985,12 @@ const AGENT_EXTENDED_INPUT_SCHEMA_BY_EFFECT = Object.freeze({
 
 const providerInstanceInputShape = contentSpaceProviderInstanceInputSchema.unwrap().shape
 const administrationUpdateShape = contentSpaceAdministrationUpdateSpaceInputSchema.unwrap().shape
-const administrationRootMutationShape = contentSpaceAdministrationPinSpaceInputSchema.unwrap().shape
 const administrationListMembersShape = contentSpaceAdministrationListMembersInputSchema.unwrap().shape
 const administrationMemberMutationShape = contentSpaceAdministrationAddMemberInputSchema.unwrap().shape
 const contentContainerReferenceShape = contentContainerReferenceSchema.unwrap().shape
 const administrationSpaceSummaryShape = contentSpaceAdministrationSpaceSummarySchema.unwrap().shape
-const administrationRootOpenShape = contentSpaceAdministrationRootOpenResultSchema.unwrap().shape
 const administrationMemberPageShape = contentSpaceAdministrationMemberPageSchema.unwrap().shape
+const administrationAddMemberShape = contentSpaceAdministrationAddMemberReceiptSchema.unwrap().shape
 const administrationRemoveMemberShape = contentSpaceAdministrationRemoveMemberReceiptSchema
   .unwrap().shape
 
@@ -2012,8 +2007,7 @@ const ADMINISTRATION_SPACE_SUMMARY_WIRE_SCHEMA = z.object({
   root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA,
   label: administrationSpaceSummaryShape.label,
   contentOwnerUserId: administrationSpaceSummaryShape.contentOwnerUserId,
-  pinned: administrationSpaceSummaryShape.pinned,
-  revision: administrationSpaceSummaryShape.revision
+  pinned: administrationSpaceSummaryShape.pinned
 }).strict().readonly()
 
 const ADMINISTRATION_SPACE_PAGE_WIRE_SCHEMA = z.object({
@@ -2022,8 +2016,7 @@ const ADMINISTRATION_SPACE_PAGE_WIRE_SCHEMA = z.object({
 }).strict().readonly()
 
 const ADMINISTRATION_ROOT_OPEN_WIRE_SCHEMA = z.object({
-  root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA,
-  revision: administrationRootOpenShape.revision
+  root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA
 }).strict().readonly()
 
 const ADMINISTRATION_MEMBER_PAGE_WIRE_SCHEMA = z.object({
@@ -2032,11 +2025,15 @@ const ADMINISTRATION_MEMBER_PAGE_WIRE_SCHEMA = z.object({
   nextCursor: administrationMemberPageShape.nextCursor
 }).strict().readonly()
 
+const ADMINISTRATION_ADD_MEMBER_WIRE_SCHEMA = z.object({
+  root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA,
+  member: administrationAddMemberShape.member
+}).strict().readonly()
+
 const ADMINISTRATION_REMOVE_MEMBER_WIRE_SCHEMA = z.object({
   root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA,
   member: administrationRemoveMemberShape.member,
-  removed: administrationRemoveMemberShape.removed,
-  revision: administrationRemoveMemberShape.revision
+  removed: administrationRemoveMemberShape.removed
 }).strict().readonly()
 
 const AGENT_ADMINISTRATION_AUTHORIZATION_SCHEMA = z.object({
@@ -2050,12 +2047,7 @@ const AGENT_ADMINISTRATION_CREATE_SPACE_SCHEMA = z.object({
 }).strict().readonly()
 
 const AGENT_ADMINISTRATION_UPDATE_SPACE_INPUT_SCHEMA = z.object({
-  expectedRevision: administrationUpdateShape.expectedRevision,
   label: administrationUpdateShape.label
-}).strict().readonly()
-
-const AGENT_ADMINISTRATION_ROOT_MUTATION_INPUT_SCHEMA = z.object({
-  expectedRevision: administrationRootMutationShape.expectedRevision
 }).strict().readonly()
 
 const AGENT_ADMINISTRATION_LIST_MEMBERS_INPUT_SCHEMA = z.object({
@@ -2063,8 +2055,7 @@ const AGENT_ADMINISTRATION_LIST_MEMBERS_INPUT_SCHEMA = z.object({
 }).strict().readonly()
 
 const AGENT_ADMINISTRATION_MEMBER_MUTATION_INPUT_SCHEMA = z.object({
-  member: administrationMemberMutationShape.member,
-  expectedRevision: administrationMemberMutationShape.expectedRevision
+  member: administrationMemberMutationShape.member
 }).strict().readonly()
 
 async function issueExtendedPortalTarget(

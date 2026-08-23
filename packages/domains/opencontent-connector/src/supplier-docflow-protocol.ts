@@ -12,7 +12,7 @@ export const DOCFLOW_NATIVE_DOCUMENT_COMMANDS = Object.freeze([
   'docflow-export'
 ] as const)
 
-export const docflowCommandSchema = z.enum(DOCFLOW_NATIVE_DOCUMENT_COMMANDS)
+const docflowCommandSchema = z.enum(DOCFLOW_NATIVE_DOCUMENT_COMMANDS)
 export type DocflowCommand = z.infer<typeof docflowCommandSchema>
 
 const invocationIdSchema = z.string()
@@ -31,7 +31,7 @@ const safeDataFileNameSchema = z.string()
     return codePoint >= 32 && codePoint !== 127
   }))
 
-export const docflowDataFileRoleSchema = z.enum([
+const docflowDataFileRoleSchema = z.enum([
   'content',
   'operations',
   'probe-template',
@@ -46,14 +46,12 @@ const docflowInputDataFileRoleSchema = z.enum([
   'image'
 ])
 
-export type DocflowManagedOutputWrite = (chunk: Uint8Array) => Promise<void>
-
-const managedOutputWriteSchema = z.custom<DocflowManagedOutputWrite>(
+const managedOutputWriteSchema = z.custom<(chunk: Uint8Array) => Promise<void>>(
   (value) => typeof value === 'function',
   'A runner-managed output requires a write function.'
 )
 
-export const docflowDataFileSchema = z.discriminatedUnion('encoding', [
+const docflowDataFileSchema = z.discriminatedUnion('encoding', [
   z.object({
     role: docflowInputDataFileRoleSchema,
     encoding: z.literal('utf8'),
@@ -101,7 +99,7 @@ const referenceSchema = z.object({
   description: z.string().trim().min(1).max(1_024).optional()
 }).strict().readonly()
 
-export const docflowCanonicalEditOperationSchema = z.enum([
+const docflowCanonicalEditOperationSchema = z.enum([
   'locate',
   'replaceText',
   'insertText',
@@ -291,7 +289,7 @@ const boundedIdentifierSchema = z.string()
   .max(512)
   .refine((value) => value === value.trim(), 'Identifiers must be canonical.')
 
-export const docflowStructuredDeliverySchema = z.object({
+const docflowStructuredDeliverySchema = z.object({
   protocolVersion: z.literal('1.0'),
   kind: z.literal('docflowCard'),
   version: z.literal('v1'),
@@ -315,7 +313,7 @@ export const docflowStructuredDeliverySchema = z.object({
   }
 }).readonly()
 
-export const docflowManagedDataFileSchema = z.object({
+const docflowManagedDataFileSchema = z.object({
   role: z.literal('probe-template'),
   token: z.string().regex(/^ocdf_[A-Za-z0-9_-]{32,128}$/u),
   name: safeDataFileNameSchema,
@@ -331,7 +329,7 @@ const docflowTransportSuccessSchema = z.object({
   managedDataFiles: z.array(docflowManagedDataFileSchema).max(1).readonly()
 }).strict().readonly()
 
-const docflowTransportErrorSchema = z.object({
+export const docflowTransportErrorSchema = z.object({
   code: z.string().trim().min(1).max(128),
   message: z.string().trim().min(1).max(512),
   stage: z.enum([
@@ -359,7 +357,6 @@ export const docflowTransportResultSchema = z.union([
   docflowTransportSuccessSchema,
   docflowTransportFailureSchema
 ])
-export type DocflowTransportResult = z.infer<typeof docflowTransportResultSchema>
 
 export const docflowNativeDocumentSuccessReceiptSchema = z.object({
   protocol: z.literal(DOCFLOW_NATIVE_DOCUMENT_RECEIPT_PROTOCOL),
@@ -440,200 +437,4 @@ export type DocflowNativeDocumentReceipt = z.infer<
  */
 export interface DocflowCommandTransport {
   invoke(invocation: DocflowCommandInvocation): Promise<unknown>
-}
-
-export type DocflowNativeDocumentAdapter = Readonly<{
-  execute(input: unknown): Promise<DocflowNativeDocumentReceipt>
-}>
-
-export function createDocflowNativeDocumentAdapter(
-  transport: DocflowCommandTransport
-): DocflowNativeDocumentAdapter {
-  return Object.freeze({
-    async execute(input: unknown): Promise<DocflowNativeDocumentReceipt> {
-      const invocation = docflowCommandInvocationSchema.parse(input)
-      let rawResponse: unknown
-      try {
-        rawResponse = await transport.invoke(invocation)
-      } catch (error) {
-        return isWriteCommand(invocation.command)
-          ? outcomeUnknownReceipt(
-              invocation,
-              'write',
-              boundedMessage(error, 'The command transport failed after dispatch began.')
-            )
-          : failureReceipt(
-              invocation,
-              'provider_unavailable',
-              boundedMessage(error, 'The command transport is unavailable.')
-            )
-      }
-      const parsedResponse = docflowTransportResultSchema.safeParse(rawResponse)
-      if (!parsedResponse.success) {
-        return isWriteCommand(invocation.command)
-          ? outcomeUnknownReceipt(
-              invocation,
-              'verify',
-              'The command returned an invalid result after a possible write.'
-            )
-          : failureReceipt(
-              invocation,
-              'contract_violation',
-              'The command returned an invalid structured result.'
-            )
-      }
-      const response = parsedResponse.data
-      if (response.command !== invocation.command) {
-        return isWriteCommand(invocation.command)
-          ? outcomeUnknownReceipt(
-              invocation,
-              'verify',
-              'The command result could not be bound to the requested write.'
-            )
-          : failureReceipt(
-              invocation,
-              'contract_violation',
-              'The command result does not match the requested command.'
-            )
-      }
-      if (!response.ok) {
-        return mapTransportFailure(invocation, response.error)
-      }
-      if (requiresStructuredDelivery(invocation.command) &&
-        response.structuredDeliveryItems.length !== 1) {
-        return outcomeUnknownReceipt(
-          invocation,
-          'verify',
-          'The write result lacks its required structured delivery receipt.'
-        )
-      }
-      return Object.freeze(docflowNativeDocumentSuccessReceiptSchema.parse({
-        protocol: DOCFLOW_NATIVE_DOCUMENT_RECEIPT_PROTOCOL,
-        invocationId: invocation.invocationId,
-        command: invocation.command,
-        attemptCount: 1,
-        outcome: 'succeeded',
-        json: response.json,
-        structuredDeliveryItems: response.structuredDeliveryItems,
-        managedDataFiles: response.managedDataFiles
-      }))
-    }
-  })
-}
-
-const HASH_CONFLICT_CODES = new Set([
-  'DOCFLOW_DOCUMENT_HASH_MISMATCH',
-  'DOCFLOW_EDIT_PLAN_PRECONDITION_FAILED',
-  'DOCFLOW_REVISION_CONFLICT'
-])
-
-const WRITE_COMMANDS = new Set<DocflowCommand>([
-  'docflow-create',
-  'docflow-image-upload',
-  'docflow-image-download',
-  'docflow-export'
-])
-
-const DELIVERY_COMMANDS = new Set<DocflowCommand>([
-  'docflow-create'
-])
-
-function isWriteCommand(command: DocflowCommand): boolean {
-  return WRITE_COMMANDS.has(command)
-}
-
-function requiresStructuredDelivery(command: DocflowCommand): boolean {
-  return DELIVERY_COMMANDS.has(command)
-}
-
-function mapTransportFailure(
-  invocation: DocflowCommandInvocation,
-  error: z.infer<typeof docflowTransportErrorSchema>
-): DocflowNativeDocumentReceipt {
-  if (HASH_CONFLICT_CODES.has(error.code)) {
-    return Object.freeze(docflowNativeDocumentConflictReceiptSchema.parse({
-      protocol: DOCFLOW_NATIVE_DOCUMENT_RECEIPT_PROTOCOL,
-      invocationId: invocation.invocationId,
-      command: invocation.command,
-      attemptCount: 1,
-      outcome: 'conflict',
-      error: {
-        code: 'conflict',
-        reason: error.code === 'DOCFLOW_REVISION_CONFLICT'
-          ? 'revision_conflict'
-          : 'hash_mismatch',
-        message: error.message,
-        retry: 'never',
-        expectedHash: error.expectedHash ?? invocationBaseHash(invocation),
-        actualHash: error.actualHash
-      }
-    }))
-  }
-  if (error.code === 'DOCFLOW_POSTCOMMIT_VERIFY_FAILED') {
-    return outcomeUnknownReceipt(invocation, 'verify', error.message)
-  }
-  if (error.dispatched && isWriteCommand(invocation.command) &&
-    !['validation', 'read'].includes(error.stage)) {
-    const stage = error.stage === 'publish'
-      ? 'publish'
-      : error.stage === 'verify'
-        ? 'verify'
-        : 'write'
-    return outcomeUnknownReceipt(invocation, stage, error.message)
-  }
-  return failureReceipt(invocation, normalizeFailureCode(error.code), error.message)
-}
-
-function outcomeUnknownReceipt(
-  invocation: DocflowCommandInvocation,
-  stage: 'write' | 'publish' | 'verify',
-  message: string
-): DocflowNativeDocumentReceipt {
-  return Object.freeze(docflowNativeDocumentOutcomeUnknownReceiptSchema.parse({
-    protocol: DOCFLOW_NATIVE_DOCUMENT_RECEIPT_PROTOCOL,
-    invocationId: invocation.invocationId,
-    command: invocation.command,
-    attemptCount: 1,
-    outcome: 'outcome_unknown',
-    error: { code: 'outcome_unknown', stage, message, retry: 'never' }
-  }))
-}
-
-function failureReceipt(
-  invocation: DocflowCommandInvocation,
-  code: z.infer<typeof docflowNativeDocumentFailureReceiptSchema>['error']['code'],
-  message: string
-): DocflowNativeDocumentReceipt {
-  return Object.freeze(docflowNativeDocumentFailureReceiptSchema.parse({
-    protocol: DOCFLOW_NATIVE_DOCUMENT_RECEIPT_PROTOCOL,
-    invocationId: invocation.invocationId,
-    command: invocation.command,
-    attemptCount: 1,
-    outcome: 'failed',
-    error: { code, message, retry: 'never' }
-  }))
-}
-
-function invocationBaseHash(invocation: DocflowCommandInvocation): string | undefined {
-  return 'baseHash' in invocation.args && typeof invocation.args.baseHash === 'string'
-    ? invocation.args.baseHash
-    : undefined
-}
-
-function normalizeFailureCode(
-  code: string
-): z.infer<typeof docflowNativeDocumentFailureReceiptSchema>['error']['code'] {
-  if (/AUTH|PERMISSION|NOT_PERMISSION|FORBIDDEN/iu.test(code)) return 'unauthorized'
-  if (/NOT_FOUND|TARGET_UNRESOLVED/iu.test(code)) return 'not_found'
-  if (/UNSUPPORTED/iu.test(code)) return 'unsupported'
-  if (/INVALID|PARAM/iu.test(code)) return 'invalid_input'
-  if (/CANCEL/iu.test(code)) return 'cancelled'
-  return 'provider_unavailable'
-}
-
-function boundedMessage(error: unknown, fallback: string): string {
-  const message = error instanceof Error && error.message.trim()
-    ? error.message.trim()
-    : fallback
-  return message.slice(0, 512)
 }

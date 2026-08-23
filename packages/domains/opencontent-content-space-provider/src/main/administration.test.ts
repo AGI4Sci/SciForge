@@ -2,15 +2,18 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   CONTENT_SPACE_ADMINISTRATION_OPERATIONS,
-  CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION,
-  PROJECT_CONTENT_SPACE_PROVISIONING_CONTRACT_VERSION
+  CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION
 } from '@sciforge/domain-content-space/administration-contract'
-import { ContentSpaceOperationError } from '@sciforge/domain-content-space/contract'
+import {
+  ContentSpaceOperationError,
+  toPortableContentContainerReference
+} from '@sciforge/domain-content-space/contract'
 import type { ContentSpaceProviderOperationContext } from '@sciforge/domain-content-space/contract'
 import {
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
-  type OpenContentContentSpaceFacade
+  OpenContentConnectorError,
+  OPENCONTENT_PROVIDER_INSTANCE_REF
 } from '@sciforge/domain-opencontent-connector/contract'
+import type { OpenContentContentSpaceFacade } from '@sciforge/domain-opencontent-connector/main-contract'
 import {
   openContentFolderIdSchema,
   openContentIdentityIdSchema,
@@ -22,7 +25,6 @@ import {
 import {
   createOpenContentAdministrationFeature
 } from './administration.js'
-import type { OpenContentIdentityBindingPort } from './identity-binding.js'
 
 const principal = Object.freeze({
   authority: 'sciforge.identity-access',
@@ -52,15 +54,14 @@ const externalBinding = Object.freeze({
 })
 
 describe('OpenContent provider-neutral administration adapter', () => {
-  it('declares ten unverified operations PoC-only and Project provisioning blocked', async () => {
+  it('declares exactly the ten supported administration operations PoC-only', async () => {
     const useTeamAdministration = vi.fn(async () => {
       throw new Error('Readiness description must not open an OpenContent administration session.')
     }) as unknown as OpenContentContentSpaceFacade['useTeamAdministration'] &
       ReturnType<typeof vi.fn>
     const feature = createOpenContentAdministrationFeature({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      facade: facadeFixture(useTeamAdministration),
-      identities: identityBindings()
+      facade: facadeFixture(useTeamAdministration)
     })
 
     const states = await feature.describeOperations(context)
@@ -68,18 +69,10 @@ describe('OpenContent provider-neutral administration adapter', () => {
     expect(states.map(({ operation }) => operation))
       .toEqual(CONTENT_SPACE_ADMINISTRATION_OPERATIONS)
     expect(new Set(states.map(({ operation }) => operation)).size).toBe(states.length)
-    expect(states).toHaveLength(11)
-    expect(states.filter(({ operation }) => operation !== 'provision-project'))
-      .toHaveLength(10)
-    expect(states.filter(({ operation }) => operation !== 'provision-project')
-      .every(({ readiness, reasonCode }) => (
-        readiness === 'poc_only' && reasonCode === 'verification_profile_required'
-      ))).toBe(true)
-    expect(states).toContainEqual({
-      operation: 'provision-project',
-      readiness: 'blocked_by_contract',
-      reasonCode: 'provider_contract_missing'
-    })
+    expect(states).toHaveLength(10)
+    expect(states.every(({ readiness, reasonCode }) => (
+      readiness === 'poc_only' && reasonCode === 'verification_profile_required'
+    ))).toBe(true)
     expect(states.some(({ readiness }) => readiness === 'production_ready')).toBe(false)
     expect(states.some(({ operation }) => operation.includes('delete'))).toBe(false)
     expect(useTeamAdministration).not.toHaveBeenCalled()
@@ -100,21 +93,19 @@ describe('OpenContent provider-neutral administration adapter', () => {
     expect(useTeamAdministration).not.toHaveBeenCalled()
   })
 
-  it('binds administration and Project provisioning to the same Principal-scoped facade', async () => {
+  it('binds only the supported Principal-scoped administration port', async () => {
     const harness = teamHarness()
     const useTeamAdministration = teamSession(harness.administration)
     const feature = createOpenContentAdministrationFeature({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      facade: facadeFixture(useTeamAdministration),
-      identities: identityBindings()
+      facade: facadeFixture(useTeamAdministration)
     })
 
     const binding = await feature.bind(context)
 
     expect(binding.administration.contractVersion)
       .toBe(CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION)
-    expect(binding.projectProvisioning?.contractVersion)
-      .toBe(PROJECT_CONTENT_SPACE_PROVISIONING_CONTRACT_VERSION)
+    expect(Object.keys(binding)).toEqual(['administration'])
     await binding.administration.listSpaces({ page: { limit: 20 } })
     expect(useTeamAdministration).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -131,8 +122,7 @@ describe('OpenContent provider-neutral administration adapter', () => {
     const useTeamAdministration = teamSession(harness.administration)
     const feature = createOpenContentAdministrationFeature({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      facade: facadeFixture(useTeamAdministration),
-      identities: identityBindings()
+      facade: facadeFixture(useTeamAdministration)
     })
     const boundContext = Object.freeze({ ...context, expectedExternalBinding: externalBinding })
     const binding = await feature.bind(boundContext)
@@ -160,20 +150,15 @@ describe('OpenContent provider-neutral administration adapter', () => {
         root: expect.any(Object),
         label: 'Research Team',
         contentOwnerUserId: 'content-owner',
-        pinned: false,
-        revision: expect.stringMatching(/^oc_[a-f0-9]{32}$/u)
+        pinned: false
       }]
     })
     const root = listed.items[0]!.root
-    const observed = await administration.observeSpace({ root })
-    await expect(administration.openRoot({ root })).resolves.toEqual({
-      root,
-      revision: observed.revision
-    })
+    await administration.observeSpace({ root })
+    await expect(administration.openRoot({ root })).resolves.toEqual({ root })
 
     const edited = await administration.updateSpace({
       root,
-      expectedRevision: observed.revision,
       label: 'Renamed Team'
     })
     expect(edited.label).toBe('Renamed Team')
@@ -182,60 +167,332 @@ describe('OpenContent provider-neutral administration adapter', () => {
       folderId,
       name: 'Renamed Team'
     })
-    const pinned = await administration.pinSpace({
-      root,
-      expectedRevision: edited.revision
-    })
+    const pinned = await administration.pinSpace({ root })
     expect(pinned.pinned).toBe(true)
-    const unpinned = await administration.unpinSpace({
-      root,
-      expectedRevision: pinned.revision
-    })
+    const unpinned = await administration.unpinSpace({ root })
     expect(unpinned.pinned).toBe(false)
     expect(harness.stickTeam).toHaveBeenCalledOnce()
     expect(harness.unstickTeam).toHaveBeenCalledOnce()
   })
 
-  it('returns a conflict before an update when the expected Team revision is stale', async () => {
+  it.each([
+    ['a non-Team-2 row', { teamType: 3 }],
+    ['a row owned by another external identity', { ownerIdentityId: externalIdentityId }]
+  ] as const)('does not expose %s through listSpaces', async (_label, drift) => {
     const harness = teamHarness()
+    harness.listTeams.mockResolvedValue({
+      pageNumber: 1,
+      pageSize: 100,
+      totalCount: 1,
+      teams: [{ ...teamValue('Unowned Team', false, ownerIdentityId), ...drift }]
+    })
+    const administration = (await createFeature(harness).bind(context)).administration
+
+    await expect(administration.listSpaces({ page: { limit: 20 } })).rejects.toMatchObject({
+      detail: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(harness.resolveTeamRoot).not.toHaveBeenCalled()
+  })
+
+  it('does not open a Team root from an incomplete Team snapshot', async () => {
+    const harness = teamHarness()
+    harness.listTeams.mockResolvedValue({
+      pageNumber: 1,
+      pageSize: 100,
+      totalCount: 2,
+      teams: [teamValue('Research Team', false, ownerIdentityId)]
+    })
     const administration = (await createFeature(harness).bind(context)).administration
     const root = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!.root
 
+    await expect(administration.openRoot({ root })).rejects.toMatchObject({
+      detail: { code: 'provider_contract_violation', retry: 'never' }
+    })
+  })
+
+  it('updates a Team without simulating Supplier CAS through a local revision comparison', async () => {
+    const harness = teamHarness()
+    const administration = (await createFeature(harness).bind(context)).administration
+    const root = toPortableContentContainerReference({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      containerId: rootGuid
+    })
+
     await expect(administration.updateSpace({
       root,
-      expectedRevision: 'oc_00000000000000000000000000000000',
-      label: 'Must not write'
+      label: 'Renamed Without CAS'
+    })).resolves.toMatchObject({ root, label: 'Renamed Without CAS' })
+    expect(harness.editTeam).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['a non-Team-2 root', { teamType: 3 }],
+    ['a root owned by another external identity', { ownerIdentityId: externalIdentityId }]
+  ] as const)('rejects every administration mutation against %s before dispatch', async (
+    _label,
+    drift
+  ) => {
+    const root = toPortableContentContainerReference({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      containerId: rootGuid
+    })
+    for (const operation of ['update', 'pin', 'unpin', 'add', 'remove'] as const) {
+      const harness = teamHarness({ users: [ownerIdentityId, memberIdentityId] })
+      if (operation === 'unpin') {
+        await harness.stickTeam({ teamId })
+        harness.stickTeam.mockClear()
+      }
+      const listed = await harness.observeTeam({ teamId })
+      harness.listTeams.mockResolvedValue({
+        pageNumber: 1,
+        pageSize: 100,
+        totalCount: 1,
+        teams: [{ ...listed, ...drift }]
+      })
+      const administration = (await createFeature(harness).bind(context)).administration
+      const result = operation === 'update'
+        ? administration.updateSpace({ root, label: 'Rejected mutation' })
+        : operation === 'pin'
+          ? administration.pinSpace({ root })
+          : operation === 'unpin'
+            ? administration.unpinSpace({ root })
+            : operation === 'add'
+              ? administration.addMember({ root, member: directoryMember(managerIdentityId) })
+              : administration.removeMember({ root, member: directoryMember(memberIdentityId) })
+
+      await expect(result).rejects.toMatchObject({
+        detail: { code: 'provider_contract_violation', retry: 'never' }
+      })
+      expect(harness.editTeam).not.toHaveBeenCalled()
+      expect(harness.stickTeam).not.toHaveBeenCalled()
+      expect(harness.unstickTeam).not.toHaveBeenCalled()
+      expect(harness.addTeamUsers).not.toHaveBeenCalled()
+      expect(harness.removeTeamUsers).not.toHaveBeenCalled()
+    }
+  })
+
+  it('reports outcome unknown when Team authority drifts after every dispatched mutation', async () => {
+    const root = toPortableContentContainerReference({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      containerId: rootGuid
+    })
+    for (const operation of ['update', 'pin', 'unpin', 'add', 'remove'] as const) {
+      const harness = teamHarness({ users: [ownerIdentityId, memberIdentityId] })
+      if (operation === 'unpin') {
+        await harness.stickTeam({ teamId })
+        harness.stickTeam.mockClear()
+      }
+      const observe = harness.observeTeam.getMockImplementation()
+      if (!observe) throw new Error('The Team observe fixture is unavailable.')
+      let observation = 0
+      harness.observeTeam.mockImplementation(async (input) => {
+        const team = await observe(input)
+        observation += 1
+        return observation === 1 ? team : { ...team, teamType: 3 }
+      })
+      const administration = (await createFeature(harness).bind(context)).administration
+      const result = operation === 'update'
+        ? administration.updateSpace({ root, label: 'Authority drift' })
+        : operation === 'pin'
+          ? administration.pinSpace({ root })
+          : operation === 'unpin'
+            ? administration.unpinSpace({ root })
+            : operation === 'add'
+              ? administration.addMember({ root, member: directoryMember(managerIdentityId) })
+              : administration.removeMember({ root, member: directoryMember(memberIdentityId) })
+
+      await expect(result).rejects.toMatchObject({
+        detail: { code: 'outcome_unknown', retry: 'never' }
+      })
+      const expectedWrite = {
+        update: harness.editTeam,
+        pin: harness.stickTeam,
+        unpin: harness.unstickTeam,
+        add: harness.addTeamUsers,
+        remove: harness.removeTeamUsers
+      }[operation]
+      expect(expectedWrite).toHaveBeenCalledOnce()
+    }
+  })
+
+  it.each([
+    ['team id', { teamId: openContentTeamIdSchema.parse(9000020) }],
+    ['folder id', { folderId: openContentFolderIdSchema.parse(9002214) }],
+    ['Team type', { teamType: 3 }],
+    ['owner', { ownerIdentityId: externalIdentityId }]
+  ] as const)('keeps the post-update %s bound to the pre-write Team', async (_label, drift) => {
+    const harness = teamHarness()
+    const observe = harness.observeTeam.getMockImplementation()
+    if (!observe) throw new Error('The Team observe fixture is unavailable.')
+    let observation = 0
+    harness.observeTeam.mockImplementation(async (input) => {
+      const team = await observe(input)
+      observation += 1
+      return observation === 1 ? team : { ...team, ...drift }
+    })
+    const administration = (await createFeature(harness).bind(context)).administration
+    const root = toPortableContentContainerReference({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      containerId: rootGuid
+    })
+
+    await expect(administration.updateSpace({
+      root,
+      label: 'Post-write drift'
     })).rejects.toMatchObject({
-      detail: { code: 'conflict', retry: 'after-human-action' }
+      detail: { code: 'outcome_unknown', retry: 'never' }
+    })
+    expect(harness.editTeam).toHaveBeenCalledOnce()
+  })
+
+  it('reports an unknown update outcome when the post-write Team readback fails', async () => {
+    const harness = teamHarness()
+    const administration = (await createFeature(harness).bind(context)).administration
+    const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
+    const observe = harness.observeTeam.getMockImplementation()
+    if (!observe) throw new Error('The Team observe fixture is unavailable.')
+    let observeCount = 0
+    harness.observeTeam.mockImplementation(async (input) => {
+      observeCount += 1
+      if (observeCount === 1) return observe(input)
+      throw new OpenContentConnectorError(
+        'provider_contract_violation',
+        'Synthetic post-update readback drift.'
+      )
+    })
+
+    await expect(administration.updateSpace({
+      root: space.root,
+      label: 'Updated Team'
+    })).rejects.toMatchObject({
+      detail: { code: 'outcome_unknown', retry: 'never' }
+    })
+    expect(harness.editTeam).toHaveBeenCalledOnce()
+  })
+
+  it('reports an unknown pin outcome when the post-write Team readback fails', async () => {
+    const harness = teamHarness()
+    const administration = (await createFeature(harness).bind(context)).administration
+    const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
+    const observe = harness.observeTeam.getMockImplementation()
+    if (!observe) throw new Error('The Team observe fixture is unavailable.')
+    let observeCount = 0
+    harness.observeTeam.mockImplementation(async (input) => {
+      observeCount += 1
+      if (observeCount === 1) return observe(input)
+      throw new OpenContentConnectorError(
+        'provider_unavailable',
+        'Synthetic post-pin readback failure.'
+      )
+    })
+
+    await expect(administration.pinSpace({ root: space.root })).rejects.toMatchObject({
+      detail: { code: 'outcome_unknown', retry: 'never' }
+    })
+    expect(harness.stickTeam).toHaveBeenCalledOnce()
+  })
+
+  it('reports an unknown unpin outcome when the post-write Team readback fails', async () => {
+    const harness = teamHarness()
+    await harness.stickTeam({ teamId })
+    harness.stickTeam.mockClear()
+    const administration = (await createFeature(harness).bind(context)).administration
+    const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
+    const observe = harness.observeTeam.getMockImplementation()
+    if (!observe) throw new Error('The Team observe fixture is unavailable.')
+    let observeCount = 0
+    harness.observeTeam.mockImplementation(async (input) => {
+      observeCount += 1
+      if (observeCount === 1) return observe(input)
+      throw new OpenContentConnectorError(
+        'cancelled',
+        'Synthetic post-unpin readback cancellation.'
+      )
+    })
+
+    await expect(administration.unpinSpace({ root: space.root })).rejects.toMatchObject({
+      detail: { code: 'outcome_unknown', retry: 'never' }
+    })
+    expect(harness.unstickTeam).toHaveBeenCalledOnce()
+  })
+
+  it('preserves a read failure classification when updateSpace dispatches no write', async () => {
+    const harness = teamHarness()
+    const administration = (await createFeature(harness).bind(context)).administration
+    const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
+    const observe = harness.observeTeam.getMockImplementation()
+    if (!observe) throw new Error('The Team observe fixture is unavailable.')
+    harness.observeTeam
+      .mockImplementationOnce(observe)
+      .mockRejectedValueOnce(new OpenContentConnectorError(
+        'provider_unavailable',
+        'Synthetic no-op update read failure.'
+      ))
+
+    await expect(administration.updateSpace({
+      root: space.root,
+      label: space.label
+    })).rejects.toMatchObject({
+      detail: { code: 'provider_unavailable', retry: 'safe-with-same-invocation' }
     })
     expect(harness.editTeam).not.toHaveBeenCalled()
   })
 
-  it('never transfers ownership through the administration update path', async () => {
+  it('preserves a read failure classification when pinSpace dispatches no write', async () => {
     const harness = teamHarness()
-    const identities = identityBindings(new Map([
-      ['content-owner', ownerIdentityId],
-      ['content-new-owner', memberIdentityId]
-    ]))
-    const administration = (await createFeature(harness, identities).bind(context)).administration
+    await harness.stickTeam({ teamId })
+    harness.stickTeam.mockClear()
+    const administration = (await createFeature(harness).bind(context)).administration
+    const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
+    const observe = harness.observeTeam.getMockImplementation()
+    if (!observe) throw new Error('The Team observe fixture is unavailable.')
+    harness.observeTeam
+      .mockImplementationOnce(observe)
+      .mockRejectedValueOnce(new OpenContentConnectorError(
+        'provider_unavailable',
+        'Synthetic no-op pin read failure.'
+      ))
+
+    await expect(administration.pinSpace({ root: space.root })).rejects.toMatchObject({
+      detail: { code: 'provider_unavailable', retry: 'safe-with-same-invocation' }
+    })
+    expect(harness.stickTeam).not.toHaveBeenCalled()
+  })
+
+  it('preserves a read failure classification when unpinSpace dispatches no write', async () => {
+    const harness = teamHarness()
+    const administration = (await createFeature(harness).bind(context)).administration
+    const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
+    const observe = harness.observeTeam.getMockImplementation()
+    if (!observe) throw new Error('The Team observe fixture is unavailable.')
+    harness.observeTeam
+      .mockImplementationOnce(observe)
+      .mockRejectedValueOnce(new OpenContentConnectorError(
+        'provider_unavailable',
+        'Synthetic no-op unpin read failure.'
+      ))
+
+    await expect(administration.unpinSpace({ root: space.root })).rejects.toMatchObject({
+      detail: { code: 'provider_unavailable', retry: 'safe-with-same-invocation' }
+    })
+    expect(harness.unstickTeam).not.toHaveBeenCalled()
+  })
+
+  it('keeps the observed owner unchanged through the administration update path', async () => {
+    const harness = teamHarness()
+    const administration = (await createFeature(harness).bind(context)).administration
     const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
 
-    const updateSpace = administration.updateSpace as (input: unknown) => ReturnType<
-      typeof administration.updateSpace
-    >
-    await expect(updateSpace({
+    await expect(administration.updateSpace({
       root: space.root,
-      expectedRevision: space.revision,
-      label: 'Renamed Without Owner Transfer',
-      contentOwnerUserId: 'content-new-owner'
+      label: 'Renamed Without Owner Transfer'
     })).resolves.toMatchObject({
       label: 'Renamed Without Owner Transfer',
       contentOwnerUserId: 'content-owner'
     })
-    expect(harness.transferTeamOwner).not.toHaveBeenCalled()
   })
 
-  it('creates once only for the verified current Principal owner and reads the Team back', async () => {
+  it('creates a previously absent Team for the verified current Principal and reads it back', async () => {
     const harness = teamHarness({ initiallyEmpty: true })
     const administration = (await createFeature(harness).bind(context)).administration
 
@@ -249,12 +506,135 @@ describe('OpenContent provider-neutral administration adapter', () => {
     })
     expect(harness.createTeam).toHaveBeenCalledOnce()
     expect(harness.createTeam).toHaveBeenCalledWith({ name: 'New Research Team' })
+  })
 
-    await administration.createSpace({
-      label: 'New Research Team',
+  it('rejects an incomplete Team snapshot before dispatching CreateTeam', async () => {
+    const harness = teamHarness({ initiallyEmpty: true })
+    harness.listTeams.mockResolvedValue({
+      pageNumber: 1,
+      pageSize: 100,
+      totalCount: 1,
+      teams: []
+    })
+    const administration = (await createFeature(harness).bind(context)).administration
+
+    await expect(administration.createSpace({
+      label: 'Unproven Research Team',
       contentOwnerUserId: principal.subject
+    })).rejects.toMatchObject({
+      detail: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(harness.createTeam).not.toHaveBeenCalled()
+  })
+
+  it('rejects Team pagination total drift before dispatching CreateTeam', async () => {
+    const harness = teamHarness({ initiallyEmpty: true })
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      ...teamValue(`Other Team ${index}`, false, ownerIdentityId),
+      teamId: openContentTeamIdSchema.parse(1_000 + index),
+      folderId: openContentFolderIdSchema.parse(2_000 + index)
+    }))
+    harness.listTeams.mockImplementation(async ({ pageNumber, pageSize }) => pageNumber === 1
+      ? {
+          pageNumber,
+          pageSize,
+          totalCount: 101,
+          teams: firstPage,
+          nextPage: 2
+        }
+      : {
+          pageNumber,
+          pageSize,
+          totalCount: 102,
+          teams: [{
+            ...teamValue('Drifting Team', false, ownerIdentityId),
+            teamId: openContentTeamIdSchema.parse(3_000),
+            folderId: openContentFolderIdSchema.parse(4_000)
+          }]
+        })
+    const administration = (await createFeature(harness).bind(context)).administration
+
+    await expect(administration.createSpace({
+      label: 'Unproven Research Team',
+      contentOwnerUserId: principal.subject
+    })).rejects.toMatchObject({
+      detail: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(harness.createTeam).not.toHaveBeenCalled()
+  })
+
+  it('rejects duplicate Team identities before dispatching CreateTeam', async () => {
+    const harness = teamHarness({ initiallyEmpty: true })
+    const duplicate = teamValue('Other Team', false, ownerIdentityId)
+    harness.listTeams.mockResolvedValue({
+      pageNumber: 1,
+      pageSize: 100,
+      totalCount: 2,
+      teams: [duplicate, duplicate]
+    })
+    const administration = (await createFeature(harness).bind(context)).administration
+
+    await expect(administration.createSpace({
+      label: 'Unproven Research Team',
+      contentOwnerUserId: principal.subject
+    })).rejects.toMatchObject({
+      detail: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(harness.createTeam).not.toHaveBeenCalled()
+  })
+
+  it('reports an unknown create outcome when the post-write Team snapshot is incomplete', async () => {
+    const harness = teamHarness({ initiallyEmpty: true })
+    let teamRead = 0
+    harness.listTeams.mockImplementation(async ({ pageNumber, pageSize }) => {
+      teamRead += 1
+      return {
+        pageNumber,
+        pageSize,
+        totalCount: teamRead === 1 ? 0 : 1,
+        teams: []
+      }
+    })
+    const administration = (await createFeature(harness).bind(context)).administration
+
+    await expect(administration.createSpace({
+      label: 'Unproven Created Team',
+      contentOwnerUserId: principal.subject
+    })).rejects.toMatchObject({
+      detail: { code: 'outcome_unknown', retry: 'never' }
     })
     expect(harness.createTeam).toHaveBeenCalledOnce()
+  })
+
+  it('returns a conflict without adopting an existing same-label Team as a new root', async () => {
+    const harness = teamHarness()
+    const administration = (await createFeature(harness).bind(context)).administration
+
+    await expect(administration.createSpace({
+      label: 'Research Team',
+      contentOwnerUserId: principal.subject
+    })).rejects.toMatchObject({
+      detail: { code: 'conflict', retry: 'after-human-action' }
+    })
+    expect(harness.createTeam).not.toHaveBeenCalled()
+    expect(harness.observeTeam).not.toHaveBeenCalled()
+    expect(harness.resolveTeamRoot).not.toHaveBeenCalled()
+  })
+
+  it('does not retry or reconcile an uncertain CreateTeam result by its label', async () => {
+    const harness = teamHarness({ initiallyEmpty: true, createOutcomeUnknown: true })
+    const administration = (await createFeature(harness).bind(context)).administration
+
+    await expect(administration.createSpace({
+      label: 'Uncertain Research Team',
+      contentOwnerUserId: principal.subject
+    })).rejects.toMatchObject({
+      detail: { code: 'outcome_unknown', retry: 'never' }
+    })
+    expect(harness.createTeam).toHaveBeenCalledOnce()
+    expect(harness.listTeams).toHaveBeenCalledOnce()
+    expect(harness.observeTeam).not.toHaveBeenCalled()
+    expect(harness.resolveTeamRoot).not.toHaveBeenCalled()
   })
 
   it('never guesses a non-current owner identity or dispatches CreateTeam for it', async () => {
@@ -292,21 +672,19 @@ describe('OpenContent provider-neutral administration adapter', () => {
 
     await expect(administration.addMember({
       root: space.root,
-      member,
-      expectedRevision: space.revision
-    })).resolves.toMatchObject({ member, role: 'internal' })
+      member
+    })).resolves.toEqual({ root: space.root, member })
 
     const listed = await administration.listMembers({
       root: space.root,
       page: { limit: 20 }
     })
     const listedMember = listed.items.find((item) => item.member.principalId === member.principalId)
-    expect(listedMember).toMatchObject({ member, role: 'internal' })
+    expect(listedMember).toEqual({ member })
 
     await expect(administration.removeMember({
       root: space.root,
-      member: listedMember!.member,
-      expectedRevision: space.revision
+      member: listedMember!.member
     })).resolves.toMatchObject({ member, removed: true })
     await expect(administration.listMembers({
       root: space.root,
@@ -316,21 +694,256 @@ describe('OpenContent provider-neutral administration adapter', () => {
     })
   })
 
+  it('rejects an incomplete member snapshot before dispatching an add', async () => {
+    const harness = teamHarness()
+    const administration = (await createFeature(harness).bind(context)).administration
+    const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
+    harness.listTeamUsers.mockResolvedValue({
+      pageNumber: 1,
+      pageSize: 100,
+      totalCount: 2,
+      users: [{ identityId: ownerIdentityId, userType: 1 }]
+    })
+
+    await expect(administration.addMember({
+      root: space.root,
+      member: directoryMember(memberIdentityId)
+    })).rejects.toMatchObject({
+      detail: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(harness.addTeamUsers).not.toHaveBeenCalled()
+  })
+
+  it('rejects member pagination total drift before dispatching an add', async () => {
+    const harness = teamHarness()
+    const administration = (await createFeature(harness).bind(context)).administration
+    const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
+    const firstPage = [
+      { identityId: ownerIdentityId, userType: 1 as const },
+      ...Array.from({ length: 99 }, (_, index) => ({
+        identityId: openContentIdentityIdSchema.parse(1_000 + index),
+        userType: 3 as const
+      }))
+    ]
+    harness.listTeamUsers.mockImplementation(async ({ pageNumber, pageSize }) => pageNumber === 1
+      ? {
+          pageNumber,
+          pageSize,
+          totalCount: 101,
+          users: firstPage,
+          nextPage: 2
+        }
+      : {
+          pageNumber,
+          pageSize,
+          totalCount: 102,
+          users: [{ identityId: openContentIdentityIdSchema.parse(2_000), userType: 3 }]
+        })
+
+    await expect(administration.addMember({
+      root: space.root,
+      member: directoryMember(memberIdentityId)
+    })).rejects.toMatchObject({
+      detail: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(harness.addTeamUsers).not.toHaveBeenCalled()
+  })
+
+  it('rejects duplicate member identities before dispatching an add', async () => {
+    const harness = teamHarness()
+    const administration = (await createFeature(harness).bind(context)).administration
+    const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
+    harness.listTeamUsers.mockResolvedValue({
+      pageNumber: 1,
+      pageSize: 100,
+      totalCount: 2,
+      users: [
+        { identityId: ownerIdentityId, userType: 1 },
+        { identityId: ownerIdentityId, userType: 1 }
+      ]
+    })
+
+    await expect(administration.addMember({
+      root: space.root,
+      member: directoryMember(memberIdentityId)
+    })).rejects.toMatchObject({
+      detail: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(harness.addTeamUsers).not.toHaveBeenCalled()
+  })
+
+  it('rejects an incomplete member snapshot before dispatching a remove', async () => {
+    const harness = teamHarness({ users: [ownerIdentityId, memberIdentityId] })
+    const administration = (await createFeature(harness).bind(context)).administration
+    const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
+    harness.listTeamUsers.mockResolvedValue({
+      pageNumber: 1,
+      pageSize: 100,
+      totalCount: 3,
+      users: [
+        { identityId: ownerIdentityId, userType: 1 },
+        { identityId: memberIdentityId, userType: 3 }
+      ]
+    })
+
+    await expect(administration.removeMember({
+      root: space.root,
+      member: directoryMember(memberIdentityId)
+    })).rejects.toMatchObject({
+      detail: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(harness.removeTeamUsers).not.toHaveBeenCalled()
+  })
+
+  it('rejects member pagination total drift before dispatching a remove', async () => {
+    const harness = teamHarness({ users: [ownerIdentityId, memberIdentityId] })
+    const administration = (await createFeature(harness).bind(context)).administration
+    const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
+    const firstPage = [
+      { identityId: ownerIdentityId, userType: 1 as const },
+      { identityId: memberIdentityId, userType: 3 as const },
+      ...Array.from({ length: 98 }, (_, index) => ({
+        identityId: openContentIdentityIdSchema.parse(1_000 + index),
+        userType: 3 as const
+      }))
+    ]
+    harness.listTeamUsers.mockImplementation(async ({ pageNumber, pageSize }) => pageNumber === 1
+      ? {
+          pageNumber,
+          pageSize,
+          totalCount: 101,
+          users: firstPage,
+          nextPage: 2
+        }
+      : {
+          pageNumber,
+          pageSize,
+          totalCount: 102,
+          users: [{ identityId: openContentIdentityIdSchema.parse(2_000), userType: 3 }]
+        })
+
+    await expect(administration.removeMember({
+      root: space.root,
+      member: directoryMember(memberIdentityId)
+    })).rejects.toMatchObject({
+      detail: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(harness.removeTeamUsers).not.toHaveBeenCalled()
+  })
+
+  it('reports an unknown add outcome without another write when member pagination drifts', async () => {
+    const harness = teamHarness()
+    const administration = (await createFeature(harness).bind(context)).administration
+    const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
+    const fullFirstPage = [
+      { identityId: ownerIdentityId, userType: 1 as const },
+      { identityId: memberIdentityId, userType: 3 as const },
+      ...Array.from({ length: 98 }, (_, index) => ({
+        identityId: openContentIdentityIdSchema.parse(1_000 + index),
+        userType: 3 as const
+      }))
+    ]
+    let memberRead = 0
+    harness.listTeamUsers.mockImplementation(async ({ pageNumber, pageSize }) => {
+      memberRead += 1
+      if (memberRead === 1) {
+        return {
+          pageNumber,
+          pageSize,
+          totalCount: 1,
+          users: [{ identityId: ownerIdentityId, userType: 1 }]
+        }
+      }
+      if (pageNumber === 1) {
+        return {
+          pageNumber,
+          pageSize,
+          totalCount: 101,
+          users: fullFirstPage,
+          nextPage: 2
+        }
+      }
+      return {
+        pageNumber,
+        pageSize,
+        totalCount: 102,
+        users: [
+          { identityId: openContentIdentityIdSchema.parse(2_000), userType: 3 },
+          { identityId: openContentIdentityIdSchema.parse(2_001), userType: 3 }
+        ]
+      }
+    })
+
+    await expect(administration.addMember({
+      root: space.root,
+      member: directoryMember(memberIdentityId)
+    })).rejects.toMatchObject({
+      detail: { code: 'outcome_unknown', retry: 'never' }
+    })
+    expect(harness.addTeamUsers).toHaveBeenCalledOnce()
+  })
+
+  it('reports an unknown remove outcome without another write when member pagination drifts', async () => {
+    const harness = teamHarness({ users: [ownerIdentityId, memberIdentityId] })
+    const administration = (await createFeature(harness).bind(context)).administration
+    const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
+    const fullFirstPage = [
+      { identityId: ownerIdentityId, userType: 1 as const },
+      ...Array.from({ length: 99 }, (_, index) => ({
+        identityId: openContentIdentityIdSchema.parse(1_000 + index),
+        userType: 3 as const
+      }))
+    ]
+    let memberRead = 0
+    harness.listTeamUsers.mockImplementation(async ({ pageNumber, pageSize }) => {
+      memberRead += 1
+      if (memberRead === 1) {
+        return {
+          pageNumber,
+          pageSize,
+          totalCount: 2,
+          users: [
+            { identityId: ownerIdentityId, userType: 1 },
+            { identityId: memberIdentityId, userType: 3 }
+          ]
+        }
+      }
+      if (pageNumber === 1) {
+        return {
+          pageNumber,
+          pageSize,
+          totalCount: 101,
+          users: fullFirstPage,
+          nextPage: 2
+        }
+      }
+      return {
+        pageNumber,
+        pageSize,
+        totalCount: 102,
+        users: [
+          { identityId: openContentIdentityIdSchema.parse(2_000), userType: 3 },
+          { identityId: openContentIdentityIdSchema.parse(2_001), userType: 3 }
+        ]
+      }
+    })
+
+    await expect(administration.removeMember({
+      root: space.root,
+      member: directoryMember(memberIdentityId)
+    })).rejects.toMatchObject({
+      detail: { code: 'outcome_unknown', retry: 'never' }
+    })
+    expect(harness.removeTeamUsers).toHaveBeenCalledOnce()
+  })
+
   it('paginates members in provider batches and verifies add and remove writes', async () => {
     const harness = teamHarness({
       users: [ownerIdentityId, ...Array.from({ length: 100 }, (_, index) => (
         openContentIdentityIdSchema.parse(100 + index)
       ))]
     })
-    const bindings = identityBindings(new Map([
-      ['content-owner', ownerIdentityId],
-      ['content-member', memberIdentityId],
-      ...Array.from({ length: 100 }, (_, index) => [
-        `existing-${index}`,
-        openContentIdentityIdSchema.parse(100 + index)
-      ] as const)
-    ]))
-    const administration = (await createFeature(harness, bindings).bind(context)).administration
+    const administration = (await createFeature(harness).bind(context)).administration
     const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
 
     const first = await administration.listMembers({ root: space.root, page: { limit: 100 } })
@@ -347,17 +960,18 @@ describe('OpenContent provider-neutral administration adapter', () => {
 
     await expect(administration.addMember({
       root: space.root,
-      member: directoryMember(memberIdentityId),
-      expectedRevision: space.revision
-    })).resolves.toMatchObject({ member: directoryMember(memberIdentityId), role: 'internal' })
+      member: directoryMember(memberIdentityId)
+    })).resolves.toEqual({
+      root: space.root,
+      member: directoryMember(memberIdentityId)
+    })
     expect(harness.addTeamUsers).toHaveBeenCalledWith({
       teamId,
       identityIds: [memberIdentityId]
     })
     await expect(administration.removeMember({
       root: space.root,
-      member: directoryMember(memberIdentityId),
-      expectedRevision: space.revision
+      member: directoryMember(memberIdentityId)
     })).resolves.toMatchObject({ member: directoryMember(memberIdentityId), removed: true })
     expect(harness.removeTeamUsers).toHaveBeenCalledWith({
       teamId,
@@ -365,7 +979,7 @@ describe('OpenContent provider-neutral administration adapter', () => {
     })
   })
 
-  it('preserves OpenContent owner, manager, internal, and external Team identities', async () => {
+  it('projects every valid OpenContent member without exposing its Provider role', async () => {
     const harness = teamHarness()
     harness.listTeamUsers.mockResolvedValue({
       pageNumber: 1,
@@ -378,29 +992,24 @@ describe('OpenContent provider-neutral administration adapter', () => {
         { identityId: externalIdentityId, userType: 4 }
       ]
     })
-    const identities = identityBindings(new Map([
-      ['content-owner', ownerIdentityId],
-      ['content-manager', managerIdentityId],
-      ['content-internal', memberIdentityId],
-      ['content-external', externalIdentityId]
-    ]))
-    const administration = (await createFeature(harness, identities).bind(context)).administration
+    const administration = (await createFeature(harness).bind(context)).administration
     const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
 
     await expect(administration.listMembers({
       root: space.root,
       page: { limit: 20 }
-    })).resolves.toMatchObject({
+    })).resolves.toEqual({
+      root: space.root,
       items: [
-        { member: directoryMember(ownerIdentityId), role: 'owner' },
-        { member: directoryMember(managerIdentityId), role: 'manager' },
-        { member: directoryMember(memberIdentityId), role: 'internal' },
-        { member: directoryMember(externalIdentityId), role: 'external' }
+        { member: directoryMember(ownerIdentityId) },
+        { member: directoryMember(managerIdentityId) },
+        { member: directoryMember(memberIdentityId) },
+        { member: directoryMember(externalIdentityId) }
       ]
     })
   })
 
-  it('does not silently reinterpret an existing manager as an internal addMember result', async () => {
+  it('treats an existing valid member as present without changing its Provider role', async () => {
     const harness = teamHarness()
     harness.listTeamUsers.mockResolvedValue({
       pageNumber: 1,
@@ -411,32 +1020,26 @@ describe('OpenContent provider-neutral administration adapter', () => {
         { identityId: managerIdentityId, userType: 2 }
       ]
     })
-    const identities = identityBindings(new Map([
-      ['content-owner', ownerIdentityId],
-      ['content-manager', managerIdentityId]
-    ]))
-    const administration = (await createFeature(harness, identities).bind(context)).administration
+    const administration = (await createFeature(harness).bind(context)).administration
     const space = (await administration.listSpaces({ page: { limit: 20 } })).items[0]!
 
     await expect(administration.addMember({
       root: space.root,
-      member: directoryMember(managerIdentityId),
-      expectedRevision: space.revision
-    })).rejects.toMatchObject({
-      detail: { code: 'conflict', retry: 'after-human-action' }
+      member: directoryMember(managerIdentityId)
+    })).resolves.toEqual({
+      root: space.root,
+      member: directoryMember(managerIdentityId)
     })
     expect(harness.addTeamUsers).not.toHaveBeenCalled()
   })
 })
 
 function createFeature(
-  harness: ReturnType<typeof teamHarness>,
-  identities = identityBindings()
+  harness: ReturnType<typeof teamHarness>
 ) {
   return createOpenContentAdministrationFeature({
     providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-    facade: facadeFixture(teamSession(harness.administration)),
-    identities
+    facade: facadeFixture(teamSession(harness.administration))
   })
 }
 
@@ -467,31 +1070,12 @@ function facadeFixture(
   }
 }
 
-function identityBindings(
-  initial = new Map<string, OpenContentIdentityId>([['content-owner', ownerIdentityId]])
-): OpenContentIdentityBindingPort {
-  const reverse = new Map([...initial].map(([contentUserId, identityId]) => (
-    [identityId, contentUserId] as const
-  )))
-  return {
-    resolveContentUserIdentity: async ({ contentUserId }) => {
-      const identityId = initial.get(contentUserId)
-      if (identityId === undefined) throw new Error(`Missing fixture ${contentUserId}`)
-      return identityId
-    },
-    resolveExternalIdentityContentUser: async ({ externalIdentityId }) => {
-      const contentUserId = reverse.get(externalIdentityId)
-      if (contentUserId === undefined) throw new Error(`Missing fixture ${externalIdentityId}`)
-      return contentUserId
-    }
-  }
-}
-
 function teamHarness(options: Readonly<{
   initiallyEmpty?: boolean
+  createOutcomeUnknown?: boolean
   users?: readonly OpenContentIdentityId[]
 }> = {}) {
-  let currentOwnerIdentityId = ownerIdentityId
+  const currentOwnerIdentityId = ownerIdentityId
   let team = options.initiallyEmpty
     ? undefined
     : teamValue('Research Team', false, currentOwnerIdentityId)
@@ -504,6 +1088,9 @@ function teamHarness(options: Readonly<{
   }))
   const createTeam = vi.fn<OpenContentBoundTeamAdministration['createTeam']>(async ({ name }) => {
     team = teamValue(name, false, currentOwnerIdentityId)
+    if (options.createOutcomeUnknown) {
+      throw new OpenContentConnectorError('outcome_unknown', 'uncertain CreateTeam result')
+    }
   })
   const observeTeam = vi.fn<OpenContentBoundTeamAdministration['observeTeam']>(async () => {
     if (!team) throw new Error('missing fixture Team')
@@ -546,14 +1133,6 @@ function teamHarness(options: Readonly<{
   const resolveTeamRoot = vi.fn<OpenContentBoundTeamAdministration['resolveTeamRoot']>(
     async () => ({ teamId, folderId, folderGuid: rootGuid })
   )
-  const transferTeamOwner = vi.fn<OpenContentBoundTeamAdministration['transferTeamOwner']>(
-    async ({ ownerIdentityId: nextOwnerIdentityId }) => {
-      if (!team) throw new Error('missing fixture Team')
-      currentOwnerIdentityId = nextOwnerIdentityId
-      users.add(nextOwnerIdentityId)
-      team = teamValue(team.name, team.isStuck, currentOwnerIdentityId)
-    }
-  )
   const administration: OpenContentBoundTeamAdministration = {
     listTeams,
     createTeam,
@@ -564,9 +1143,7 @@ function teamHarness(options: Readonly<{
     listTeamUsers,
     addTeamUsers,
     removeTeamUsers,
-    resolveTeamRoot,
-    setTeamUserRole: vi.fn(),
-    transferTeamOwner
+    resolveTeamRoot
   }
   return {
     administration,
@@ -579,8 +1156,7 @@ function teamHarness(options: Readonly<{
     listTeamUsers,
     addTeamUsers,
     removeTeamUsers,
-    resolveTeamRoot,
-    transferTeamOwner
+    resolveTeamRoot
   }
 }
 

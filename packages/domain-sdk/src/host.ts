@@ -10,6 +10,7 @@ import {
   domainPackageModuleIdSchema,
   domainPackagePermissionIdSchema,
   domainPackageStableVersionSchema,
+  type DomainPackageContributionPublicReleasePolicy,
   type DomainPackageJsonValue
 } from './contract.js'
 import type {
@@ -197,6 +198,8 @@ export type DomainMainContribution = Readonly<{
   owner: DomainRuntimeContributionOwner
   /** Optional manifest declaration version, projected only from trusted metadata. */
   version?: string
+  /** Optional manifest policy; absence has the same public-release meaning as allowed. */
+  publicRelease?: DomainPackageContributionPublicReleasePolicy
   contract: DomainPackageJsonValue
   value: unknown
 }>

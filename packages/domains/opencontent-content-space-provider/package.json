@@ -16,11 +16,11 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sciforge/opencontent-skill-runtime": "0.1.1",
     "@sciforge/domain-content-space": "3.0.0",
     "@sciforge/domain-opencontent-connector": "2.0.1",
     "@sciforge/domain-sdk": "^0.2.1",
-    "react": "^19.0.0"
+    "react": "^19.0.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@sciforge/internal-runtime-integrity": "0.1.0",

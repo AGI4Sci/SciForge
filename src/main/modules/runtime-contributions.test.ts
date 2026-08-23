@@ -151,6 +151,7 @@ describe('main runtime contributions', () => {
         id: 'fixture.extensions.executor',
         kind: MAIN_EXTENSION_CONTRIBUTION_KIND,
         version: '1.3.0',
+        publicRelease: 'forbidden',
         contract,
         value: executor
       },
@@ -170,6 +171,7 @@ describe('main runtime contributions', () => {
       kind: MAIN_EXTENSION_CONTRIBUTION_KIND,
       packageName: '@fixture/extensions',
       version: '1.3.0',
+      publicRelease: 'forbidden',
       contract,
       value: executor
     }])
@@ -903,6 +905,7 @@ function fixtureEntry(
     kind: string
     priority?: number
     version?: string
+    publicRelease?: 'allowed' | 'forbidden'
     contract?: DomainPackageJsonValue
     value: unknown
   }>
@@ -925,11 +928,12 @@ function fixtureEntry(
       entrypoints: [{
         process: 'main',
         export: './main',
-        contributions: contributions.map(({ id, kind, priority, version }) => ({
+        contributions: contributions.map(({ id, kind, priority, version, publicRelease }) => ({
           id,
           kind,
           ...(priority === undefined ? {} : { priority }),
-          ...(version === undefined ? {} : { version })
+          ...(version === undefined ? {} : { version }),
+          ...(publicRelease === undefined ? {} : { publicRelease })
         }))
       }]
     },

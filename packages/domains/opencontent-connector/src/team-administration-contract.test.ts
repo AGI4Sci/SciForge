@@ -4,7 +4,7 @@ import {
   openContentFolderIdSchema,
   openContentIdentityIdSchema,
   openContentTeamIdSchema,
-  openContentTeamPageRequestSchema,
+  openContentTeamUserSchema,
   openContentTeamUserMutationSchema,
   type OpenContentBoundTeamAdministration,
   type OpenContentFolderId,
@@ -12,6 +12,11 @@ import {
   type OpenContentTeamAdministration,
   type OpenContentTeamId
 } from './team-administration-contract.js'
+
+// @ts-expect-error Raw token-bearing administration is not part of the public main namespace.
+import type { OpenContentTeamAdministration as PublicMainTeamAdministration } from './main/index.js'
+// @ts-expect-error Credential-bearing connection sessions are package-private.
+import type { OpenContentConnectionService as PublicMainConnectionService } from './main/index.js'
 
 describe('OpenContent Team administration contract', () => {
   it('keeps Team ids and root-folder ids as distinct public types', () => {
@@ -23,10 +28,6 @@ describe('OpenContent Team administration contract', () => {
   })
 
   it('bounds every provider page and membership mutation to 100 records', () => {
-    expect(openContentTeamPageRequestSchema.parse({ pageNumber: 1, pageSize: 100 }))
-      .toEqual({ pageNumber: 1, pageSize: 100 })
-    expect(() => openContentTeamPageRequestSchema.parse({ pageNumber: 1, pageSize: 101 }))
-      .toThrow()
     expect(() => openContentTeamUserMutationSchema.parse({
       teamId: 9000019,
       identityIds: Array.from({ length: 101 }, (_, index) => index + 1)
@@ -37,9 +38,30 @@ describe('OpenContent Team administration contract', () => {
     })).toThrow()
   })
 
-  it('does not publish destructive Team deletion', () => {
+  it('publishes only the Team-member fields proven by the supplier contract', () => {
+    expect(openContentTeamUserSchema.parse({
+      identityId: 9000041,
+      userType: 3,
+      displayName: 'Fixture User'
+    })).toEqual({
+      identityId: 9000041,
+      userType: 3,
+      displayName: 'Fixture User'
+    })
+    expect(() => openContentTeamUserSchema.parse({
+      identityId: 9000041,
+      userType: 3,
+      account: 'unproven-alias'
+    })).toThrow()
+  })
+
+  it('does not publish dormant or destructive Team mutations', () => {
     expectTypeOf<OpenContentBoundTeamAdministration>()
       .not.toHaveProperty('deleteTeam')
+    expectTypeOf<OpenContentBoundTeamAdministration>()
+      .not.toHaveProperty('setTeamUserRole')
+    expectTypeOf<OpenContentBoundTeamAdministration>()
+      .not.toHaveProperty('transferTeamOwner')
     expectTypeOf<Parameters<OpenContentBoundTeamAdministration['listTeams']>[0]>()
       .not.toHaveProperty('token')
   })

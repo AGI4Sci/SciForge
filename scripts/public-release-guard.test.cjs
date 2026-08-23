@@ -4,21 +4,58 @@ const { resolve } = require('node:path')
 const test = require('node:test')
 
 const {
+  assertNoTrackedInternalPayloadPaths,
+  assertPublicReleaseDomainContributionsSafe,
   assertPublicReleaseCompositionSafe,
-  findContentSpaceVerificationProfileContributions,
   runConfiguredPublicReleaseGuard,
   runPublicReleaseGuard
 } = require('./public-release-guard.cjs')
-const afterPack = require('./after-pack.cjs')
+
+function loadAfterPack(options = {}) {
+  if (!options.internalRuntimePackaging) return require('./after-pack.cjs')
+
+  const afterPackPath = require.resolve('./after-pack.cjs')
+  const internalRuntimePackagingPath = require.resolve('./internal-runtime-packaging.cjs')
+  const previousAfterPack = require.cache[afterPackPath]
+  const previousInternalRuntimePackaging = require.cache[internalRuntimePackagingPath]
+  delete require.cache[afterPackPath]
+  require.cache[internalRuntimePackagingPath] = {
+    id: internalRuntimePackagingPath,
+    filename: internalRuntimePackagingPath,
+    loaded: true,
+    exports: options.internalRuntimePackaging,
+    children: [],
+    paths: []
+  }
+  try {
+    return require(afterPackPath)
+  } finally {
+    delete require.cache[afterPackPath]
+    if (previousAfterPack) require.cache[afterPackPath] = previousAfterPack
+    if (previousInternalRuntimePackaging) {
+      require.cache[internalRuntimePackagingPath] = previousInternalRuntimePackaging
+    } else {
+      delete require.cache[internalRuntimePackagingPath]
+    }
+  }
+}
+
+function loadAfterPackWithoutInternalRuntimes() {
+  return loadAfterPack({
+    internalRuntimePackaging: {
+      internalRuntimeComposition: { extraResources: [], packagedRuntimes: [] },
+      verifyPackagedInternalRuntimes() {}
+    }
+  })
+}
 
 test('public release guard accepts only an empty internal runtime composition', () => {
   assert.deepEqual(
     assertPublicReleaseCompositionSafe({
       extraResources: [],
-      packagedRuntimes: [],
-      domainPackages: []
+      packagedRuntimes: []
     }),
-    { internalRuntimeCount: 0, verificationProfileCount: 0 }
+    { internalRuntimeCount: 0 }
   )
   assert.throws(
     () => assertPublicReleaseCompositionSafe({
@@ -26,8 +63,7 @@ test('public release guard accepts only an empty internal runtime composition', 
       packagedRuntimes: [
         { packageName: '@private/zeta' },
         { packageName: '@private/alpha' }
-      ],
-      domainPackages: []
+      ]
     }),
     /@private\/alpha, @private\/zeta/
   )
@@ -37,8 +73,7 @@ test('public release guard rejects internal extra resources without packaged run
   assert.throws(
     () => assertPublicReleaseCompositionSafe({
       extraResources: [{ from: 'internal/runtime', to: 'internal/runtime' }],
-      packagedRuntimes: [],
-      domainPackages: []
+      packagedRuntimes: []
     }),
     /internal extra resource composition is non-empty/u
   )
@@ -54,144 +89,71 @@ test('public release guard fails closed for malformed internal composition shape
 
   for (const composition of malformedCompositions) {
     assert.throws(
-      () => assertPublicReleaseCompositionSafe({
-        ...composition,
-        domainPackages: []
-      }),
+      () => assertPublicReleaseCompositionSafe(composition),
       /requires canonical extraResources and packagedRuntimes composition/u
     )
   }
 })
 
-test('public release guard rejects an active trusted verification profile from canonical main composition', () => {
+test('public release guard rejects Git-tracked internal payloads before loading composition', async () => {
+  assert.deepEqual(assertNoTrackedInternalPayloadPaths([]), {
+    trackedInternalPayloadCount: 0
+  })
   assert.throws(
-    () => assertPublicReleaseCompositionSafe({
-      extraResources: [],
-      packagedRuntimes: [],
-      domainPackages: [trustedDomainDefinition({
-        contract: verificationProfileContract()
-      })]
-    }),
-    /Refusing to build or publish.*@fixture\/content-space-verification/u
+    () => assertNoTrackedInternalPayloadPaths(['internal/fixture/private.txt']),
+    /internal payloads are Git-tracked/u
   )
+  let compositionLoads = 0
+  await assert.rejects(
+    runPublicReleaseGuard([], {
+      createComposition: () => {
+        compositionLoads += 1
+        return { extraResources: [], packagedRuntimes: [] }
+      },
+      loadTrackedInternalPayloadPaths: () => ['internal/fixture/private.txt'],
+      projectRoot: '/trusted/repository'
+    }),
+    /internal payloads are Git-tracked/u
+  )
+  assert.equal(compositionLoads, 0)
 })
 
-test('profile discovery requires the manifest contract and matching main runtime contribution', () => {
-  const developmentOnly = trustedDomainDefinition({
-    composition: 'development-only',
-    contract: verificationProfileContract()
-  })
-  const rendererOnly = trustedDomainDefinition({
-    contract: verificationProfileContract(),
-    process: 'renderer',
-    contributionKind: 'renderer.extension'
-  })
-  const unrelatedMainExtension = trustedDomainDefinition({
-    contract: {
-      location: 'main.unrelated-fixture',
-      principal: 'fixture-principal',
-      externalBinding: 'fixture-external-binding',
-      root: 'fixture-root'
-    }
-  })
-  const contractWithoutRuntimeDeclaration = trustedDomainDefinition({
-    contract: verificationProfileContract(),
-    contributions: []
-  })
-  const runtimeDeclarationWithoutContract = trustedDomainDefinition({ contract: undefined })
-
-  assert.deepEqual(
-    assertPublicReleaseCompositionSafe({
-      extraResources: [],
-      packagedRuntimes: [],
-      domainPackages: [
-        developmentOnly,
-        rendererOnly,
-        unrelatedMainExtension,
-        contractWithoutRuntimeDeclaration,
-        runtimeDeclarationWithoutContract
-      ]
-    }),
-    { internalRuntimeCount: 0, verificationProfileCount: 0 }
-  )
-  assert.deepEqual(
-    findContentSpaceVerificationProfileContributions(
-      [developmentOnly],
-      { includeDevelopmentOnly: true }
-    ),
-    [{
-      packageName: '@fixture/content-space-verification',
-      contributionId: 'fixture.content-space-verification'
-    }]
-  )
-})
-
-test('profile rejection never echoes Principal, external binding, or root contract contents', () => {
-  const contract = verificationProfileContract()
-  contract.profile.principal.subject = 'SENSITIVE-PRINCIPAL-SENTINEL'
-  contract.profile.externalBinding.externalSubject = 'SENSITIVE-BINDING-SENTINEL'
-  contract.profile.authority.root.containerId = 'SENSITIVE-ROOT-SENTINEL'
-
-  let diagnostic = ''
-  assert.throws(
-    () => assertPublicReleaseCompositionSafe({
-      extraResources: [],
-      packagedRuntimes: [],
-      domainPackages: [trustedDomainDefinition({ contract })]
-    }),
-    (error) => {
-      diagnostic = error.message
-      return true
-    }
-  )
-  assert.match(diagnostic, /@fixture\/content-space-verification:fixture\.content-space-verification/u)
-  assert.doesNotMatch(diagnostic, /SENSITIVE-/u)
-})
-
-test('public release guard accepts canonical composition without active verification profiles', async () => {
+test('public release guard accepts canonical empty internal composition', async () => {
   let discoveredRoot
   const result = await runPublicReleaseGuard([], {
     createComposition(root) {
       discoveredRoot = root
       return { extraResources: [], packagedRuntimes: [] }
     },
-    loadDomainPackages: async () => [],
+    discoverDomainPackages: async () => [],
+    loadTrackedInternalPayloadPaths: () => [],
     projectRoot: '/trusted/repository'
   })
   assert.equal(discoveredRoot, '/trusted/repository')
   assert.deepEqual(result, {
     internalRuntimeCount: 0,
-    verificationProfileCount: 0
+    publicReleaseForbiddenContributionCount: 0
   })
 })
 
-test('public release guard rejects a verification profile loaded by canonical domain discovery', async () => {
-  const discoveredRoots = []
-  await assert.rejects(
-    runPublicReleaseGuard([], {
-      createComposition(root) {
-        discoveredRoots.push(root)
-        return { extraResources: [], packagedRuntimes: [] }
-      },
-      loadDomainPackages: async (root) => {
-        discoveredRoots.push(root)
-        return [trustedDomainDefinition({ contract: verificationProfileContract() })]
-      },
-      projectRoot: '/trusted/repository'
-    }),
-    /Refusing to build or publish.*@fixture\/content-space-verification/u
-  )
-  assert.deepEqual(discoveredRoots, [
-    '/trusted/repository',
-    '/trusted/repository'
-  ])
+test('public release guard reads installed manifests through canonical domain discovery', async () => {
+  const result = await runPublicReleaseGuard([], {
+    createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
+    loadTrackedInternalPayloadPaths: () => [],
+    projectRoot: resolve('.')
+  })
+
+  assert.deepEqual(result, {
+    internalRuntimeCount: 0,
+    publicReleaseForbiddenContributionCount: 0
+  })
 })
 
 test('public release guard rejects arguments that could weaken the official policy', async () => {
   await assert.rejects(
     runPublicReleaseGuard(['--allow-internal'], {
       createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
-      loadDomainPackages: async () => [],
+      loadTrackedInternalPayloadPaths: () => [],
       projectRoot: '/trusted/repository'
     }),
     /does not accept arguments/
@@ -209,9 +171,9 @@ test('configured guard preserves local internal acceptance unless public release
         packagedRuntimes: [{ packageName: '@fixture/internal-runtime' }]
       }
     },
-    loadDomainPackages: async () => {
+    loadTrackedInternalPayloadPaths: () => {
       compositionLoads += 1
-      return [trustedDomainDefinition({ contract: verificationProfileContract() })]
+      return ['internal/fixture/private.txt']
     },
     projectRoot: '/trusted/repository'
   })
@@ -225,22 +187,90 @@ test('configured guard fails closed for malformed and enabled public release mod
     runConfiguredPublicReleaseGuard({
       environment: { SCIFORGE_PUBLIC_RELEASE: 'true' },
       createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
-      loadDomainPackages: async () => [],
+      loadTrackedInternalPayloadPaths: () => [],
       projectRoot: '/trusted/repository'
     }),
     /must be exactly 1/u
   )
+  assert.deepEqual(
+    await runConfiguredPublicReleaseGuard({
+      environment: { SCIFORGE_PUBLIC_RELEASE: '1' },
+      createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
+      discoverDomainPackages: async () => [],
+      loadTrackedInternalPayloadPaths: () => [],
+      projectRoot: '/trusted/repository'
+    }),
+    { internalRuntimeCount: 0, publicReleaseForbiddenContributionCount: 0 }
+  )
+})
+
+test('configured prebuild guard rejects any active contribution forbidden by its manifest', async () => {
   await assert.rejects(
     runConfiguredPublicReleaseGuard({
       environment: { SCIFORGE_PUBLIC_RELEASE: '1' },
       createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
-      loadDomainPackages: async () => [
-        trustedDomainDefinition({ contract: verificationProfileContract() })
-      ],
+      discoverDomainPackages: async () => [domainPackageCandidate({
+        contributionId: 'fixture.local-acceptance',
+        publicRelease: 'forbidden'
+      })],
+      loadTrackedInternalPayloadPaths: () => [],
       projectRoot: '/trusted/repository'
     }),
-    /@fixture\/content-space-verification/u
+    /@fixture\/release-policy:fixture\.local-acceptance/u
   )
+})
+
+test('configured prebuild guard allows ordinary and inactive domain contributions', async () => {
+  const result = await runConfiguredPublicReleaseGuard({
+    environment: { SCIFORGE_PUBLIC_RELEASE: '1' },
+    createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
+    discoverDomainPackages: async () => [
+      domainPackageCandidate({
+        packageName: '@fixture/release-policy-default',
+        contributionId: 'fixture.default-allowed'
+      }),
+      domainPackageCandidate({
+        packageName: '@fixture/release-policy-explicit',
+        contributionId: 'fixture.explicitly-allowed',
+        publicRelease: 'allowed'
+      }),
+      domainPackageCandidate({
+        packageName: '@fixture/release-policy-development',
+        composition: 'development-only',
+        contributionId: 'fixture.inactive-local-only',
+        publicRelease: 'forbidden'
+      })
+    ],
+    loadTrackedInternalPayloadPaths: () => [],
+    projectRoot: '/trusted/repository'
+  })
+
+  assert.deepEqual(result, {
+    internalRuntimeCount: 0,
+    publicReleaseForbiddenContributionCount: 0
+  })
+})
+
+test('generic contribution rejection does not expose package-owned contract values', () => {
+  const sensitive = 'SENSITIVE-PROFILE-CONTRACT-SENTINEL'
+  const candidate = domainPackageCandidate({
+    contributionId: 'fixture.sanitized-local-acceptance',
+    publicRelease: 'forbidden'
+  })
+  candidate.definition.contributionContracts = {
+    'fixture.sanitized-local-acceptance': { opaqueEvidence: sensitive }
+  }
+
+  let diagnostic = ''
+  assert.throws(
+    () => assertPublicReleaseDomainContributionsSafe([candidate]),
+    (error) => {
+      diagnostic = error.message
+      return true
+    }
+  )
+  assert.match(diagnostic, /fixture\.sanitized-local-acceptance/u)
+  assert.doesNotMatch(diagnostic, new RegExp(sensitive, 'u'))
 })
 
 test('npm prebuild checks configured public release composition before compilation', async () => {
@@ -317,7 +347,38 @@ test('after-pack rechecks public release composition immediately before packaged
   assert.match(source, /createComposition:\s*\(\)\s*=>\s*\n?\s*internalRuntimePackaging\.internalRuntimeComposition/u)
 })
 
+test('after-pack rejects an active contribution forbidden by its generic manifest policy', async () => {
+  const afterPack = loadAfterPackWithoutInternalRuntimes()
+  await assert.rejects(
+    afterPack._internals.verifyOfficialPublicReleaseComposition({
+      environment: { SCIFORGE_PUBLIC_RELEASE: '1' },
+      discoverDomainPackages: async () => [domainPackageCandidate({
+        contributionId: 'fixture.packaged-local-acceptance',
+        publicRelease: 'forbidden'
+      })],
+      loadTrackedInternalPayloadPaths: () => [],
+      projectRoot: '/trusted/repository'
+    }),
+    /@fixture\/release-policy:fixture\.packaged-local-acceptance/u
+  )
+})
+
+test('after-pack allows active contributions that permit public release', async () => {
+  const afterPack = loadAfterPackWithoutInternalRuntimes()
+
+  await afterPack._internals.verifyOfficialPublicReleaseComposition({
+    environment: { SCIFORGE_PUBLIC_RELEASE: '1' },
+    discoverDomainPackages: async () => [domainPackageCandidate({
+      contributionId: 'fixture.packaged-public',
+      publicRelease: 'allowed'
+    })],
+    loadTrackedInternalPayloadPaths: () => [],
+    projectRoot: '/trusted/repository'
+  })
+})
+
 test('after-pack rejects malformed public release mode instead of treating it as disabled', async () => {
+  const afterPack = loadAfterPackWithoutInternalRuntimes()
   const previous = process.env.SCIFORGE_PUBLIC_RELEASE
   process.env.SCIFORGE_PUBLIC_RELEASE = 'true'
   try {
@@ -332,6 +393,7 @@ test('after-pack rejects malformed public release mode instead of treating it as
 })
 
 test('after-pack leaves ordinary local internal acceptance mode unchanged', async () => {
+  const afterPack = loadAfterPackWithoutInternalRuntimes()
   const previous = process.env.SCIFORGE_PUBLIC_RELEASE
   delete process.env.SCIFORGE_PUBLIC_RELEASE
   try {
@@ -370,72 +432,36 @@ test('GitHub public release jobs guard before build, signing credentials, and pu
   }
 })
 
-function trustedDomainDefinition({
+function domainPackageCandidate({
+  packageName = '@fixture/release-policy',
   composition = 'production',
-  contract,
-  process = 'main',
-  contributionKind = 'main.extension',
-  contributions
+  contributionId,
+  publicRelease
 }) {
-  const contributionId = 'fixture.content-space-verification'
   return {
-    contractVersion: 1,
-    kind: 'trusted-compile-time',
-    composition,
-    packageName: '@fixture/content-space-verification',
-    module: {
-      id: 'fixture.content-space-verification',
-      displayName: 'Fixture Content Space Verification',
-      version: '1.0.0',
-      hostApi: { minimum: '1.0.0', maximumExclusive: '2.0.0' },
-      priority: 100
-    },
-    ...(contract === undefined ? {} : {
-      contributionContracts: { [contributionId]: contract }
-    }),
-    entrypoints: [{
-      process,
-      export: process === 'renderer' ? './renderer' : './main',
-      contributions: contributions ?? [{
-        id: contributionId,
-        kind: contributionKind,
-        version: '2.0.0',
+    definition: {
+      contractVersion: 1,
+      kind: 'trusted-compile-time',
+      composition,
+      packageName,
+      module: {
+        id: packageName.replace(/^@fixture\//u, 'fixture.'),
+        displayName: 'Fixture Release Policy',
+        version: '1.0.0',
+        hostApi: { minimum: '1.0.0', maximumExclusive: '2.0.0' },
         priority: 100
+      },
+      contributionContracts: {},
+      entrypoints: [{
+        process: 'main',
+        export: './main',
+        contributions: [{
+          id: contributionId,
+          kind: 'main.extension',
+          ...(publicRelease === undefined ? {} : { publicRelease }),
+          priority: 100
+        }]
       }]
-    }]
-  }
-}
-
-function verificationProfileContract() {
-  return {
-    location: 'main.content-space-verification-profile',
-    contractVersion: '2.0.0',
-    profile: {
-      profileId: 'fixture-profile',
-      providerInstanceRef: 'provider-instance-fixture',
-      principal: {
-        authority: 'fixture.identity',
-        subject: 'fixture-subject',
-        assurance: 'local-selection',
-        deviceId: 'fixture-device',
-        identityVersion: 1
-      },
-      audience: 'agent',
-      authority: {
-        kind: 'content-root',
-        root: {
-          providerInstanceRef: 'provider-instance-fixture',
-          containerId: 'fixture-root'
-        }
-      },
-      operation: { family: 'ordinary', operation: 'upload-new-file' },
-      transferLimits: { maxUploadBytes: 16 * 1024 * 1024, maxDownloadBytes: 0 },
-      externalBinding: {
-        externalSubject: 'fixture-external-subject',
-        bindingRevision: 'fixture-binding-revision'
-      },
-      validFrom: '2026-08-21T00:00:00.000Z',
-      expiresAt: '2026-08-21T01:00:00.000Z'
     }
   }
 }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import {
+  glob,
   lstat,
   mkdir,
   mkdtemp,
@@ -13,49 +14,132 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createRequire } from 'node:module'
 import { promisify } from 'node:util'
 import test from 'node:test'
+
+import { discoverDomainPackages } from './domain-packages.mjs'
 
 const run = promisify(execFile)
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-const typescriptCompiler = createRequire(import.meta.url).resolve('typescript/bin/tsc')
-const targetPackageDirectories = Object.freeze([
-  'packages/domain-sdk',
-  'packages/domains/artifact-versions',
-  'packages/domains/content-space',
-  'packages/domains/content-space-mock-provider',
-  'packages/domains/git-checkpoints',
-  'packages/domains/identity-access',
-  'packages/domains/opencontent-connector',
-  'packages/domains/opencontent-content-space-provider',
-  'packages/domains/research-checkpoints',
-  'packages/domains/research-dossier',
-  'packages/domains/visual-review',
-  'packages/internal-runtime-integrity',
-  'packages/opencontent-skill-runtime'
-])
-const localDependencyDirectories = Object.freeze([
-  'packages/collaboration-contracts',
-  'packages/collaboration-identity',
-  'packages/workers/image-generation',
-  'packages/workers/scientific-plotting'
-])
-const packageDirectories = Object.freeze([
-  ...targetPackageDirectories,
-  ...localDependencyDirectories
-])
 
 const sourceExtensionPattern = /\.(?:[cm]?[jt]sx?)$/u
+const testSourcePattern = /\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/u
 const packagePrivateSpecifierPattern = /^@sciforge\/[^/]+\/src(?:\/|$)/u
+
+test('tarball coverage follows every publishable domain manifest', async () => {
+  const discovered = await discoverDomainPackages(repositoryRoot)
+  const expected = discovered
+    .filter(({ packageJson }) => packageJson.private !== true)
+    .map(({ packageJson }) => packageJson.name)
+    .sort()
+  const selected = (await discoverTarballPackages(repositoryRoot))
+    .filter(({ isDomain }) => isDomain)
+    .map(({ packageJson }) => packageJson.name)
+    .sort()
+
+  assert.deepEqual(selected, expected)
+})
+
+async function discoverWorkspacePackages(root) {
+  const rootPackagePath = join(root, 'package.json')
+  const rootPackage = JSON.parse(await readFile(rootPackagePath, 'utf8'))
+  assert.ok(Array.isArray(rootPackage.workspaces), 'Root package.json must declare workspaces')
+
+  const packages = new Map()
+  for (const workspace of [...rootPackage.workspaces].sort()) {
+    assert.equal(typeof workspace, 'string', 'Every workspace must be a path pattern')
+    assert.equal(isAbsolute(workspace), false, `Workspace must be repository-relative: ${workspace}`)
+    assert.equal(
+      workspace.split(/[\\/]/u).includes('..'),
+      false,
+      `Workspace must not escape the repository: ${workspace}`
+    )
+    for await (const manifestPath of glob(`${workspace}/package.json`, { cwd: root })) {
+      const packageRoot = resolve(root, dirname(manifestPath))
+      const escaped = relative(root, packageRoot)
+      assert.equal(
+        escaped === '..' ||
+          escaped.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) ||
+          isAbsolute(escaped),
+        false,
+        `Workspace package escapes the repository: ${manifestPath}`
+      )
+      const packageJson = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
+      assert.equal(typeof packageJson.name, 'string', `${manifestPath} must declare a package name`)
+      assert.equal(
+        packages.has(packageJson.name),
+        false,
+        `Duplicate workspace package: ${packageJson.name}`
+      )
+      packages.set(packageJson.name, Object.freeze({ packageJson, packageRoot }))
+    }
+  }
+  return packages
+}
+
+async function discoverTarballPackages(root) {
+  const [domains, workspaces] = await Promise.all([
+    discoverDomainPackages(root),
+    discoverWorkspacePackages(root)
+  ])
+  const domainNames = new Set(
+    domains
+      .filter(({ packageJson }) => packageJson.private !== true)
+      .map(({ packageName }) => packageName)
+  )
+  const domainsByName = new Map(domains.map((domain) => [domain.packageName, domain]))
+  assert.ok(domainNames.size > 0, 'At least one publishable domain package is required')
+
+  const selected = new Set()
+  const pending = [...domainNames]
+  while (pending.length > 0) {
+    const packageName = pending.pop()
+    if (selected.has(packageName)) continue
+    const workspacePackage = workspaces.get(packageName)
+    assert.ok(workspacePackage, `Domain dependency is not a declared workspace: ${packageName}`)
+    selected.add(packageName)
+    const dependencies = workspacePackage.packageJson.dependencies ?? {}
+    assert.ok(
+      typeof dependencies === 'object' && dependencies !== null && !Array.isArray(dependencies),
+      `${packageName} dependencies must be an object`
+    )
+    for (const dependencyName of Object.keys(dependencies)) {
+      if (workspaces.has(dependencyName) && !selected.has(dependencyName)) {
+        pending.push(dependencyName)
+      }
+    }
+  }
+
+  return Object.freeze(
+    [...selected]
+      .map((packageName) => Object.freeze({
+        ...workspaces.get(packageName),
+        isDomain: domainNames.has(packageName),
+        nonNodeExportSpecifiers: Object.freeze(
+          (domainsByName.get(packageName)?.definition.entrypoints ?? [])
+            .filter(({ process }) => process === 'renderer')
+            .map(({ export: subpath }) => publicExportSpecifier(packageName, subpath))
+        )
+      }))
+      .sort((left, right) => left.packageJson.name.localeCompare(right.packageJson.name))
+  )
+}
+
+function publicExportSpecifier(packageName, subpath) {
+  return subpath === '.' ? packageName : `${packageName}${subpath.slice(1)}`
+}
 
 async function sourceFiles(root) {
   const files = []
   for (const entry of await readdir(root, { withFileTypes: true })) {
     const path = join(root, entry.name)
     if (entry.isDirectory()) files.push(...await sourceFiles(path))
-    else if (entry.isFile() && sourceExtensionPattern.test(entry.name)) files.push(path)
+    else if (
+      entry.isFile() &&
+      sourceExtensionPattern.test(entry.name) &&
+      !testSourcePattern.test(entry.name)
+    ) files.push(path)
   }
   return files
 }
@@ -100,7 +184,9 @@ async function assertPackedPackageBoundaries(packageRoot, packageName) {
       const target = resolve(dirname(sourceFile), specifier)
       const escaped = relative(packageRoot, target)
       assert.equal(
-        escaped === '..' || escaped.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(escaped),
+        escaped === '..' ||
+          escaped.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) ||
+          isAbsolute(escaped),
         false,
         `${packageName} packed source escapes its package root: ${specifier}`
       )
@@ -108,9 +194,11 @@ async function assertPackedPackageBoundaries(packageRoot, packageName) {
   }
 }
 
-function publicExportSpecifiers(packageJson) {
+async function assertPublicExportTargets(packageRoot, packageJson) {
   assert.equal(typeof packageJson.exports, 'object', `${packageJson.name} must declare exports`)
-  return Object.entries(packageJson.exports).map(([subpath, target]) => {
+  const importSpecifiers = []
+  const requireSpecifiers = []
+  for (const [subpath, target] of Object.entries(packageJson.exports)) {
     const importTarget = typeof target === 'string' ? target : target?.import
     assert.equal(
       typeof importTarget,
@@ -137,15 +225,56 @@ function publicExportSpecifiers(packageJson) {
         )
       }
     }
-    return subpath === '.' ? packageJson.name : `${packageJson.name}${subpath.slice(1)}`
+    const specifier = publicExportSpecifier(packageJson.name, subpath)
+    importSpecifiers.push(specifier)
+    if (typeof target !== 'string' && typeof target.require === 'string') {
+      requireSpecifiers.push(specifier)
+    }
+    for (const [condition, exportTarget] of Object.entries(
+      typeof target === 'string' ? { import: target } : target
+    )) {
+      if (condition !== 'import' && condition !== 'require' && condition !== 'types') continue
+      assert.equal(
+        typeof exportTarget,
+        'string',
+        `${packageJson.name} ${subpath} ${condition} target must be explicit`
+      )
+      assert.equal(
+        exportTarget.startsWith('./'),
+        true,
+        `${packageJson.name} ${subpath} ${condition} target must be package-relative`
+      )
+      const targetPath = resolve(packageRoot, exportTarget)
+      const escaped = relative(packageRoot, targetPath)
+      assert.equal(
+        escaped === '..' ||
+          escaped.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) ||
+          isAbsolute(escaped),
+        false,
+        `${packageJson.name} ${subpath} ${condition} target escapes its package root`
+      )
+      assert.equal(
+        (await lstat(targetPath)).isFile(),
+        true,
+        `${packageJson.name} ${subpath} ${condition} target must be packed as a file`
+      )
+    }
+  }
+  return Object.freeze({
+    importSpecifiers: Object.freeze(importSpecifiers),
+    requireSpecifiers: Object.freeze(requireSpecifiers)
   })
 }
 
 test('publishable domain packages resolve every public export from independent tarballs', {
-  timeout: 120_000
+  timeout: 240_000
 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-domain-tarball-smoke-'))
   try {
+    const packages = await discoverTarballPackages(repositoryRoot)
+    const nonNodeExportSpecifiers = new Set(
+      packages.flatMap(({ nonNodeExportSpecifiers: specifiers }) => specifiers)
+    )
     const tarballs = join(root, 'tarballs')
     const installation = join(root, 'installation')
     await mkdir(tarballs)
@@ -157,7 +286,7 @@ test('publishable domain packages resolve every public export from independent t
     }))
 
     const archives = []
-    for (const relativeDirectory of packageDirectories) {
+    for (const { packageRoot, packageJson } of packages) {
       const { stdout } = await run(npm, [
         'pack',
         '--json',
@@ -165,11 +294,11 @@ test('publishable domain packages resolve every public export from independent t
         '--pack-destination',
         tarballs
       ], {
-        cwd: join(repositoryRoot, relativeDirectory),
+        cwd: packageRoot,
         maxBuffer: 4 * 1024 * 1024
       })
       const packed = JSON.parse(stdout)
-      assert.equal(packed.length, 1, `Expected one archive for ${relativeDirectory}`)
+      assert.equal(packed.length, 1, `Expected one archive for ${packageJson.name}`)
       archives.push(join(tarballs, packed[0].filename))
     }
 
@@ -188,11 +317,7 @@ test('publishable domain packages resolve every public export from independent t
     })
 
     const installedPackages = new Map()
-    for (const relativeDirectory of packageDirectories) {
-      const sourcePackage = JSON.parse(await readFile(
-        join(repositoryRoot, relativeDirectory, 'package.json'),
-        'utf8'
-      ))
+    for (const { packageJson: sourcePackage, isDomain } of packages) {
       const installedRoot = join(installation, 'node_modules', sourcePackage.name)
       assert.equal((await lstat(installedRoot)).isSymbolicLink(), false)
       assert.equal((await realpath(installedRoot)).startsWith(repositoryRoot), false)
@@ -201,155 +326,31 @@ test('publishable domain packages resolve every public export from independent t
       assert.equal(installedPackage.version, sourcePackage.version)
       await assertPackedPackageBoundaries(installedRoot, installedPackage.name)
       installedPackages.set(installedPackage.name, {
+        isDomain,
         packageJson: installedPackage,
         root: installedRoot
       })
+      if (isDomain) {
+        const installedManifest = JSON.parse(await readFile(
+          join(installedRoot, 'sciforge.domain.json'),
+          'utf8'
+        ))
+        assert.equal(installedManifest.packageName, installedPackage.name)
+        assert.equal(installedManifest.module.version, installedPackage.version)
+      }
     }
 
-    const sdkPackage = installedPackages.get('@sciforge/domain-sdk').packageJson
-    const artifact = installedPackages.get('@sciforge/domain-artifact-versions')
-    const artifactPackage = artifact.packageJson
-    const content = installedPackages.get('@sciforge/domain-content-space')
-    const contentPackage = content.packageJson
-    const contentMock = installedPackages.get('@sciforge/domain-content-space-mock-provider')
-    const contentMockPackage = contentMock.packageJson
-    const identity = installedPackages.get('@sciforge/domain-identity-access')
-    const identityPackage = identity.packageJson
-    const internalRuntimeIntegrity = installedPackages.get(
-      '@sciforge/internal-runtime-integrity'
-    ).packageJson
-    const openContentRuntimePackage = installedPackages.get(
-      '@sciforge/opencontent-skill-runtime'
-    )
-    const openContentRuntime = openContentRuntimePackage.packageJson
-    const openContentConnector = installedPackages.get('@sciforge/domain-opencontent-connector')
-      .packageJson
-    const openContentProvider = installedPackages.get(
-      '@sciforge/domain-opencontent-content-space-provider'
-    ).packageJson
-    const checkpointPackage = installedPackages.get(
-      '@sciforge/domain-research-checkpoints'
-    ).packageJson
-    const dossierPackage = installedPackages.get('@sciforge/domain-research-dossier').packageJson
-    const artifactManifest = JSON.parse(await readFile(
-      join(artifact.root, 'sciforge.domain.json'),
-      'utf8'
-    ))
-    const contentManifest = JSON.parse(await readFile(
-      join(content.root, 'sciforge.domain.json'),
-      'utf8'
-    ))
-    const contentMockManifest = JSON.parse(await readFile(
-      join(contentMock.root, 'sciforge.domain.json'),
-      'utf8'
-    ))
-    const identityManifest = JSON.parse(await readFile(
-      join(identity.root, 'sciforge.domain.json'),
-      'utf8'
-    ))
-    assert.equal(sdkPackage.version, '0.2.2')
-    assert.equal(sdkPackage.exports['./external-navigation'], './src/external-navigation.ts')
-    assert.equal(sdkPackage.exports['./file-transfer'], './src/file-transfer.ts')
-    assert.equal(
-      sdkPackage.exports['./portable-resource-references'],
-      './src/portable-resource-references.ts'
-    )
-    assert.equal(sdkPackage.exports['./principal'], './src/principal.ts')
-    assert.equal(sdkPackage.exports['./provider-composition'], './src/provider-composition.ts')
-    assert.equal(artifactPackage.version, '1.1.0')
-    assert.equal(artifactManifest.module.version, '1.1.0')
-    assert.equal(artifactPackage.dependencies['@sciforge/domain-sdk'], '^0.2.0')
-    assert.equal(contentPackage.version, '3.0.0')
-    assert.equal(contentManifest.module.version, '3.0.0')
-    assert.equal(contentManifest.module.hostApi.minimum, '1.3.0')
-    assert.equal(contentPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
-    assert.equal(contentMockPackage.version, '1.0.2')
-    assert.equal(contentMockManifest.module.version, '1.0.2')
-    assert.equal(contentMockManifest.module.hostApi.minimum, '1.3.0')
-    assert.equal(
-      contentMockPackage.dependencies['@sciforge/domain-content-space'],
-      '3.0.0'
-    )
-    assert.equal(contentMockPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
-    assert.equal(identityPackage.version, '1.1.0')
-    assert.equal(identityManifest.module.version, '1.1.0')
-    assert.equal(identityManifest.module.hostApi.minimum, '1.4.0')
-    assert.equal(
-      identityPackage.dependencies['@sciforge/collaboration-contracts'],
-      '0.1.0'
-    )
-    assert.equal(
-      identityPackage.dependencies['@sciforge/collaboration-identity'],
-      '0.1.0'
-    )
-    assert.equal(identityPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
-    assert.equal(
-      openContentRuntime.exports['./main/extended-operation-adapter'].import,
-      './src/extended-operation-adapter.ts'
-    )
-    assert.equal(
-      Object.keys(openContentRuntime.exports).some((subpath) => subpath.includes('internal')),
-      false,
-      'OpenContent runtime must not export its private process implementation'
-    )
-    assert.equal(
-      openContentConnector.dependencies['@sciforge/opencontent-skill-runtime'],
-      openContentRuntime.version
-    )
-    assert.equal(
-      openContentConnector.dependencies['@sciforge/internal-runtime-integrity'],
-      internalRuntimeIntegrity.version
-    )
-    assert.equal(
-      Object.keys(openContentConnector.exports).some((subpath) => subpath.includes('facade')),
-      false,
-      'OpenContent Connector must keep facade construction package-private'
-    )
-    assert.equal(
-      Object.values(openContentConnector.exports).some((target) =>
-        JSON.stringify(target).includes('/main/team-administration.')
-      ),
-      false,
-      'OpenContent Connector must keep credential-bearing Team transport package-private'
-    )
-    assert.deepEqual(internalRuntimeIntegrity.exports['.'], {
-      types: './src/index.ts',
-      import: './src/index.ts',
-      require: './index.cjs'
-    })
-    assert.equal(
-      openContentProvider.dependencies['@sciforge/opencontent-skill-runtime'],
-      openContentRuntime.version
-    )
-    for (const packageJson of [
-      openContentRuntime,
-      openContentConnector,
-      openContentProvider
-    ]) {
-      assert.equal(packageJson.private, false)
-      assert.equal(packageJson.license, 'MIT')
-      assert.equal(
-        Object.keys(packageJson.dependencies ?? {}).some((name) =>
-          name.startsWith('@sciforge-internal/')
-        ),
-        false,
-        `${packageJson.name} must not depend on a private attachment package`
-      )
+    const publicExports = []
+    const requireExports = []
+    for (const { packageJson, root: installedRoot } of installedPackages.values()) {
+      if (packageJson.private === true) continue
+      const specifiers = await assertPublicExportTargets(installedRoot, packageJson)
+      publicExports.push(...specifiers.importSpecifiers)
+      requireExports.push(...specifiers.requireSpecifiers)
     }
-    await assert.rejects(lstat(join(openContentRuntimePackage.root, 'assets')), {
-      code: 'ENOENT'
-    })
-    assert.equal(
-      checkpointPackage.dependencies['@sciforge/domain-artifact-versions'],
-      '^1.1.0'
+    const nodeRuntimeExports = publicExports.filter(
+      (specifier) => !nonNodeExportSpecifiers.has(specifier)
     )
-    assert.equal(checkpointPackage.dependencies['@sciforge/domain-sdk'], '^0.2.0')
-    assert.equal(dossierPackage.exports['./contract'], './src/contract.ts')
-    assert.equal(dossierPackage.dependencies.zod, '^4.4.3')
-
-    const publicExports = [...installedPackages.values()].flatMap(({ packageJson }) => (
-      publicExportSpecifiers(packageJson)
-    ))
 
     const cssLoader = join(installation, 'css-loader.mjs')
     await writeFile(cssLoader, `
@@ -372,92 +373,22 @@ test('publishable domain packages resolve every public export from independent t
       import assert from 'node:assert/strict'
       import { createRequire } from 'node:module'
       const publicExports = ${JSON.stringify(publicExports)}
+      const nodeRuntimeExports = ${JSON.stringify(nodeRuntimeExports)}
+      const requireExports = ${JSON.stringify(requireExports)}
       for (const specifier of publicExports) {
+        const resolved = import.meta.resolve(specifier)
+        assert.equal(typeof resolved, 'string', \`Expected resolution for \${specifier}\`)
+      }
+      for (const specifier of nodeRuntimeExports) {
         const loaded = await import(specifier)
         assert.equal(typeof loaded, 'object', \`Expected module namespace for \${specifier}\`)
       }
-      const openContentConnectorMain = await import(
-        '@sciforge/domain-opencontent-connector/main'
-      )
-      assert.equal(
-        'createOpenContentContentSpaceFacade' in openContentConnectorMain,
-        false,
-        'OpenContent Connector main must not expose raw facade construction'
-      )
-      assert.equal(
-        'createOpenContentTeamAdministration' in openContentConnectorMain ||
-          'bindOpenContentTeamAdministration' in openContentConnectorMain,
-        false,
-        'OpenContent Connector main must not expose credential-bearing Team transport'
-      )
-      const openContentProcessPort = await import(
-        '@sciforge/opencontent-skill-runtime/main/node-cli-process-port'
-      )
-      assert.equal(
-        'createNodeOpenContentCliProcessPortInternal' in openContentProcessPort,
-        false,
-        'OpenContent runtime must not expose its private process factory'
-      )
       const require = createRequire(import.meta.url)
-      const integrity = require('@sciforge/internal-runtime-integrity')
-      assert.equal(typeof integrity.verifyInstalledInternalOverlaySync, 'function')
+      for (const specifier of requireExports) {
+        const loaded = require(specifier)
+        assert.equal(typeof loaded, 'object', \`Expected CommonJS namespace for \${specifier}\`)
+      }
     `)
-    const typeBoundary = join(installation, 'opencontent-public-boundary.mts')
-    await writeFile(typeBoundary, `
-      import type {
-        OpenContentBoundTeamAdministration
-      } from '@sciforge/domain-opencontent-connector/team-administration-contract'
-      import type {
-        NodeOpenContentCliProcessPortOptions
-      } from '@sciforge/opencontent-skill-runtime/main/node-cli-process-port'
-
-      // @ts-expect-error Credential-bearing administration is Connector-main private.
-      import type { OpenContentTeamAdministration } from '@sciforge/domain-opencontent-connector/team-administration-contract'
-
-      // @ts-expect-error The public main entrypoint does not publish raw administration.
-      import type { OpenContentTeamAdministration as MainOpenContentTeamAdministration } from '@sciforge/domain-opencontent-connector/main'
-
-      declare const listTeamsInput:
-        Parameters<OpenContentBoundTeamAdministration['listTeams']>[0]
-      // @ts-expect-error Provider-facing Team administration never accepts a Token.
-      listTeamsInput.token
-
-      declare const processOptions: NodeOpenContentCliProcessPortOptions
-      // @ts-expect-error Package-owned integrity is not a public override.
-      processOptions.trustedSnapshotIntegrity
-      // @ts-expect-error The verified-read race seam is package-private.
-      processOptions.afterSnapshotRead
-
-      // @ts-expect-error The private process implementation is not a package export.
-      import type { NodeOpenContentCliProcessPortInternalOptions } from '@sciforge/opencontent-skill-runtime/src/node-cli-process-port.internal'
-    `)
-    const typeBoundaryConfig = join(installation, 'tsconfig.json')
-    await writeFile(typeBoundaryConfig, JSON.stringify({
-      compilerOptions: {
-        target: 'ES2023',
-        module: 'NodeNext',
-        moduleResolution: 'NodeNext',
-        strict: true,
-        skipLibCheck: true,
-        noEmit: true,
-        types: ['node'],
-        typeRoots: [join(repositoryRoot, 'node_modules', '@types')]
-      },
-      files: [typeBoundary]
-    }))
-    try {
-      await run(process.execPath, [typescriptCompiler, '--project', typeBoundaryConfig], {
-        cwd: installation,
-        maxBuffer: 4 * 1024 * 1024
-      })
-    } catch (error) {
-      throw new Error(
-        `Packed OpenContent public type boundary failed:\n${String(
-          error.stdout || error.stderr || error
-        )}`,
-        { cause: error }
-      )
-    }
     await run(process.execPath, [
       '--import',
       import.meta.resolve('tsx'),

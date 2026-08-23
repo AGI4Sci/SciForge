@@ -1,13 +1,13 @@
 # OpenContent Skill Capability Matrix
 
-Audit date: 2026-08-21
+Audit date: 2026-08-23
 
 This inventory maps every reviewed supplier command to a
 provider-neutral SciForge contract. It is evidence, not runtime configuration and not permission
 to invoke the supplier CLI or its raw HTTP passthrough.
 
-The OpenContent Connector, Content Space Provider, SDK documentation, and SciForge-authored skill
-runtime are public source. The original supplier attachment, its extracted files, and its private
+The OpenContent Connector (including supplier transport), Content Space Provider (including semantic
+adapters), and SDK documentation are public source. The original supplier attachment, its extracted files, and its private
 distribution metadata are not published; see the
 [attachment distribution boundary](./opencontent-attachment-distribution.md).
 
@@ -31,7 +31,7 @@ CLI argument strings, and arbitrary request payloads are adapter-private transla
 
 ## Current dispatch readiness
 
-The public contracts enumerate exactly **20 native-document operations** and **54 extended
+The public contracts enumerate exactly **20 native-document operations** and **52 extended
 operations**. OpenContent currently has **zero** `production_ready` operations. The exact-operation
 ledger below records the limited packaged canonical live evidence; every `live_verified` operation
 still declares `poc_only` / `verification_profile_required`. Runtime availability is intentionally
@@ -40,10 +40,10 @@ different from inventory status. Provider-declared readiness (`poc_only`, `block
 the exact caller, Principal, authority, audience, platform and verification facts may execute now.
 An admitted verification invocation remains `poc_only`.
 
-| Installation | `poc_only` / `verification_profile_required` | Blocked, dormant, or omitted |
+| Installation | `poc_only` / `verification_profile_required` | Blocked or omitted |
 |---|---|---|
-| Public checkout, without the private attachment | The six ordinary file operations (`list-containers`, `list-entries`, `observe-entry`, `create-folder`, `upload-new`, `download`); all ten Team Administration operations; extended `updateTeamMemberRole` and `transferTeamOwnership` | The native-document feature is not registered. The other 52 extended operations are `blocked_by_contract` / `provider_contract_missing`. Portal targets and immutable-version observation remain blocked. Provider operation `provision-project` is blocked; the provider-neutral port may compose dormant, but no generic Agent capability exposes it. |
-| Valid private attachment installed | The same public PoC candidates; nine safely contract-shaped native-document operations; 53 of 54 extended operations | Eleven native-document operations are `blocked_by_contract`: ten hash-bound mutations including `edit`, plus `import` without a verifiable source/content postcondition. `updateFileVersion` is the blocked extended operation. Portal targets and immutable-version observation remain blocked. Project provisioning remains a dormant provider-neutral port. |
+| Public checkout, without the private attachment | The six ordinary file operations (`list-containers`, `list-entries`, `observe-entry`, `create-folder`, `upload-new`, `download`); all ten Team Administration operations; session-backed `getCurrentPrincipal` | The native-document feature is not registered. The other 51 extended operations are `blocked_by_contract` / `provider_contract_missing`. Portal targets and immutable-version observation remain blocked. Project provisioning is absent from the Content Space and Provider contracts. |
+| Valid private attachment installed | The same public PoC candidates; nine safely contract-shaped native-document operations; 47 of 52 extended operations | Eleven native-document operations are `blocked_by_contract`: ten hash-bound mutations including `edit`, plus `import` without a verifiable source/content postcondition. `updateFileVersion` and four directory searches without pinned item schemas/kind evidence are the blocked extended operations. Portal targets and immutable-version observation remain blocked. Project provisioning remains absent. |
 
 The ten blocked hash-bound native-document mutations are `update`, `insert`, `edit`, `undo`,
 `redo`, `comment-create`, `comment-reply`, `comment-solve`, `comment-reopen`, and
@@ -108,8 +108,8 @@ Host/Broker capabilities are therefore recorded explicitly before the command ma
 | Personal/shared root selection | `content-space.list-agent-root-candidates` / `content-space.authorize-agent-root` | implemented | Candidate labels are non-authorizing; authorization re-enumerates live state and issues one exact Broker root resource. |
 | Personal-library file loop | `content-space.agent-list-entries` / `content-space.agent-create-folder` / `content-space.agent-upload-new` / `content-space.agent-download` | implemented | Uses the Provider-resolved personal root, bounded pages, no magic numeric folder ID, and no implicit overwrite. |
 | Shared Content Container / OpenContent Team file loop | `content-space.agent-list-entries` / `content-space.agent-create-folder` / `content-space.agent-upload-new` / `content-space.agent-download` | implemented | Uses the Team's real Content Container root reference; Team identity and root folder identity remain distinct. |
-| Shared-root / Team administration | `content-space.authorize-provider-administration` plus `content-space.agent-admin-*` | implemented | All ten operations are PoC-only. The Host issues one scoped Broker resource and gates each exact operation. Agent shared-root creation accepts no owner; the Broker current Principal supplies it and the Provider checks it against the authenticated external session. Team deletion is absent. |
-| Project Content Directory provisioning | `ProjectContentSpaceProvisioningPort` | blocked_by_contract / dormant | No `content-space.agent-provision-project` capability exists. Provider operation `provision-project` is `blocked_by_contract / provider_contract_missing`; a future Project-owning consumer must supply an authoritative Project Content Space Binding and verified identity mappings before it invokes the provider-neutral port. Ordinary Agents cannot author owner or membership intent. |
+| Shared-root / Team administration | `content-space.authorize-provider-administration` plus `content-space.agent-admin-*` | implemented | All ten operations are PoC-only. The Host issues one scoped Broker resource and gates each exact operation. Agent shared-root creation accepts no owner; the Broker current Principal supplies it and the Provider checks it against the authenticated external session. Every required Team or Team-user enumeration must prove complete, stable pagination before a remote write. Membership values contain only `member`; no role/ownership delegate exists. All outputs are exactly request-bound, and the five root/member mutations declare `concurrency.revision: "none"`. Team deletion is absent. |
+| Project Content Directory provisioning | — | absent | Content Space and the OpenContent Provider expose no capability, operation, intent/report schema, or Provider port. A future Project-owning integration requires a separately reviewed authoritative binding and identity contract. Ordinary Agents cannot author owner or membership intent. |
 | Cloud Task handoff | — | deferred | No Task-specific Content Space port exists. Cloud Collaboration must first own the Project Content Space Binding, typed Task file intents, and exact Task-turn resource injection and retirement. |
 | Immutable artifact proof | `content-space.observe-immutable-version` | blocked_by_contract | OpenContent does not prove immutable retention plus version-specific retrieval. A file identity, version number, or digest cannot by itself authorize an `ArtifactReference`. |
 
@@ -179,13 +179,14 @@ Provider only a managed byte stream.
 
 ## Organization and permissions
 
-| Supplier command | Provider-neutral SciForge operation | Status | Notes |
+| Authority source or supplier command | Provider-neutral SciForge operation | Status | Notes |
 |---|---|---|---|
-| `user-info` | `content-space.get-current-principal` | implemented | Current bound external principal only. |
-| `search-position` | `content-space.search-positions` | implemented | Literal-`position` directory summaries only. |
-| `search-department` | `content-space.search-departments` | implemented | Literal-`department` directory summaries only. |
-| `search-user` | `content-space.search-users` | implemented | Literal-`user` summaries with optional bounded department/position scope; each reference is accepted directly by Team membership administration. |
-| `search-user-group` | `content-space.search-groups` | implemented | Literal-`group` directory summaries only. |
+| Connector-revalidated current session | `content-space.get-current-principal` | implemented | Uses only the strict canonical external identity already established by the Principal-bound Connector session. The package-private semantic route dispatches no supplier command and accepts no raw user DTO. |
+| `user-info` | — | unmapped | No Content Space operation maps this supplier command; first-defined identity or name aliases cannot issue a directory reference. |
+| `search-position` | `content-space.search-positions` | blocked_by_contract | Pinned supplier evidence does not define an exact item schema or prove literal kind. |
+| `search-department` | `content-space.search-departments` | blocked_by_contract | Pinned supplier evidence does not define an exact item schema or prove literal kind. |
+| `search-user` | `content-space.search-users` | blocked_by_contract | Pinned supplier evidence does not define an exact item schema, kind proof, or safe pagination contract. |
+| `search-user-group` | `content-space.search-groups` | blocked_by_contract | Pinned supplier evidence does not define an exact item schema or prove literal kind. |
 | `perm-cates` | `content-space.list-permission-categories` | implemented | Closed target kinds and category references. |
 | `perm-list` | `content-space.list-permissions` | implemented | Direct/inherited/self/administrator source is explicit. |
 | `perm-set` | `content-space.change-permissions` | implemented | Closed add/change/remove union; numeric member types remain adapter-private. |
@@ -194,17 +195,22 @@ Provider only a managed byte stream.
 
 | Supplier command | Provider-neutral SciForge operation | Status | Notes |
 |---|---|---|---|
-| `team-create` | `content-space-administration.createSpace` | implemented | Creates a shared Content Container through the canonical administration port. Agent input cannot choose the owner; Broker authority injects the current Principal. |
+| `team-create` | `content-space-administration.createSpace` | implemented | Creates a shared Content Container through the canonical administration port. Agent input cannot choose the owner; Broker authority injects the current Principal. Complete stable Team enumeration must prove the label is absent before creation. |
 | `team-list` | `content-space-administration.listSpaces` | implemented | Does not expose supplier team IDs. |
-| `team-edit` | `content-space-administration.updateSpace` | implemented | Label update is revision-bound; owner transfer has one separate canonical operation below. |
+| `team-edit` | `content-space-administration.updateSpace` | implemented | Updates the exact root label. The public request and receipt carry no Administration revision. |
 | `team-stick` | `content-space-administration.pinSpace` | implemented | Provider-neutral pinned state. |
 | `team-unstick` | `content-space-administration.unpinSpace` | implemented | Provider-neutral pinned state. |
-| `team-users` | `content-space-administration.listMembers` | implemented | Typed bounded member page returns same-instance Provider directory user references reusable by remove. |
-| `team-member-add` | `content-space-administration.addMember` | implemented | Accepts one typed Provider directory user reference and expected root revision; no Host cross-user mapping or caller-selected Connection. |
-| `team-member-remove` | `content-space-administration.removeMember` | implemented | Accepts the listed Provider directory user reference and expected root revision. |
-| role change (typed delegate) | `content-space.update-team-member-role` | implemented | Typed Team Administration delegate maps `manager`, `internal`, and `external` to OpenContent Team identities 2, 3, and 4; no read-only role is admitted. |
-| owner transfer (typed delegate) | `content-space.transfer-team-ownership` | implemented | Typed Team Administration delegate; no per-operation confirmation. |
+| `team-users` | `content-space-administration.listMembers` | implemented | Typed bounded member page returns each same-instance Provider directory user only as `{ member }`, reusable by remove, with no role or revision. |
+| `team-member-add` | `content-space-administration.addMember` | implemented | Accepts one typed Provider directory user reference with no `expectedRevision`; complete stable member enumeration is required before mutation, with no Host cross-user mapping or caller-selected Connection. |
+| `team-member-remove` | `content-space-administration.removeMember` | implemented | Accepts the listed Provider directory user reference with no `expectedRevision`; complete stable member enumeration is required before mutation. |
 | `team.delete` | — | intentionally_excluded | **not-supported**: no command, contract, fallback, or destructive team lifecycle path. |
+
+The typed OpenContent Team supplier surface exposes no atomic expected-state field. The five
+root/member mutations therefore declare `concurrency.revision: "none"`; observation and post-write
+reconciliation prove receipts, not CAS. Content Space binds every one of the ten Administration
+outputs to the exact request and authority, rejects empty pages that carry `nextCursor`, and requires
+unique progressing page identities. Binding drift on a read is `provider_unavailable`; drift after a
+write or destructive operation is `outcome_unknown`, with no automatic retry.
 
 ## Collaboration and knowledge browsing
 
@@ -276,20 +282,22 @@ any sibling operation.
 The re-attestation result above is path and safety evidence for `upload-new`; it is not a separate
 OpenContent business operation. OpenContent still has **zero** `production_ready` operations.
 
-### Installed-attachment packaged callability
+### Supplier inventory and canonical packaged callability
 
-The installed-attachment smoke verified the packaged Runtime without supplying Provider
-credentials or dispatching a Provider business operation. The verified packaged inventory
-contained 37 files, the attachment CLI reported version `1.0.0`, its help exposed exactly 86
-supplier commands, and SciForge's reviewed admitted-command union contained exactly 61 commands.
-This is packaged installation and callability evidence only; it is not `live_verified` evidence for
-any Provider operation and does not admit a supplier command outside that union.
+The Connector-owned static contract freezes attachment CLI version `1.0.0`, exactly 86 supplier
+inventory commands, and a reviewed 56-command admitted adapter union. The four unpinned directory
+searches remain Provider-inventory-only: they have no Provider operation mapping and cannot be
+dispatched through the canonical Content Space path. `user-info` likewise has no current Provider
+mapping. A packaged application proves callability only through the
+canonical Electron/Broker → Content Space → Provider → Connector smoke, never through a second
+direct-CLI acceptance path. This is not `live_verified` evidence for any Provider operation and
+does not admit a supplier command outside that union.
 
 ### Extended-operation packaged outcome
 
 | Exact operation | Sanitized packaged outcome | Evidence classification | Declared readiness |
 |---|---|---|---|
-| `content-space.get-current-principal` (`user-info`) | One B-side live invocation completed through the installed attachment and returned the typed current external principal for that exact authorized session. | `live_verified` for this exact read only | `poc_only` / `verification_profile_required` |
+| `content-space.get-current-principal` | An earlier B-side invocation through the retired `user-info` mapping returned a typed current external principal for that exact authorized session. The current implementation instead uses the Connector-revalidated session identity and dispatches no supplier command. | Historical live evidence for the retired supplier route; not a live claim for the current semantic route | `poc_only` / `verification_profile_required` |
 
 ### Native-document packaged outcomes
 
@@ -309,7 +317,7 @@ These outcomes are acceptance evidence, but none is a native-document live succe
 | Exact operation | Sanitized packaged outcome | Evidence classification | Declared readiness |
 |---|---|---|---|
 | `content-space-administration.createSpace` | An earlier packaged invocation reached a remote commit but failed during Agent result delivery; it was not retried, and later canonical read-only reconciliation confirmed exactly one resulting shared root. After the delivery defect was fixed, exactly one new packaged Agent invocation traversed Broker → Content Space → Provider → Connector and reached terminal success. | post-fix invocation `live_verified`; earlier invocation remains remote-commit/reconciliation evidence only | `poc_only` / `verification_profile_required` |
-| `content-space-administration.addMember` | Exactly one packaged owner-side Agent invocation caused the canonical path to issue exactly one `SaveTeamUserList` write, and the write succeeded. Post-write `listMembers` reconciliation observed exactly one owner and one internal member, with the B-side canonical Provider directory user reference present exactly once. No second member write was issued. | `live_verified` with exact read-after-write postcondition | `poc_only` / `verification_profile_required` |
+| `content-space-administration.addMember` | Exactly one packaged current-account Agent invocation caused the canonical path to issue exactly one `SaveTeamUserList` write, and the write succeeded. Post-write `listMembers` reconciliation observed two distinct members, with the B-side canonical Provider directory user reference present exactly once. No second member write was issued, and no public role value is inferred from the historical response. | `live_verified` with exact read-after-write postcondition | `poc_only` / `verification_profile_required` |
 
 The live Team-member response used a previously unmodeled `teamUser` collection key. A value-free
 response-shape fingerprint identified the key without retaining account, member, root, or binding
@@ -334,9 +342,9 @@ outcomes above remain explicitly non-`live_verified`.
 - Readiness remains descriptive evidence even when an exact invocation is admitted. Admission additionally requires current Broker authority and, for unsafe/provider-scoped operations, a v2 binding attestation rechecked by the Connector before business dispatch.
 - Same-file update and all ten hash-bound native-document mutations, including `edit`, remain `blocked_by_contract` until the Provider exposes an atomic exact-version/hash compare-and-mutate contract.
 - Immutable-version observation remains blocked, so OpenContent results remain live `ContentFileReference` values or native-document receipts rather than `ArtifactReference` values.
-- The provider-neutral Project provisioning port remains dormant and no generic Agent provisioning capability exists. Cloud Task handoff remains deferred until Cloud Collaboration supplies the binding, typed file intents, and Task-turn resource lifecycle; Content Space exposes no Task port.
+- Project provisioning is absent from Content Space and the OpenContent Provider: there is no capability, operation, intent/report schema, or Provider port. Cloud Task handoff remains deferred until Cloud Collaboration supplies a separately reviewed binding, typed file intents, and Task-turn resource lifecycle; Content Space exposes no Task port.
 - Extended rows marked `implemented` have a canonical typed adapter and Content Space dispatch path only. A resource grant cannot promote their readiness.
-- Team member role change and owner transfer use the typed Team Administration delegate. Team deletion remains not-supported.
+- Team Administration exposes no member-role mutation or ownership-transfer delegate. Team deletion remains not-supported.
 - Installed-attachment callability, one exact live read, or one exact Team administration success does not promote a sibling command, operation, root, authority, audience, Principal, or binding. OpenContent remains at zero `production_ready` operations.
 
 ## Evidence required for promotion
@@ -347,7 +355,7 @@ reached through another path.
 
 Every promotion record must include:
 
-- the exact SciForge commit, packaged application identity, platform, public Runtime version, and
+- the exact SciForge commit, packaged application identity, platform, Connector and Provider package versions, and
   private overlay identity/digest when used;
 - the exact Provider Instance, complete Host Principal snapshot (including assurance),
   authority/root, operation ID, audience, verification-profile identity, enforced limits, validity
@@ -389,9 +397,8 @@ read-before-write emulation are not accepted.
 
 A no-network static characterization on 2026-08-21 confirmed the negative result for the current
 pinned snapshot. SciForge first verified the optional `opencontent-attachment-assets` receipt at
-version `1.0.1` (43 files; inventory SHA-256
-`a9f1e10344bced1ab0c8cc7717703c73be07317d990877890f0e837464a4cf03`) and then read only its
-receipt-covered `references/transfer.md` and `cli/bin/oc.js`; it also read the public offline SDK
+version `1.0.1` and then read only its receipt-covered `references/transfer.md` and `cli/bin/oc.js`;
+it also read the public offline SDK
 snapshot (SHA-256 `d39492835c823f64d8a4283dcf3a279be64fa05bc5e277cdf53ea010cab92a76`). The documented and
 implemented update inputs contain `fileId`, `fileModel`, and `strategy`, but no expected immutable
 version, revision, `baseHash`, or `If-Match` precondition. `FileVerId`/`fileVerId` is response-only.
@@ -401,8 +408,8 @@ request table says `UPDATE`.
 
 This resolves the current snapshot only as **contract absent and spelling conflicted**. It is not a
 supplier guarantee for another version, live CAS evidence, or production promotion. Because the
-request has no atomic expected-state field, a two-account write race would test last-writer behavior
-rather than CAS and was not dispatched. Same-file mutation therefore remains blocked.
+request has no atomic expected-state field, a concurrent two-writer same-file CAS experiment would
+test only last-writer behavior and was not dispatched. Same-file mutation therefore remains blocked.
 
 Native `edit` is subject to the same rule: a local plan receipt, one-time token, probe, `baseHash`
 check, write-time re-read, or post-write digest does not prove atomic Provider comparison.

@@ -7,7 +7,7 @@ Content Space.
   `ContentSpaceProvider` contract.
 - The renderer entry contributes the Connector-owned enrollment fragment to the
   provider-neutral `content-space.provider-enrollment-view` slot.
-- The adapter selects by Provider Kind and forwards the exact Provider Instance Ref chosen by
+- The Provider package owns every supplier-receipt-to-Content-Space semantic adapter. It selects by Provider Kind and forwards the exact Provider Instance Ref chosen by
   Content Space. It never receives a token, password, endpoint, or connection ID.
 
 The binding remains owned by the Connector and scoped to the current Local Account, this device,
@@ -17,14 +17,14 @@ and the selected Provider Instance. The external OpenContent account is not a Sc
 
 Composition of this adapter is not production admission or live verification.
 The authoritative capability matrix records a limited exact packaged-live
-ordinary-operation subset, one attachment-backed current-principal read, and
-exact post-fix Team-create/member-add successes. Every verified operation
+ordinary-operation subset, historical evidence for a retired attachment-backed
+current-principal route, and exact post-fix Team-create/member-add successes. Every verified operation
 remains `poc_only`, no native-document operation has a live-success claim, and
 `production_ready` remains zero. An `implemented` adapter path or successful
 sibling operation does not imply Agent eligibility.
 
 - The six ordinary file operations, all ten Team Administration operations,
-  nine safely contract-shaped native-document operations, and 53 extended
+  nine safely contract-shaped native-document operations, and 47 extended
   operations are `poc_only` / `verification_profile_required` when their
   required runtime is installed. The default product composition cannot
   execute them.
@@ -49,6 +49,16 @@ sibling operation does not imply Agent eligibility.
   conflicts with the SDK overview's `UPGRADE` spelling. This negative snapshot
   evidence keeps mutation blocked; it is not a future supplier guarantee or a
   readiness promotion.
+- `searchUsers`, `searchDepartments`, `searchPositions`, and `searchGroups` are
+  `blocked_by_contract`: the pinned SDK and receipt define only collection
+  envelopes, not exact item schemas or kind evidence. The Provider never
+  guesses aliases or assigns a requested kind to an unproven item. These four
+  supplier commands have no Provider mapping and cannot be dispatched through
+  Content Space.
+- `getCurrentPrincipal` dispatches no supplier command and parses no user DTO.
+  A narrow package-private semantic port reuses only the strict canonical
+  external identity returned by the Connector-revalidated current Principal
+  session, then issues one same-Provider directory `user` reference.
 - All ten hash-bound native-document mutations, including `edit`, are
   `blocked_by_contract`: a read, probe, plan receipt, write-time re-read, or
   post-write digest cannot replace an atomic Provider-side `baseHash`
@@ -60,11 +70,10 @@ sibling operation does not imply Agent eligibility.
 - `observeImmutableVersion` is blocked. A file identity, version number, or
   digest does not prove immutable retention and version-specific retrieval, so
   this adapter cannot issue an `ArtifactReference`.
-- The provider-neutral Project Content Space provisioning port remains dormant.
-  Its `provision-project` Provider operation is `blocked_by_contract` /
-  `provider_contract_missing`. No generic Agent provisioning capability exists;
-  a future Project-owning consumer must supply the authoritative binding and
-  verified identities.
+- Project Content Space provisioning is absent: this package contributes no
+  Project operation or provisioning port, and Content Space exposes no generic
+  Agent provisioning capability. A future Project-owning integration requires
+  a separately reviewed owner contract instead of another Team write path.
   Provisioning is not Cloud Task handoff. Content Space exposes no Task port;
   Cloud Collaboration must also supply typed Task file intents and exact
   Task-turn resource injection and retirement.
@@ -76,24 +85,41 @@ current OpenContent session. The created object is a shared Content Container
 (an OpenContent Team), not the Content Space bounded context and not a Project
 binding.
 
-Ordinary Team membership does not use that current-owner or Project identity
-mapping. `searchUsers` returns a typed Provider directory user reference, and
-the existing Content Space Administration `addMember`, `listMembers`, and
-`removeMember` path carries that same reference end to end. This adapter parses
-only a canonical same-instance OpenContent directory identity behind its
-Provider boundary, calls the token-private Connector Team API with the current
-Principal-bound Connection, and reconstructs the same typed reference when it
-lists members. A non-current user therefore needs no Host `contentUserId`
-mapping, while tokens, endpoints, raw account DTOs, and Connection selectors
-remain absent from Agent and Content Space contracts.
+Ordinary Team membership does not use the current-owner binding as a cross-user
+identity map, and no Project identity mapping is installed. It carries an
+authoritative same-instance Provider directory `user`
+reference through the existing Content Space Administration `addMember`,
+`listMembers`, and `removeMember` path. The user reference must come from an
+independently authoritative Provider observation; the four unpinned search
+contracts cannot manufacture it. The current Principal reference comes only
+from the Connector-revalidated session identity, while listed member references
+come from the strict Team-user response. This adapter calls the token-private Connector
+Team API with the current Principal-bound Connection and reconstructs the same
+typed reference when it lists members. Tokens, endpoints, raw account DTOs, and
+Connection selectors remain absent from Agent and Content Space contracts.
 
-The packaged installed-attachment callability smoke verified 37 packaged
-inventory files, CLI version `1.0.0`, all 86 supplier commands, and the exact
-61-command admitted union. This is static installation/callability evidence,
-not a Provider live result. The authoritative matrix also records that later
-file/native attempts added no evidence because external Agent operation-
-reference/cursor consumption remained unstable before Provider dispatch; both
-Provider business-dispatch and remote-write counts were zero.
+Administration member page items are exactly `{ member }`, and mutation
+receipts reuse that same reference alongside exact root/result fields; they
+expose no member role, role mutation, ownership transfer, or revision. The five
+root/member mutations accept no `expectedRevision` and their Agent capabilities
+declare `concurrency.revision: "none"`, because the typed OpenContent Team
+supplier surface exposes no atomic expected-state field. Team observation and
+post-write reconciliation prove bounded receipts, not CAS.
+
+Every Administration operation that relies on Team or Team-user state first
+requires a complete, stable, duplicate-free enumeration. Unprovable pagination,
+including an empty page with a continuation signal, fails as
+`provider_contract_violation` before a remote write. All ten outputs are exactly
+bound to the request and authority: root/member/label/pinned/removal values and
+bounded page progress cannot drift. Content Space classifies a mismatch on a
+read as `provider_unavailable` and on a write/destructive operation as
+`outcome_unknown`, without automatic retry.
+
+The Connector-owned static inventory test freezes CLI version `1.0.0`, all 86
+supplier commands, and the exact 56-command admitted adapter union. It does not run a
+second packaged acceptance path and is not Provider live evidence. Packaged
+callability is proven only by the canonical Electron/Broker → Content Space →
+Provider → Connector smoke.
 
 The authoritative operation inventory is
 [the OpenContent capability matrix](../../../docs/opencontent-skill-capability-matrix.md),

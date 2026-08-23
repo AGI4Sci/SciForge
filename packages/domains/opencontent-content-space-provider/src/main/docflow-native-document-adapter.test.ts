@@ -1,25 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  DOCFLOW_NATIVE_DOCUMENT_COMMANDS,
-  createDocflowNativeDocumentAdapter,
   type DocflowCommandTransport
-} from './docflow-native-document-adapter.js'
+} from '@sciforge/domain-opencontent-connector/main-contract'
+import { createDocflowNativeDocumentAdapter } from './docflow-native-document-adapter.js'
 
 describe('DocFlow native document adapter', () => {
   it('admits only the fixed DocFlow command surface before reaching the transport', async () => {
-    expect(DOCFLOW_NATIVE_DOCUMENT_COMMANDS).toEqual([
-      'docflow-create',
-      'docflow-read',
-      'docflow-probe',
-      'docflow-plan',
-      'docflow-image-upload',
-      'docflow-image-download',
-      'docflow-comment-list',
-      'docflow-comment-get',
-      'docflow-export'
-    ])
-
     const transport: DocflowCommandTransport = { invoke: vi.fn() }
     const adapter = createDocflowNativeDocumentAdapter(transport)
 

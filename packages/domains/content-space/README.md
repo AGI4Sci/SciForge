@@ -19,7 +19,11 @@ verification facts. An admitted PoC invocation remains `poc_only`.
 A package-owned `main.content-space-verification-profile` extension may
 contribute one static, separately reviewed verification profile. Manifest and
 runtime values must match exactly, and invalid, drifting, duplicate, or unsafe
-profiles fail composition; the default composition installs no profile. Each
+profiles fail composition; the contribution declaration must explicitly set
+`"publicRelease": "forbidden"`, and omission or `allowed` also fails Content
+Space composition. The generic official-release guard rejects that declaration
+through standard domain discovery without knowing the Content Space location or
+package identity. The default composition installs no profile. Each
 profile binds one Provider Instance, the complete Host Principal snapshot
 (including assurance), exact authority and operation, audience, bounded
 upload/download maxima, and a validity window of at most 24 hours. The matched
@@ -47,10 +51,10 @@ the mutation.
 Content Space exposes no Task-specific port. Cloud Task handoff remains owned
 by Cloud Collaboration and requires its Project Content Space Binding, typed
 Task file intents, and exact Task-turn resource injection and retirement.
-Content Space also exposes no generic Agent Project-provisioning capability. A
-provider-neutral Project provisioning port may compose as a dormant SPI, but
-only a future Project-owning consumer with an authoritative binding and
-verified identity mappings may invoke it.
+Content Space also exposes no Project provisioning capability, operation,
+intent/report schema, or Provider port. A future Project-owning integration
+must introduce its own authoritative binding and identity contract through a
+separately reviewed change rather than reuse ordinary Provider administration.
 
 Ordinary shared-container membership uses a different identity boundary. The
 v2 extended contract gives each directory search a literal-kind summary/page
@@ -59,9 +63,22 @@ the Provider Instance, principal kind, and opaque Provider principal ID. The
 v3 Administration contract uses that reference as the sole add/list/remove
 member identity, rejects legacy Host `contentUserId` member payloads, and
 requires the root, input member, and Provider output to stay on the same
-Provider Instance. The separate Project provisioning port retains Cloud-owned
-`contentUserId` values because only the future Project-owning context may supply
-their verified Provider mappings.
+Provider Instance. Cloud-owned `contentUserId` is not part of this contract,
+and ordinary membership cannot create or reconcile Project authority. Member
+page items are exactly `{ member }`, and mutation receipts reuse that same
+reference with exact root/result fields; no public member-role or
+ownership-transfer operation exists. `updateSpace`, `pinSpace`, `unpinSpace`,
+`addMember`, and `removeMember` accept no `expectedRevision`, return no
+Administration revision, and declare `concurrency.revision: "none"`; this is an
+explicit absence of optimistic-concurrency/CAS semantics.
+
+All ten Administration outputs are strictly bound to the exact request and
+Broker authority. Pages must be bounded, unique, and progressing, and an empty
+page cannot carry `nextCursor`. Root-scoped results echo the exact root;
+create/update/pin/unpin prove their requested label/current owner/pinned state;
+member mutation receipts echo the exact root and member. An output mismatch on
+a read is `provider_unavailable`; on an external write or destructive operation
+it is `outcome_unknown`, and neither result permits automatic retry.
 
 See [the Content Space glossary](../../../docs/contexts/content-space/CONTEXT.md),
 [the architecture and canonical call chain](../../../docs/content-space-architecture.md),

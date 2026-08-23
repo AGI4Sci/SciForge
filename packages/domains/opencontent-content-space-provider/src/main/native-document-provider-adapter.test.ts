@@ -8,8 +8,10 @@ import {
   DOCFLOW_NATIVE_DOCUMENT_RECEIPT_PROTOCOL,
   docflowCommandInvocationSchema,
   type DocflowCommandInvocation,
-  type DocflowNativeDocumentAdapter,
   type DocflowNativeDocumentReceipt
+} from '@sciforge/domain-opencontent-connector/main-contract'
+import type {
+  DocflowNativeDocumentAdapter
 } from './docflow-native-document-adapter.js'
 import {
   createNativeDocumentProviderAdapter,
@@ -39,12 +41,6 @@ const PRINCIPAL = Object.freeze({
   deviceId: 'native-document-provider-adapter-test',
   identityVersion: 1
 })
-const ADAPTER_OWNER = Object.freeze({
-  role: 'adapter-owner' as const,
-  moduleId: 'sciforge.opencontent-content-space-provider' as const,
-  moduleVersion: '1.0.0'
-})
-
 type FeatureInput = Parameters<ContentSpaceNativeDocumentExecutor['execute']>[0]
 
 function featureInput(
@@ -237,7 +233,7 @@ describe('native-document Content Space provider adapter', () => {
       }
       return failureReceipt(invocation)
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     await expect(adapter.execute(featureInput('create', {
       operation: 'create',
@@ -289,7 +285,7 @@ describe('native-document Content Space provider adapter', () => {
       }
       return failureReceipt(invocation)
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     await expect(adapter.execute(featureInput('create', {
       operation: 'create',
@@ -330,7 +326,7 @@ describe('native-document Content Space provider adapter', () => {
       }
       return failureReceipt(invocation)
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     await expect(adapter.execute(featureInput('create', {
       operation: 'create',
@@ -362,7 +358,7 @@ describe('native-document Content Space provider adapter', () => {
       }
       return failureReceipt(invocation)
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     await expect(adapter.execute(featureInput('create', {
       operation: 'create',
@@ -389,7 +385,7 @@ describe('native-document Content Space provider adapter', () => {
         delivery: [delivery('imported-document', 'draft.mdoc')]
       })
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
     const importSource = source('draft.docx', new Uint8Array([4, 5, 6]))
 
     await expect(adapter.execute(featureInput('import', {
@@ -431,7 +427,7 @@ describe('native-document Content Space provider adapter', () => {
       }
       return failureReceipt(invocation)
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     await expect(adapter.execute(featureInput('create', {
       operation: 'create',
@@ -480,7 +476,7 @@ describe('native-document Content Space provider adapter', () => {
       }
       return failureReceipt(invocation)
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     await expect(adapter.execute(featureInput('create', {
       operation: 'create',
@@ -512,7 +508,7 @@ describe('native-document Content Space provider adapter', () => {
         }
       })
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     const receipt = await adapter.execute(featureInput('read', {
       operation: 'read',
@@ -554,7 +550,7 @@ describe('native-document Content Space provider adapter', () => {
         }
       })
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     await expect(adapter.execute(featureInput('read', {
       operation: 'read',
@@ -601,7 +597,7 @@ describe('native-document Content Space provider adapter', () => {
         }]
       })
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     await expect(adapter.execute(featureInput('probe', {
       operation: 'probe',
@@ -668,7 +664,7 @@ describe('native-document Content Space provider adapter', () => {
         }]
       })
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     await expect(adapter.execute(featureInput('probe', {
       operation: 'probe',
@@ -688,7 +684,7 @@ describe('native-document Content Space provider adapter', () => {
       const invocation = docflowCommandInvocationSchema.parse(raw)
       return failureReceipt(invocation)
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
     const imageSource = source('figure.png', new Uint8Array([1, 2, 3]))
     const cases: readonly Readonly<{
       input: FeatureInput
@@ -868,7 +864,7 @@ describe('native-document Content Space provider adapter', () => {
             return failureReceipt(invocation)
         }
       })
-      const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+      const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
       const receipt = await adapter.execute(featureInput(
         fixture.operation,
         fixture.request,
@@ -914,7 +910,7 @@ describe('native-document Content Space provider adapter', () => {
     ]
 
     const execute = vi.fn<DocflowNativeDocumentAdapter['execute']>()
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
     for (const fixture of hashBoundCases) {
       const receipt = await adapter.execute(featureInput(fixture.operation, fixture.request))
       expect(receipt, fixture.operation).toMatchObject({
@@ -956,7 +952,7 @@ describe('native-document Content Space provider adapter', () => {
             }
       })
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     const imageReceipt = await adapter.execute(featureInput('image-download', {
       operation: 'image-download',
@@ -1015,7 +1011,7 @@ describe('native-document Content Space provider adapter', () => {
       const invocation = docflowCommandInvocationSchema.parse(raw)
       return canonicalPlanningReceipt(invocation, probeToken) ?? failureReceipt(invocation)
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     const probe = await adapter.execute(featureInput('probe', {
       operation: 'probe',
@@ -1134,7 +1130,7 @@ describe('native-document Content Space provider adapter', () => {
       }
       return failureReceipt(invocation)
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
     const probe = await adapter.execute(featureInput('probe', {
       operation: 'probe',
       document: DOCUMENT,
@@ -1164,7 +1160,7 @@ describe('native-document Content Space provider adapter', () => {
 
   it('rejects a stale or foreign managed chain before invoking DocFlow', async () => {
     const execute = vi.fn<DocflowNativeDocumentAdapter['execute']>()
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     const result = await adapter.execute(featureInput('plan', {
       operation: 'plan',
@@ -1198,7 +1194,7 @@ describe('native-document Content Space provider adapter', () => {
         const invocation = docflowCommandInvocationSchema.parse(raw)
         return canonicalPlanningReceipt(invocation, probeToken) ?? failureReceipt(invocation)
       })
-      const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+      const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
       const selector = { kind: 'text' as const, text: 'Old text', occurrence: 1 }
       const probe = await adapter.execute(featureInput('probe', {
         operation: 'probe',
@@ -1234,7 +1230,7 @@ describe('native-document Content Space provider adapter', () => {
       const invocation = docflowCommandInvocationSchema.parse(raw)
       return canonicalPlanningReceipt(invocation, probeToken) ?? failureReceipt(invocation)
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
     const selector = { kind: 'text' as const, text: 'Old text', occurrence: 1 }
     const probe = await adapter.execute(featureInput('probe', {
       operation: 'probe',
@@ -1297,7 +1293,7 @@ describe('native-document Content Space provider adapter', () => {
           }]
         })
       })
-      const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+      const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
       const request = {
         operation: 'probe' as const,
         document: DOCUMENT,
@@ -1353,7 +1349,7 @@ describe('native-document Content Space provider adapter', () => {
         delivery: [delivery('new-document', 'Draft.mdoc')]
       })
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     const receipt = await adapter.execute(featureInput('create', {
       operation: 'create',
@@ -1387,7 +1383,7 @@ describe('native-document Content Space provider adapter', () => {
         }
       })
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     const receipt = await adapter.execute(featureInput('create', {
       operation: 'create',
@@ -1423,7 +1419,7 @@ describe('native-document Content Space provider adapter', () => {
   ) => {
     const execute = vi.fn<DocflowNativeDocumentAdapter['execute']>(async (raw: unknown) =>
       response(docflowCommandInvocationSchema.parse(raw)) as DocflowNativeDocumentReceipt)
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     const receipt = await adapter.execute(featureInput('create', {
       operation: 'create',
@@ -1452,7 +1448,7 @@ describe('native-document Content Space provider adapter', () => {
         }
       })
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     const receipt = await adapter.execute(featureInput('read', {
       operation: 'read',
@@ -1470,7 +1466,7 @@ describe('native-document Content Space provider adapter', () => {
       const invocation = docflowCommandInvocationSchema.parse(raw)
       return successReceipt(invocation, { json: { mediaType: 'image/png' } })
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     const receipt = await adapter.execute(featureInput('image-upload', {
       operation: 'image-upload',
@@ -1511,7 +1507,7 @@ describe('native-document Content Space provider adapter', () => {
         }
       } satisfies DocflowNativeDocumentReceipt
     })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
+    const adapter = createNativeDocumentProviderAdapter({ docflow: { execute } })
 
     await expect(adapter.execute(featureInput('read', {
       operation: 'read',
@@ -1531,17 +1527,4 @@ describe('native-document Content Space provider adapter', () => {
     expect(execute).toHaveBeenCalledTimes(2)
   })
 
-  it('admits only the declared Content Space adapter owner before any DocFlow call', () => {
-    const execute = vi.fn<DocflowNativeDocumentAdapter['execute']>()
-
-    expect(() => createNativeDocumentProviderAdapter({
-      owner: {
-        role: 'transport-owner',
-        moduleId: 'sciforge.opencontent-connector',
-        moduleVersion: '1.0.0'
-      },
-      docflow: { execute }
-    })).toThrow()
-    expect(execute).not.toHaveBeenCalled()
-  })
 })

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../workspace-preview/PdfWorkspaceViewer', () => ({ PdfWorkspaceViewer: () => null }))
 import type { ReactNode } from 'react'
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
+import { CAPABILITY_BROKER_CONTRACT_VERSION } from '@shared/capability-broker'
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
   workspacePreviewModalitySchema,
@@ -943,7 +944,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
             },
             resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
             operations: [{
-              contractVersion: 1,
+              contractVersion: CAPABILITY_BROKER_CONTRACT_VERSION,
               id: 'workspace-preview.apply-edit',
               version: '1.0.0',
               title: 'Apply edit',

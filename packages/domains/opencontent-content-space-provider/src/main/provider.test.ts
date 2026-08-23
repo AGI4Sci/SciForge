@@ -7,9 +7,9 @@ import { NATIVE_DOCUMENT_OPERATIONS } from '@sciforge/domain-content-space/nativ
 
 import {
   OPENCONTENT_PROVIDER_INSTANCE_REF,
-  OpenContentConnectorError,
-  type OpenContentContentSpaceFacade
+  OpenContentConnectorError
 } from '@sciforge/domain-opencontent-connector/contract'
+import type { OpenContentContentSpaceFacade } from '@sciforge/domain-opencontent-connector/main-contract'
 
 import { createOpenContentContentSpaceProvider } from './provider.js'
 
@@ -208,7 +208,7 @@ describe('OpenContent Content Space Provider', () => {
       .not.toHaveProperty('expectedBindingAttestation')
   })
 
-  it('declares unverified administration operations PoC-only and Project provisioning blocked', async () => {
+  it('declares exactly the ten supported administration operations PoC-only', async () => {
     const useTeamAdministration = vi.fn(async () => {
       throw new Error('Administration readiness must not open a remote session.')
     }) as unknown as NonNullable<OpenContentContentSpaceFacade['useTeamAdministration']>
@@ -227,16 +227,10 @@ describe('OpenContent Content Space Provider', () => {
       signal: new AbortController().signal,
       assertPrincipalCurrent
     })
-    expect(administrationStates).toHaveLength(11)
-    expect(administrationStates.filter(({ operation }) => operation !== 'provision-project')
-      .every(({ readiness, reasonCode }) => (
-        readiness === 'poc_only' && reasonCode === 'verification_profile_required'
-      ))).toBe(true)
-    expect(administrationStates).toContainEqual({
-      operation: 'provision-project',
-      readiness: 'blocked_by_contract',
-      reasonCode: 'provider_contract_missing'
-    })
+    expect(administrationStates).toHaveLength(10)
+    expect(administrationStates.every(({ readiness, reasonCode }) => (
+      readiness === 'poc_only' && reasonCode === 'verification_profile_required'
+    ))).toBe(true)
     expect(administrationStates.some(({ readiness }) => readiness === 'production_ready'))
       .toBe(false)
     expect(useTeamAdministration).not.toHaveBeenCalled()
@@ -314,30 +308,25 @@ describe('OpenContent Content Space Provider', () => {
       signal: new AbortController().signal,
       assertPrincipalCurrent
     })
-    expect(states).toHaveLength(54)
+    expect(states).toHaveLength(52)
     expect(states.filter(({ readiness }) => readiness === 'poc_only'))
       .toEqual([
         {
-          operation: 'updateTeamMemberRole',
-          readiness: 'poc_only',
-          reasonCode: 'verification_profile_required'
-        },
-        {
-          operation: 'transferTeamOwnership',
+          operation: 'getCurrentPrincipal',
           readiness: 'poc_only',
           reasonCode: 'verification_profile_required'
         }
       ])
     expect(states.filter(({ readiness }) => readiness === 'blocked_by_contract'))
-      .toHaveLength(52)
+      .toHaveLength(51)
   })
 
   it('advertises safe runtime operations and keeps non-CAS mutations blocked', async () => {
-    const useSkillRuntime: NonNullable<OpenContentContentSpaceFacade['useSkillRuntime']> =
+    const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
       async () => { throw new Error('Execution is outside this readiness test.') }
     const provider = createOpenContentContentSpaceProvider({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      facade: facadeFixture({ useSkillRuntime })
+      facade: facadeFixture({ useSupplierTransport })
     })
     const extended = provider.features?.extendedOperations
     const native = provider.features?.nativeDocuments
@@ -354,16 +343,24 @@ describe('OpenContent Content Space Provider', () => {
     expect(states.map(({ operation }) => operation).sort()).toEqual(
       Object.keys(CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS).sort()
     )
-    expect(states).toContainEqual({
-      operation: 'updateFileVersion',
-      readiness: 'blocked_by_contract',
-      reasonCode: 'provider_contract_missing'
-    })
-    expect(states.filter(({ operation }) => operation !== 'updateFileVersion')
+    for (const operation of [
+      'updateFileVersion',
+      'searchUsers',
+      'searchDepartments',
+      'searchPositions',
+      'searchGroups'
+    ] as const) {
+      expect(states).toContainEqual({
+        operation,
+        readiness: 'blocked_by_contract',
+        reasonCode: 'provider_contract_missing'
+      })
+    }
+    expect(states.filter(({ readiness }) => readiness === 'poc_only')
       .every(({ readiness, reasonCode }) =>
         readiness === 'poc_only' && reasonCode === 'verification_profile_required'))
       .toBe(true)
-    expect(states.filter(({ readiness }) => readiness === 'poc_only')).toHaveLength(53)
+    expect(states.filter(({ readiness }) => readiness === 'poc_only')).toHaveLength(47)
 
     const nativeStates = await native!.describeOperations({
       principal,

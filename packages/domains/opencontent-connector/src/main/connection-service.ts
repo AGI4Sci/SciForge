@@ -97,16 +97,6 @@ export type OpenContentConnectionService = Readonly<{
     assertPrincipalCurrent(): void | Promise<void>
     signal?: AbortSignal
   }>): Promise<OpenContentExternalBindingAttestation>
-  useCurrentToken<T>(
-    input: Readonly<{
-      principal: PrincipalSnapshot
-      providerInstanceRef: string
-      expectedBindingAttestation?: OpenContentExternalBindingAttestation
-      assertPrincipalCurrent(): void | Promise<void>
-      signal?: AbortSignal
-    }>,
-    operation: (token: string) => T | Promise<T>
-  ): Promise<T>
   useCurrentSession<T>(
     input: Readonly<{
       principal: PrincipalSnapshot
@@ -406,14 +396,6 @@ export function createOpenContentConnectionService(options: Readonly<{
     }
   }
 
-  const useCurrentToken: OpenContentConnectionService['useCurrentToken'] = (
-    input,
-    operation
-  ) => useCurrentSession(input, async ({ token }) => {
-      await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
-      return operation(token)
-    })
-
   const attestExternalBinding: OpenContentConnectionService['attestExternalBinding'] = (
     input
   ) => useCurrentSession(input, ({ bindingAttestation }) => bindingAttestation)
@@ -421,7 +403,6 @@ export function createOpenContentConnectionService(options: Readonly<{
   return Object.freeze({
     status,
     attestExternalBinding,
-    useCurrentToken,
     useCurrentSession,
     unbind: (input) => serialize(async () => {
       requireProviderInstanceRef(input.providerInstanceRef, providerInstanceRef)

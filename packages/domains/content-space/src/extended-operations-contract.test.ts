@@ -3,15 +3,17 @@ import { describe, expect, it } from 'vitest'
 import * as contract from './extended-operations-contract.js'
 
 describe('Content Space extended operations contract', () => {
-  it('publishes a closed provider-neutral operation catalog without team deletion', () => {
+  it('publishes a closed provider-neutral operation catalog without vendor Team governance', () => {
     const operations = Object.values(contract.CONTENT_SPACE_EXTENDED_OPERATIONS)
 
     expect(contract.CONTENT_SPACE_EXTENDED_CONTRACT_VERSION).toBe('2.0.0')
     expect(new Set(operations.map(({ id }) => id)).size).toBe(operations.length)
     expect(new Set(operations.map(({ key }) => key)).size).toBe(operations.length)
     expect(operations.every(({ id }) => id.startsWith('content-space.'))).toBe(true)
-    expect(operations.some(({ family }) => family === 'team-governance')).toBe(true)
-    expect(JSON.stringify(operations)).not.toMatch(/opencontent|raw|team\.delete/iu)
+    expect(operations.map(({ family }) => family)).not.toContain('team-governance')
+    expect(contract.CONTENT_SPACE_EXTENDED_OPERATIONS).not.toHaveProperty('updateTeamMemberRole')
+    expect(contract.CONTENT_SPACE_EXTENDED_OPERATIONS).not.toHaveProperty('transferTeamOwnership')
+    expect(JSON.stringify(operations)).not.toMatch(/opencontent|raw|team/iu)
   })
 
   it('accepts bounded structured discovery criteria and rejects query passthrough', () => {
@@ -73,6 +75,15 @@ describe('Content Space extended operations contract', () => {
 
     expect(() => contract.contentSpaceSearchUsersResultSchema.parse(result('department')))
       .toThrow()
+    expect(() => contract.contentSpaceSearchUsersResultSchema.parse({
+      ok: true,
+      value: {
+        items: [
+          ...result('user').value.items,
+          ...result('department').value.items
+        ]
+      }
+    })).toThrow()
     for (const [schema, kind] of [
       [contract.contentSpaceSearchUsersResultSchema, 'user'],
       [contract.contentSpaceSearchDepartmentsResultSchema, 'department'],
@@ -88,6 +99,47 @@ describe('Content Space extended operations contract', () => {
       .not.toBe(contract.contentSpaceSearchUsersResultSchema)
     expect(() => contract.contentSpaceSearchDepartmentsResultSchema.parse(result('user')))
       .toThrow()
+  })
+
+  it('keeps a user-search directory scope aligned with its typed principal', () => {
+    const request = {
+      providerInstanceRef: 'provider-instance-a',
+      query: 'Ada',
+      page: { limit: 20 },
+      within: {
+        kind: 'department' as const,
+        principal: {
+          providerInstanceRef: 'provider-instance-a',
+          kind: 'department' as const,
+          principalId: 'department-a'
+        },
+        recursive: true
+      }
+    }
+
+    expect(contract.contentSpaceSearchUsersRequestSchema.parse(request)).toEqual(request)
+    expect(() => contract.contentSpaceSearchUsersRequestSchema.parse({
+      ...request,
+      within: {
+        ...request.within,
+        principal: {
+          ...request.within.principal,
+          kind: 'position'
+        }
+      }
+    })).toThrow()
+    expect(contract.contentSpaceSearchUsersRequestSchema.parse({
+      ...request,
+      within: {
+        kind: 'position',
+        principal: {
+          providerInstanceRef: 'provider-instance-a',
+          kind: 'position',
+          principalId: 'position-a'
+        },
+        recursive: false
+      }
+    }).within).toMatchObject({ kind: 'position', principal: { kind: 'position' } })
   })
 
   it('models metadata values as a closed discriminated union', () => {
@@ -260,35 +312,18 @@ describe('Content Space extended operations contract', () => {
     })).toThrow()
   })
 
-  it('contracts every catalog operation, including bounded team governance', () => {
+  it('contracts every catalog operation without dormant vendor operations', () => {
     expect(Object.keys(contract.CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS).sort()).toEqual(
       Object.keys(contract.CONTENT_SPACE_EXTENDED_OPERATIONS).sort()
     )
     expect(Object.values(contract.CONTENT_SPACE_EXTENDED_OPERATIONS)
       .every(({ stage }) => stage === 'contracted')).toBe(true)
-    expect(contract.CONTENT_SPACE_EXTENDED_OPERATIONS.updateTeamMemberRole.stage).toBe('contracted')
-    expect(contract.CONTENT_SPACE_EXTENDED_OPERATIONS.transferTeamOwnership.stage).toBe('contracted')
-    expect(contract.CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS).not.toHaveProperty('deleteTeam')
+    expect(Object.keys(contract.CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS).join(','))
+      .not.toMatch(/team/iu)
   })
 
-  it('models every writable OpenContent Team member identity without a read-only alias', () => {
-    expect(contract.contentSpaceTeamMemberRoleSchema.options).toEqual([
-      'manager',
-      'internal',
-      'external'
-    ])
-    for (const role of ['manager', 'internal', 'external'] as const) {
-      expect(contract.contentSpaceUpdateTeamMemberRoleRequestSchema.parse({
-        teamRoot: { providerInstanceRef: 'provider-instance-a', containerId: 'team-root-a' },
-        member: {
-          providerInstanceRef: 'provider-instance-a',
-          kind: 'user',
-          principalId: 'person-a'
-        },
-        role
-      }).role).toBe(role)
-    }
-    expect(() => contract.contentSpaceTeamMemberRoleSchema.parse('member')).toThrow()
-    expect(() => contract.contentSpaceTeamMemberRoleSchema.parse('read-only')).toThrow()
+  it('does not export vendor Team request, receipt, result, or role schemas', () => {
+    expect(Object.keys(contract).filter((name) => /team|ownership|memberrole/iu.test(name)))
+      .toEqual([])
   })
 })

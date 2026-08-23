@@ -1,15 +1,16 @@
 import { z } from 'zod'
 import { describe, expect, it, vi } from 'vitest'
-import type {
-  CapabilityJsonValue,
-  CapabilityObservation,
-  CapabilityReadiness
+import {
+  CAPABILITY_BROKER_CONTRACT_VERSION,
+  type CapabilityJsonValue,
+  type CapabilityObservation,
+  type CapabilityReadiness
 } from '@shared/capability-broker'
 import type { SciForgeApi } from '@shared/sciforge-api'
 import { RendererCapabilityClient, type RendererCapabilityContract } from './capability-client'
 
 const READY: CapabilityReadiness = {
-  contractVersion: 1,
+  contractVersion: CAPABILITY_BROKER_CONTRACT_VERSION,
   status: 'ready' as const,
   registryFingerprint: '0'.repeat(64),
   availableCapabilityIds: ['example.read', 'example.compute'],
@@ -78,7 +79,7 @@ describe('RendererCapabilityClient', () => {
 
     await expect(client.invoke(contract, { value: 1 })).resolves.toEqual({ value: 2 })
     expect(bridge.readiness).toHaveBeenCalledWith({
-      expectedContractVersion: 1,
+      expectedContractVersion: CAPABILITY_BROKER_CONTRACT_VERSION,
       requiredCapabilityIds: ['example.read']
     })
     expect(bridge.invoke.mock.calls[0]?.[0].request).toEqual({
@@ -180,7 +181,7 @@ describe('RendererCapabilityClient', () => {
 
     expect(bridge.readiness).toHaveBeenCalledWith({
       workspaceId: '/workspace',
-      expectedContractVersion: 1,
+      expectedContractVersion: CAPABILITY_BROKER_CONTRACT_VERSION,
       requiredCapabilityIds: ['example.compute']
     })
     expect(bridge.invoke).toHaveBeenCalledWith({

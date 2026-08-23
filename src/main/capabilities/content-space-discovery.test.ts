@@ -1,15 +1,10 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import {
-  MAIN_EXTENSION_CONTRIBUTION_KIND,
-  type DomainMainContribution,
-  type DomainMainContributionHost,
-  type DomainMainHost,
-  type DomainMainRuntimeLifecycleContribution
-} from '@sciforge/domain-sdk/host'
+import type { DomainMainHost } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import { samePrincipalSnapshot, type PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import {
@@ -29,11 +24,6 @@ import {
   toPortableContentContainerReference,
   type ContentSpaceProvider
 } from '@sciforge/domain-content-space/contract'
-import {
-  CONTENT_SPACE_CAPABILITY_FACTORY_CONTRIBUTION,
-  CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION
-} from '@sciforge/domain-content-space/definition'
-import { createDomainMainEntry } from '@sciforge/domain-content-space/main'
 import { NATIVE_DOCUMENT_OPERATIONS } from
   '@sciforge/domain-content-space/native-document-contract'
 import type {
@@ -51,8 +41,18 @@ import {
   CAPABILITY_AGENT_TOOL_NAMES,
   createCapabilityAgentToolSurface
 } from './agent-tools'
-import { CapabilityRegistry, defineCapability, type CapabilityDefinition } from './registry'
 import { HostFileTransferService } from '../modules/file-transfer'
+import type { AppCapabilityDependencies } from './app-registry'
+import {
+  createApplicationCapabilityRegistry,
+  createApplicationDomainCatalog
+} from '../modules/application-composition'
+import { createNonSecretPackageStorageForTest } from
+  '../modules/domain-package-storage.test-helper'
+import {
+  activateMainRuntimeContributions,
+  createMainSystemCapabilityInvokerFactory
+} from '../modules/runtime-contributions'
 
 const principal: PrincipalSnapshot = Object.freeze({
   authority: 'sciforge.identity-access',
@@ -64,78 +64,77 @@ const principal: PrincipalSnapshot = Object.freeze({
 
 describe('Content Space Agent discovery integration', () => {
   it('routes one external Team library intent through Provider, candidate, and root authorization discovery', () => {
-    const entry = createDomainMainEntry({ defineCapability } as unknown as DomainMainHost)
-    const factory = entry.contributions.find(({ id }) =>
-      id === CONTENT_SPACE_CAPABILITY_FACTORY_CONTRIBUTION.id
-    )?.value as Readonly<{ createDefinitions(): readonly CapabilityDefinition[] }> | undefined
-    if (!factory) throw new Error('Content Space capability factory is missing.')
-    const registry = new CapabilityRegistry(factory.createDefinitions())
-    const caller = {
-      audience: 'agent' as const,
-      callerId: 'content-space-discovery-agent',
-      workspaceId: '/workspace'
-    }
-    const query = {
-      text: 'OpenContent team library create folder upload',
-      scope: 'global' as const,
-      limit: 10
-    }
-
-    const discovered = registry.discover(caller, query)
-    expect(discovered.map(({ id }) => id)).toEqual(expect.arrayContaining([
-      CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances,
-      CONTENT_SPACE_CAPABILITY_IDS.listAgentRootCandidates,
-      CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot
-    ]))
-    expect(discovered.find(({ id }) =>
-      id === CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances
-    )?.description).toMatch(/first.*provider instance/iu)
-    expect(discovered.find(({ id }) =>
-      id === CONTENT_SPACE_CAPABILITY_IDS.listAgentRootCandidates
-    )?.description).toMatch(/after.*provider instance.*human-visible/iu)
-    expect(discovered.find(({ id }) =>
-      id === CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot
-    )?.description).toMatch(/exact.*label.*re-enumerates live/iu)
-    expect(registry.discover(caller, { ...query, providerFamily: 'managed-mcp' }))
-      .toEqual([])
-
-    const verboseNativeProviderDiscovery = registry.discover(caller, {
-      text: 'OpenContent Provider Instance list discover native',
-      scope: 'global',
-      providerFamily: 'native',
-      effects: ['read'],
-      limit: 20
-    })
-    expect(verboseNativeProviderDiscovery.map(({ id }) => id)).toContain(
-      CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances
+    const catalog = createTestApplicationCatalog(
+      '/private/tmp/sciforge-content-space-discovery'
     )
+    try {
+      const registry = createApplicationCapabilityRegistry(
+        catalog,
+        unavailableDependencies()
+      )
+      const caller = {
+        audience: 'agent' as const,
+        callerId: 'content-space-discovery-agent',
+        workspaceId: '/workspace'
+      }
+      const query = {
+        text: 'OpenContent team library create folder upload',
+        scope: 'global' as const,
+        limit: 10
+      }
 
-    const humanReferenceQueries = [{
-      id: CONTENT_SPACE_CAPABILITY_IDS.observeImmutableVersion,
-      text: 'Observe Immutable Content Version'
-    }, {
-      id: CONTENT_SPACE_CAPABILITY_IDS.resolvePortalTarget,
-      text: 'Resolve Content Space Portal Target'
-    }, {
-      id: CONTENT_SPACE_CAPABILITY_IDS.openPortalTarget,
-      text: 'Open Content Space Portal Target'
-    }]
-    for (const { id, text } of humanReferenceQueries) {
-      expect(registry.discover(caller, {
-        text,
+      const discovered = registry.discover(caller, query)
+      expect(discovered.map(({ id }) => id)).toEqual(expect.arrayContaining([
+        CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances,
+        CONTENT_SPACE_CAPABILITY_IDS.listAgentRootCandidates,
+        CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot
+      ]))
+      expect(discovered.find(({ id }) =>
+        id === CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances
+      )?.description).toMatch(/first.*provider instance/iu)
+      expect(discovered.find(({ id }) =>
+        id === CONTENT_SPACE_CAPABILITY_IDS.listAgentRootCandidates
+      )?.description).toMatch(/after.*provider instance.*human-visible/iu)
+      expect(discovered.find(({ id }) =>
+        id === CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot
+      )?.description).toMatch(/exact.*label.*re-enumerates live/iu)
+      expect(registry.discover(caller, { ...query, providerFamily: 'managed-mcp' }))
+        .toEqual([])
+
+      const verboseNativeProviderDiscovery = registry.discover(caller, {
+        text: 'OpenContent Provider Instance list discover native',
         scope: 'global',
+        providerFamily: 'native',
+        effects: ['read'],
         limit: 20
-      }).map((definition) => definition.id)).not.toContain(id)
+      })
+      expect(verboseNativeProviderDiscovery.map(({ id }) => id)).toContain(
+        CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances
+      )
+
+      const humanReferenceQueries = [{
+        id: CONTENT_SPACE_CAPABILITY_IDS.observeImmutableVersion,
+        text: 'Observe Immutable Content Version'
+      }, {
+        id: CONTENT_SPACE_CAPABILITY_IDS.resolvePortalTarget,
+        text: 'Resolve Content Space Portal Target'
+      }, {
+        id: CONTENT_SPACE_CAPABILITY_IDS.openPortalTarget,
+        text: 'Open Content Space Portal Target'
+      }]
+      for (const { id, text } of humanReferenceQueries) {
+        expect(registry.discover(caller, {
+          text,
+          scope: 'global',
+          limit: 20
+        }).map((definition) => definition.id)).not.toContain(id)
+      }
+    } finally {
+      catalog.dispose()
     }
   })
 
   it('uses one approved Provider administration resource for observe, list, and create', async () => {
-    const host = Object.freeze({
-      getUserDataDir: () => '/private/tmp/sciforge-content-space-administration-integration',
-      defineCapability
-    }) as unknown as DomainMainHost
-    const contentEntry = createDomainMainEntry(host)
-    const providerEntry = createMockProviderMainEntry(host)
     const createdRoot = toPortableContentContainerReference({
       providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF,
       containerId: 'mock_root'
@@ -168,61 +167,32 @@ describe('Content Space Agent discovery integration', () => {
       removeMember: unusedAdministrationOperation
     })
     const bind = vi.fn(async () => Object.freeze({ administration }))
-    const providerExtensions = projectMainExtensions(providerEntry).map((extension) => {
-      const candidate = extension.value as Partial<
-        ContentSpaceProviderFactoryRuntimeValue<ContentSpaceProvider, unknown>
-      >
-      if (candidate.location !== MAIN_CONTENT_SPACE_PROVIDER_FACTORY_LOCATION ||
-        !candidate.createProvider || !candidate.contractVersion || !candidate.providerKind) {
-        return extension
-      }
-      const original = candidate as ContentSpaceProviderFactoryRuntimeValue<
-        ContentSpaceProvider,
-        unknown
-      >
-      return Object.freeze({
-        ...extension,
-        value: defineContentSpaceProviderFactory<ContentSpaceProvider, unknown>({
-          contractVersion: original.contractVersion,
-          providerKind: original.providerKind,
-          createProvider: async (hostView) => {
-            const provider = await original.createProvider(hostView)
-            return defineContentSpaceProvider({
-              ...provider,
-              features: Object.freeze({
-                ...provider.features,
-                administration: Object.freeze({
-                  describeOperations: () => Object.freeze(
-                    CONTENT_SPACE_ADMINISTRATION_OPERATIONS.map((operation) => Object.freeze({
-                      operation,
-                      readiness: 'production_ready' as const,
-                      reasonCode: 'available' as const
-                    }))
-                  ),
-                  bind
-                })
-              })
-            })
-          }
+    const providerEntry = createMockProviderFixtureEntry((provider) =>
+      defineContentSpaceProvider({
+        ...provider,
+        features: Object.freeze({
+          ...provider.features,
+          administration: Object.freeze({
+            describeOperations: () => Object.freeze(
+              CONTENT_SPACE_ADMINISTRATION_OPERATIONS.map((operation) => Object.freeze({
+                operation,
+                readiness: 'production_ready' as const,
+                reasonCode: 'available' as const
+              }))
+            ),
+            bind
+          })
         })
       })
-    })
-    const lifecycle = contribution<DomainMainRuntimeLifecycleContribution>(
-      contentEntry,
-      CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION.id
     )
-    const factory = contribution<Readonly<{
-      createDefinitions(): readonly CapabilityDefinition[]
-    }>>(contentEntry, CONTENT_SPACE_CAPABILITY_FACTORY_CONTRIBUTION.id)
-    const dispose = await lifecycle.activate({
-      contributions: contributionHost(providerExtensions)
-    } as unknown as Parameters<DomainMainRuntimeLifecycleContribution['activate']>[0])
+    const application = await activateContentSpaceTestApplication({
+      userDataDir: '/private/tmp/sciforge-content-space-administration-integration',
+      providerEntry,
+      principal
+    })
 
     try {
-      const broker = new CapabilityBroker(
-        new CapabilityRegistry(factory.createDefinitions()),
-        { resolveCurrentPrincipal: () => principal }
-      )
+      const { broker } = application
       const authorizationInvocationId = 'content_space_authorize_administration_0001'
       const caller = {
         audience: 'agent' as const,
@@ -396,7 +366,7 @@ describe('Content Space Agent discovery integration', () => {
         contentOwnerUserId: principal.subject
       })
     } finally {
-      if (typeof dispose === 'function') await dispose()
+      await application.dispose()
     }
   })
 
@@ -415,39 +385,26 @@ describe('Content Space Agent discovery integration', () => {
     await writeFile(join(workspace, 'outputs', 'result.txt'), uploadBytes)
 
     let broker: CapabilityBroker | undefined
-    let dispose: Awaited<
-      ReturnType<DomainMainRuntimeLifecycleContribution['activate']>
-    > = undefined
+    let application: Awaited<ReturnType<typeof activateContentSpaceTestApplication>> | undefined
     const transfers = new HostFileTransferService({
       temporaryRoot: temporary,
       isPrincipalCurrent: (candidate) => samePrincipalSnapshot(candidate, principal)
     })
-    const host = Object.freeze({
-      getUserDataDir: () => userData,
-      defineCapability,
-      fileTransfers: transfers.forOwner(
-        CONTENT_SPACE_DOMAIN_MODULE_ID,
-        () => broker?.currentInvocation()
-      )
-    }) as unknown as DomainMainHost
-    const contentEntry = createDomainMainEntry(host)
-    const providerEntry = createMockProviderMainEntry(host)
-    const lifecycle = contribution<DomainMainRuntimeLifecycleContribution>(
-      contentEntry,
-      CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION.id
-    )
-    const factory = contribution<Readonly<{
-      createDefinitions(): readonly CapabilityDefinition[]
-    }>>(contentEntry, CONTENT_SPACE_CAPABILITY_FACTORY_CONTRIBUTION.id)
+    const providerEntry = createMockProviderFixtureEntry()
 
     try {
-      dispose = await lifecycle.activate({
-        contributions: contributionHost(projectMainExtensions(providerEntry))
-      } as unknown as Parameters<DomainMainRuntimeLifecycleContribution['activate']>[0])
-      broker = new CapabilityBroker(
-        new CapabilityRegistry(factory.createDefinitions()),
-        { resolveCurrentPrincipal: () => principal }
-      )
+      application = await activateContentSpaceTestApplication({
+        userDataDir: userData,
+        providerEntry,
+        principal,
+        applicationHost: {
+          fileTransfersFor: (owner) => transfers.forOwner(
+            owner.moduleId,
+            () => broker?.currentInvocation()
+          )
+        }
+      })
+      broker = application.broker
       const caller = Object.freeze({
         audience: 'agent' as const,
         callerId: 'agent:content-space-real-transfer',
@@ -571,7 +528,7 @@ describe('Content Space Agent discovery integration', () => {
       await expect(readFile(join(workspace, 'inputs', 'result.txt')))
         .resolves.toEqual(Buffer.from(uploadBytes))
     } finally {
-      if (typeof dispose === 'function') await dispose()
+      await application?.dispose()
       await transfers.dispose()
       await rm(rootDirectory, { recursive: true, force: true })
     }
@@ -583,6 +540,7 @@ describe('Content Space Agent discovery integration', () => {
     const openWorkspaceUploadSource = vi.fn(async () => Object.freeze({
       name: 'result.txt',
       size: uploadBytes.byteLength,
+      sha256: createHash('sha256').update(uploadBytes).digest('hex'),
       read: async ({ offset, length }: Readonly<{ offset: number; length: number }>) =>
         uploadBytes.slice(offset, Math.min(offset + length, uploadBytes.byteLength)),
       close: vi.fn(async () => undefined)
@@ -597,18 +555,12 @@ describe('Content Space Agent discovery integration', () => {
       commit: relativePath === 'inputs/unknown-result.txt' ? unknownCommit : commit,
       abort: vi.fn(async () => undefined)
     }))
-    const host = Object.freeze({
-      getUserDataDir: () => '/private/tmp/sciforge-content-space-broker-integration',
-      defineCapability,
-      fileTransfers: Object.freeze({
-        openUploadSource: vi.fn(async () => { throw new Error('UI upload path was used.') }),
-        openDownloadDestination: vi.fn(async () => { throw new Error('UI download path was used.') }),
-        openWorkspaceUploadSource,
-        openWorkspaceDownloadDestination
-      })
-    }) as unknown as DomainMainHost
-    const contentEntry = createDomainMainEntry(host)
-    const providerEntry = createMockProviderMainEntry(host)
+    const fileTransfers = Object.freeze({
+      openUploadSource: vi.fn(async () => { throw new Error('UI upload path was used.') }),
+      openDownloadDestination: vi.fn(async () => { throw new Error('UI download path was used.') }),
+      openWorkspaceUploadSource,
+      openWorkspaceDownloadDestination
+    })
     const nativeReadInvocationIds: string[] = []
     const extendedReadInvocationIds: string[] = []
     const nativeReadExecute: ContentSpaceNativeDocumentExecutor['execute'] = vi.fn(async (input) => {
@@ -654,69 +606,41 @@ describe('Content Space Agent discovery integration', () => {
         })
       }
     )
-    const providerExtensions = projectMainExtensions(providerEntry).map((extension) => {
-      const candidate = extension.value as Partial<
-        ContentSpaceProviderFactoryRuntimeValue<ContentSpaceProvider, unknown>
-      >
-      if (candidate.location !== MAIN_CONTENT_SPACE_PROVIDER_FACTORY_LOCATION ||
-        !candidate.createProvider || !candidate.contractVersion || !candidate.providerKind) {
-        return extension
-      }
-      const original = candidate as ContentSpaceProviderFactoryRuntimeValue<
-        ContentSpaceProvider,
-        unknown
-      >
-      return Object.freeze({
-        ...extension,
-        value: defineContentSpaceProviderFactory<ContentSpaceProvider, unknown>({
-          contractVersion: original.contractVersion,
-          providerKind: original.providerKind,
-          createProvider: async (hostView) => {
-            const provider = await original.createProvider(hostView)
-            return defineContentSpaceProvider({
-              ...provider,
-              features: Object.freeze({
-                ...provider.features,
-                nativeDocuments: Object.freeze({
-                  describeOperations: () => Object.freeze(
-                    NATIVE_DOCUMENT_OPERATIONS.map((operation) => Object.freeze({
-                      operation,
-                      readiness: 'production_ready' as const,
-                      reasonCode: 'available' as const
-                    }))
-                  ),
-                  execute: nativeReadExecute
-                }),
-                extendedOperations: Object.freeze({
-                  describeOperations: () => Object.freeze([Object.freeze({
-                    operation: 'getEntryInfo' as const,
-                    readiness: 'production_ready' as const,
-                    reasonCode: 'available' as const
-                  })]),
-                  execute: extendedReadExecute
-                })
-              })
-            })
-          }
+    const providerEntry = createMockProviderFixtureEntry((provider) =>
+      defineContentSpaceProvider({
+        ...provider,
+        features: Object.freeze({
+          ...provider.features,
+          nativeDocuments: Object.freeze({
+            describeOperations: () => Object.freeze(
+              NATIVE_DOCUMENT_OPERATIONS.map((operation) => Object.freeze({
+                operation,
+                readiness: 'production_ready' as const,
+                reasonCode: 'available' as const
+              }))
+            ),
+            execute: nativeReadExecute
+          }),
+          extendedOperations: Object.freeze({
+            describeOperations: () => Object.freeze([Object.freeze({
+              operation: 'getEntryInfo' as const,
+              readiness: 'production_ready' as const,
+              reasonCode: 'available' as const
+            })]),
+            execute: extendedReadExecute
+          })
         })
       })
-    })
-    const lifecycle = contribution<DomainMainRuntimeLifecycleContribution>(
-      contentEntry,
-      CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION.id
     )
-    const factory = contribution<Readonly<{
-      createDefinitions(): readonly CapabilityDefinition[]
-    }>>(contentEntry, CONTENT_SPACE_CAPABILITY_FACTORY_CONTRIBUTION.id)
-    const dispose = await lifecycle.activate({
-      contributions: contributionHost(providerExtensions)
-    } as unknown as Parameters<DomainMainRuntimeLifecycleContribution['activate']>[0])
+    const application = await activateContentSpaceTestApplication({
+      userDataDir: '/private/tmp/sciforge-content-space-broker-integration',
+      providerEntry,
+      principal,
+      applicationHost: { fileTransfersFor: () => fileTransfers }
+    })
 
     try {
-      const broker = new CapabilityBroker(
-        new CapabilityRegistry(factory.createDefinitions()),
-        { resolveCurrentPrincipal: () => principal }
-      )
+      const { broker } = application
       const caller = Object.freeze({
         audience: 'agent' as const,
         callerId: 'agent:content-space-broker-integration',
@@ -900,7 +824,7 @@ describe('Content Space Agent discovery integration', () => {
         { actionId: CONTENT_SPACE_CAPABILITY_IDS.agentDownload, approval: 'none' }
       ])
     } finally {
-      if (typeof dispose === 'function') await dispose()
+      await application.dispose()
     }
   })
 })
@@ -912,44 +836,129 @@ function successValue<Value>(output: unknown): Value {
   return output.value as Value
 }
 
-function contribution<Value>(
-  entry: TrustedDomainProcessEntryInput<unknown>,
-  id: string
-): Value {
-  const found = entry.contributions.find((candidate) => candidate.id === id)
-  if (!found) throw new Error(`Missing contribution ${id}.`)
-  return found.value as Value
-}
-
-function projectMainExtensions(
-  entry: TrustedDomainProcessEntryInput<unknown>
-): readonly DomainMainContribution[] {
-  const declarations = entry.definition.entrypoints.find(({ process }) => process === 'main')
-    ?.contributions
-  if (!declarations) throw new Error('Provider has no main entrypoint.')
-  return Object.freeze(entry.contributions.flatMap((runtime) => {
-    const declaration = declarations.find(({ id }) => id === runtime.id)
-    if (!declaration || declaration.kind !== MAIN_EXTENSION_CONTRIBUTION_KIND) return []
-    if (!runtime.contract) throw new Error(`Provider contribution ${runtime.id} has no contract.`)
-    return [Object.freeze({
-      id: runtime.id,
-      kind: MAIN_EXTENSION_CONTRIBUTION_KIND,
-      packageName: entry.definition.packageName,
-      owner: Object.freeze({
-        moduleId: entry.definition.module.id,
-        moduleVersion: entry.definition.module.version
-      }),
-      ...(declaration.version ? { version: declaration.version } : {}),
-      contract: runtime.contract,
-      value: runtime.value
-    })]
-  }))
-}
-
-function contributionHost(
-  contributions: readonly DomainMainContribution[]
-): DomainMainContributionHost {
-  return Object.freeze({
-    list: (kind) => kind === MAIN_EXTENSION_CONTRIBUTION_KIND ? contributions : []
+function createMockProviderFixtureEntry(
+  transformProvider: (
+    provider: ContentSpaceProvider
+  ) => ContentSpaceProvider | Promise<ContentSpaceProvider> = (provider) => provider
+): TrustedDomainProcessEntryInput<unknown> {
+  const entry = createMockProviderMainEntry(Object.freeze({}) as DomainMainHost)
+  let replacedFactory = false
+  const contributions = entry.contributions.map((contribution) => {
+    const candidate = contribution.value as Partial<
+      ContentSpaceProviderFactoryRuntimeValue<ContentSpaceProvider, unknown>
+    >
+    if (candidate.location !== MAIN_CONTENT_SPACE_PROVIDER_FACTORY_LOCATION ||
+      !candidate.createProvider || !candidate.contractVersion || !candidate.providerKind) {
+      return contribution
+    }
+    replacedFactory = true
+    const original = candidate as ContentSpaceProviderFactoryRuntimeValue<
+      ContentSpaceProvider,
+      unknown
+    >
+    return Object.freeze({
+      ...contribution,
+      value: defineContentSpaceProviderFactory<ContentSpaceProvider, unknown>({
+        contractVersion: original.contractVersion,
+        providerKind: original.providerKind,
+        createProvider: async (hostView) => transformProvider(
+          await original.createProvider(hostView)
+        )
+      })
+    })
   })
+  if (!replacedFactory) throw new Error('Mock Provider manifest has no Provider factory.')
+  return Object.freeze({
+    ...entry,
+    contributions: Object.freeze(contributions)
+  })
+}
+
+function createTestApplicationCatalog(
+  userDataDir: string,
+  overrides: Partial<Parameters<typeof createApplicationDomainCatalog>[0]> = {}
+) {
+  return createApplicationDomainCatalog({
+    getUserDataDir: () => userDataDir,
+    packageStorageFor: createNonSecretPackageStorageForTest(),
+    capabilityInvokerFor: () => Object.freeze({
+      invoke: async () => {
+        throw new Error('Domain system capabilities are unavailable in this test.')
+      }
+    }),
+    ...overrides
+  })
+}
+
+function unavailableDependencies(): AppCapabilityDependencies {
+  const unavailable = () => undefined
+  return new Proxy({}, {
+    get: () => unavailable
+  }) as AppCapabilityDependencies
+}
+
+async function activateContentSpaceTestApplication(input: Readonly<{
+  userDataDir: string
+  providerEntry: TrustedDomainProcessEntryInput<unknown>
+  principal: PrincipalSnapshot
+  applicationHost?: Partial<Parameters<typeof createApplicationDomainCatalog>[0]>
+}>) {
+  const catalog = createTestApplicationCatalog(input.userDataDir, input.applicationHost)
+  for (const definition of catalog.listPackages()) {
+    if (
+      definition.module.id === CONTENT_SPACE_DOMAIN_MODULE_ID ||
+      definition.packageName.startsWith('@sciforge/core-')
+    ) continue
+    catalog.unregisterModule(definition.module.id)
+  }
+  catalog.registerModule(input.providerEntry)
+
+  const broker = new CapabilityBroker(
+    createApplicationCapabilityRegistry(catalog, unavailableDependencies()),
+    { resolveCurrentPrincipal: () => input.principal }
+  )
+  try {
+    const activated = await activateMainRuntimeContributions(catalog, {
+      userDataDir: input.userDataDir,
+      appRoot: input.userDataDir,
+      environment: Object.freeze({ NODE_ENV: 'test' }),
+      agentThreads: {
+        list: async () => [],
+        read: async ({ runtimeId, threadId }) => ({
+          id: threadId,
+          runtimeId,
+          watermark: '0',
+          turns: [],
+          artifacts: []
+        }),
+        subscribeMessages: async function* () {},
+        hasActiveTurns: () => false
+      },
+      capabilityInvokers: createMainSystemCapabilityInvokerFactory(broker),
+      executionEvents: {
+        publish: async () => {
+          throw new Error('Execution events are unavailable in this test.')
+        }
+      },
+      modelAccess: { textReasoner: async () => null },
+      enablement: {
+        isEnabled: async () => true,
+        subscribe: () => () => undefined
+      },
+      log: () => undefined
+    })
+    return Object.freeze({
+      broker,
+      dispose: async () => {
+        try {
+          await activated.dispose()
+        } finally {
+          catalog.dispose()
+        }
+      }
+    })
+  } catch (error) {
+    catalog.dispose()
+    throw error
+  }
 }

@@ -649,9 +649,7 @@ describe('CapabilityBroker', () => {
     })
 
     expect(broker.describeResourceHandle(agent, issued.resource)).toEqual({
-      resourceRef: issued.resourceRef,
-      resourceKind: 'document',
-      semanticRevision: '1'
+      resourceRef: issued.resourceRef
     })
     expect(observe).not.toHaveBeenCalled()
     expect(() => broker.describeResourceHandle(

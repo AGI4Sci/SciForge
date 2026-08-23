@@ -8,9 +8,9 @@ import {
   OPENCONTENT_CONTENT_SPACE_SERVICE_ID,
   OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION,
   OPENCONTENT_PROVIDER_INSTANCE_REF,
-  OPENCONTENT_PROVIDER_KIND,
-  type OpenContentContentSpaceFacade
+  OPENCONTENT_PROVIDER_KIND
 } from '@sciforge/domain-opencontent-connector/contract'
+import type { OpenContentContentSpaceFacade } from '@sciforge/domain-opencontent-connector/main-contract'
 
 import {
   OPENCONTENT_CONTENT_SPACE_FACTORY_CONTRACT,
@@ -18,19 +18,13 @@ import {
   domainPackageDefinition
 } from '../definition.js'
 import { createOpenContentContentSpaceProvider } from './provider.js'
-import type { OpenContentIdentityBindingPort } from './identity-binding.js'
-
-export type { OpenContentIdentityBindingPort } from './identity-binding.js'
 
 type OpenContentAdapterMainContribution = ReturnType<
   typeof defineContentSpaceProviderFactory
 >
 
 export function createDomainMainEntry(
-  host: DomainMainHost,
-  options: Readonly<{
-    identities?: OpenContentIdentityBindingPort
-  }> = {}
+  host: DomainMainHost
 ): TrustedDomainProcessEntryInput<OpenContentAdapterMainContribution> {
   if (!host.internalServices) {
     throw new Error('OpenContent Content Space Provider requires Host service mediation.')
@@ -48,8 +42,7 @@ export function createDomainMainEntry(
       )
       return createOpenContentContentSpaceProvider({
         providerInstanceRef: instance.providerInstanceRef,
-        facade,
-        ...(options.identities === undefined ? {} : { identities: options.identities })
+        facade
       })
     }
   })

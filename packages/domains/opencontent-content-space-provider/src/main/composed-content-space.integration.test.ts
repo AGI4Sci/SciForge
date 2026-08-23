@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto'
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   CONTENT_SPACE_CAPABILITY_IDS,
@@ -57,6 +57,7 @@ const principal = Object.freeze({
 
 const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+afterEach(() => vi.unstubAllGlobals())
 
 type CapabilityDefinition = Readonly<{
   id: string
@@ -204,6 +205,7 @@ async function composeRuntime(
   storage: ReturnType<typeof persistentStorage>,
   fetchImplementation: typeof fetch
 ) {
+  vi.stubGlobal('fetch', fetchImplementation)
   const internalServices = inMemoryInternalServices()
   const packageSecrets: DomainMainPackageSecretStoreHost = Object.freeze({
     has: vi.fn(async () => false),
@@ -221,7 +223,7 @@ async function composeRuntime(
     ...commonHost,
     packageSettings: storage.settings,
     packageSecrets
-  }), { fetch: fetchImplementation })
+  }))
   const adapterEntry = createAdapterMainEntry(commonHost)
   const contentEntry = createContentSpaceMainEntry(commonHost)
   const lifecycle = runtimeContribution<DomainMainRuntimeLifecycleContribution>(

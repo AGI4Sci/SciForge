@@ -9,9 +9,12 @@ import { z } from 'zod'
 import {
   OpenContentConnectorError
 } from '../contract.js'
+import { readOpenContentFolderInfo } from './folder-info-reader.js'
+import {
+  requestOpenContentProviderJson,
+  requestOpenContentProviderResponse
+} from './provider-json-transport.js'
 
-const MAX_RESPONSE_BYTES = 1_000_000
-const REQUEST_TIMEOUT_MS = 15_000
 const TRANSFER_TIMEOUT_MS = 60_000
 const UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024
 const MAX_UPLOAD_BYTES = 16 * 1024 * 1024
@@ -65,35 +68,6 @@ const externalAccountResponseSchema = envelopeSchema(z.object({
 }))
 
 const personalRootResponseSchema = envelopeSchema(z.string().regex(/^\d+$/u))
-
-const teamPageResponseSchema = envelopeSchema(z.object({
-  pageNum: z.number().int().min(1),
-  pageSize: z.number().int().min(1).max(100),
-  totalCount: z.number().int().nonnegative().safe(),
-  teamList: z.array(z.object({
-    teamId: z.number().int().nonnegative().safe(),
-    folderId: z.number().int().nonnegative().safe(),
-    teamName: z.string().trim().min(1).max(256),
-    teamStatus: z.number().int(),
-    teamOwner: z.number().int().nonnegative().safe(),
-    permission: z.number().int(),
-    teamType: z.number().int(),
-    isStick: z.boolean()
-  })).max(100),
-  sortName: z.string().max(64),
-  sortDesc: z.string().max(16)
-}))
-
-const folderInfoResponseSchema = envelopeSchema(z.object({
-  id: z.number().int().nonnegative().safe(),
-  folderGuid: z.string().trim().min(1).max(256),
-  parentFolderId: z.number().int().nonnegative().safe(),
-  folderType: z.number().int(),
-  teamId: z.number().int().nonnegative().safe(),
-  permission: z.number().int(),
-  childFolderCount: z.number().int().nonnegative().safe(),
-  childFileCount: z.number().int().nonnegative().safe()
-}))
 
 const folderChildSchema = z.object({
   id: z.number().int().nonnegative().safe(),
@@ -186,8 +160,8 @@ const downloadCheckDataSchema = z.object({
   regionUrl: z.string().max(2048)
 })
 
-export type OpenContentRootFolder = Readonly<{
-  source: 'personal-root' | 'team-root'
+export type OpenContentPersonalRootFolder = Readonly<{
+  source: 'personal-root'
   folderGuid: string
   label: string
 }>
@@ -209,18 +183,11 @@ export type OpenContentClient = Readonly<{
     signal?: AbortSignal
     assertPrincipalCurrent(): void | Promise<void>
   }>): Promise<OpenContentExternalAccount>
-  listRootFolders(input: Readonly<{
+  listPersonalRootFolder(input: Readonly<{
     token: string
-    teamPage: number
-    teamPageSize: number
-    includePersonal?: boolean
-    includeTeams?: boolean
     signal?: AbortSignal
     assertPrincipalCurrent(): void | Promise<void>
-  }>): Promise<Readonly<{
-    roots: readonly OpenContentRootFolder[]
-    nextTeamPage?: number
-  }>>
+  }>): Promise<OpenContentPersonalRootFolder>
   listFolderEntries(input: Readonly<{
     token: string
     parentFolderGuid: string
@@ -277,31 +244,6 @@ export function createOpenContentClient(options: Readonly<{
 }>): OpenContentClient {
   const baseUrl = trustedBaseUrl(options.baseUrl)
   const fetchImplementation = options.fetch ?? globalThis.fetch
-
-  const folderInfo = async (
-    token: string,
-    folderId: number,
-    signal: AbortSignal | undefined,
-    assertPrincipalCurrent: () => void | Promise<void>
-  ) => {
-    const response = await requestJson({
-      baseUrl,
-      fetchImplementation,
-      path: '/flatsdk/api/services/DocList/GetFolderInfoById',
-      method: 'POST',
-      body: { token, folderId },
-      signal,
-      assertPrincipalCurrent
-    })
-    const envelope = parseProviderResponse(
-      folderInfoResponseSchema,
-      response,
-      'provider_contract_violation'
-    )
-    requireBusinessSuccess(envelope.result, 'provider_unavailable')
-    if (envelope.data.id !== folderId) throw connectorError('provider_contract_violation')
-    return envelope.data
-  }
 
   const folderByGuid = async (
     token: string,
@@ -474,103 +416,50 @@ export function createOpenContentClient(options: Readonly<{
         account
       }))
     },
-    listRootFolders: async (rawInput) => {
-      const input = parseClientInput(rootFolderRequestSchema, rawInput)
-      const personalRootPromise = input.includePersonal
-        ? requestJson({
-            baseUrl,
-            fetchImplementation,
-            path: '/flatsdk/api/services/User/GetTopPersonalFolderId',
-            method: 'POST',
-            body: { token: input.token },
-            signal: rawInput.signal,
-            assertPrincipalCurrent: input.assertPrincipalCurrent
-          }).then((response) => {
-            const envelope = parseProviderResponse(
-              personalRootResponseSchema,
-              response,
-              'provider_contract_violation'
-            )
-            requireBusinessSuccess(envelope.result, 'provider_unavailable')
-            return Number(envelope.data)
-          })
-        : Promise.resolve<number | undefined>(undefined)
-      const teamPagePromise = input.includeTeams ? requestJson({
+    listPersonalRootFolder: async (rawInput) => {
+      const input = parseClientInput(personalRootFolderRequestSchema, rawInput)
+      const response = await requestJson({
         baseUrl,
         fetchImplementation,
-        path: '/flatsdk/api/services/Team/GetMyTeamList',
+        path: '/flatsdk/api/services/User/GetTopPersonalFolderId',
         method: 'POST',
-        body: {
-          token: input.token,
-          pageNum: input.teamPage,
-          pageSize: input.teamPageSize,
-          sortName: 'team_name',
-          teamType: 0,
-          desc: false,
-          keyWord: ''
-        },
-        signal: rawInput.signal,
+        body: { token: input.token },
+        signal: input.signal,
         assertPrincipalCurrent: input.assertPrincipalCurrent
-      }).then((response) => {
-        const envelope = parseProviderResponse(
-          teamPageResponseSchema,
-          response,
-          'provider_contract_violation'
-        )
-        requireBusinessSuccess(envelope.result, 'provider_unavailable')
-        if (
-          envelope.data.pageNum !== input.teamPage ||
-          envelope.data.pageSize !== input.teamPageSize
-        ) {
-          throw connectorError('provider_contract_violation')
-        }
-        return envelope.data
-      }) : Promise.resolve(undefined)
-      const [personalFolderId, teamPage] = await Promise.all([
-        personalRootPromise,
-        teamPagePromise
-      ])
-      const [personalFolder, teamFolders] = await Promise.all([
-        personalFolderId === undefined
-          ? Promise.resolve(undefined)
-          : folderInfo(
-              input.token,
-              personalFolderId,
-              rawInput.signal,
-              input.assertPrincipalCurrent
-            ),
-        Promise.all((teamPage?.teamList ?? []).map(async (team) => ({
-          team,
-          folder: await folderInfo(
-            input.token,
-            team.folderId,
-            rawInput.signal,
-            input.assertPrincipalCurrent
-          )
-        })))
-      ])
-      const roots: OpenContentRootFolder[] = []
-      if (personalFolder) {
-        roots.push(Object.freeze({
-          source: 'personal-root',
-          folderGuid: personalFolder.folderGuid,
-          label: 'Personal library'
-        }))
+      })
+      const envelope = parseProviderResponse(
+        personalRootResponseSchema,
+        response,
+        'provider_contract_violation'
+      )
+      requireBusinessSuccess(envelope.result, 'provider_unavailable')
+      const folderId = Number(envelope.data)
+      if (!Number.isSafeInteger(folderId) || folderId <= 0) {
+        throw connectorError('provider_contract_violation')
       }
-      for (const { team, folder } of teamFolders) {
-        if (folder.teamId !== team.teamId) throw connectorError('provider_contract_violation')
-        roots.push(Object.freeze({
-          source: 'team-root',
-          folderGuid: folder.folderGuid,
-          label: team.teamName
-        }))
+      const receipt = await readOpenContentFolderInfo({
+        token: input.token,
+        folderId,
+        signal: input.signal,
+        request: ({ path, body, signal }) => requestJson({
+          baseUrl,
+          fetchImplementation,
+          path,
+          method: 'POST',
+          body,
+          signal,
+          assertPrincipalCurrent: input.assertPrincipalCurrent
+        })
+      })
+      requireBusinessSuccess(receipt.result, 'provider_unavailable')
+      const folder = receipt.folder
+      if (!folder || folder.id !== folderId || folder.teamId !== 0) {
+        throw connectorError('provider_contract_violation')
       }
-      const consumed = input.teamPage * input.teamPageSize
       return Object.freeze({
-        roots: Object.freeze(roots),
-        ...(teamPage && consumed < teamPage.totalCount
-          ? { nextTeamPage: input.teamPage + 1 }
-          : {})
+        source: 'personal-root',
+        folderGuid: folder.folderGuid,
+        label: 'Personal library'
       })
     },
     listFolderEntries: (rawInput) => listFolderEntriesRequest({
@@ -687,13 +576,27 @@ export function createOpenContentClient(options: Readonly<{
         throw connectorError('outcome_unknown')
       }
       if (created.name !== input.name) throw connectorError('outcome_unknown')
-      const observed = await folderInfo(
-        input.token,
-        created.id,
-        input.signal,
-        input.assertPrincipalCurrent
-      )
-        .catch(() => { throw connectorError('outcome_unknown') })
+      const observed = await (async () => {
+        const receipt = await readOpenContentFolderInfo({
+          token: input.token,
+          folderId: created.id,
+          signal: input.signal,
+          request: ({ path, body, signal }) => requestJson({
+            baseUrl,
+            fetchImplementation,
+            path,
+            method: 'POST',
+            body,
+            signal,
+            assertPrincipalCurrent: input.assertPrincipalCurrent
+          })
+        })
+        requireBusinessSuccess(receipt.result, 'provider_unavailable')
+        if (!receipt.folder || receipt.folder.id !== created.id) {
+          throw connectorError('provider_contract_violation')
+        }
+        return receipt.folder
+      })().catch(() => { throw connectorError('outcome_unknown') })
       if (observed.parentFolderId !== parent.id) throw connectorError('outcome_unknown')
       return Object.freeze({ folderGuid: observed.folderGuid })
     },
@@ -857,7 +760,7 @@ export function createOpenContentClient(options: Readonly<{
         'provider_contract_violation'
       )
       const transferBaseUrl = trustedTransferBase(baseUrl, check.regionType, check.regionUrl)
-      const response = await requestRaw({
+      const response = await requestOpenContentProviderResponse({
         baseUrl: transferBaseUrl,
         fetchImplementation,
         path: '/downLoad/index',
@@ -868,7 +771,8 @@ export function createOpenContentClient(options: Readonly<{
         },
         signal: input.signal,
         timeoutMs: TRANSFER_TIMEOUT_MS,
-        assertPrincipalCurrent: input.assertPrincipalCurrent
+        assertPrincipalCurrent: input.assertPrincipalCurrent,
+        errorFactory: connectorError
       })
       const declaredLength = response.headers.get('content-length')
       if (declaredLength && Number(declaredLength) > MAX_DOWNLOAD_BYTES) {
@@ -913,12 +817,8 @@ const currentAccountRequestSchema = z.object({
   assertPrincipalCurrent: principalAssertionSchema
 }).strict()
 
-const rootFolderRequestSchema = z.object({
+const personalRootFolderRequestSchema = z.object({
   token: z.string().trim().min(16).max(4096),
-  teamPage: z.number().int().min(1).max(100_000),
-  teamPageSize: z.number().int().min(1).max(100),
-  includePersonal: z.boolean().optional().default(true),
-  includeTeams: z.boolean().optional().default(true),
   signal: z.instanceof(AbortSignal).optional(),
   assertPrincipalCurrent: principalAssertionSchema
 }).strict()
@@ -1156,12 +1056,12 @@ async function requestJson(input: Readonly<{
   signal?: AbortSignal
   assertPrincipalCurrent: () => void | Promise<void>
 }>): Promise<unknown> {
-  const response = await requestRaw({
+  return requestOpenContentProviderJson({
     ...input,
     headers: input.body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: input.body === undefined ? undefined : JSON.stringify(input.body)
+    body: input.body === undefined ? undefined : JSON.stringify(input.body),
+    errorFactory: connectorError
   })
-  return parseJsonBody(response)
 }
 
 async function requestMultipartJson(input: Readonly<{
@@ -1184,7 +1084,7 @@ async function requestMultipartJson(input: Readonly<{
       input.file.name
     )
   }
-  const response = await requestRaw({
+  return requestOpenContentProviderJson({
     baseUrl: input.baseUrl,
     fetchImplementation: input.fetchImplementation,
     path: input.path,
@@ -1193,109 +1093,9 @@ async function requestMultipartJson(input: Readonly<{
     body: form,
     signal: input.signal,
     timeoutMs: input.timeoutMs,
-    assertPrincipalCurrent: input.assertPrincipalCurrent
+    assertPrincipalCurrent: input.assertPrincipalCurrent,
+    errorFactory: connectorError
   })
-  return parseJsonBody(response)
-}
-
-async function requestRaw(input: Readonly<{
-  baseUrl: URL
-  fetchImplementation: typeof fetch
-  path: string
-  method?: 'GET' | 'POST'
-  query?: Readonly<Record<string, string>>
-  headers?: Readonly<Record<string, string>>
-  body?: BodyInit
-  signal?: AbortSignal
-  timeoutMs?: number
-  assertPrincipalCurrent: () => void | Promise<void>
-}>): Promise<Response> {
-  const url = new URL(input.path, input.baseUrl)
-  for (const [name, value] of Object.entries(input.query ?? {})) url.searchParams.set(name, value)
-  const timeout = AbortSignal.timeout(input.timeoutMs ?? REQUEST_TIMEOUT_MS)
-  const signal = input.signal ? AbortSignal.any([input.signal, timeout]) : timeout
-  try {
-    await input.assertPrincipalCurrent()
-  } catch {
-    throw connectorError('unauthorized')
-  }
-  let response: Response
-  try {
-    response = await input.fetchImplementation(url, {
-      method: input.method ?? 'GET',
-      redirect: 'error',
-      credentials: 'omit',
-      referrerPolicy: 'no-referrer',
-      signal,
-      ...(input.headers ? { headers: input.headers } : {}),
-      ...(input.body === undefined ? {} : { body: input.body })
-    })
-  } catch {
-    if (input.signal?.aborted) throw connectorError('cancelled')
-    throw connectorError('provider_unavailable')
-  }
-  if (!response.ok) {
-    if (response.status === 401 || response.status === 403) throw connectorError('unauthorized')
-    if (response.status === 429) throw connectorError('rate_limited')
-    throw connectorError('provider_unavailable')
-  }
-  return response
-}
-
-async function parseJsonBody(response: Response): Promise<unknown> {
-  const text = await readBoundedResponseText(response)
-  try {
-    return JSON.parse(text)
-  } catch {
-    throw connectorError('provider_contract_violation')
-  }
-}
-
-async function readBoundedResponseText(response: Response): Promise<string> {
-  const declaredLength = response.headers.get('content-length')
-  if (declaredLength !== null) {
-    const validLength = /^\d+$/u.test(declaredLength)
-      ? Number(declaredLength)
-      : Number.NaN
-    if (!Number.isSafeInteger(validLength) || validLength > MAX_RESPONSE_BYTES) {
-      await response.body?.cancel().catch(() => undefined)
-      throw connectorError('provider_contract_violation')
-    }
-  }
-  if (!response.body) return ''
-
-  const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
-  let totalBytes = 0
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      totalBytes += value.byteLength
-      if (totalBytes > MAX_RESPONSE_BYTES) {
-        await reader.cancel().catch(() => undefined)
-        throw connectorError('provider_contract_violation')
-      }
-      chunks.push(value)
-    }
-  } catch (error) {
-    if (error instanceof OpenContentConnectorError) throw error
-    throw connectorError('provider_unavailable')
-  } finally {
-    reader.releaseLock()
-  }
-
-  const bytes = new Uint8Array(totalBytes)
-  let offset = 0
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-  } catch {
-    throw connectorError('provider_contract_violation')
-  }
 }
 
 function parseProviderResponse<Schema extends z.ZodType>(

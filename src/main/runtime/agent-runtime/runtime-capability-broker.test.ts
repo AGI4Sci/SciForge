@@ -24,9 +24,7 @@ describe('RuntimeCapabilityBroker', () => {
       expiresAt: '2026-07-16T12:00:00.000Z'
     }
     const description = {
-      resourceRef: `res_${'r'.repeat(32)}`,
-      resourceKind: 'document',
-      semanticRevision: '1'
+      resourceRef: `res_${'r'.repeat(32)}`
     }
     const describeResourceHandle = vi.fn(() => description)
     const runtime = createRuntimeCapabilityBroker({

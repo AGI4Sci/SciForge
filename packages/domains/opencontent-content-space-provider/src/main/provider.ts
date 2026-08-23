@@ -9,16 +9,15 @@ import {
 } from '@sciforge/domain-content-space/contract'
 import {
   OPENCONTENT_PROVIDER_INSTANCE_REF,
-  OpenContentConnectorError,
-  type OpenContentContentSpaceFacade
+  OpenContentConnectorError
 } from '@sciforge/domain-opencontent-connector/contract'
+import type { OpenContentContentSpaceFacade } from '@sciforge/domain-opencontent-connector/main-contract'
 
 import { createOpenContentAdministrationFeature } from './administration.js'
 import {
   fromOpenContentExternalBinding,
   toOpenContentExpectedBinding
 } from './external-binding.js'
-import type { OpenContentIdentityBindingPort } from './identity-binding.js'
 import { createOpenContentRuntimeFeatures } from './runtime-features.js'
 
 const OPERATIONS = Object.freeze([
@@ -43,7 +42,6 @@ const ORDINARY_OPERATIONS = Object.freeze([
 export function createOpenContentContentSpaceProvider(input: Readonly<{
   providerInstanceRef: string
   facade: OpenContentContentSpaceFacade
-  identities?: OpenContentIdentityBindingPort
 }>): ContentSpaceProvider {
   const providerInstanceRef = input.providerInstanceRef
   assertInstance(providerInstanceRef, OPENCONTENT_PROVIDER_INSTANCE_REF)
@@ -63,8 +61,7 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
     features: Object.freeze({
       administration: createOpenContentAdministrationFeature({
         providerInstanceRef,
-        facade: input.facade,
-        ...(input.identities === undefined ? {} : { identities: input.identities })
+        facade: input.facade
       }),
       ...runtimeFeatures
     }),

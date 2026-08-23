@@ -29,11 +29,19 @@ describe('Content Space verification profile composition', () => {
     const declared = profileContribution('profile-alpha')
 
     expect(composeContentSpaceVerificationPolicy(host([
-      contribution('fixture.profile-alpha', declared, declared)
+      contribution('fixture.profile-alpha', declared, declared, undefined, 'forbidden')
     ]))).toEqual({
       contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
       profiles: [declared.profile]
     })
+  })
+
+  it('rejects a profile contribution that does not forbid public release', () => {
+    const declared = profileContribution('profile-alpha')
+
+    expect(() => composeContentSpaceVerificationPolicy(host([
+      contribution('fixture.public-release-allowed', declared, declared)
+    ]))).toThrow(/forbid public release/u)
   })
 
   it('fails composition for manifest/runtime drift or invalid metadata', () => {
@@ -41,16 +49,16 @@ describe('Content Space verification profile composition', () => {
     const drifted = profileContribution('profile-beta')
 
     expect(() => composeContentSpaceVerificationPolicy(host([
-      contribution('fixture.drifted', declared, drifted)
+      contribution('fixture.drifted', declared, drifted, undefined, 'forbidden')
     ]))).toThrow(/drifted/u)
     expect(() => composeContentSpaceVerificationPolicy(host([
-      contribution('fixture.version', declared, declared, '1.0.0')
+      contribution('fixture.version', declared, declared, '1.0.0', 'forbidden')
     ]))).toThrow(/metadata/u)
     expect(() => composeContentSpaceVerificationPolicy(host([
       contribution('fixture.invalid', {
         ...declared,
         unexpected: true
-      }, declared)
+      }, declared, undefined, 'forbidden')
     ]))).toThrow(/drifted/u)
   })
 
@@ -58,8 +66,8 @@ describe('Content Space verification profile composition', () => {
     const declared = profileContribution('profile-alpha')
 
     expect(() => composeContentSpaceVerificationPolicy(host([
-      contribution('fixture.profile-one', declared, declared),
-      contribution('fixture.profile-two', declared, declared)
+      contribution('fixture.profile-one', declared, declared, undefined, 'forbidden'),
+      contribution('fixture.profile-two', declared, declared, undefined, 'forbidden')
     ]))).toThrow(/duplicated/u)
   })
 })
@@ -89,7 +97,8 @@ function contribution(
   id: string,
   contract: DomainPackageJsonValue,
   value: unknown,
-  version: string = CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION
+  version: string = CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+  publicRelease?: 'allowed' | 'forbidden'
 ): DomainMainContribution {
   return Object.freeze({
     id,
@@ -97,6 +106,7 @@ function contribution(
     packageName: '@fixture/content-space-verification',
     owner: Object.freeze({ moduleId: 'fixture.content-space-verification', moduleVersion: '1.0.0' }),
     version,
+    ...(publicRelease === undefined ? {} : { publicRelease }),
     contract,
     value
   })

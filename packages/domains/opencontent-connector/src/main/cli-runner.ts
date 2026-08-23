@@ -5,22 +5,17 @@ import {
   type OpenContentSkillBundledAssetLocation
 } from './bundled-assets.js'
 import {
-  admitOpenContentSkillRuntimeOwner,
-  type OpenContentCliCommandTransport,
-  type OpenContentCliInvocation,
-  type OpenContentSkillMainExecutionContext,
-  type OpenContentSkillRuntimeOwner
-} from './contract.js'
+  type OpenContentSupplierCommandTransport,
+  type OpenContentSupplierInvocation
+} from '../main-contract.js'
 import {
   DOCFLOW_NATIVE_DOCUMENT_COMMANDS,
-  docflowCommandInvocationSchema,
-  type DocflowCommandTransport
-} from './docflow-native-document-adapter.js'
+  docflowCommandInvocationSchema
+} from '../supplier-docflow-protocol.js'
 import {
   OPENCONTENT_EXTENDED_OPERATION_COMMANDS,
-  openContentExtendedCommandInvocationSchema,
-  type OpenContentExtendedCommandTransport
-} from './extended-operation-adapter.js'
+  openContentExtendedCommandInvocationSchema
+} from '../supplier-extended-operation-protocol.js'
 
 /** The complete named-command surface shipped by the pinned OpenContent CLI snapshot. */
 export const OPENCONTENT_CLI_COMMANDS = Object.freeze([
@@ -112,7 +107,7 @@ export const OPENCONTENT_CLI_COMMANDS = Object.freeze([
   'perm-set'
 ] as const)
 
-export const openContentCliCommandSchema = z.enum(OPENCONTENT_CLI_COMMANDS)
+const openContentCliCommandSchema = z.enum(OPENCONTENT_CLI_COMMANDS)
 export type OpenContentCliCommand = z.infer<typeof openContentCliCommandSchema>
 
 const nativeDocumentCommands = new Set<string>(DOCFLOW_NATIVE_DOCUMENT_COMMANDS)
@@ -134,10 +129,6 @@ export const openContentCliInvocationSchema = z.union([
   docflowCommandInvocationSchema,
   openContentExtendedCommandInvocationSchema
 ])
-export type {
-  OpenContentCliCommandTransport,
-  OpenContentCliInvocation
-} from './contract.js'
 
 export const OPENCONTENT_CLI_RUNNER_PROTOCOL = 'opencontentCliRunner:v1' as const
 export const OPENCONTENT_CLI_MAX_STDOUT_BYTES = 4 * 1024 * 1024
@@ -154,14 +145,14 @@ export const openContentCliConnectionMaterialSchema = z.object({
   site: z.string().url().max(4_096),
   systemUserToken: boundedSecretSchema
 }).strict().readonly()
-export type OpenContentCliConnectionMaterial = z.infer<
+type OpenContentCliConnectionMaterial = z.infer<
   typeof openContentCliConnectionMaterialSchema
 >
 
 export type OpenContentCliProcessRequest = Readonly<{
   protocol: typeof OPENCONTENT_CLI_RUNNER_PROTOCOL
   entrypoint: string
-  invocation: OpenContentCliInvocation
+  invocation: OpenContentSupplierInvocation
   connectionMaterial: OpenContentCliConnectionMaterial
   deadlineAt: string
   signal: AbortSignal
@@ -182,10 +173,17 @@ export interface OpenContentCliProcessPort {
   run(request: OpenContentCliProcessRequest): Promise<unknown>
 }
 
+export type OpenContentCliExecutionContext = Readonly<{
+  providerInstanceRef: string
+  invocationId?: string
+  deadlineAt: string
+  signal: AbortSignal
+  assertPrincipalCurrent(): void | Promise<void>
+}>
+
 export type OpenContentCliRunnerBinding = Readonly<{
-  owner: OpenContentSkillRuntimeOwner
   assets: OpenContentSkillBundledAssetLocation
-  execution: OpenContentSkillMainExecutionContext
+  execution: OpenContentCliExecutionContext
   connectionMaterial: OpenContentCliConnectionMaterial
   processPort: OpenContentCliProcessPort
 }>
@@ -197,18 +195,14 @@ export type OpenContentCliRunnerBinding = Readonly<{
  */
 export function createOpenContentCliRunner(
   binding: OpenContentCliRunnerBinding
-): OpenContentCliCommandTransport & DocflowCommandTransport & OpenContentExtendedCommandTransport {
-  const owner = admitOpenContentSkillRuntimeOwner(binding.owner)
-  if (owner.role !== 'transport-owner') {
-    throw new TypeError('Only the OpenContent Connector may own the CLI transport.')
-  }
+): OpenContentSupplierCommandTransport {
   const connectionMaterial = Object.freeze(
     openContentCliConnectionMaterialSchema.parse(binding.connectionMaterial)
   )
   const assets = assertOpenContentSkillBundledAssetsPresent(binding.assets)
 
   return Object.freeze({
-    async invoke(input: OpenContentCliInvocation): Promise<unknown> {
+    async invoke(input: OpenContentSupplierInvocation): Promise<unknown> {
       const invocation = openContentCliInvocationSchema.parse(input)
       await binding.execution.assertPrincipalCurrent()
       if (binding.execution.signal.aborted) {

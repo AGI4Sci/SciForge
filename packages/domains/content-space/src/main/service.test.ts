@@ -35,11 +35,9 @@ import {
 import {
   CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION,
   CONTENT_SPACE_ADMINISTRATION_OPERATIONS,
-  PROJECT_CONTENT_SPACE_PROVISIONING_CONTRACT_VERSION,
   defineContentSpaceAdministrationPort,
   type ContentSpaceAdministrationOperationState,
-  type ContentSpaceAdministrationPort,
-  type ProjectContentSpaceProvisioningPort
+  type ContentSpaceAdministrationPort
 } from '../administration-contract.js'
 import {
   CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS
@@ -110,25 +108,6 @@ const readyCapabilities: readonly ContentSpaceCapabilityState[] = Object.freeze(
 )
 
 describe('ContentSpaceService', () => {
-  it('does not authorize an Agent administration scope from dormant Project provisioning', async () => {
-    const describeOperations = vi.fn(() => administrationStates('provision-project'))
-    const bind = vi.fn(async () => Object.freeze({
-      administration: administrationPortFixture()
-    }))
-    const service = serviceFor(providerFixture({
-      features: { administration: { describeOperations, bind } }
-    }))
-
-    await expect(service.authorizeProviderAdministration(PROVIDER_INSTANCE_REF, {
-      ...writeCall(),
-      audience: 'agent'
-    })).rejects.toMatchObject({
-      detail: { code: 'blocked_by_contract', retry: 'never' }
-    })
-    expect(describeOperations).toHaveBeenCalledOnce()
-    expect(bind).not.toHaveBeenCalled()
-  })
-
   it('blocks each unready administration operation before binding the Provider feature', async () => {
     const createSpace = vi.fn(administrationPortFixture().createSpace)
     const describeOperations = vi.fn(() => administrationStates('list-spaces'))
@@ -163,9 +142,8 @@ describe('ContentSpaceService', () => {
     const addMember = vi.fn(async (
       input: Parameters<ContentSpaceAdministrationPort['addMember']>[0]
     ) => Object.freeze({
-      member: input.member,
-      role: 'internal' as const,
-      revision: 'revision:2'
+      root,
+      member: input.member
     }))
     const bind = vi.fn(async () => Object.freeze({
       administration: administrationPortFixture({ addMember })
@@ -188,13 +166,125 @@ describe('ContentSpaceService', () => {
           providerInstanceRef: 'provider-instance-beta',
           kind: 'user',
           principalId: 'provider-user-b'
-        },
-        expectedRevision: 'revision:1'
+        }
       }
     }, writeCall())).rejects.toMatchObject({ detail: { code: 'invalid_target' } })
 
     expect(bind).not.toHaveBeenCalled()
     expect(addMember).not.toHaveBeenCalled()
+  })
+
+  it('rejects an add-member receipt for a different same-Provider member after dispatch', async () => {
+    const root = toPortableContentContainerReference(ROOT)
+    const requestedMember = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      kind: 'user' as const,
+      principalId: 'provider-user-requested'
+    })
+    const addMember = vi.fn(async () => Object.freeze({
+      root,
+      member: Object.freeze({
+        ...requestedMember,
+        principalId: 'provider-user-returned'
+      })
+    }))
+    const service = serviceFor(providerFixture({
+      features: {
+        administration: {
+          describeOperations: () => administrationStates('add-member'),
+          bind: async () => Object.freeze({
+            administration: administrationPortFixture({ addMember })
+          })
+        }
+      }
+    }))
+
+    await expect(service.executeAdministration({
+      target: featureTarget(ROOT),
+      operation: 'add-member',
+      request: {
+        root,
+        member: requestedMember
+      }
+    }, writeCall())).rejects.toMatchObject({
+      detail: { code: 'outcome_unknown', retry: 'never' }
+    })
+    expect(addMember).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a remove-member receipt for a different same-Provider member after dispatch', async () => {
+    const root = toPortableContentContainerReference(ROOT)
+    const requestedMember = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      kind: 'user' as const,
+      principalId: 'provider-user-requested'
+    })
+    const removeMember = vi.fn(async () => Object.freeze({
+      root,
+      member: Object.freeze({
+        ...requestedMember,
+        principalId: 'provider-user-returned'
+      }),
+      removed: true as const
+    }))
+    const service = serviceFor(providerFixture({
+      features: {
+        administration: {
+          describeOperations: () => administrationStates('remove-member'),
+          bind: async () => Object.freeze({
+            administration: administrationPortFixture({ removeMember })
+          })
+        }
+      }
+    }))
+
+    await expect(service.executeAdministration({
+      target: featureTarget(ROOT),
+      operation: 'remove-member',
+      request: {
+        root,
+        member: requestedMember
+      }
+    }, writeCall())).rejects.toMatchObject({
+      detail: { code: 'outcome_unknown', retry: 'never' }
+    })
+    expect(removeMember).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a remove-member receipt for a different same-Provider root after dispatch', async () => {
+    const root = toPortableContentContainerReference(ROOT)
+    const member = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      kind: 'user' as const,
+      principalId: 'provider-user-requested'
+    })
+    const removeMember = vi.fn(async () => Object.freeze({
+      root: toPortableContentContainerReference(OTHER_ROOT),
+      member,
+      removed: true as const
+    }))
+    const service = serviceFor(providerFixture({
+      features: {
+        administration: {
+          describeOperations: () => administrationStates('remove-member'),
+          bind: async () => Object.freeze({
+            administration: administrationPortFixture({ removeMember })
+          })
+        }
+      }
+    }))
+
+    await expect(service.executeAdministration({
+      target: featureTarget(ROOT),
+      operation: 'remove-member',
+      request: {
+        root,
+        member
+      }
+    }, writeCall())).rejects.toMatchObject({
+      detail: { code: 'outcome_unknown', retry: 'never' }
+    })
+    expect(removeMember).toHaveBeenCalledOnce()
   })
 
   it('rejects a listed member whose Provider Instance drifts from the root', async () => {
@@ -206,9 +296,7 @@ describe('ContentSpaceService', () => {
           providerInstanceRef: 'provider-instance-beta',
           kind: 'user' as const,
           principalId: 'provider-user-b'
-        }),
-        role: 'internal' as const,
-        revision: 'revision:1'
+        })
       })])
     }))
     const service = serviceFor(providerFixture({
@@ -231,41 +319,238 @@ describe('ContentSpaceService', () => {
     expect(listMembers).toHaveBeenCalledOnce()
   })
 
-  it('dispatches ready Project provisioning through the Provider-owned provisioning port', async () => {
-    const root = toPortableContentContainerReference(ROOT)
-    const intent = Object.freeze({
-      projectId: 'project:alpha',
-      projectLabel: 'Alpha Project',
-      contentOwnerUserId: 'user:owner',
-      contentMemberUserIds: Object.freeze(['user:owner', 'user:member']),
-      intentRevision: 1,
-      idempotencyKey: 'idem_project_alpha_0001'
-    })
-    const report = Object.freeze({
-      projectId: intent.projectId,
-      intentRevision: intent.intentRevision,
-      status: 'ready' as const,
-      root,
-      contentOwnerUserId: intent.contentOwnerUserId,
-      members: Object.freeze(intent.contentMemberUserIds.map((contentUserId) => Object.freeze({
-        contentUserId,
-        status: 'ready' as const
-      })))
-    })
-    const provisionProjectContentSpace = vi.fn(async () => report)
-    const projectProvisioning: ProjectContentSpaceProvisioningPort = Object.freeze({
-      contractVersion: PROJECT_CONTENT_SPACE_PROVISIONING_CONTRACT_VERSION,
-      provisionProjectContentSpace
-    })
-    const bind = vi.fn(async () => Object.freeze({
-      administration: administrationPortFixture(),
-      projectProvisioning
-    }))
+  const exactAdministrationRoot = toPortableContentContainerReference(ROOT)
+  const otherAdministrationRoot = toPortableContentContainerReference(OTHER_ROOT)
+  const foreignAdministrationRoot = toPortableContentContainerReference({
+    providerInstanceRef: 'provider-instance-beta',
+    containerId: 'foreign-root'
+  })
+  const administrationSummary = Object.freeze({
+    root: exactAdministrationRoot,
+    label: 'Research Team',
+    contentOwnerUserId: 'user:owner',
+    pinned: false
+  })
+  const administrationMember = Object.freeze({
+    providerInstanceRef: PROVIDER_INSTANCE_REF,
+    kind: 'user' as const,
+    principalId: 'provider-user-a'
+  })
+
+  it.each([
+    {
+      name: 'list-spaces page bound',
+      operation: 'list-spaces' as const,
+      method: 'listSpaces' as const,
+      request: { page: { limit: 1 } },
+      output: { items: [administrationSummary, {
+        ...administrationSummary,
+        root: otherAdministrationRoot
+      }] },
+      code: 'provider_unavailable'
+    },
+    {
+      name: 'list-spaces cursor progress',
+      operation: 'list-spaces' as const,
+      method: 'listSpaces' as const,
+      request: { page: { limit: 2, cursor: 'same-cursor' } },
+      output: { items: [administrationSummary], nextCursor: 'same-cursor' },
+      code: 'provider_unavailable'
+    },
+    {
+      name: 'list-spaces empty continuation',
+      operation: 'list-spaces' as const,
+      method: 'listSpaces' as const,
+      request: { page: { limit: 2 } },
+      output: { items: [], nextCursor: 'next-cursor' },
+      code: 'provider_unavailable'
+    },
+    {
+      name: 'list-spaces unique roots',
+      operation: 'list-spaces' as const,
+      method: 'listSpaces' as const,
+      request: { page: { limit: 2 } },
+      output: { items: [administrationSummary, administrationSummary] },
+      code: 'provider_unavailable'
+    },
+    {
+      name: 'list-spaces Provider authority',
+      operation: 'list-spaces' as const,
+      method: 'listSpaces' as const,
+      request: { page: { limit: 2 } },
+      output: { items: [{ ...administrationSummary, root: foreignAdministrationRoot }] },
+      code: 'provider_unavailable'
+    },
+    {
+      name: 'create-space label',
+      operation: 'create-space' as const,
+      method: 'createSpace' as const,
+      request: { label: 'Research Team', contentOwnerUserId: 'user:owner' },
+      output: { ...administrationSummary, label: 'Different Team' },
+      code: 'outcome_unknown'
+    },
+    {
+      name: 'create-space owner',
+      operation: 'create-space' as const,
+      method: 'createSpace' as const,
+      request: { label: 'Research Team', contentOwnerUserId: 'user:owner' },
+      output: { ...administrationSummary, contentOwnerUserId: 'user:other' },
+      code: 'outcome_unknown'
+    },
+    {
+      name: 'observe-space root',
+      operation: 'observe-space' as const,
+      method: 'observeSpace' as const,
+      request: { root: exactAdministrationRoot },
+      output: { ...administrationSummary, root: otherAdministrationRoot },
+      code: 'provider_unavailable'
+    },
+    {
+      name: 'update-space label',
+      operation: 'update-space' as const,
+      method: 'updateSpace' as const,
+      request: { root: exactAdministrationRoot, label: 'Renamed Team' },
+      output: administrationSummary,
+      code: 'outcome_unknown'
+    },
+    {
+      name: 'pin-space state',
+      operation: 'pin-space' as const,
+      method: 'pinSpace' as const,
+      request: { root: exactAdministrationRoot },
+      output: administrationSummary,
+      code: 'outcome_unknown'
+    },
+    {
+      name: 'unpin-space state',
+      operation: 'unpin-space' as const,
+      method: 'unpinSpace' as const,
+      request: { root: exactAdministrationRoot },
+      output: { ...administrationSummary, pinned: true },
+      code: 'outcome_unknown'
+    },
+    {
+      name: 'open-root identity',
+      operation: 'open-root' as const,
+      method: 'openRoot' as const,
+      request: { root: exactAdministrationRoot },
+      output: { root: otherAdministrationRoot },
+      code: 'provider_unavailable'
+    },
+    {
+      name: 'list-members page bound',
+      operation: 'list-members' as const,
+      method: 'listMembers' as const,
+      request: { root: exactAdministrationRoot, page: { limit: 1 } },
+      output: {
+        root: exactAdministrationRoot,
+        items: [
+          { member: administrationMember },
+          { member: { ...administrationMember, principalId: 'provider-user-b' } }
+        ]
+      },
+      code: 'provider_unavailable'
+    },
+    {
+      name: 'list-members root identity',
+      operation: 'list-members' as const,
+      method: 'listMembers' as const,
+      request: { root: exactAdministrationRoot, page: { limit: 2 } },
+      output: { root: otherAdministrationRoot, items: [{ member: administrationMember }] },
+      code: 'provider_unavailable'
+    },
+    {
+      name: 'list-members cursor progress',
+      operation: 'list-members' as const,
+      method: 'listMembers' as const,
+      request: { root: exactAdministrationRoot, page: { limit: 2, cursor: 'same-cursor' } },
+      output: {
+        root: exactAdministrationRoot,
+        items: [{ member: administrationMember }],
+        nextCursor: 'same-cursor'
+      },
+      code: 'provider_unavailable'
+    },
+    {
+      name: 'list-members empty continuation',
+      operation: 'list-members' as const,
+      method: 'listMembers' as const,
+      request: { root: exactAdministrationRoot, page: { limit: 2 } },
+      output: { root: exactAdministrationRoot, items: [], nextCursor: 'next-cursor' },
+      code: 'provider_unavailable'
+    },
+    {
+      name: 'list-members unique identities',
+      operation: 'list-members' as const,
+      method: 'listMembers' as const,
+      request: { root: exactAdministrationRoot, page: { limit: 2 } },
+      output: {
+        root: exactAdministrationRoot,
+        items: [{ member: administrationMember }, { member: administrationMember }]
+      },
+      code: 'provider_unavailable'
+    },
+    {
+      name: 'add-member root',
+      operation: 'add-member' as const,
+      method: 'addMember' as const,
+      request: { root: exactAdministrationRoot, member: administrationMember },
+      output: { root: otherAdministrationRoot, member: administrationMember },
+      code: 'outcome_unknown'
+    },
+    {
+      name: 'remove-member root',
+      operation: 'remove-member' as const,
+      method: 'removeMember' as const,
+      request: { root: exactAdministrationRoot, member: administrationMember },
+      output: { root: otherAdministrationRoot, member: administrationMember, removed: true },
+      code: 'outcome_unknown'
+    }
+  ])('rejects same-Provider $name drift after exactly one dispatch', async (testCase) => {
+    const dispatch = vi.fn(async () => testCase.output)
     const service = serviceFor(providerFixture({
       features: {
         administration: {
-          describeOperations: () => administrationStates('provision-project'),
-          bind
+          describeOperations: () => administrationStates(testCase.operation),
+          bind: async () => Object.freeze({
+            administration: administrationPortFixture({
+              [testCase.method]: dispatch
+            } as Partial<ContentSpaceAdministrationPort>)
+          })
+        }
+      }
+    }))
+    const target = testCase.operation === 'list-spaces' || testCase.operation === 'create-space'
+      ? Object.freeze({
+          kind: 'provider-administration' as const,
+          providerInstanceRef: PROVIDER_INSTANCE_REF
+        })
+      : featureTarget(ROOT)
+
+    const error = await service.executeAdministration({
+      target,
+      operation: testCase.operation,
+      request: testCase.request
+    }, writeCall()).catch((caught: unknown) => caught)
+    expect(error).toMatchObject({ detail: { code: testCase.code } })
+    if (testCase.code === 'outcome_unknown') {
+      expect(error).toMatchObject({
+        detail: { code: 'outcome_unknown', retry: 'never' }
+      })
+    }
+    expect(dispatch).toHaveBeenCalledOnce()
+  })
+
+  it('rejects an administration binding with an extra legacy port before dispatch', async () => {
+    const listSpaces = vi.fn(administrationPortFixture().listSpaces)
+    const service = serviceFor(providerFixture({
+      features: {
+        administration: {
+          describeOperations: () => administrationStates('list-spaces'),
+          bind: async () => Object.freeze({
+            administration: administrationPortFixture({ listSpaces }),
+            legacyPort: Object.freeze({})
+          })
         }
       }
     }))
@@ -275,16 +560,11 @@ describe('ContentSpaceService', () => {
         kind: 'provider-administration' as const,
         providerInstanceRef: PROVIDER_INSTANCE_REF
       }),
-      operation: 'provision-project',
-      request: intent
-    }, {
-      ...writeCall(),
-      audience: 'agent'
-    })).resolves.toEqual(report)
+      operation: 'list-spaces',
+      request: { page: { limit: 25 } }
+    }, writeCall())).rejects.toMatchObject({ detail: { code: 'provider_unavailable' } })
 
-    expect(provisionProjectContentSpace).toHaveBeenCalledOnce()
-    expect(provisionProjectContentSpace).toHaveBeenCalledWith(intent)
-    expect(bind).toHaveBeenCalledOnce()
+    expect(listSpaces).not.toHaveBeenCalled()
   })
 
   it('keeps PoC-only reads blocked without a separately reviewed trusted gate', async () => {
@@ -679,6 +959,93 @@ describe('ContentSpaceService', () => {
       parent: ROOT,
       page: { cursor: 'offset_10', limit: 10 }
     }, readCall())).rejects.toMatchObject({ detail: { code: 'provider_unavailable' } })
+  })
+
+  it('returns cancelled without Provider dispatch when a write lease is already aborted', async () => {
+    const controller = new AbortController()
+    const createFolder = vi.fn(providerFixture().createFolder)
+    const observeEntry = vi.fn(async ({ reference }) => {
+      const observation = observationFor(reference)
+      return {
+        ...observation,
+        get capabilities() {
+          controller.abort()
+          return observation.capabilities
+        }
+      }
+    }) satisfies ContentSpaceProvider['observeEntry']
+    const service = serviceFor(providerFixture({ observeEntry, createFolder }))
+
+    const error = await service.createFolder(
+      { parent: ROOT, name: 'Never Dispatched' },
+      writeCall(controller.signal)
+    ).catch((caught: unknown) => caught)
+    expect(observeEntry).toHaveBeenCalledOnce()
+    expect(createFolder).not.toHaveBeenCalled()
+    expect(error).toMatchObject({ detail: { code: 'cancelled', retry: 'never' } })
+  })
+
+  it('returns cancelled when the write lease aborts during pre-dispatch revalidation', async () => {
+    const controller = new AbortController()
+    const createFolder = vi.fn(providerFixture().createFolder)
+    let observationReturned = false
+    let observationPostcheckPassed = false
+    const observeEntry = vi.fn(async ({ reference }) => {
+      observationReturned = true
+      return observationFor(reference)
+    }) satisfies ContentSpaceProvider['observeEntry']
+    const service = serviceFor(providerFixture({ observeEntry, createFolder }))
+
+    const error = await service.createFolder(
+      { parent: ROOT, name: 'Never Dispatched' },
+      writeCall(controller.signal, () => {
+        if (!observationReturned) return
+        if (!observationPostcheckPassed) {
+          observationPostcheckPassed = true
+          return
+        }
+        controller.abort()
+      })
+    ).catch((caught: unknown) => caught)
+    expect(observeEntry).toHaveBeenCalledOnce()
+    expect(createFolder).not.toHaveBeenCalled()
+    expect(error).toMatchObject({ detail: { code: 'cancelled', retry: 'never' } })
+  })
+
+  it('returns cancelled when the deadline expires before synchronous Provider dispatch', async () => {
+    const baseNow = Date.now()
+    let deadlineExpired = false
+    const now = vi.spyOn(Date, 'now').mockImplementation(() =>
+      baseNow + (deadlineExpired ? 2_000 : 0))
+    const createFolder = vi.fn(providerFixture().createFolder)
+    let observationReturned = false
+    let observationPostcheckPassed = false
+    const observeEntry = vi.fn(async ({ reference }) => {
+      observationReturned = true
+      return observationFor(reference)
+    }) satisfies ContentSpaceProvider['observeEntry']
+    const service = serviceFor(providerFixture({ observeEntry, createFolder }), {
+      operationDeadlineMs: 1_000
+    })
+
+    try {
+      const error = await service.createFolder(
+        { parent: ROOT, name: 'Never Dispatched' },
+        writeCall(undefined, () => {
+          if (!observationReturned) return
+          if (!observationPostcheckPassed) {
+            observationPostcheckPassed = true
+            return
+          }
+          deadlineExpired = true
+        })
+      ).catch((caught: unknown) => caught)
+      expect(observeEntry).toHaveBeenCalledOnce()
+      expect(createFolder).not.toHaveBeenCalled()
+      expect(error).toMatchObject({ detail: { code: 'cancelled', retry: 'never' } })
+    } finally {
+      now.mockRestore()
+    }
   })
 
   it('returns outcome_unknown when a dispatched Provider write ignores its deadline', async () => {
@@ -1411,6 +1778,37 @@ describe('ContentSpaceService', () => {
       }
     }, writeCall())).rejects.toMatchObject({ detail: { code: 'invalid_target' } })
     expect(execute).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a native-document receipt for a different document', async () => {
+    const execute = vi.fn(async (input: any) => ({
+      contractVersion: '1.0.0' as const,
+      resourceType: 'native_document' as const,
+      operation: 'read' as const,
+      invocationId: input.context.invocationId,
+      outcome: 'succeeded' as const,
+      result: {
+        kind: 'content' as const,
+        document: {
+          resourceType: 'native_document' as const,
+          reference: { ...FILE, fileId: 'different-file' }
+        },
+        documentHash: 'a'.repeat(64),
+        content: { type: 'doc' }
+      }
+    }))
+    const service = serviceFor(providerFixture({
+      features: { nativeDocuments: nativeDocumentsFixture(execute) }
+    }))
+
+    await expect(service.executeNativeDocument({
+      target: featureTarget(FILE),
+      request: {
+        operation: 'read',
+        document: { resourceType: 'native_document', reference: FILE }
+      }
+    }, writeCall())).rejects.toMatchObject({ detail: { code: 'provider_unavailable' } })
+    expect(execute).toHaveBeenCalledOnce()
   })
 
   it('keeps Host transfer handles out of native Provider dispatch and injects them after commit', async () => {
@@ -2242,8 +2640,7 @@ function administrationPortFixture(
     root,
     label: 'Research Team',
     contentOwnerUserId: 'user:owner',
-    pinned: false,
-    revision: 'revision:1'
+    pinned: false
   })
   return defineContentSpaceAdministrationPort({
     contractVersion: CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION,
@@ -2253,18 +2650,16 @@ function administrationPortFixture(
     updateSpace: async () => summary,
     pinSpace: async () => Object.freeze({ ...summary, pinned: true }),
     unpinSpace: async () => summary,
-    openRoot: async () => Object.freeze({ root, revision: summary.revision }),
+    openRoot: async () => Object.freeze({ root }),
     listMembers: async () => Object.freeze({ root, items: Object.freeze([]) }),
     addMember: async (input) => Object.freeze({
-      member: input.member,
-      role: 'internal' as const,
-      revision: 'revision:2'
+      root,
+      member: input.member
     }),
     removeMember: async (input) => Object.freeze({
       root,
       member: input.member,
-      removed: true as const,
-      revision: 'revision:2'
+      removed: true as const
     }),
     ...overrides
   })
