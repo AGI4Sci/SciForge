@@ -166,6 +166,46 @@ describe('DesktopDeviceService', () => {
     expect(cloudInstallationId('sciforge-local-installation')).toMatch(/^ins_[a-f0-9]{32}$/u)
   })
 
+  it('keeps the ACTIVE Device lease stable across a same-User token refresh', async () => {
+    const listDevices = vi.fn(async (_context: IdentityAccessContext) => ({
+      devices: [cloudDevice('active')]
+    }))
+    const identity = identityHarness(
+      signedInStatus('usr_CloudUser000001', 'oid_CloudIdent0001'),
+      'access-token-one'
+    )
+    const states: string[] = []
+    const service = new DesktopDeviceService({
+      identity: identity.identity,
+      client: clientStub({ listDevices }),
+      installationSeed: 'sciforge-local-installation',
+      secrets: memorySecrets(),
+      appVersion: '0.2.17'
+    })
+    service.subscribe((status) => states.push(status.state))
+
+    await expect(service.ensureRegistered()).resolves.toMatchObject({
+      ok: true,
+      status: { state: 'active' }
+    })
+    states.length = 0
+
+    identity.setStatus(
+      signedInStatus('usr_CloudUser000001', 'oid_CloudIdent0001'),
+      'access-token-two'
+    )
+
+    expect(service.getStatus()).toMatchObject({ state: 'active' })
+    expect(states).toEqual([])
+    await service.refresh()
+    expect(listDevices.mock.calls.map(([context]) => context.accessToken)).toEqual([
+      'access-token-one',
+      'access-token-two'
+    ])
+    expect(states).toEqual(['active'])
+    service.close()
+  })
+
   it.each(['enrollment', 'refresh'] as const)(
     'discards a deferred %s result after logout',
     async (operationKind) => {
