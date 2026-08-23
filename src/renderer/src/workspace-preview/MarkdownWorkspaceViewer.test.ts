@@ -252,7 +252,8 @@ describe('MarkdownWorkspaceViewer', () => {
       activeAnnotationId: 'thread-1',
       onAnnotationAction: () => undefined,
       onAnnotationSelect: () => undefined,
-      onOpenAnnotations: () => undefined,
+      annotationsOpen: true,
+      onToggleAnnotations: () => undefined,
       navigationRequest: {
         requestId: 'locate-1',
         threadId: 'thread-1',
@@ -278,6 +279,7 @@ describe('MarkdownWorkspaceViewer', () => {
       expect(html).toContain('data-markdown-annotation-text-root')
       expect(html).toContain('data-markdown-annotation-overlay-layer')
       expect(html).toContain('data-markdown-open-annotations')
+      expect(html).toContain('aria-pressed="true"')
     }
   })
 

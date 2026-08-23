@@ -45,13 +45,13 @@ usage so failed retries do not make a successful turn look failed or double
 count tokens. Both views are derived from the durable events, not a second
 capture path. `export` writes a portable owner-only JSONL bundle, and `clear`
 removes trace history. `initialize` performs the daily 30-day retention check
-automatically. New writes roll at 64 MiB per segment; all managed indexed segments
-are capped at 2 GiB in total, including current-day indexed segments. Every
+automatically. New writes roll at 64 MiB per segment; all recognized segments
+are capped at 2 GiB in total, including pre-policy daily files and current-day
+indexed segments. Every
 producer sharing the directory uses the same cross-process mutation lease for
-segment selection, append/fsync, retention, capacity pruning, and clear. Pre-policy
-unindexed daily files remain readable and exportable and are not deleted by the
-new capacity policy. All inputs are filtered before persistence, and reads and
-exports apply the same filter again.
+segment selection, append/fsync, retention, capacity pruning, and clear. All
+inputs are filtered before persistence, and reads and exports apply the same
+filter again.
 
 Readers open a bounded file-descriptor snapshot while holding that lease, then
 release the lease before scanning. Capacity pruning and clear can therefore
@@ -64,11 +64,12 @@ incomplete acquisitions are reclaimed.
 Store queries scan JSONL segments one event at a time. Limited reads retain
 only the requested ordered events while still reporting exact totals and
 corrupt-line counts. Summary queries retain only per-trace and per-request
-aggregate fields. Exports scan the store once into an owner-only temporary
-spool and retain only a lightweight byte-range sort index before writing the
-manifest and timestamp-ordered events. Full payload history is never
-accumulated in the main-process heap, and manifest counts match the exported
-event stream.
+aggregate fields, with a hard group limit that fails a query with guidance to
+narrow its scope before it can exhaust the process heap. Exports scan the store
+once into an owner-only temporary spool and retain a bounded byte-range sort
+index before writing the manifest and timestamp-ordered events. Full payload
+history is never accumulated in the main-process heap, and manifest counts
+match the exported event stream.
 
 ## Scientific semantics
 

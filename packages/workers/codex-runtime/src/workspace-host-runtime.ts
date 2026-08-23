@@ -26,6 +26,7 @@ import {
 
 import {
   CODEX_MAIN_IPC_CHANNELS,
+  codexAppServerTurnInputs,
   createCodexAppServerClient,
   type CodexAppServerClientEvent,
   type CodexAppServerJsonRpcClient,
@@ -574,18 +575,28 @@ export class CodexWorkspaceHostRuntime {
     const workspace = await this.#containedWorkspace(
       stringValue(input.workspace) || binding?.workspace
     )
-    const response = await client.startTurn({
-      threadId: binding?.codexThreadId ?? guiThreadId,
-      input: [{ type: 'text', text, text_elements: [] }],
-      cwd: workspace,
-      ...(stringValue(input.model) ? { model: stringValue(input.model) } : {}),
-      approvalPolicy: 'on-request',
-      sandboxPolicy: {
-        type: 'workspaceWrite',
-        writableRoots: [workspace],
-        networkAccess: this.#networkAccessReady()
-      }
-    })
+    let response: unknown
+    try {
+      response = await client.startTurn({
+        threadId: binding?.codexThreadId ?? guiThreadId,
+        input: await codexAppServerTurnInputs({
+          text,
+          workspaceRoot: workspace,
+          fileReferences: input.fileReferences
+        }),
+        cwd: workspace,
+        ...(stringValue(input.model) ? { model: stringValue(input.model) } : {}),
+        approvalPolicy: 'on-request',
+        sandboxPolicy: {
+          type: 'workspaceWrite',
+          writableRoots: [workspace],
+          networkAccess: this.#networkAccessReady()
+        }
+      })
+    } catch (error) {
+      await this.#stopCurrentClient()
+      throw error
+    }
     const turn = record(record(response).turn)
     const turnId = stringValue(turn.id) || randomUUID()
     const userMessageItemId =
@@ -670,14 +681,40 @@ export class CodexWorkspaceHostRuntime {
     return null
   }
 
-  #subscribeEvents(
+  async #subscribeEvents(
     payload: WorkspaceHostRuntimeInvokeInput,
     input: Record<string, unknown>
-  ): WorkspaceHostPayload {
+  ): Promise<WorkspaceHostPayload> {
     const streamId = requiredString(payload.streamId, 'subscribeEvents.streamId')
     const threadId = requiredString(input.threadId, 'subscribeEvents.threadId')
+    await this.#reconcileOrphanedTurnTerminal(threadId)
     this.#streams.set(streamId, { streamId, threadId })
     return null
+  }
+
+  async #reconcileOrphanedTurnTerminal(threadId: string): Promise<void> {
+    const summary = await this.#eventStore.summary(threadId)
+    const localTurnId = summary?.latestTurnId
+    if (!localTurnId || terminalTurnState(summary.latestTurnStatus)) return
+    const binding = this.#threads.get(threadId)
+    let rawThread: Record<string, unknown>
+    try {
+      const client = await this.#ensureConnected()
+      rawThread = threadFromResponse(await client.readThread({
+        threadId: binding?.codexThreadId ?? threadId,
+        includeTurns: true
+      }))
+    } catch {
+      return
+    }
+    const durableTurnId = latestTurnId(rawThread)
+    const durableStatus = terminalTurnState(latestTurnStatus(rawThread))
+    if (!durableTurnId || durableTurnId !== localTurnId || !durableStatus) return
+    this.#appendEvent(threadId, {
+      kind: 'turn_lifecycle',
+      turnId: durableTurnId,
+      state: durableStatus
+    })
   }
 
   #unsubscribeEvents(payload: WorkspaceHostRuntimeInvokeInput): WorkspaceHostPayload {
@@ -1638,6 +1675,19 @@ function turnStatusFromEvents(events: RuntimeEvent[]): string {
     if (state === 'started' || state === 'running' || state === 'in_progress') return 'running'
   }
   return events.length > 0 ? 'running' : 'queued'
+}
+
+function terminalTurnState(value: unknown): 'completed' | 'failed' | 'aborted' | undefined {
+  const state = stringValue(value).toLowerCase()
+  if (state === 'completed' || state === 'success' || state === 'done') return 'completed'
+  if (state === 'failed' || state === 'failure' || state === 'error') return 'failed'
+  if (
+    state === 'aborted' ||
+    state === 'cancelled' ||
+    state === 'canceled' ||
+    state === 'interrupted'
+  ) return 'aborted'
+  return undefined
 }
 
 function eventTurnId(event: RuntimeEvent): string {

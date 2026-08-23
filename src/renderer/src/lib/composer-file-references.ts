@@ -7,7 +7,6 @@ export type ComposerFileReference = {
   workspaceRoot?: string
   kind?: AgentRuntimeWorkspaceReferenceKind
   mimeType?: string
-  modelRouterObject?: boolean
 }
 
 export type ComposerFileMention = {
@@ -15,13 +14,6 @@ export type ComposerFileMention = {
   end: number
   query: string
   quoted: boolean
-}
-
-export type ComposerFileContextEntry = {
-  relativePath: string
-  workspaceRoot?: string
-  content: string
-  truncated?: boolean
 }
 
 const FILE_MENTION_BOUNDARY = /(^|[\s([{，。；：、])@([^\s@"']*)$/u
@@ -156,37 +148,4 @@ export function filterWorkspaceFileMentionSuggestions(
     )
     .slice(0, limit)
     .map((entry) => entry.file)
-}
-
-function escapeFileContextAttribute(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('"', '&quot;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-}
-
-export function buildComposerFileContextPrompt(
-  userPrompt: string,
-  files: ComposerFileContextEntry[]
-): string {
-  if (files.length === 0) return userPrompt
-  const fileBlocks = files.map((file) => {
-    const truncated = file.truncated ? ' truncated="true"' : ''
-    const workspaceRoot = file.workspaceRoot ? ` workspace_root="${escapeFileContextAttribute(file.workspaceRoot)}"` : ''
-    return [
-      `<workspace_file path="${escapeFileContextAttribute(file.relativePath)}"${workspaceRoot}${truncated}>`,
-      file.content,
-      '</workspace_file>'
-    ].join('\n')
-  })
-
-  return [
-    'The user referenced these workspace files. Use them as context for the request.',
-    '',
-    ...fileBlocks,
-    '',
-    'User request:',
-    userPrompt.trim() || 'Please review the referenced workspace file(s).'
-  ].join('\n')
 }

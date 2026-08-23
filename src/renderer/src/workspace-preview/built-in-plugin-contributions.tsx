@@ -134,9 +134,10 @@ readonly RendererWorkspacePreviewPluginContribution[] {
               applyEdit={text.onApplyEdit}
               annotationOverlays={text.annotationOverlays}
               activeAnnotationId={text.activeAnnotationId}
+              annotationsOpen={text.annotationsOpen}
               navigationRequest={text.navigationRequest}
               onAnnotationSelect={text.onAnnotationSelect}
-              onOpenAnnotations={text.onOpenAnnotations}
+              onToggleAnnotations={text.onToggleAnnotations}
             />
           )}
         />
@@ -224,9 +225,10 @@ readonly RendererWorkspacePreviewPluginContribution[] {
               onApplyEdit={text.onApplyEdit}
               annotationOverlays={text.annotationOverlays}
               activeAnnotationId={text.activeAnnotationId}
+              annotationsOpen={text.annotationsOpen}
               navigationRequest={text.navigationRequest}
               onAnnotationSelect={text.onAnnotationSelect}
-              onOpenAnnotations={text.onOpenAnnotations}
+              onToggleAnnotations={text.onToggleAnnotations}
             />
           )}
         />
@@ -273,9 +275,10 @@ function MarkdownWorkspaceViewerHost({
   applyEdit,
   annotationOverlays,
   activeAnnotationId,
+  annotationsOpen,
   navigationRequest,
   onAnnotationSelect,
-  onOpenAnnotations
+  onToggleAnnotations
 }: {
   context: WorkspacePreviewPanelShellContext
   observation: WorkspaceObservation | null
@@ -283,9 +286,10 @@ function MarkdownWorkspaceViewerHost({
   applyEdit: (operation: WorkspacePreviewEditOperation) => Promise<void>
   annotationOverlays: NonNullable<MarkdownWorkspaceViewerProps['annotationOverlays']>
   activeAnnotationId: string | null
+  annotationsOpen: boolean
   navigationRequest: MarkdownWorkspaceViewerProps['navigationRequest']
   onAnnotationSelect: NonNullable<MarkdownWorkspaceViewerProps['onAnnotationSelect']>
-  onOpenAnnotations: NonNullable<MarkdownWorkspaceViewerProps['onOpenAnnotations']>
+  onToggleAnnotations: NonNullable<MarkdownWorkspaceViewerProps['onToggleAnnotations']>
 }): ReactElement {
   const { t } = useTranslation('common')
   const host = context.host
@@ -349,10 +353,11 @@ function MarkdownWorkspaceViewerHost({
       onOpenWorkspaceLink={context.openFile}
       annotationOverlays={annotationOverlays}
       activeAnnotationId={activeAnnotationId}
+      annotationsOpen={annotationsOpen}
       navigationRequest={navigationRequest}
       onAnnotationAction={applyAnnotation}
       onAnnotationSelect={onAnnotationSelect}
-      onOpenAnnotations={onOpenAnnotations}
+      onToggleAnnotations={onToggleAnnotations}
     />
   )
 }

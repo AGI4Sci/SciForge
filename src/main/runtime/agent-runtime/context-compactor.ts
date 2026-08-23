@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { toWellFormedUnicode, truncateWellFormedUnicode } from '@sciforge/domain-sdk/unicode'
 import type { AgentRuntimeItem } from '../../../shared/agent-runtime-contract'
 
 export type AgentRuntimeCompactionMode = 'normal' | 'aggressive' | 'force'
@@ -116,7 +117,7 @@ export class AgentRuntimeContextCompactor {
     const replacedTokens = this.estimate(head)
     const sourceDigest = computeShortHash(compactedRuntimeItemsDigestSource(head))
     const digestMarker = createRuntimeDigestMarker(sourceDigest)
-    const summaryBase = input.summaryOverride?.trim() || buildRuntimeCompactionSummary({
+    const summaryBase = toWellFormedUnicode(input.summaryOverride?.trim() || buildRuntimeCompactionSummary({
       history,
       head,
       tail,
@@ -124,7 +125,7 @@ export class AgentRuntimeContextCompactor {
       mode: input.mode,
       budgetTokens: input.budgetTokens,
       pinnedConstraints: input.pinnedConstraints ?? []
-    })
+    }))
     const summary = appendDigestMarker(summaryBase, digestMarker)
     const sourceItemIds = head.map((item) => item.id)
     const summaryItem = makeRuntimeCompactionItem({
@@ -354,9 +355,9 @@ function escapeMarkerAttribute(value: string): string {
 }
 
 function clipText(text: string, max = 360): string {
-  const compact = text.replace(/\s+/gu, ' ').trim()
+  const compact = toWellFormedUnicode(text).replace(/\s+/gu, ' ').trim()
   if (compact.length <= max) return compact
-  return `${compact.slice(0, Math.max(0, max - 3)).trim()}...`
+  return `${truncateWellFormedUnicode(compact, Math.max(0, max - 3)).trim()}...`
 }
 
 function normalizeFrozenItemCount(value: number | undefined, historyLength: number): number {

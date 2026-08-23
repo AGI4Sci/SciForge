@@ -202,9 +202,7 @@ const agentRuntimeFileReferenceSchema = z.object({
   relativePath: trimmedString(MAX_PATH_LENGTH),
   name: trimmedString(512),
   kind: z.enum(['file', 'directory', 'image', 'pdf', 'text']).optional(),
-  delivery: z.enum(['inline_context', 'model_router_object']).optional(),
-  mimeType: optionalTrimmedString(MAX_MIME_TYPE_LENGTH),
-  modelRouterObject: z.boolean().optional()
+  mimeType: optionalTrimmedString(MAX_MIME_TYPE_LENGTH)
 }).strict()
 
 const agentRuntimeExecutionRequirementSchema = z.object({

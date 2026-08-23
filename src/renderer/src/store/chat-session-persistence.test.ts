@@ -94,6 +94,66 @@ describe('chat session persistence', () => {
     expect(queue[0]?.attachments?.[0]).not.toHaveProperty('previewUrl')
   })
 
+  it('persists file references as workspace-relative locator metadata only', () => {
+    const queue = normalizePersistedQueuedMessages([{
+      id: 'file-q',
+      text: 'read the referenced files',
+      fileReferences: [{
+        path: '/workspace/sciforge/papers/report.pdf',
+        relativePath: 'papers/report.pdf',
+        name: 'report.pdf',
+        kind: 'pdf',
+        mimeType: 'application/pdf',
+        workspaceRoot: '/workspace/sciforge',
+        delivery: 'model_router_object',
+        modelRouterObject: true
+      }, {
+        path: '../outside.txt',
+        relativePath: '../outside.txt',
+        name: 'outside.txt'
+      }]
+    }], false)
+
+    expect(queue[0]?.fileReferences).toEqual([{
+      path: 'papers/report.pdf',
+      relativePath: 'papers/report.pdf',
+      name: 'report.pdf',
+      kind: 'pdf',
+      mimeType: 'application/pdf'
+    }])
+  })
+
+  it('removes legacy inlined file contents when restoring a queued message', () => {
+    const legacyRuntimeText = [
+      'The user referenced these workspace files. Use them as context for the request.',
+      '<workspace_file path="papers/private.md">',
+      'PRIVATE FILE CONTENT',
+      '</workspace_file>',
+      'User request:',
+      'summarize the paper'
+    ].join('\n')
+    const queue = normalizePersistedQueuedMessages([{
+      id: 'legacy-file-q',
+      text: legacyRuntimeText,
+      displayText: 'summarize the paper',
+      deliveryAttempt: {
+        startedAt: 1,
+        userBlockId: 'legacy-file-q',
+        attemptedText: legacyRuntimeText
+      },
+      fileReferences: [{
+        path: 'papers/private.md',
+        relativePath: 'papers/private.md',
+        name: 'private.md',
+        kind: 'text'
+      }]
+    }], true)
+
+    expect(queue[0]?.text).toBe('summarize the paper')
+    expect(queue[0]?.deliveryAttempt?.attemptedText).toBe('summarize the paper')
+    expect(JSON.stringify(queue)).not.toContain('PRIVATE FILE CONTENT')
+  })
+
   it('keeps failed sends as ordered recovery entries and rejects malformed envelopes', () => {
     values.set(CHAT_SESSION_STORAGE_KEY, JSON.stringify({
       version: 1,

@@ -9,6 +9,7 @@ import type {
   AgentRuntimeThreadGoalStatus,
   AgentRuntimeWorkspaceReference
 } from '../../shared/agent-runtime-contract'
+import { toWellFormedUnicode, truncateWellFormedUnicode } from '@sciforge/domain-sdk/unicode'
 import {
   atomicWriteAppDataJson,
   readAppDataStoreText
@@ -80,8 +81,10 @@ export class RuntimeContextLedgerService {
         sourceMarker: patchString(current.sourceMarker, patch, 'sourceMarker'),
         updatedAt: new Date().toISOString()
       }
-      setLedger(store, next)
-      return cloneLedger(next)
+      const normalized = normalizeLedger(next)
+      if (!normalized) throw new Error('Runtime context ledger normalization failed.')
+      setLedger(store, normalized)
+      return cloneLedger(normalized)
     })
   }
 
@@ -92,8 +95,8 @@ export class RuntimeContextLedgerService {
     text: string
     acceptedAt?: string
   }): Promise<AgentRuntimeContextDirective> {
-    const id = input.id.trim()
-    const text = input.text.trim()
+    const id = toWellFormedUnicode(input.id).trim()
+    const text = toWellFormedUnicode(input.text).trim()
     if (!id || !text) throw new Error('Runtime directive id and text are required.')
     return this.mutate(async (store) => {
       const ledger = this.ensure(store, input.runtimeId, input.threadId)
@@ -177,6 +180,31 @@ export class RuntimeContextLedgerService {
       if (turnId) directive.turnId = turnId
       if (error) directive.error = error
       else delete directive.error
+      ledger.updatedAt = new Date().toISOString()
+      return cloneDirective(directive)
+    })
+  }
+
+  /**
+   * Releases an interrupted delivery only after the Host has proved that no
+   * durable turn-boundary owner exists for this directive.
+   */
+  async rejectUnownedDirectiveDelivery(input: {
+    runtimeId: AgentRuntimeId
+    threadId: string
+    id: string
+    error: string
+  }): Promise<AgentRuntimeContextDirective> {
+    return this.mutate(async (store) => {
+      const ledger = this.ensure(store, input.runtimeId, input.threadId)
+      const directive = requiredDirective(ledger, input.id)
+      if (directive.delivery === 'delivered') return cloneDirective(directive)
+      if (directive.delivery !== 'delivering' && directive.delivery !== 'uncertain') {
+        return cloneDirective(directive)
+      }
+      directive.delivery = 'rejected'
+      directive.error = input.error.trim() || 'Interrupted delivery had no durable turn owner.'
+      delete directive.turnId
       ledger.updatedAt = new Date().toISOString()
       return cloneDirective(directive)
     })
@@ -387,7 +415,7 @@ function normalizeStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined
   const values = value
     .filter((item): item is string => typeof item === 'string')
-    .map((item) => item.trim())
+    .map((item) => toWellFormedUnicode(item).trim())
     .filter(Boolean)
   return values.length ? values : undefined
 }
@@ -539,7 +567,7 @@ function nonNegativeInteger(value: unknown): number | undefined {
 }
 
 function stringValue(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : ''
+  return typeof value === 'string' ? toWellFormedUnicode(value).trim() : ''
 }
 
 function hasPatchKey<K extends keyof RuntimeContextLedgerPatch>(
@@ -556,7 +584,8 @@ function patchString<K extends keyof RuntimeContextLedgerPatch>(
 ): string | undefined {
   if (!hasPatchKey(patch, keyName)) return current
   const value = patch[keyName]
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+  const normalized = typeof value === 'string' ? toWellFormedUnicode(value).trim() : ''
+  return normalized || undefined
 }
 
 function patchStatus(
@@ -578,7 +607,11 @@ function isThreadGoalStatus(value: unknown): value is AgentRuntimeThreadGoalStat
 
 function mergeStrings(current: string[] | undefined, next: string[] | undefined): string[] | undefined {
   if (!next) return current ? [...current] : undefined
-  const values = new Set([...(current ?? []), ...next].map((value) => value.trim()).filter(Boolean))
+  const values = new Set(
+    [...(current ?? []), ...next]
+      .map((value) => toWellFormedUnicode(value).trim())
+      .filter(Boolean)
+  )
   return values.size ? [...values] : undefined
 }
 
@@ -636,7 +669,7 @@ function cloneRecord(value: Record<string, unknown> | undefined): Record<string,
 }
 
 function clipText(value: string, max: number): string {
-  const compact = value.replace(/\s+/gu, ' ').trim()
+  const compact = toWellFormedUnicode(value).replace(/\s+/gu, ' ').trim()
   if (compact.length <= max) return compact
-  return `${compact.slice(0, Math.max(0, max - 3)).trim()}...`
+  return `${truncateWellFormedUnicode(compact, Math.max(0, max - 3)).trim()}...`
 }

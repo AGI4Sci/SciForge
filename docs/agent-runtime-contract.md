@@ -129,7 +129,43 @@ type AgentRuntimeAdapter = {
 必填方法；由 capability 声明决定 UI 是否展示入口。`usage` 是必填方法，但
 不支持时必须返回 `supported: false`。
 
+## 工作区文件引用契约
+
+`AgentRuntimeTurnStartInput.fileReferences` 只携带工作区相对定位元数据：
+
+```ts
+type AgentRuntimeFileReference = {
+  path: string
+  relativePath: string
+  name: string
+  kind?: 'file' | 'directory' | 'image' | 'pdf' | 'text'
+  mimeType?: string
+}
+```
+
+`path` 和 `relativePath` 在 adapter 调用前必须由 `AgentRuntimeHost` 归一为同一个
+安全的工作区相对路径。Host 必须拒绝绝对路径、越界路径和其他无法安全
+归一的定位符，不得在归一过程中静默丢弃引用。
+
+Composer 和 Host 不得为构造 turn 读取引用文件内容，也不得将文件或
+目录内容嵌入 `text`。每个 runtime adapter 必须把每个已接受引用转换为
+provider 能实际看到的定位信息：优先使用 provider 原生的文件输入；若
+provider 没有普通文件或目录输入，则可发送只包含工作区相对路径与类型的
+安全文本定位块，让 agent 通过工作区工具按需读取。引用不得被冒充为其他
+协议对象（例如 app/plugin mention）。无法转换或材料化时必须返回可见错误，
+不得忽略引用或回退到文件内容内联。
+
+Codex app-server 的 stdio JSON-RPC 边界必须把所有出站字符串归一为合法
+Unicode 标量序列，避免历史持久化数据中的孤立 UTF-16 surrogate 破坏整条
+JSONL 请求。`turn/start` 的 provider acknowledgement 必须有界等待；超时后
+该连接应被销毁，并把交付保持为可审计的 uncertain 状态，不得无限挂起或
+在同一连接上盲目重发。
+
 ## 中性事件模型
+
+Host 边界所有权出现前遗留的 artifact-only 记录只做有界材料化重试；
+耗尽后必须写入与 delivered receipt 明确区分的持久 quarantine receipt 并
+解除后续回合阻塞，不得静默丢弃或伪装成交付成功。
 
 `AgentRuntimeEvent` 以 UI 语义为中心：
 

@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
+import { toWellFormedUnicode } from '@sciforge/domain-sdk/unicode'
 
 import {
   CodexAppServerPendingRequestRegistry,
@@ -127,6 +128,8 @@ export type CodexAppServerJsonRpcClientOptions = {
   clientInfo?: CodexAppServerClientInfo
   serverRequestHandler?: CodexAppServerServerRequestHandler
   pendingServerRequests?: CodexAppServerPendingRequestRegistry | CodexAppServerPendingRequestRegistryOptions
+  /** Maximum time to wait for the provider to acknowledge `turn/start`. */
+  turnStartTimeoutMs?: number
 }
 
 type PendingRequest = {
@@ -146,6 +149,7 @@ const DEFAULT_CLIENT_INFO: CodexAppServerClientInfo = {
 const DEFAULT_CAPABILITIES = {
   experimentalApi: true
 }
+const DEFAULT_TURN_START_TIMEOUT_MS = 30_000
 
 export function createCodexAppServerClient(
   options: CodexAppServerJsonRpcClientOptions = {}
@@ -289,7 +293,20 @@ export class CodexAppServerJsonRpcClient {
     params: CodexAppServerTurnStartParams,
     abortSignal?: AbortSignal
   ): Promise<unknown> {
-    return this.request('turn/start', params, abortSignal)
+    if (abortSignal) return this.request('turn/start', params, abortSignal)
+    const timeoutMs = positiveTimeoutMs(
+      this.options.turnStartTimeoutMs,
+      DEFAULT_TURN_START_TIMEOUT_MS
+    )
+    const deadline = AbortSignal.timeout(timeoutMs)
+    return this.request('turn/start', params, deadline).catch((error) => {
+      if (!deadline.aborted) throw error
+      const stderr = toWellFormedUnicode(this.stderrTail).trim()
+      const detail = stderr ? ` Recent stderr: ${stderr}` : ''
+      throw new Error(
+        `Codex app-server did not acknowledge turn/start within ${timeoutMs} ms.${detail}`
+      )
+    })
   }
 
   listHooks(cwds: string[], abortSignal?: AbortSignal): Promise<CodexAppServerHooksListResponse> {
@@ -428,7 +445,7 @@ export class CodexAppServerJsonRpcClient {
   private write(payload: CodexAppServerJsonRpcRequest | CodexAppServerJsonRpcNotification | CodexAppServerJsonRpcResponse): void {
     this.assertOpen()
     if (!this.process) throw new Error('Codex app-server process is not running.')
-    this.process.stdin.write(`${JSON.stringify(payload)}\n`)
+    this.process.stdin.write(`${JSON.stringify(wellFormedJsonValue(payload))}\n`)
   }
 
   private handleLine(line: string): void {
@@ -617,6 +634,36 @@ function pendingServerRequestRegistry(
   if (!value) return null
   if (value instanceof CodexAppServerPendingRequestRegistry) return value
   return createCodexAppServerPendingRequestRegistry(value)
+}
+
+function positiveTimeoutMs(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback
+}
+
+function wellFormedJsonValue(value: unknown, ancestors = new Set<object>()): unknown {
+  if (typeof value === 'string') return toWellFormedUnicode(value)
+  if (value === null || typeof value !== 'object') return value
+  if (ancestors.has(value)) throw new TypeError('Converting circular structure to JSON.')
+
+  const toJSON = (value as { toJSON?: () => unknown }).toJSON
+  if (typeof toJSON === 'function') {
+    ancestors.add(value)
+    const normalized = wellFormedJsonValue(toJSON.call(value), ancestors)
+    ancestors.delete(value)
+    return normalized
+  }
+
+  ancestors.add(value)
+  const output: unknown[] | Record<string, unknown> = Array.isArray(value) ? [] : {}
+  for (const [key, nested] of Object.entries(value)) {
+    const normalized = wellFormedJsonValue(nested, ancestors)
+    if (Array.isArray(output)) output.push(normalized)
+    else output[toWellFormedUnicode(key)] = normalized
+  }
+  ancestors.delete(value)
+  return output
 }
 
 function isJsonRpcResponse(value: Record<string, unknown>): value is CodexAppServerJsonRpcResponse {

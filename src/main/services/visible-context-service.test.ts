@@ -270,8 +270,7 @@ describe('VisibleContextService capture', () => {
         resources: component.resources?.map((resource) => ({
           ...resource,
           capability: {
-            resourceRef: `res_${'c'.repeat(26)}`,
-            operations: []
+            resourceRef: `res_${'c'.repeat(26)}`
           }
         }))
       }))
@@ -567,8 +566,7 @@ describe('VisibleContextService capture', () => {
           ...resource,
           title: 'Other.pdf',
           capability: {
-            resourceRef: `res_${'c'.repeat(26)}`,
-            operations: []
+            resourceRef: `res_${'c'.repeat(26)}`
           }
         }))
       }))

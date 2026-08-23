@@ -65,6 +65,83 @@ afterEach(async () => {
 })
 
 describe('TurnArtifactHandoffService', () => {
+  it('persists a recovery-safe prepared phase before crossing into dispatching', async () => {
+    const root = await temporaryRoot()
+    const service = handoff({
+      outbox: new TurnArtifactOutbox(root),
+      materialize: async (value) => event(value, 'unused'),
+      consumers: []
+    })
+
+    const prepared = await service.registerStart(startDraft({
+      threadId: 'thread-start-phase',
+      clientDirectiveId: 'directive-start-phase'
+    }))
+    assert.equal(prepared.phase, 'prepared')
+
+    const recoveredPrepared = new TurnArtifactOutbox(root)
+    await recoveredPrepared.load()
+    const recoverySafe = recoveredPrepared.pendingStarts()[0]
+    assert.equal(recoverySafe?.phase, 'prepared')
+    assert.ok(recoverySafe)
+
+    const dispatching = await service.markStartDispatching(prepared)
+    assert.equal(dispatching.phase, 'dispatching')
+    assert.equal((await service.markStartDispatching(prepared)).phase, 'dispatching')
+
+    const recoveredDispatching = new TurnArtifactOutbox(root)
+    await recoveredDispatching.load()
+    assert.equal(recoveredDispatching.pendingStarts()[0]?.phase, 'dispatching')
+    await service.close()
+  })
+
+  it('migrates a phase-less V5 start conservatively as dispatching', async () => {
+    const root = await temporaryRoot()
+    const first = new TurnArtifactOutbox(root)
+    const prepared = await first.registerStart(startDraft({
+      threadId: 'thread-v5-start-phase',
+      clientDirectiveId: 'directive-v5-start-phase'
+    }))
+    assert.equal(prepared.phase, 'prepared')
+    const persisted = JSON.parse(await readFile(first.path, 'utf8')) as {
+      version: number
+      starts: Array<Record<string, unknown>>
+    }
+    persisted.version = 5
+    for (const start of persisted.starts) delete start.phase
+    await writeFile(first.path, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8')
+
+    const recovered = new TurnArtifactOutbox(root)
+    await recovered.load()
+    assert.equal(recovered.pendingStarts()[0]?.phase, 'dispatching')
+    const migrated = JSON.parse(await readFile(recovered.path, 'utf8')) as {
+      version: number
+      starts: Array<{ phase?: unknown }>
+    }
+    assert.equal(migrated.version, 6)
+    assert.equal(migrated.starts[0]?.phase, 'dispatching')
+  })
+
+  it('refuses provider acceptance while a durable start is still prepared', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+    const prepared = await outbox.registerStart(startDraft({
+      threadId: 'thread-prepared-bind',
+      clientDirectiveId: 'directive-prepared-bind'
+    }))
+
+    await assert.rejects(
+      outbox.bindStart(prepared, {
+        ...prepared,
+        turnId: 'turn-prepared-bind',
+        bindingSource: 'provider-accepted'
+      }),
+      /must be marked dispatching/
+    )
+    assert.equal(outbox.pendingStarts()[0]?.phase, 'prepared')
+    assert.equal(outbox.pendingWatches().length, 0)
+  })
+
   it('preserves the signed-out Principal context version at durable start', async () => {
     const root = await temporaryRoot()
     const outbox = new TurnArtifactOutbox(root)
@@ -338,6 +415,7 @@ describe('TurnArtifactHandoffService', () => {
       turnId: 'turn-principal',
       bindingSource: 'provider-accepted' as const
     }
+    await first.markStartDispatching(start)
     await first.bindStart(start, watch)
     const intent = intentFor(start, watch.turnId)
     const key = turnArtifactIntentKey(intent)
@@ -417,7 +495,8 @@ describe('TurnArtifactHandoffService', () => {
       version: number
       watches: Array<Record<string, unknown>>
     }
-    assert.equal(persisted.version, 5)
+    assert.equal(persisted.version, 6)
+    persisted.version = 5
     for (const watch of persisted.watches) delete watch.principalContext
     await writeFile(first.path, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8')
 
@@ -431,7 +510,7 @@ describe('TurnArtifactHandoffService', () => {
       version: number
       watches: Array<{ principalContext?: unknown }>
     }
-    assert.equal(migrated.version, 5)
+    assert.equal(migrated.version, 6)
     assert.deepEqual(migrated.watches[0]?.principalContext, HOST_PRINCIPAL_CONTEXT)
   })
 
@@ -456,8 +535,10 @@ describe('TurnArtifactHandoffService', () => {
       receipts: Array<Record<string, unknown>>
       lifecycleReceipts: Array<{ event: Record<string, unknown> }>
     }
-    assert.equal(persisted.version, 5)
+    assert.equal(persisted.version, 6)
+    persisted.version = 5
     for (const receipt of persisted.receipts) {
+      delete receipt.outcome
       delete receipt.principalContext
       delete receipt.principalContextDigest
     }
@@ -477,12 +558,15 @@ describe('TurnArtifactHandoffService', () => {
     const migrated = JSON.parse(await readFile(recovered.path, 'utf8')) as {
       version: number
       receipts: Array<{
+        outcome?: unknown
         principalContext?: unknown
         principalContextDigest?: unknown
       }>
       lifecycleReceipts: Array<{ event: { principalContext?: unknown } }>
     }
-    assert.equal(migrated.version, 5)
+    assert.equal(migrated.version, 6)
+    assert.equal(migrated.receipts[0]?.outcome, 'delivered')
+    assert.equal(recovered.wasDelivered(key), true)
     assert.deepEqual(migrated.receipts[0]?.principalContext, HOST_PRINCIPAL_CONTEXT)
     assert.match(String(migrated.receipts[0]?.principalContextDigest), /^[a-f0-9]{64}$/)
     assert.deepEqual(
@@ -499,6 +583,7 @@ describe('TurnArtifactHandoffService', () => {
       version: number
       watches: Array<Record<string, unknown>>
     }
+    persisted.version = 5
     for (const watch of persisted.watches) delete watch.principalContext
     await writeFile(first.path, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8')
 
@@ -511,7 +596,7 @@ describe('TurnArtifactHandoffService', () => {
       version: number
       watches: Array<{ principalContext?: unknown }>
     }
-    assert.equal(migrated.version, 5)
+    assert.equal(migrated.version, 6)
     assert.equal(migrated.watches[0]?.principalContext, null)
   })
 
@@ -539,7 +624,7 @@ describe('TurnArtifactHandoffService', () => {
       version: number
       watches: Array<{ principal?: unknown; principalContext?: unknown }>
     }
-    assert.equal(migrated.version, 5)
+    assert.equal(migrated.version, 6)
     assert.equal(migrated.watches[0]?.principal, null)
     assert.equal(migrated.watches[0]?.principalContext, null)
 
@@ -828,6 +913,157 @@ describe('TurnArtifactHandoffService', () => {
     await service.close()
   })
 
+  it('quarantines an unmaterializable legacy artifact after bounded retries and unblocks the same flush', async () => {
+    const root = await temporaryRoot()
+    const firstOutbox = new TurnArtifactOutbox(root)
+    const { intent } = await acceptTurn(firstOutbox, {
+      threadId: 'thread-legacy-quarantine',
+      turnId: 'turn-legacy-quarantine'
+    })
+    const key = turnArtifactIntentKey(intent)
+    await firstOutbox.enqueueIntent(intent)
+    await rewriteRecordAsLegacyArtifactOnly(firstOutbox, key)
+
+    const outbox = new TurnArtifactOutbox(root)
+    await outbox.load()
+    assert.equal(outbox.record(key)?.legacyArtifactOnly, true)
+    let materializations = 0
+    const logs: Array<{ level: string; message: string; detail?: unknown }> = []
+    const service = handoff({
+      outbox,
+      materialize: async () => {
+        materializations += 1
+        throw new Error('legacy thread is permanently unavailable')
+      },
+      consumers: [],
+      log: (level, message, detail) => { logs.push({ level, message, detail }) }
+    })
+
+    for (let attempt = 1; attempt < 8; attempt += 1) {
+      await assert.rejects(
+        service.flushThread(intent.runtimeId, intent.threadId),
+        /predecessor flush failed/
+      )
+      assert.equal(outbox.record(key)?.attempts, attempt)
+    }
+    await service.flushThread(intent.runtimeId, intent.threadId)
+
+    assert.equal(materializations, 8)
+    assert.equal(outbox.record(key), undefined)
+    assert.equal(outbox.wasDelivered(key), false)
+    assert.equal(outbox.nextAttemptAt(), null)
+    assert.equal(logs.length, 1)
+    assert.match(logs[0]?.message ?? '', /quarantined after bounded retries/)
+    const persisted = JSON.parse(await readFile(outbox.path, 'utf8')) as {
+      records: unknown[]
+      receipts: Array<Record<string, unknown>>
+    }
+    assert.equal(persisted.records.length, 0)
+    assert.equal(persisted.receipts[0]?.key, key)
+    assert.equal(
+      persisted.receipts[0]?.outcome,
+      'legacy_materialization_quarantined'
+    )
+    assert.equal(persisted.receipts[0]?.attempts, 8)
+    assert.equal(
+      persisted.receipts[0]?.error,
+      'legacy thread is permanently unavailable'
+    )
+    assert.equal(persisted.receipts[0]?.workspaceRoot, undefined)
+    assert.equal(persisted.receipts[0]?.fileBaseline, undefined)
+    assert.equal(persisted.receipts[0]?.fileEffects, undefined)
+
+    await service.close()
+    const restartedOutbox = new TurnArtifactOutbox(root)
+    await restartedOutbox.load()
+    let replayedMaterializations = 0
+    const restarted = handoff({
+      outbox: restartedOutbox,
+      materialize: async (value) => {
+        replayedMaterializations += 1
+        return event(value, 'must-not-replay-quarantine')
+      },
+      consumers: []
+    })
+    await restarted.replayPending()
+    assert.equal(replayedMaterializations, 0)
+    assert.equal(restartedOutbox.wasDelivered(key), false)
+    assert.equal(restartedOutbox.nextAttemptAt(), null)
+    await restarted.close()
+  })
+
+  it('never quarantines Host-owned materialization retries', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+    const service = handoff({
+      outbox,
+      materialize: async () => { throw new Error('modern thread temporarily unavailable') },
+      consumers: []
+    })
+    const { intent } = await acceptTurn(service, {
+      threadId: 'thread-modern-retry',
+      turnId: 'turn-modern-retry'
+    })
+    const key = turnArtifactIntentKey(intent)
+    await service.publish(intent)
+
+    for (let attempt = 1; attempt <= 9; attempt += 1) {
+      await assert.rejects(
+        service.flushThread(intent.runtimeId, intent.threadId),
+        /predecessor flush failed/
+      )
+    }
+    assert.equal(outbox.record(key)?.stage, 'pending_materialization')
+    assert.equal(outbox.record(key)?.attempts, 9)
+    assert.equal(outbox.wasDelivered(key), false)
+    await assert.rejects(
+      outbox.markLegacyMaterializationQuarantined(key, 'must not quarantine'),
+      /Only a legacy artifact-only pending materialization/
+    )
+    await service.close()
+  })
+
+  it('never quarantines a materialized legacy event whose consumer is unavailable', async () => {
+    const root = await temporaryRoot()
+    const firstOutbox = new TurnArtifactOutbox(root)
+    const { intent } = await acceptTurn(firstOutbox, {
+      threadId: 'thread-legacy-fanout',
+      turnId: 'turn-legacy-fanout'
+    })
+    const key = turnArtifactIntentKey(intent)
+    await firstOutbox.enqueueIntent(intent)
+    await firstOutbox.markMaterialized(key, event(intent, 'legacy-immutable-event'))
+    await rewriteRecordAsLegacyArtifactOnly(firstOutbox, key)
+
+    const outbox = new TurnArtifactOutbox(root)
+    await outbox.load()
+    let materializations = 0
+    const service = handoff({
+      outbox,
+      materialize: async (value) => {
+        materializations += 1
+        return event(value, 'must-not-rematerialize')
+      },
+      consumers: [{ consume: async () => { throw new Error('consumer remains unavailable') } }]
+    })
+
+    for (let attempt = 1; attempt <= 9; attempt += 1) {
+      await assert.rejects(
+        service.flushThread(intent.runtimeId, intent.threadId),
+        /predecessor flush failed/
+      )
+    }
+    assert.equal(materializations, 0)
+    assert.equal(outbox.record(key)?.stage, 'pending_fanout')
+    assert.equal(outbox.record(key)?.attempts, 9)
+    assert.equal(outbox.wasDelivered(key), false)
+    await assert.rejects(
+      outbox.markLegacyMaterializationQuarantined(key, 'must not quarantine'),
+      /Only a legacy artifact-only pending materialization/
+    )
+    await service.close()
+  })
+
   it('restarts from pending_fanout without reading the mutable thread again', async () => {
     const root = await temporaryRoot()
     const firstOutbox = new TurnArtifactOutbox(root)
@@ -1022,6 +1258,7 @@ describe('TurnArtifactHandoffService', () => {
       turnId: 'turn-1',
       bindingSource: 'provider-accepted'
     }
+    await service.markStartDispatching(acceptedStart)
     await service.bindStart(acceptedStart, acceptedWatch)
     assert.equal((await service.readDurableTurnBoundarySnapshot()).owners[0]?.phase, 'watching')
     const acceptedIntent = intentFor(acceptedStart, acceptedWatch.turnId)
@@ -1089,6 +1326,7 @@ describe('TurnArtifactHandoffService', () => {
       ...lifecycleFor(raced, undefined, undefined, 'rejected'),
       settlementSource: 'explicit-pending-start-release' as const
     }
+    await outbox.markStartDispatching(raced)
     const raceResults = await Promise.all([
       outbox.bindStart(raced, racedWatch),
       outbox.rejectStart(raced, racedRelease)
@@ -1113,6 +1351,7 @@ describe('TurnArtifactHandoffService', () => {
       ...lifecycleFor(releaseFirst, undefined, undefined, 'rejected'),
       settlementSource: 'explicit-pending-start-release' as const
     }
+    await outbox.markStartDispatching(releaseFirst)
     assert.deepEqual(await Promise.all([
       outbox.rejectStart(releaseFirst, releaseFirstEvent),
       outbox.bindStart(releaseFirst, releaseFirstWatch)
@@ -1128,6 +1367,7 @@ describe('TurnArtifactHandoffService', () => {
       threadId: 'thread-double-resolve',
       clientDirectiveId: 'directive-double-resolve'
     }))
+    await outbox.markStartDispatching(doubleResolve)
     const differentHandles = await Promise.allSettled([
       outbox.bindStart(doubleResolve, {
         ...doubleResolve,
@@ -1177,6 +1417,7 @@ describe('TurnArtifactHandoffService', () => {
       turnId: 'turn-resolved-before-restart',
       bindingSource: 'explicit-resolution'
     }
+    await outbox.markStartDispatching(resolvedBeforeRestart)
     assert.equal(await outbox.bindStart(resolvedBeforeRestart, resolvedWatch), true)
     const afterResolveRestart = new TurnArtifactOutbox(root)
     await afterResolveRestart.load()
@@ -1316,6 +1557,7 @@ function handoff(input: {
   materialize: (intent: TurnArtifactReplayIntent) => Promise<DomainTurnArtifactEvent>
   consumers: readonly DomainArtifactConsumer[]
   lifecycleConsumer?: (event: DomainMainAfterTurnEvent) => Promise<void>
+  log?: (level: 'warn' | 'error', message: string, detail?: unknown) => void
 }): TurnArtifactHandoffService {
   const service = new TurnArtifactHandoffService({
     ...input,
@@ -1328,8 +1570,47 @@ function handoff(input: {
   return service
 }
 
+async function rewriteRecordAsLegacyArtifactOnly(
+  outbox: TurnArtifactOutbox,
+  key: string
+): Promise<void> {
+  const persisted = JSON.parse(await readFile(outbox.path, 'utf8')) as {
+    version: number
+    starts: unknown[]
+    watches: unknown[]
+    records: Array<Record<string, unknown>>
+    receipts: unknown[]
+    lifecycleSettlements: unknown[]
+    lifecycleReceipts: unknown[]
+  }
+  const record = persisted.records.find((candidate) => candidate.key === key)
+  assert.ok(record)
+  const intent = record.intent as Record<string, unknown>
+  delete intent.issuerEpoch
+  delete intent.deliveryAttemptId
+  delete intent.deliveryAttemptOrdinal
+  delete intent.boundaryLeaseId
+  if (record.stage === 'pending_fanout') {
+    const materialized = record.event as Record<string, unknown>
+    delete materialized.issuerEpoch
+    delete materialized.deliveryAttemptId
+    delete materialized.deliveryAttemptOrdinal
+    delete materialized.boundaryLeaseId
+  }
+  persisted.version = 3
+  persisted.starts = []
+  persisted.watches = []
+  persisted.receipts = []
+  persisted.lifecycleSettlements = []
+  persisted.lifecycleReceipts = []
+  await writeFile(outbox.path, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8')
+}
+
 async function acceptTurn(
-  owner: Pick<TurnArtifactHandoffService, 'registerStart' | 'bindStart'> | TurnArtifactOutbox,
+  owner: Pick<
+    TurnArtifactHandoffService,
+    'registerStart' | 'markStartDispatching' | 'bindStart'
+  > | TurnArtifactOutbox,
   overrides: Readonly<{
     runtimeId?: string
     threadId?: string
@@ -1353,6 +1634,7 @@ async function acceptTurn(
     turnId: overrides.turnId ?? 'turn-1',
     bindingSource: 'provider-accepted'
   }
+  await owner.markStartDispatching(start)
   await owner.bindStart(start, watchValue)
   const intentValue = intentFor(start, watchValue.turnId)
   return Object.freeze({
@@ -1392,9 +1674,15 @@ function startDraft(overrides: Readonly<{
 }
 
 function intentFor(start: TurnArtifactStart, turnId: string): TurnArtifactIntent {
-  const { key: _key, registeredAt: _registeredAt, ...binding } = start as TurnArtifactStart & {
+  const {
+    key: _key,
+    registeredAt: _registeredAt,
+    phase: _phase,
+    ...binding
+  } = start as TurnArtifactStart & {
     key?: string
     registeredAt?: string
+    phase?: 'prepared' | 'dispatching'
   }
   return {
     ...binding,

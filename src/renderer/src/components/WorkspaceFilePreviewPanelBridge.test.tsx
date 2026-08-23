@@ -1092,8 +1092,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
         sessionId: 'chat-session-1',
         surfaceId: 'pane:preview-1',
         currentPreview: {
-          resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
-          operationRefs: ['workspace-preview.apply-edit']
+          resourceRef: 'res_abcdefghijklmnopqrstuvwxyz'
         },
         documentAnnotations: {
           threadCount: 2,
@@ -1148,11 +1147,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
           threadCount: 2,
           openThreadCount: 1,
           capability: {
-            resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
-            operations: [{
-              operationRef: 'workspace-preview.apply-edit',
-              schemaRef: 'sciforge://capability-schema/workspace-preview.apply-edit?version=1.0.0'
-            }]
+            resourceRef: 'res_abcdefghijklmnopqrstuvwxyz'
           },
           metadata: {
             routeReason: 'registered-plugin',
@@ -1175,5 +1170,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     expect(JSON.stringify(component)).not.toContain('cap_abcdefghijklmnopqrstuvwxyz')
     expect(JSON.stringify(component)).not.toContain('semanticRevision')
     expect(JSON.stringify(component)).not.toContain('inputSchema')
+    expect(JSON.stringify(component)).not.toContain('workspace-preview.apply-edit')
+    expect(JSON.stringify(component)).not.toContain('operationRefs')
   })
 })

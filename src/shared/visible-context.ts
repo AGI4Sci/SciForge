@@ -82,11 +82,7 @@ export type VisibleContextTargetRefResult = z.infer<
 >
 
 export const visibleContextCapabilityLocatorSchema = z.object({
-  resourceRef: z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/),
-  operations: z.array(z.object({
-    operationRef: z.string().trim().min(3).max(192),
-    schemaRef: z.string().trim().min(1).max(1024)
-  }).strict()).max(512)
+  resourceRef: z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/)
 }).strict()
 
 export type VisibleContextCapabilityLocator = z.infer<typeof visibleContextCapabilityLocatorSchema>

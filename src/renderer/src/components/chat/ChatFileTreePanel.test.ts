@@ -64,8 +64,7 @@ describe('ChatFileTreePanel helpers', () => {
       name: 'panel.png',
       workspaceRoot: '/tmp/workspace',
       kind: 'image',
-      mimeType: 'image/png',
-      modelRouterObject: true
+      mimeType: 'image/png'
     })
 
     expect(composerReferenceFromWorkspaceReference({
@@ -81,8 +80,7 @@ describe('ChatFileTreePanel helpers', () => {
       name: 'large-paper.pdf',
       workspaceRoot: '/tmp/workspace',
       kind: 'pdf',
-      mimeType: 'application/pdf',
-      modelRouterObject: true
+      mimeType: 'application/pdf'
     })
   })
 

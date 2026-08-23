@@ -339,6 +339,112 @@ describe('WorkspacePreview capability adapter', () => {
       expect.objectContaining({ resource: renewed })
     ])
   })
+
+  it('keeps an idle preview resource alive until the session is released', async () => {
+    vi.useFakeTimers()
+    try {
+      let nowMs = Date.parse('2026-07-16T13:45:00.000Z')
+      const opened = handle('idle-opened')
+      const observed = handle('idle-observed')
+      const renewed = {
+        ...handle('idle-renewed'),
+        expiresAt: '2026-07-16T14:15:00.000Z'
+      }
+      const annotationRequests: Array<Record<string, unknown>> = []
+      const transport = {
+        readiness: vi.fn(async (request: { expectedContractVersion: number; requiredCapabilityIds: string[] }) => ({
+          contractVersion: request.expectedContractVersion,
+          status: 'ready' as const,
+          registryFingerprint: 'a'.repeat(64),
+          availableCapabilityIds: request.requiredCapabilityIds,
+          missingCapabilityIds: [],
+          message: 'Capability broker is ready.'
+        })),
+        bind: vi.fn(async () => renewed),
+        invoke: vi.fn(async (payload: { request: Record<string, unknown> }) => {
+          const actionId = String(payload.request.actionId)
+          if (actionId === 'workspace-preview.open') {
+            return invocation(actionId, {
+              ok: true,
+              session: { id: 'session-idle' },
+              manifest: { id: 'fixture-preview' },
+              route: 'matched',
+              file: { path: 'paper.pdf' },
+              resource: opened
+            })
+          }
+          if (
+            actionId === 'workspace-preview.annotations.list' ||
+            actionId === 'workspace-preview.annotations.update'
+          ) {
+            annotationRequests.push(payload.request)
+          }
+          if (actionId === 'workspace-preview.release') return invocation(actionId, true)
+          return invocation(actionId, { ok: true })
+        }),
+        observe: vi.fn(async () => ({
+          resource: observed,
+          resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
+          resourceKind: 'workspace-preview',
+          semanticRevision: observed.semanticRevision,
+          observedAt: '2026-07-16T13:45:00.000Z',
+          state: {
+            observation: {
+              schemaVersion: 1,
+              file: {
+                path: '/workspace/paper.pdf',
+                workspaceRoot: '/workspace',
+                mimeType: 'application/pdf'
+              },
+              view: {
+                pluginId: 'pdf',
+                modality: 'document',
+                mode: 'preview',
+                title: 'paper.pdf'
+              },
+              actions: []
+            }
+          },
+          operations: [operation]
+        }))
+      }
+      const adapter = createWorkspacePreviewCapabilityAdapter({
+        transport,
+        now: () => nowMs
+      })
+
+      await adapter.open({ workspaceRoot: '/workspace', path: 'paper.pdf' })
+      await adapter.observe('session-idle')
+
+      nowMs = Date.parse('2026-07-16T13:59:00.000Z')
+      await vi.advanceTimersByTimeAsync(14 * 60_000)
+      expect(transport.bind).toHaveBeenCalledTimes(1)
+
+      await adapter.listAnnotations('session-idle')
+      await adapter.updateAnnotation('session-idle', {
+        annotationId: 'annotation-idle',
+        annotationKind: 'comment',
+        body: 'Still writable after the preview was idle.'
+      })
+      expect(annotationRequests).toEqual([
+        expect.objectContaining({
+          actionId: 'workspace-preview.annotations.list',
+          resource: renewed
+        }),
+        expect.objectContaining({
+          actionId: 'workspace-preview.annotations.update',
+          expectedRevision: renewed.semanticRevision,
+          resource: renewed
+        })
+      ])
+
+      await expect(adapter.releaseSession('session-idle')).resolves.toBe(true)
+      await vi.advanceTimersByTimeAsync(20 * 60_000)
+      expect(transport.bind).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 function handle(label: string): CapabilityResourceHandle {

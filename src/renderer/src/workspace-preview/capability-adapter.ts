@@ -72,6 +72,8 @@ type ResourceBinding = {
   operations: CapabilityDescriptor[]
   resourceRef?: string
   operationQueue: Promise<void>
+  renewalTimer: ReturnType<typeof setTimeout> | null
+  closing: boolean
 }
 
 type InvocationOptions = {
@@ -140,6 +142,7 @@ type WorkspacePreviewCapabilityAdapterOptions = {
 }
 
 const RESOURCE_HANDLE_RENEWAL_WINDOW_MS = 60_000
+const RESOURCE_HANDLE_RENEWAL_RETRY_MS = 5_000
 
 export function createWorkspacePreviewCapabilityAdapter(
   options: WorkspacePreviewCapabilityAdapterOptions = {}
@@ -224,7 +227,9 @@ export function createWorkspacePreviewCapabilityAdapter(
         resource,
         workspaceId: input.workspaceRoot,
         operations: [],
-        operationQueue: Promise.resolve()
+        operationQueue: Promise.resolve(),
+        renewalTimer: null,
+        closing: false
       }
       resources.set(sessionId, binding)
       return { ...value, capability: capabilityBinding(binding) } as WorkspacePreviewOpenResult
@@ -240,6 +245,7 @@ export function createWorkspacePreviewCapabilityAdapter(
         binding.resource = observation.resource
         binding.resourceRef = observation.resourceRef
         binding.operations = observation.operations
+        scheduleBindingRenewal(sessionId, binding)
         const state = requireRecord(observation.state, WORKSPACE_PREVIEW_CAPABILITY_IDS.open)
         return {
           ok: true,
@@ -326,14 +332,70 @@ export function createWorkspacePreviewCapabilityAdapter(
       input: { action }
     }),
     releaseSession: async (sessionId) => {
-      const released = await invokeSession<boolean>(sessionId, {
-        actionId: WORKSPACE_PREVIEW_CAPABILITY_IDS.release,
-        invocationId: createInvocationId(),
-        input: {}
-      })
-      if (released) resources.delete(sessionId)
-      return released
+      const binding = requireBinding(resources, sessionId)
+      binding.closing = true
+      clearBindingRenewal(binding)
+      try {
+        const released = await invokeSession<boolean>(sessionId, {
+          actionId: WORKSPACE_PREVIEW_CAPABILITY_IDS.release,
+          invocationId: createInvocationId(),
+          input: {}
+        })
+        if (released) {
+          resources.delete(sessionId)
+        } else {
+          binding.closing = false
+          scheduleBindingRenewal(sessionId, binding)
+        }
+        return released
+      } catch (error) {
+        binding.closing = false
+        scheduleBindingRenewal(sessionId, binding)
+        throw error
+      }
     }
+  }
+
+  function clearBindingRenewal(binding: ResourceBinding): void {
+    if (binding.renewalTimer === null) return
+    clearTimeout(binding.renewalTimer)
+    binding.renewalTimer = null
+  }
+
+  function scheduleBindingRenewal(
+    sessionId: string,
+    binding: ResourceBinding,
+    retryDelayMs?: number
+  ): void {
+    clearBindingRenewal(binding)
+    if (binding.closing || !binding.resourceRef || resources.get(sessionId) !== binding) return
+
+    const remainingMs = Date.parse(binding.resource.expiresAt) - now()
+    const delayMs = retryDelayMs ?? renewalDelayMs(remainingMs)
+    const timer = setTimeout(() => {
+      binding.renewalTimer = null
+      if (binding.closing || resources.get(sessionId) !== binding) return
+      void enqueueBindingOperation(binding, async () => {
+        if (binding.closing || resources.get(sessionId) !== binding) return
+        await renewBindingResourceIfNeeded(binding)
+      }).then(
+        () => scheduleBindingRenewal(sessionId, binding),
+        () => retryBindingRenewal(sessionId, binding)
+      )
+    }, delayMs)
+    const unrefTimer = timer as ReturnType<typeof setTimeout> & { unref?: () => void }
+    unrefTimer.unref?.()
+    binding.renewalTimer = timer
+  }
+
+  function retryBindingRenewal(sessionId: string, binding: ResourceBinding): void {
+    const remainingMs = Date.parse(binding.resource.expiresAt) - now()
+    if (!Number.isFinite(remainingMs) || remainingMs <= 0) return
+    scheduleBindingRenewal(
+      sessionId,
+      binding,
+      Math.min(RESOURCE_HANDLE_RENEWAL_RETRY_MS, Math.max(1, Math.floor(remainingMs / 2)))
+    )
   }
 
   async function renewBindingResourceIfNeeded(binding: ResourceBinding): Promise<void> {
@@ -376,6 +438,14 @@ function enqueueBindingOperation<Output>(
     () => undefined
   )
   return result
+}
+
+function renewalDelayMs(remainingMs: number): number {
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return 0
+  if (remainingMs > RESOURCE_HANDLE_RENEWAL_WINDOW_MS) {
+    return remainingMs - RESOURCE_HANDLE_RENEWAL_WINDOW_MS
+  }
+  return Math.max(1, Math.floor(remainingMs / 2))
 }
 
 function updateBinding(

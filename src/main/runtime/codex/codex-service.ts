@@ -46,6 +46,7 @@ import type {
   AgentRuntimeChild,
   AgentRuntimeEvent,
   AgentRuntimeThreadSidebarVisibility,
+  AgentRuntimeTurnState,
   AgentRuntimeTurnStatus,
   AgentRuntimeUsage,
   AgentRuntimeUsageQuery,
@@ -64,6 +65,7 @@ import {
 } from '../agent-runtime/bounded-child-history'
 import {
   createCodexAppServerClient,
+  codexAppServerTurnInputs,
   type CodexAppServerAccount,
   type CodexAppServerAccountLoginCompletedNotification,
   type CodexAppServerAccountRateLimitsUpdatedNotification,
@@ -808,6 +810,7 @@ export class CodexRuntimeService {
     const onAbort = (): void => this.closeEventSubscriber(subscriber)
     signal?.addEventListener('abort', onAbort, { once: true })
     try {
+      await this.reconcileOrphanedTurnTerminal(threadId)
       for (const event of await this.readStoredEvents(threadId, sinceSeq)) {
         latestSeq = Math.max(latestSeq, event.seq ?? latestSeq)
         yield event
@@ -823,6 +826,82 @@ export class CodexRuntimeService {
       signal?.removeEventListener('abort', onAbort)
       this.closeEventSubscriber(subscriber)
     }
+  }
+
+  private async reconcileOrphanedTurnTerminal(threadId: string): Promise<void> {
+    if (!this.eventStore) return
+    const stored = await this.findStoredThread(threadId)
+    const guiThreadId = stored?.guiThreadId ?? threadId
+    if (this.activeTurns.has(guiThreadId)) return
+
+    const page = await this.eventStore.readPage(guiThreadId, { limit: 20 })
+    const localTurnId = latestPageTurnId(page.events)
+    const localStatus = latestPageTurnStatus(page.events, localTurnId)
+    if (isAgentRuntimeTerminalTurnState(localStatus)) return
+
+    const storedStatus = normalizeAgentRuntimeTurnState(stored?.latestTurnStatus)
+    const storedTurnId = stored?.latestTurnId?.trim()
+    const latestEventOccurredAt = page.events.at(-1)?.createdAt
+    if (
+      localTurnId &&
+      storedStatus &&
+      isAgentRuntimeTerminalTurnState(storedStatus) &&
+      (!storedTurnId || storedTurnId === localTurnId) &&
+      latestEventOccurredAt &&
+      stored?.updatedAt &&
+      Date.parse(stored.updatedAt) >= Date.parse(latestEventOccurredAt)
+    ) {
+      await this.publishRecoveredTurnTerminal(guiThreadId, localTurnId, storedStatus)
+      return
+    }
+
+    let durableThread: CodexNormalizedThread
+    try {
+      const { client } = await this.ensureConnectedClient()
+      durableThread = normalizeThread(readThread(await client.readThread({
+        threadId: stored?.codexThreadId ?? threadId,
+        includeTurns: true
+      })))
+    } catch {
+      // Cached event replay remains useful while the provider is unavailable.
+      return
+    }
+    const durableTurnId = durableThread.latestTurnId?.trim()
+    const durableStatus = normalizeAgentRuntimeTurnState(durableThread.latestTurnStatus)
+    if (
+      !durableTurnId ||
+      !durableStatus ||
+      !isAgentRuntimeTerminalTurnState(durableStatus) ||
+      (localTurnId && localTurnId !== durableTurnId)
+    ) return
+
+    await this.publishRecoveredTurnTerminal(guiThreadId, durableTurnId, durableStatus)
+  }
+
+  private async publishRecoveredTurnTerminal(
+    threadId: string,
+    turnId: string,
+    state: AgentRuntimeTurnState
+  ): Promise<void> {
+    if (!isAgentRuntimeTerminalTurnState(state)) {
+      throw new Error(`Cannot recover non-terminal Codex turn state: ${state}`)
+    }
+    await this.publishClientEvent(state === 'completed'
+      ? {
+          threadId,
+          turnId,
+          turnComplete: true
+        }
+      : {
+          threadId,
+          turnId,
+          runtimeError: {
+            itemId: `codex-recovered-terminal-${turnId}`,
+            message: 'Codex durable thread state reported a terminal turn after runtime reconnection.',
+            code: state === 'failed' ? 'runtime_reconciled_failed' : 'aborted',
+            severity: 'error'
+          }
+        })
   }
 
   async renameThread(threadId: string, title: string): Promise<CodexThreadMutationResult> {
@@ -942,7 +1021,7 @@ export class CodexRuntimeService {
       })
       try {
         response = await client.startTurn(
-          turnStartParams({
+          await turnStartParams({
             threadId: codexThreadId,
             guiThreadId: payload.threadId,
             text: modelText,
@@ -975,7 +1054,7 @@ export class CodexRuntimeService {
           nativeVisualProofChainPending: payload.nativeVisualProofChainPending === true
         })
         response = await client.startTurn(
-          turnStartParams({
+          await turnStartParams({
             threadId: codexThreadId,
             guiThreadId: payload.threadId,
             text: modelText,
@@ -2045,7 +2124,7 @@ export class CodexRuntimeService {
         }
       })
       const turnResponse = await client.startTurn(
-        turnStartParams({
+        await turnStartParams({
           threadId: childCodexThreadId,
           guiThreadId: childGuiThreadId,
           text: input.prompt,
@@ -2778,7 +2857,7 @@ export class CodexRuntimeService {
         nativeVisualProofChainPending: recovery.nativeVisualProofChainPending
       })
       const response = await client.startTurn(
-        turnStartParams({
+        await turnStartParams({
           threadId: replacement.codexThreadId,
           guiThreadId: event.threadId,
           text: recovery.text,
@@ -3965,7 +4044,7 @@ function codexModelAccessKey(settings: AppSettingsV1, planGateway: CodexPlanGate
   return `api\u0000${router.baseUrl}\u0000${router.model}\u0000${credentialHash}`
 }
 
-function turnStartParams(input: {
+async function turnStartParams(input: {
   threadId: string
   guiThreadId: string
   text: string
@@ -3974,14 +4053,18 @@ function turnStartParams(input: {
   reasoningEffort?: string
   fileReferences?: CodexTurnStartPayload['fileReferences']
   runtime: ReturnType<typeof getCodexRuntimeSettings>
-}): Parameters<CodexAppServerJsonRpcClient['startTurn']>[0] {
+}): Promise<Parameters<CodexAppServerJsonRpcClient['startTurn']>[0]> {
   return {
     threadId: input.threadId,
     responsesapiClientMetadata: {
       runtime_id: 'codex',
       gui_thread_id: input.guiThreadId
     },
-    input: [textInput(input.text), ...fileReferenceInputs(input.fileReferences)],
+    input: await codexAppServerTurnInputs({
+      text: input.text,
+      workspaceRoot: input.workspace,
+      fileReferences: input.fileReferences
+    }),
     cwd: input.workspace,
     ...(input.model ? { model: input.model } : {}),
     approvalPolicy: mapApprovalPolicy(input.runtime.approvalPolicy, input.runtime.sandboxMode),
@@ -4007,18 +4090,6 @@ function mapTurnSandboxMode(mode: SandboxMode, cwd: string): CodexAppServerTurnS
   if (mode === 'read-only') return { type: 'readOnly', networkAccess: false }
   if (mode === 'danger-full-access') return { type: 'dangerFullAccess' }
   return { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: true }
-}
-
-function fileReferenceInputs(fileReferences: CodexTurnStartPayload['fileReferences']): CodexAppServerInputItem[] {
-  return (fileReferences ?? [])
-    .filter((reference) => reference.modelRouterObject === true && reference.relativePath.trim().length > 0)
-    .map((reference) => {
-      const referencePath = reference.relativePath.trim()
-      if (reference.kind === 'image') {
-        return { type: 'localImage', path: referencePath }
-      }
-      return { type: 'mention', name: reference.name, path: referencePath }
-    })
 }
 
 function textInput(text: string): CodexAppServerInputItem {

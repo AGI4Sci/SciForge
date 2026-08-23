@@ -634,17 +634,14 @@ export type AgentRuntimeTurnStartInput = {
 
 export type AgentRuntimeFileReference = {
   /**
-   * Runtime-safe path for this reference. At runtime host boundaries this is
-   * normalized to the workspace-relative path and must not contain an absolute
-   * filesystem location.
+   * Runtime-safe workspace-relative path for this reference. The Host
+   * normalizes both path fields to this canonical value before adapter dispatch.
    */
   path: string
   relativePath: string
   name: string
   kind?: AgentRuntimeWorkspaceReferenceKind
-  delivery?: 'inline_context' | 'model_router_object'
   mimeType?: string
-  modelRouterObject?: boolean
 }
 
 export type AgentRuntimeTurnTargetInput = {

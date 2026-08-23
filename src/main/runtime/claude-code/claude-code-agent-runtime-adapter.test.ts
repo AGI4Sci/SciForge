@@ -41,6 +41,47 @@ describe('createClaudeCodeAgentRuntimeAdapter', () => {
     })])
   })
 
+  it('forwards workspace file references to the Claude runtime service', async () => {
+    const received: unknown[] = []
+    const adapter = createClaudeCodeAgentRuntimeAdapter({
+      startTurn: async (input: unknown) => {
+        received.push(input)
+        return {
+          ok: true,
+          threadId: 'thread-file-references',
+          turnId: 'turn-file-references',
+          userMessageItemId: 'user-file-references'
+        }
+      }
+    } as unknown as ClaudeCodeRuntimeService)
+    const ctx = { settings: {} } as AgentRuntimeAdapterContext
+
+    await adapter.startTurn(ctx, {
+      runtimeId: 'claude',
+      threadId: 'thread-file-references',
+      text: 'Review the attached sources.',
+      workspace: '/tmp/workspace',
+      fileReferences: [{
+        path: 'papers/source.pdf',
+        relativePath: 'papers/source.pdf',
+        name: 'source.pdf',
+        kind: 'pdf',
+        mimeType: 'application/pdf'
+      }]
+    })
+
+    expect(received).toEqual([expect.objectContaining({
+      text: 'Review the attached sources.',
+      fileReferences: [{
+        path: 'papers/source.pdf',
+        relativePath: 'papers/source.pdf',
+        name: 'source.pdf',
+        kind: 'pdf',
+        mimeType: 'application/pdf'
+      }]
+    })])
+  })
+
   it('forwards Host-owned turn governance snapshots without interpreting them', async () => {
     const received: unknown[] = []
     const adapter = createClaudeCodeAgentRuntimeAdapter({

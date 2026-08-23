@@ -27,6 +27,7 @@
     "./renderer": "./src/renderer.ts",
     "./renderer-contributions": "./src/renderer-contributions.ts",
     "./safe-svg": "./src/safe-svg.ts",
+    "./unicode": "./src/unicode.ts",
     "./visual-source": "./src/visual-source.ts",
     "./version-control": "./src/version-control.ts",
     "./visual-capture": "./src/visual-capture.ts",

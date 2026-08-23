@@ -19,6 +19,7 @@ import { providerSupportsCapability } from './chat-store-provider-capabilities'
 import { getRuntimeErrorCode } from '../lib/format-runtime-error'
 import { parseSteerCommand } from '../lib/steer-command'
 import { createClientDirectiveId } from './chat-store-helpers'
+import { normalizeRuntimeFileReferences } from '../lib/runtime-file-references'
 
 type SideContext = {
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void
@@ -371,6 +372,7 @@ async function drainNextSideMessage(sideId: string, ctx: SideContext): Promise<v
   // events cannot start the same queued message twice.
   ctx.set((s) => patchSide(s, sideId, (cur) => ({ ...cur, busy: true, error: null })))
   const provider = ctx.getProvider()
+  const fileReferences = normalizeRuntimeFileReferences(queued.fileReferences)
   try {
     rememberSideThreadRuntime(provider, sideId, side)
     const { turnId } = await provider.sendUserMessage(sideId, queued.text, {
@@ -380,7 +382,7 @@ async function drainNextSideMessage(sideId: string, ctx: SideContext): Promise<v
       model: queued.model,
       ...(queued.reasoningEffort ? { reasoningEffort: queued.reasoningEffort } : {}),
       ...(queued.attachmentIds?.length ? { attachmentIds: queued.attachmentIds } : {}),
-      ...(queued.fileReferences?.length ? { fileReferences: queued.fileReferences } : {}),
+      ...(fileReferences.length ? { fileReferences } : {}),
       ...(queued.displayText ? { displayText: queued.displayText } : {}),
       visibleContextOwnerThreadId: side.parentThreadId
     })
@@ -698,7 +700,7 @@ export function createSideActions(ctx: SideContext): Pick<
       if (!side) return false
       const trimmed = text.trim()
       const attachmentIds = overrides?.attachmentIds?.filter((id) => id.trim().length > 0)
-      const fileReferences = overrides?.fileReferences?.filter((reference) => reference.path.trim().length > 0)
+      const fileReferences = normalizeRuntimeFileReferences(overrides?.fileReferences)
       if (!trimmed && !attachmentIds?.length && !fileReferences?.length) return false
       const steerCommandText = parseSteerCommand(trimmed)
       const explicitSteerText = steerCommandText !== false ? steerCommandText.trim() : null

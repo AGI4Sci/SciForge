@@ -239,6 +239,77 @@ describe('createCodexAppServerClient', () => {
     ])
   })
 
+  it('times out a stalled turn/start request and ignores its late response', async () => {
+    const { client, fake } = createHarness({ turnStartTimeoutMs: 20 })
+
+    const stalledTurn = client.startTurn({
+      threadId: 'thread-stalled',
+      cwd: '/tmp/workspace',
+      input: [{ type: 'text', text: 'hello', text_elements: [] }],
+      sandboxPolicy: { type: 'workspaceWrite', writableRoots: ['/tmp/workspace'] }
+    })
+
+    expect(fake.writtenMessages()).toEqual([expect.objectContaining({
+      id: 1,
+      method: 'turn/start'
+    })])
+    await expect(stalledTurn).rejects.toThrow(
+      'Codex app-server did not acknowledge turn/start within 20 ms.'
+    )
+
+    // A response that arrives after the timeout must not settle a later
+    // request or leave the client unusable.
+    fake.emitStdout({ id: 1, result: { turn: { id: 'turn-too-late' } } })
+    const read = client.readThread({ threadId: 'thread-stalled' })
+    fake.emitStdout({ id: 2, result: { thread: { id: 'thread-stalled' }, turns: [] } })
+    await expect(read).resolves.toEqual({
+      thread: { id: 'thread-stalled' },
+      turns: []
+    })
+
+    await client.stop()
+  })
+
+  it('repairs lone surrogates in nested JSON-RPC keys and values without poisoning later requests', async () => {
+    const { client, fake } = createHarness()
+    const loneHigh = '\ud800'
+    const loneLow = '\udc00'
+
+    const unicodeRequest = client.request('test/nested-unicode', {
+      [`high-${loneHigh}`]: {
+        [`low-${loneLow}`]: [
+          `value-${loneHigh}`,
+          { nested: `value-${loneLow}` }
+        ]
+      }
+    })
+
+    expect(fake.writtenMessages()).toEqual([{
+      id: 1,
+      method: 'test/nested-unicode',
+      params: {
+        'high-�': {
+          'low-�': [
+            'value-�',
+            { nested: 'value-�' }
+          ]
+        }
+      }
+    }])
+    expect(fake.writes[0]).not.toMatch(/\\u(?:d800|dc00)/iu)
+    fake.emitStdout({ id: 1, result: { ok: true } })
+    await expect(unicodeRequest).resolves.toEqual({ ok: true })
+
+    const read = client.readThread({ threadId: 'thread-after-unicode' })
+    fake.emitStdout({ id: 2, result: { thread: { id: 'thread-after-unicode' }, turns: [] } })
+    await expect(read).resolves.toEqual({
+      thread: { id: 'thread-after-unicode' },
+      turns: []
+    })
+
+    await client.stop()
+  })
+
   it('provides thread list/read/rename/delete methods for IPC wrappers', async () => {
     const { client, fake } = createHarness()
 

@@ -17,8 +17,11 @@ import {
   type PendingTurnArtifactStart
 } from './turn-artifact-outbox'
 
+const LEGACY_ARTIFACT_MATERIALIZATION_MAX_ATTEMPTS = 8
+
 export type TurnArtifactIntentPublisher = Readonly<{
   registerStart: (start: TurnArtifactStartDraft) => Promise<PendingTurnArtifactStart>
+  markStartDispatching: (start: TurnArtifactStart) => Promise<PendingTurnArtifactStart>
   bindStart: (start: TurnArtifactStart, watch: TurnArtifactWatch) => Promise<boolean>
   rejectStart: (
     start: TurnArtifactStart,
@@ -79,6 +82,11 @@ export class TurnArtifactHandoffService implements TurnArtifactIntentPublisher {
   async registerStart(start: TurnArtifactStartDraft): Promise<PendingTurnArtifactStart> {
     if (this.#closed) throw new Error('Completed turn artifact handoff is closed.')
     return this.#outboxOperation(() => this.#outbox.registerStart(start))
+  }
+
+  async markStartDispatching(start: TurnArtifactStart): Promise<PendingTurnArtifactStart> {
+    if (this.#closed) throw new Error('Completed turn artifact handoff is closed.')
+    return this.#outboxOperation(() => this.#outbox.markStartDispatching(start))
   }
 
   async bindStart(start: TurnArtifactStart, watch: TurnArtifactWatch): Promise<boolean> {
@@ -266,6 +274,26 @@ export class TurnArtifactHandoffService implements TurnArtifactIntentPublisher {
       if (this.#outbox.poisonedError) {
         this.#failStop()
         throw error
+      }
+      const nextAttempts = record.attempts + 1
+      if (
+        record.stage === 'pending_materialization' &&
+        record.legacyArtifactOnly &&
+        nextAttempts >= LEGACY_ARTIFACT_MATERIALIZATION_MAX_ATTEMPTS
+      ) {
+        await this.#outboxOperation(
+          () => this.#outbox.markLegacyMaterializationQuarantined(record.key, error)
+        )
+        this.#log?.(
+          'error',
+          'Legacy completed turn artifact materialization was quarantined after bounded retries.',
+          {
+            key: record.key,
+            attempts: nextAttempts,
+            error
+          }
+        )
+        return
       }
       const retryAfterMs = Math.min(
         this.#retryMaxMs,

@@ -90,6 +90,25 @@ describe('AgentRuntimeContextCompactor', () => {
     expect(result.sourceItemIds).toEqual(['u1'])
   })
 
+  it('does not split an emoji that lands on the text clipping boundary', () => {
+    const compactor = new AgentRuntimeContextCompactor()
+    const prefix = 'a'.repeat(356)
+
+    const result = compactor.compact({
+      threadId: 'thread-emoji-boundary',
+      turnId: 'turn-emoji-boundary',
+      history: [
+        item('u1', 'user_message', `${prefix}😀${'b'.repeat(10)}`),
+        item('a1', 'assistant_message', 'Recent answer stays in the tail.')
+      ],
+      keepRecent: 1
+    })
+
+    expect(result.summaryItem.summary).toContain(`- User: ${prefix}...`)
+    expect(result.summaryItem.summary).not.toContain('😀')
+    expect(hasLoneSurrogate(result.summaryItem.summary)).toBe(false)
+  })
+
   it('keeps trailing unfinished tool items out of compaction', () => {
     const compactor = new AgentRuntimeContextCompactor()
     const pendingTool: AgentRuntimeItem = {
@@ -130,3 +149,17 @@ describe('AgentRuntimeContextCompactor', () => {
     expect(result.sourceDigest).toBeUndefined()
   })
 })
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1)
+      if (next < 0xdc00 || next > 0xdfff) return true
+      index += 1
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true
+    }
+  }
+  return false
+}

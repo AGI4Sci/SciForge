@@ -281,8 +281,7 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
       surfaceId: input.surfaceId,
       currentPreview: compactCapability
         ? {
-            resourceRef: compactCapability.resourceRef,
-            operationRefs: compactCapability.operations.map((operation) => operation.operationRef)
+            resourceRef: compactCapability.resourceRef
           }
         : null,
       documentAnnotations: documentAnnotations ?? null,
@@ -308,18 +307,9 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
 
 function compactVisibleContextCapability(
   binding: WorkspacePreviewPanelShellContext['state']['capability']
-): {
-  resourceRef: string
-  operations: Array<{ operationRef: string; schemaRef: string }>
-} | undefined {
+): { resourceRef: string } | undefined {
   if (!binding?.resourceRef) return undefined
-  return {
-    resourceRef: binding.resourceRef,
-    operations: binding.operations.map((operation) => ({
-      operationRef: operation.id,
-      schemaRef: `sciforge://capability-schema/${encodeURIComponent(operation.id)}?version=${encodeURIComponent(operation.version)}`
-    }))
-  }
+  return { resourceRef: binding.resourceRef }
 }
 
 function formatPresentationSummary(

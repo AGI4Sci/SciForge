@@ -309,7 +309,7 @@ describe('LocalTraceStore', () => {
     assert.equal((exportedEvent.payload as Record<string, unknown>).body, payload.body)
   })
 
-  test('rolls future writes by size and caps indexed segments without deleting the legacy daily file', async () => {
+  test('rolls future writes by size and caps legacy plus indexed segments together', async () => {
     const temporary = await createTemporaryDirectory()
     let now = new Date('2026-07-19T10:00:00.000Z')
     const store = new LocalTraceStore({
@@ -321,7 +321,7 @@ describe('LocalTraceStore', () => {
     await store.initialize()
     await writeFile(
       path.join(store.directory, '2026-07-19.ndjson'),
-      '{"legacy":"trace-legacy"}\n',
+      `${JSON.stringify({ legacy: 'trace-legacy'.repeat(80) })}\n`,
       { mode: 0o600 }
     )
     for (const input of Array.from({ length: 8 }, (_, index) => ({
@@ -336,14 +336,12 @@ describe('LocalTraceStore', () => {
     await store.pruneExpired({ force: true })
 
     const files = (await readdir(store.directory)).filter((name) => name.endsWith('.ndjson')).sort()
-    assert.ok(files.includes('2026-07-19.ndjson'))
+    assert.equal(files.includes('2026-07-19.ndjson'), false)
     assert.ok(files.some((name) => /^2026-07-19\.\d{6}\.ndjson$/u.test(name)))
-    const indexedBytes = (await Promise.all(files
-      .filter((name) => /^2026-07-19\.\d{6}\.ndjson$/u.test(name))
+    const retainedBytes = (await Promise.all(files
       .map(async (name) => (await lstat(path.join(store.directory, name))).size)))
       .reduce((sum, size) => sum + size, 0)
-    assert.ok(indexedBytes <= store.maxTotalBytes)
-    assert.ok((await readFile(path.join(store.directory, '2026-07-19.ndjson'), 'utf8')).includes('trace-legacy'))
+    assert.ok(retainedBytes <= store.maxTotalBytes)
   })
 
   test('rejects an over-capacity append batch atomically before writing any of it', async () => {
@@ -575,6 +573,30 @@ describe('LocalTraceStore', () => {
       ['trace-0', 'trace-0', 'trace-1', 'trace-1', 'trace-2', 'trace-2', 'trace-3', 'trace-3']
     )
     assert.deepEqual(await readdir(path.dirname(destination)), ['streamed.jsonl'])
+  })
+
+  test('fails a high-cardinality summary scan before it can exhaust the process heap', async () => {
+    const temporary = await createTemporaryDirectory()
+    const storageDirectory = path.join(temporary, 'traces')
+    const store = new LocalTraceStore({ storageDirectory })
+    await store.initialize()
+    const timestamp = '2026-07-19T10:00:00.000Z'
+    const lines = Array.from({ length: 20_000 }, (_, index) => JSON.stringify({
+      schemaVersion: 'sciforge.trace.v1',
+      eventId: `event-${index}`,
+      traceId: `trace-${index}`,
+      source: 'agent-runtime',
+      kind: 'lifecycle',
+      timestamp,
+      recordedAt: timestamp,
+      payload: { phase: 'completed' }
+    })).join('\n')
+    await writeFile(path.join(storageDirectory, '2026-07-19.ndjson'), `${lines}\n`, { mode: 0o600 })
+
+    await assert.rejects(store.summaries({ order: 'desc', limit: 1 }), (error: unknown) => (
+      error instanceof Error &&
+      (error as NodeJS.ErrnoException).code === 'TRACE_SUMMARY_CAPACITY_EXCEEDED'
+    ))
   })
 
   test('derives request views and excludes child-attempt failures and usage from trajectory cards', async () => {

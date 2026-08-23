@@ -1,4 +1,7 @@
-import { createElement } from 'react'
+// @vitest-environment happy-dom
+
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -386,9 +389,8 @@ describe('DocumentAnnotationPanelController', () => {
 
     const capturedInput = renderInput as DocumentAnnotationPanelRenderInput | null
     if (!capturedInput) throw new Error('Document render input was not captured.')
-    expect(() => (
-      capturedInput.text.onOpenAnnotations as unknown as (event: unknown) => void
-    )({ type: 'click' })).not.toThrow()
+    expect(capturedInput.text.annotationsOpen).toBe(false)
+    expect(capturedInput.text.onToggleAnnotations).toEqual(expect.any(Function))
     await capturedInput.text.onApplyEdit(operation)
 
     expect(context.host.updateAnnotation).toHaveBeenCalledWith({
@@ -419,6 +421,48 @@ describe('DocumentAnnotationPanelController', () => {
     if (!capturedInput) throw new Error('Document render input was not captured.')
     await expect(capturedInput.text.onApplyEdit(textEditOperation())).rejects.toThrow('Document write failed.')
     expect(context.host.observe).not.toHaveBeenCalled()
+  })
+
+  it('toggles the text annotation panel open and closed from the same toolbar action', async () => {
+    const observation = createObservation()
+    observation.file.path = '/workspace/lab/notes.md'
+    observation.file.mimeType = 'text/markdown'
+    observation.view.pluginId = 'markdown'
+    const context = createContext(observation)
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+
+    try {
+      await act(async () => {
+        root.render(createElement(DocumentAnnotationPanelController, {
+          context,
+          observation,
+          documentKind: 'markdown',
+          renderDocument: (input) => createElement('button', {
+            type: 'button',
+            'data-test-annotation-toggle': 'true',
+            'aria-pressed': input.text.annotationsOpen,
+            onClick: input.text.onToggleAnnotations
+          }, 'annotations')
+        }))
+      })
+
+      const toggle = container.querySelector<HTMLButtonElement>('[data-test-annotation-toggle]')
+      expect(toggle?.getAttribute('aria-pressed')).toBe('false')
+      expect(container.querySelector('[data-document-annotation-panel-width]')).toBeNull()
+
+      await act(async () => toggle?.click())
+      expect(toggle?.getAttribute('aria-pressed')).toBe('true')
+      expect(container.querySelector('[data-document-annotation-panel-width]')).not.toBeNull()
+
+      await act(async () => toggle?.click())
+      expect(toggle?.getAttribute('aria-pressed')).toBe('false')
+      expect(container.querySelector('[data-document-annotation-panel-width]')).toBeNull()
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+    }
   })
 
   it('observes the updated session after a successful document save', async () => {

@@ -17,6 +17,7 @@ import { createReadStream } from 'node:fs'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
 import { createHash, randomUUID } from 'node:crypto'
+import { StringDecoder } from 'node:string_decoder'
 import {
   TRACE_EXPORT_FORMAT,
   TRACE_SCHEMA_VERSION,
@@ -67,9 +68,12 @@ const DIRECTORY_MODE = 0o700
 const FILE_MODE = 0o600
 const MAX_EVENT_ID_LOOKUP = 10_000
 const MAX_STORED_MATCHES_PER_EVENT_ID = 2
+const MAX_SUMMARY_AGGREGATE_GROUPS = 10_000
+const MAX_EXPORT_SORT_ENTRIES = 100_000
 const PREVIEW_LENGTH = 240
 const PREVIEW_SOURCE_LENGTH = 1_024
 const EXPORT_COPY_BUFFER_SIZE = 64 * 1_024
+const TRACE_SCAN_BUFFER_SIZE = 64 * 1_024
 
 export type LocalTraceStoreOptions = {
   /** Application user-data directory. Traces are placed in its full-traces child. */
@@ -79,7 +83,7 @@ export type LocalTraceStoreOptions = {
   retentionDays?: number
   /** Maximum size of each newly-written segment before rolling to an indexed segment. */
   maxSegmentBytes?: number
-  /** Capacity for indexed segments written by the bounded store. Legacy daily files are preserved. */
+  /** Capacity for every recognized trace segment in the store. */
   maxTotalBytes?: number
   now?: () => Date
   /** Known credentials to remove even when an upstream echoes them without a label. */
@@ -263,7 +267,7 @@ export class LocalTraceStore {
     await this.initialize()
     validateReadQuery(query)
     return this.enqueue(async () => this.withReadSnapshot(async (snapshot) => {
-      const accumulator = new TraceSummaryAccumulator()
+      const accumulator = new TraceSummaryAccumulator(MAX_SUMMARY_AGGREGATE_GROUPS)
       await this.scan(query, (event) => accumulator.add(event), snapshot)
       return orderAndLimitSummaries(accumulator.summaries(), query)
     }))
@@ -274,7 +278,7 @@ export class LocalTraceStore {
     await this.initialize()
     validateReadQuery(query)
     return this.enqueue(async () => this.withReadSnapshot(async (snapshot) => {
-      const accumulator = new TraceSummaryAccumulator()
+      const accumulator = new TraceSummaryAccumulator(MAX_SUMMARY_AGGREGATE_GROUPS)
       await this.scan(query, (event) => accumulator.add(event), snapshot)
       return orderAndLimitSummaries(
         accumulator.requestSummaries(query.scope ?? 'all'),
@@ -569,8 +573,7 @@ export class LocalTraceStore {
       error.code = 'TRACE_CAPACITY_EXCEEDED'
       throw error
     }
-    const indexed = (await this.segmentFiles()).filter(indexedSegment)
-    const entries = await Promise.all(indexed.map(async (file) => ({
+    const entries = await Promise.all((await this.segmentFiles()).map(async (file) => ({
       file,
       bytes: (await stat(file)).size
     })))
@@ -581,7 +584,12 @@ export class LocalTraceStore {
     // segments are closed and safe to rotate while capacity maintenance runs.
     for (const entry of entries) {
       if (total + incomingBytes <= this.maxTotalBytes) break
-      deletedEvents += await countNonEmptyLines(entry.file)
+      // Pre-policy daily files can be many gigabytes. Capacity recovery must
+      // not rescan one in full before unlinking it or startup remains blocked
+      // on the same oversized history this policy is meant to reclaim.
+      if (indexedSegment(entry.file)) {
+        deletedEvents += await countNonEmptyLines(entry.file)
+      }
       await unlink(entry.file)
       total -= entry.bytes
       deletedFiles += 1
@@ -912,6 +920,8 @@ class TraceSummaryAccumulator {
   private readonly requests = new Map<string, MutableRequestSummary>()
   private readonly traces = new Map<string, MutableSummary>()
 
+  constructor(private readonly maxGroups = Number.POSITIVE_INFINITY) {}
+
   add(event: TraceEvent): void {
     this.addRequestEvent(event)
     this.addTraceEvent(event)
@@ -1059,6 +1069,7 @@ class TraceSummaryAccumulator {
     const key = requestKey(event.traceId, requestId)
     let summary = this.requests.get(key)
     if (!summary) {
+      this.assertGroupCapacity()
       summary = {
         requestId,
         parentRequestId: event.parentRequestId,
@@ -1126,6 +1137,7 @@ class TraceSummaryAccumulator {
   private addTraceEvent(event: TraceEvent): void {
     let summary = this.traces.get(event.traceId)
     if (!summary) {
+      this.assertGroupCapacity()
       summary = {
         traceId: event.traceId,
         runtimeId: event.runtimeId,
@@ -1207,6 +1219,15 @@ class TraceSummaryAccumulator {
       const phase = stringValue(payload?.phase)?.toLowerCase()
       applyLifecyclePhase(summary, phase)
     }
+  }
+
+  private assertGroupCapacity(): void {
+    if (this.requests.size + this.traces.size < this.maxGroups) return
+    const error = new Error(
+      'Trace summary query exceeds the safe aggregation limit; narrow it by time, thread, turn, or trace id.'
+    ) as NodeJS.ErrnoException
+    error.code = 'TRACE_SUMMARY_CAPACITY_EXCEEDED'
+    throw error
   }
 }
 
@@ -1399,37 +1420,66 @@ async function scanSegment(
   sanitization: TraceSanitizationOptions,
   visit: TraceScanVisitor
 ): Promise<number> {
-  let corruptLines = 0
   if (typeof segment !== 'string' && segment.size === 0) return 0
-  const file = typeof segment === 'string' ? segment : segment.file
-  const lines = createInterface({
-    input: createReadStream(file, {
-      encoding: 'utf8',
-      ...(typeof segment === 'string' ? {} : {
-        fd: segment.handle.fd,
-        autoClose: false,
-        start: 0,
-        end: segment.size - 1
-      })
-    }),
-    crlfDelay: Infinity
-  })
-  for await (const line of lines) {
-    if (!line.trim()) continue
-    let event: TraceEvent
+  let ownedHandle: FileHandle | undefined
+  let handle: FileHandle
+  if (typeof segment === 'string') {
+    ownedHandle = await open(segment, constants.O_RDONLY | noFollowFlag())
+    handle = ownedHandle
+  } else {
+    handle = segment.handle
+  }
+  try {
+    const size = typeof segment === 'string' ? (await handle.stat()).size : segment.size
+    return await scanSegmentHandle(handle, size, sanitization, visit)
+  } finally {
+    await ownedHandle?.close()
+  }
+}
+
+async function scanSegmentHandle(
+  handle: FileHandle,
+  size: number,
+  sanitization: TraceSanitizationOptions,
+  visit: TraceScanVisitor
+): Promise<number> {
+  const buffer = Buffer.allocUnsafe(TRACE_SCAN_BUFFER_SIZE)
+  const decoder = new StringDecoder('utf8')
+  let position = 0
+  let pending = ''
+  let corruptLines = 0
+  const consumeLine = async (source: string): Promise<void> => {
+    const line = source.endsWith('\r') ? source.slice(0, -1) : source
+    if (!line.trim()) return
+    let value: unknown
     try {
-      const value: unknown = JSON.parse(line)
-      if (!isTraceEvent(value)) {
-        corruptLines += 1
-        continue
-      }
-      event = sanitizeStoredEvent(value, sanitization)
+      value = JSON.parse(line)
     } catch {
       corruptLines += 1
-      continue
+      return
     }
-    await visit(event)
+    if (!isTraceEvent(value)) {
+      corruptLines += 1
+      return
+    }
+    await visit(sanitizeStoredEvent(value, sanitization))
   }
+
+  while (position < size) {
+    const requested = Math.min(buffer.byteLength, size - position)
+    const { bytesRead } = await handle.read(buffer, 0, requested, position)
+    if (bytesRead === 0) break
+    position += bytesRead
+    pending += decoder.write(buffer.subarray(0, bytesRead))
+    let newline = pending.indexOf('\n')
+    while (newline >= 0) {
+      await consumeLine(pending.slice(0, newline))
+      pending = pending.slice(newline + 1)
+      newline = pending.indexOf('\n')
+    }
+  }
+  pending += decoder.end()
+  if (pending) await consumeLine(pending)
   return corruptLines
 }
 
@@ -1502,6 +1552,13 @@ async function writeExclusiveExport(
     try {
       await spoolHandle.chmod(FILE_MODE)
       manifest = await produce(async (event) => {
+        if (index.length >= MAX_EXPORT_SORT_ENTRIES) {
+          const error = new Error(
+            'Trace export exceeds the safe in-memory sort limit; export fewer trace ids.'
+          ) as NodeJS.ErrnoException
+          error.code = 'TRACE_EXPORT_CAPACITY_EXCEEDED'
+          throw error
+        }
         const serialized = `${JSON.stringify(event)}\n`
         const byteLength = Buffer.byteLength(serialized)
         index.push({

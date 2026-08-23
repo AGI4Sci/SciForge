@@ -54,7 +54,8 @@ type Props = {
   activeAnnotationId?: string | null
   onAnnotationAction?: (action: DocumentAnnotationAction, selection: DocumentAnnotationSelection) => void
   onAnnotationSelect?: (threadId: string) => void
-  onOpenAnnotations?: () => void
+  annotationsOpen?: boolean
+  onToggleAnnotations?: () => void
   navigationRequest?: DocumentNavigationRequest | null
   onSaveParagraphs?: (paragraphs: WorkspaceDocxTextParagraphWrite[]) => Promise<WorkspaceDocxTextWriteResult>
   className?: string
@@ -272,7 +273,8 @@ export function WriteDocxViewer({
   activeAnnotationId,
   onAnnotationAction,
   onAnnotationSelect,
-  onOpenAnnotations,
+  annotationsOpen = false,
+  onToggleAnnotations,
   navigationRequest = null,
   onSaveParagraphs,
   className
@@ -644,13 +646,15 @@ export function WriteDocxViewer({
           ) : null}
 
           <div className="flex items-center gap-1 rounded-lg border border-ds-border-muted bg-ds-surface-subtle p-1 dark:bg-white/6">
-            {onOpenAnnotations ? (
+            {onToggleAnnotations ? (
               <button
                 type="button"
                 className={DOCX_ICON_BUTTON_CLASS}
+                data-active={annotationsOpen ? 'true' : undefined}
                 title={t('writeDocxAnnotations')}
                 aria-label={t('writeDocxAnnotations')}
-                onClick={() => onOpenAnnotations()}
+                aria-pressed={annotationsOpen}
+                onClick={onToggleAnnotations}
               >
                 <MessageSquare className="h-4 w-4" strokeWidth={1.9} />
               </button>

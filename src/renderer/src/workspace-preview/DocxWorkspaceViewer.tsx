@@ -33,7 +33,8 @@ export type DocxWorkspaceViewerProps = {
   annotationOverlays?: readonly DocumentTextAnnotationOverlay[]
   activeAnnotationId?: string | null
   onAnnotationSelect?: (threadId: string) => void
-  onOpenAnnotations?: () => void
+  annotationsOpen?: boolean
+  onToggleAnnotations?: () => void
   navigationRequest?: DocumentNavigationRequest | null
 }
 
@@ -133,7 +134,8 @@ export function DocxWorkspaceViewer({
   annotationOverlays = [],
   activeAnnotationId = null,
   onAnnotationSelect,
-  onOpenAnnotations,
+  annotationsOpen = false,
+  onToggleAnnotations,
   navigationRequest = null
 }: DocxWorkspaceViewerProps): ReactElement {
   const { t } = useTranslation()
@@ -185,7 +187,8 @@ export function DocxWorkspaceViewer({
         annotationOverlays={annotationOverlays}
         activeAnnotationId={activeAnnotationId}
         onAnnotationSelect={onAnnotationSelect}
-        onOpenAnnotations={onOpenAnnotations}
+        annotationsOpen={annotationsOpen}
+        onToggleAnnotations={onToggleAnnotations}
         navigationRequest={navigationRequest}
         onSaveParagraphs={(paragraphs) => saveDocxWorkspaceParagraphs({
           observation,

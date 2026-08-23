@@ -230,6 +230,78 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.error).toBeNull()
   })
 
+  it('preserves directory and ordinary-file references while a running turn queues them', async () => {
+    const { actions, state } = buildHarness()
+    const provider = {
+      sendUserMessage: vi.fn(async () => ({
+        threadId: 'thr_existing',
+        turnId: 'turn-references',
+        userMessageItemId: 'runtime-user-references'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      renameThread: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.activeAgentRuntime = 'codex'
+    state.busy = true
+    state.currentTurnId = 'turn-running'
+    state.threads = [{ ...thread('thr_existing'), runtimeId: 'codex' }]
+    const rendererReferences = [
+      {
+        path: '/workspace/sciforge/docs',
+        relativePath: 'docs',
+        name: 'docs',
+        kind: 'directory' as const,
+        workspaceRoot: '/workspace/sciforge'
+      },
+      {
+        path: '/workspace/sciforge/docs/guide.md',
+        relativePath: 'docs/guide.md',
+        name: 'guide.md',
+        kind: 'text' as const,
+        mimeType: 'text/markdown',
+        workspaceRoot: '/workspace/sciforge'
+      }
+    ]
+
+    await expect(actions.sendMessage('Use the queued references.', 'agent', {
+      fileReferences: rendererReferences
+    })).resolves.toBe(true)
+
+    const expectedReferences = [
+      {
+        path: 'docs',
+        relativePath: 'docs',
+        name: 'docs',
+        kind: 'directory'
+      },
+      {
+        path: 'docs/guide.md',
+        relativePath: 'docs/guide.md',
+        name: 'guide.md',
+        kind: 'text',
+        mimeType: 'text/markdown'
+      }
+    ]
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({
+        text: 'Use the queued references.',
+        fileReferences: expectedReferences
+      })
+    ])
+
+    state.busy = false
+    state.currentTurnId = null
+    await actions.drainQueuedMessages()
+
+    expect(provider.sendUserMessage).toHaveBeenCalledWith(
+      'thr_existing',
+      'Use the queued references.',
+      expect.objectContaining({ fileReferences: expectedReferences })
+    )
+    expect(state.queuedMessages).toEqual([])
+  })
+
   it('steers running text when the user explicitly prefixes it with /steer', async () => {
     const { actions, state } = buildHarness()
     const provider = {
@@ -2145,7 +2217,10 @@ describe('chat-store-thread-actions queued messages', () => {
       }
     ]
     const composerReferences = previewReferences.map(composerReferenceFromWorkspaceReference)
-    const rendererOnlyRootReference: AgentRuntimeFileReference & { workspaceRoot: string } = {
+    const rendererOnlyRootReference: AgentRuntimeFileReference & {
+      workspaceRoot: string
+      modelRouterObject: boolean
+    } = {
       path: '/workspace/sciforge/data/raw.pdf',
       relativePath: 'data/raw.pdf',
       name: 'raw.pdf',
@@ -2153,17 +2228,18 @@ describe('chat-store-thread-actions queued messages', () => {
       modelRouterObject: true,
       workspaceRoot: '/workspace/sciforge'
     }
+    const rendererOnlyDeliveryReference = {
+      path: 'reports/clean.pdf',
+      relativePath: '/workspace/sciforge/reports/clean.pdf',
+      name: '',
+      modelRouterObject: true
+    }
 
     await expect(actions.sendMessage('use these files', 'agent', {
       fileReferences: [
         ...composerReferences,
         rendererOnlyRootReference,
-        {
-          path: 'reports/clean.pdf',
-          relativePath: '/workspace/sciforge/reports/clean.pdf',
-          name: '',
-          modelRouterObject: true
-        },
+        rendererOnlyDeliveryReference,
         {
           path: '../escape.txt',
           relativePath: '../escape.txt',
@@ -2186,31 +2262,25 @@ describe('chat-store-thread-actions queued messages', () => {
             path: 'docs',
             relativePath: 'docs',
             name: 'docs',
-            kind: 'directory',
-            delivery: 'inline_context'
+            kind: 'directory'
           },
           {
             path: 'docs/guide.md',
             relativePath: 'docs/guide.md',
             name: 'guide.md',
             kind: 'text',
-            mimeType: 'text/plain; charset=utf-8',
-            delivery: 'inline_context'
+            mimeType: 'text/plain; charset=utf-8'
           },
           {
             path: 'data/raw.pdf',
             relativePath: 'data/raw.pdf',
             name: 'raw.pdf',
-            mimeType: 'application/pdf',
-            modelRouterObject: true,
-            delivery: 'model_router_object'
+            mimeType: 'application/pdf'
           },
           {
             path: 'reports/clean.pdf',
             relativePath: 'reports/clean.pdf',
-            name: 'clean.pdf',
-            modelRouterObject: true,
-            delivery: 'model_router_object'
+            name: 'clean.pdf'
           }
         ]
       })

@@ -747,10 +747,14 @@ describe('chat-store-side-actions', () => {
       source: 'child_agent'
     }))!
     const fileReference = {
-      path: 'figure.png',
+      path: '/workspace/sciforge/figure.png',
       relativePath: 'figure.png',
       name: 'figure.png',
-      mimeType: 'image/png'
+      kind: 'image' as const,
+      mimeType: 'image/png',
+      workspaceRoot: '/workspace/sciforge',
+      delivery: 'model_router_object',
+      modelRouterObject: true
     }
 
     const sent = await actions.sendSideMessage(id, 'use this image', {
@@ -764,9 +768,52 @@ describe('chat-store-side-actions', () => {
       expect.objectContaining({
         text: 'use this image',
         attachmentIds: ['attachment-1'],
-        fileReferences: [fileReference]
+        fileReferences: [{
+          path: 'figure.png',
+          relativePath: 'figure.png',
+          name: 'figure.png',
+          kind: 'image',
+          mimeType: 'image/png'
+        }]
       })
     ])
+  })
+
+  it('sends side file references as workspace-relative locator metadata only', async () => {
+    const { actions, provider } = buildHarness()
+    provider.threadDetail = { blocks: [], latestSeq: 0, threadStatus: 'idle' }
+    const id = (await actions.attachSideConversation({
+      threadId: 'child-thread',
+      parentThreadId: 'thr_main',
+      source: 'child_agent'
+    }))!
+    const rendererReference = {
+      path: '/workspace/sciforge/reports/report.pdf',
+      relativePath: 'reports/report.pdf',
+      name: 'report.pdf',
+      kind: 'pdf' as const,
+      mimeType: 'application/pdf',
+      workspaceRoot: '/workspace/sciforge',
+      modelRouterObject: true
+    }
+
+    await expect(actions.sendSideMessage(id, 'inspect the report', {
+      fileReferences: [rendererReference]
+    })).resolves.toBe(true)
+
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      id,
+      'inspect the report',
+      expect.objectContaining({
+        fileReferences: [{
+          path: 'reports/report.pdf',
+          relativePath: 'reports/report.pdf',
+          name: 'report.pdf',
+          kind: 'pdf',
+          mimeType: 'application/pdf'
+        }]
+      })
+    )
   })
 
   it('sends an attachment-only child message with a runtime prompt', async () => {

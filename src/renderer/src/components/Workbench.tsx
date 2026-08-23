@@ -123,13 +123,10 @@ import {
   type WorkspaceFilePreviewDetail
 } from '../lib/workspace-file-preview'
 import {
-  buildComposerFileContextPrompt,
   composerFileReferenceKey,
   mergeComposerFileReferences,
   relativeWorkspacePath,
 } from '../lib/composer-file-references'
-import { readComposerFileContextEntries as readComposerFileContextEntriesFromReferences } from '../lib/composer-file-context'
-import { withActiveWorkspaceLocator } from '../remote-workspace/placement'
 import {
   buildWorkspaceReferenceGroups,
   type WorkspaceReferenceGroup
@@ -386,9 +383,6 @@ type PendingSddPlanTarget = {
   workspaceRoot: string
 }
 
-const COMPOSER_FILE_CONTEXT_MAX_CHARS_PER_FILE = 60_000
-const COMPOSER_FILE_CONTEXT_MAX_TOTAL_CHARS = 180_000
-const COMPOSER_DIRECTORY_CONTEXT_MAX_FILES = 40
 const PDF_ATTACHMENT_MAX_BYTES = 64 * 1024 * 1024
 const SCIENTIFIC_ATTACHMENT_MAX_BYTES = 256 * 1024
 const SCIENTIFIC_ATTACHMENT_EXTENSIONS =
@@ -464,8 +458,7 @@ function pickedWorkspaceFileReference(
     ...(isPdf
       ? {
           kind: 'pdf' as const,
-          mimeType: 'application/pdf',
-          modelRouterObject: true
+          mimeType: 'application/pdf'
         }
       : {})
   }
@@ -538,8 +531,7 @@ async function copyPdfAttachmentToWorkspace(
     name: safeUploadFileName(input, 'document.pdf'),
     workspaceRoot,
     kind: 'pdf',
-    mimeType: 'application/pdf',
-    modelRouterObject: true
+    mimeType: 'application/pdf'
   }
 }
 
@@ -575,8 +567,7 @@ async function copyScientificAttachmentToWorkspace(
     relativePath,
     name,
     workspaceRoot,
-    mimeType: scientificAttachmentMimeType(input),
-    modelRouterObject: true
+    mimeType: scientificAttachmentMimeType(input)
   }
 }
 
@@ -1661,12 +1652,23 @@ export function Workbench(): ReactElement {
   }
 
   const addComposerFileReference = (reference: ComposerFileReference): void => {
-    const normalizedReference = reference.workspaceRoot
-      ? reference
-      : {
-          ...reference,
-          workspaceRoot: activeWorkspaceReferenceRoot || workspaceRoot
-        }
+    const targetWorkspaceRoot = normalizeWorkspaceRoot(activeThread?.workspace || workspaceRoot)
+    const referenceWorkspaceRoot = normalizeWorkspaceRoot(
+      reference.workspaceRoot || activeWorkspaceReferenceRoot || workspaceRoot
+    )
+    if (
+      targetWorkspaceRoot &&
+      referenceWorkspaceRoot &&
+      referenceWorkspaceRoot !== targetWorkspaceRoot
+    ) {
+      setAttachmentUploadError(t('composerReferenceWorkspaceMismatch'))
+      return
+    }
+    const normalizedReference = {
+      ...reference,
+      workspaceRoot: referenceWorkspaceRoot
+    }
+    setAttachmentUploadError(null)
     setComposerFileReferences((current) => mergeComposerFileReferences(current, normalizedReference))
   }
 
@@ -2232,26 +2234,12 @@ export function Workbench(): ReactElement {
     if (session?.draft.id !== request.draft.id) return false
     void saveSddDraftToDisk(request.ownerSessionId)
     const messageText = v || t('composerFileOnlyPrompt')
-    let prompt = composeSddAssistantPrompt({
+    const prompt = composeSddAssistantPrompt({
       userPrompt: messageText,
       draftMarkdown: request.draftContent,
       draftRelativePath: request.draft.relativePath,
       workspaceRoot: request.draft.workspaceRoot
     })
-    if (fileReferences.length > 0) {
-      try {
-        const fileContext = await readComposerFileContextEntries(
-          fileReferences,
-          request.draft.workspaceRoot
-        )
-        prompt = buildComposerFileContextPrompt(prompt, fileContext)
-      } catch (error) {
-        if (useChatStore.getState().activeThreadId === request.ownerSessionId) {
-          setError(error instanceof Error ? error.message : String(error))
-        }
-        return false
-      }
-    }
     return sendSideMessage(request.ownerSessionId, prompt, {
       mode: request.mode,
       displayText: v || t('composerFileOnlyDisplay', { count: fileReferences.length }),
@@ -2435,23 +2423,6 @@ export function Workbench(): ReactElement {
     }
   }
 
-  const readComposerFileContextEntries = async (
-    references: readonly ComposerFileReference[],
-    workspace: string
-  ) => readComposerFileContextEntriesFromReferences(references, workspace, {
-    listWorkspaceReferences: async (input) => {
-      const provider = getProvider()
-      if (!provider.listWorkspaceReferences) return { ok: false, message: t('workspaceReferenceUnavailable') }
-      return provider.listWorkspaceReferences(withActiveWorkspaceLocator(input))
-    },
-    readWorkspaceFile: (input) =>
-      window.sciforge.readWorkspaceFile(withActiveWorkspaceLocator(input))
-  }, {
-    maxCharsPerFile: COMPOSER_FILE_CONTEXT_MAX_CHARS_PER_FILE,
-    maxTotalChars: COMPOSER_FILE_CONTEXT_MAX_TOTAL_CHARS,
-    maxDirectoryFiles: COMPOSER_DIRECTORY_CONTEXT_MAX_FILES
-  })
-
   const handleSend = (intent?: ComposerSendIntent): void => {
     void handleSendAsync(intent)
   }
@@ -2461,6 +2432,14 @@ export function Workbench(): ReactElement {
     const attachments = route === 'chat' ? composerAttachments : []
     const attachmentIds = attachments.map((attachment) => attachment.id)
     const fileReferences = route === 'chat' ? composerFileReferences : []
+    const targetWorkspaceRoot = normalizeWorkspaceRoot(activeThread?.workspace || workspaceRoot)
+    if (fileReferences.some((reference) => {
+      const referenceWorkspaceRoot = normalizeWorkspaceRoot(reference.workspaceRoot)
+      return targetWorkspaceRoot && referenceWorkspaceRoot && referenceWorkspaceRoot !== targetWorkspaceRoot
+    })) {
+      setAttachmentUploadError(t('composerReferenceWorkspaceMismatch'))
+      return
+    }
     const reasoningEffort = composerReasoningEffortRequestValue(composerReasoningEffort)
     const isImageGenerationIntent = intent?.kind === 'image-generation'
     if (!v && attachmentIds.length === 0 && fileReferences.length === 0) return
@@ -2533,30 +2512,9 @@ export function Workbench(): ReactElement {
       }
       const withContributedContext = (text: string): string =>
         contributedContext ? `${text}\n\n${contributedContext}` : text
-      if (fileReferences.length === 0) {
-        return {
-          text: withContributedContext(preparedRuntimeMessageText),
-          ...(userVisibleText ? { displayText: userVisibleText } : {})
-        }
-      }
-      const workspace = normalizeWorkspaceRoot(
-        threads.find((thread) => thread.id === activeThreadId)?.workspace || workspaceRoot
-      )
-      if (!workspace) {
-        setError(t('workspaceRequiredToCreateThread'))
-        return null
-      }
-      try {
-        const fileContext = await readComposerFileContextEntries(fileReferences, workspace)
-        return {
-          text: withContributedContext(
-            buildComposerFileContextPrompt(preparedRuntimeMessageText, fileContext)
-          ),
-          ...(userVisibleText ? { displayText: userVisibleText } : {})
-        }
-      } catch (error) {
-        setError(error instanceof Error ? error.message : String(error))
-        return null
+      return {
+        text: withContributedContext(preparedRuntimeMessageText),
+        ...(userVisibleText ? { displayText: userVisibleText } : {})
       }
     }
 

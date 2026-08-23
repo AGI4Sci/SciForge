@@ -34,8 +34,11 @@ import {
   type TurnFileMetadataV1
 } from './turn-file-effect-capture'
 
-const OUTBOX_VERSION = 5
-const LEGACY_OUTBOX_VERSIONS = new Set([1, 2, 3, 4])
+const OUTBOX_VERSION = 6
+const LEGACY_OUTBOX_VERSIONS = new Set([1, 2, 3, 4, 5])
+const BOUNDARY_OWNERSHIP_VERSION = 4
+const PRINCIPAL_ATTRIBUTION_VERSION = 5
+const START_PHASE_VERSION = 6
 const MAX_PENDING_TURNS = 1_000
 const MAX_TERMINAL_RECEIPTS = 1_024
 const MAX_ARTIFACT_RECEIPTS = 1_024
@@ -124,6 +127,8 @@ export type PendingTurnArtifactWatch = TurnArtifactWatch & Readonly<{
   registeredAt: string
 }>
 
+export type TurnArtifactStartPhase = 'prepared' | 'dispatching'
+
 /** Pre-dispatch journal entry. It is not a completed turn and cannot fan out. */
 export type TurnArtifactStart = Readonly<{
   runtimeId: string
@@ -145,10 +150,19 @@ export type TurnArtifactStart = Readonly<{
 
 export type TurnArtifactStartDraft = Omit<
   TurnArtifactStart,
-  'issuerEpoch' | 'deliveryAttemptId' | 'deliveryAttemptOrdinal' | 'boundaryLeaseId'
+  | 'issuerEpoch'
+  | 'deliveryAttemptId'
+  | 'deliveryAttemptOrdinal'
+  | 'boundaryLeaseId'
 >
 
 export type PendingTurnArtifactStart = TurnArtifactStart & Readonly<{
+  /**
+   * `prepared` durably proves provider dispatch has not begun and is therefore
+   * safe to release during recovery. `dispatching` is outcome-ambiguous until
+   * it is bound to an accepted provider turn or authoritatively rejected.
+   */
+  phase: TurnArtifactStartPhase
   key: string
   registeredAt: string
 }>
@@ -182,7 +196,7 @@ type PersistedOutbox = Readonly<{
   starts: readonly PendingTurnArtifactStart[]
   watches: readonly PendingTurnArtifactWatch[]
   records: readonly TurnArtifactOutboxRecord[]
-  receipts: readonly TurnArtifactDeliveryReceipt[]
+  receipts: readonly TurnArtifactTerminalReceipt[]
   lifecycleSettlements: readonly TurnLifecycleSettlementRecord[]
   lifecycleReceipts: readonly TurnLifecycleSettlementReceipt[]
   attemptIssuer: PersistedAttemptIssuer
@@ -214,7 +228,7 @@ type TurnLifecycleSettlementReceipt = Readonly<{
   deliveredAt: string
 }>
 
-type TurnArtifactDeliveryReceipt = Readonly<{
+type TurnArtifactReceiptBase = Readonly<{
   key: string
   runtimeId: string
   threadId: string
@@ -225,7 +239,7 @@ type TurnArtifactDeliveryReceipt = Readonly<{
   boundaryLeaseId?: string
   clientDirectiveId?: string
   inputDigest?: string
-  /** Irreversible binding; delivered tombstones never retain absolute paths. */
+  /** Irreversible binding; terminal tombstones never retain absolute paths. */
   workspaceBindingDigest?: string
   fileBaselineDigest?: string
   /** Retained bounded attribution so later lifecycle replay cannot rebind it. */
@@ -238,8 +252,25 @@ type TurnArtifactDeliveryReceipt = Readonly<{
   principalContextDigest: string
   /** Digest of the validated pre-context V5 intent; context has its own proof. */
   intentDigest: string
+}>
+
+type TurnArtifactDeliveryReceipt = TurnArtifactReceiptBase & Readonly<{
+  outcome: 'delivered'
   deliveredAt: string
 }>
+
+type TurnArtifactLegacyMaterializationQuarantineReceipt =
+  TurnArtifactReceiptBase & Readonly<{
+    outcome: 'legacy_materialization_quarantined'
+    firstSeenAt: string
+    quarantinedAt: string
+    attempts: number
+    error: string
+  }>
+
+type TurnArtifactTerminalReceipt =
+  | TurnArtifactDeliveryReceipt
+  | TurnArtifactLegacyMaterializationQuarantineReceipt
 
 type TurnArtifactDirectiveBinding = Readonly<{
   runtimeId: string
@@ -266,7 +297,7 @@ export type TurnArtifactOutboxOptions = Readonly<{
 export class TurnArtifactOutbox {
   readonly path: string
   #records = new Map<string, TurnArtifactOutboxRecord>()
-  #receipts = new Map<string, TurnArtifactDeliveryReceipt>()
+  #receipts = new Map<string, TurnArtifactTerminalReceipt>()
   #watches = new Map<string, PendingTurnArtifactWatch>()
   #starts = new Map<string, PendingTurnArtifactStart>()
   #lifecycleSettlements = new Map<string, TurnLifecycleSettlementRecord>()
@@ -395,6 +426,7 @@ export class TurnArtifactOutbox {
         deliveryAttemptId: attempt.deliveryAttemptId,
         deliveryAttemptOrdinal: attempt.deliveryAttemptOrdinal,
         boundaryLeaseId: `turn-boundary:${attempt.deliveryAttemptId}`,
+        phase: 'prepared' as const,
         key,
         registeredAt: new Date().toISOString()
       })
@@ -415,6 +447,37 @@ export class TurnArtifactOutbox {
 
   pendingStarts(): readonly PendingTurnArtifactStart[] {
     return [...this.#starts.values()].sort(compareStarts)
+  }
+
+  /** Durably crosses the last safe pre-dispatch boundary. */
+  async markStartDispatching(input: TurnArtifactStart): Promise<PendingTurnArtifactStart> {
+    const start = parseStartInput(input)
+    const startKey = turnArtifactStartKey(start)
+    await this.load()
+    let pending: PendingTurnArtifactStart | undefined
+    await this.#mutate(async () => {
+      this.#assertLiveIssuedAttempt(start)
+      const current = this.#starts.get(startKey)
+      if (!current) throw new Error(`Turn artifact start ${startKey} is missing.`)
+      assertSameStart(current, start, startKey)
+      if (current.phase === 'dispatching') {
+        pending = current
+        return
+      }
+      const updated = Object.freeze({
+        ...current,
+        phase: 'dispatching' as const
+      })
+      this.#starts.set(startKey, updated)
+      try {
+        await this.#persist()
+      } catch (error) {
+        if (!isPostRenameDurabilityError(error)) this.#starts.set(startKey, current)
+        throw error
+      }
+      pending = updated
+    })
+    return pending!
   }
 
   async bindStart(input: TurnArtifactStart, watchInput: TurnArtifactWatch): Promise<boolean> {
@@ -490,6 +553,9 @@ export class TurnArtifactOutbox {
           return
         }
         throw new Error(`Turn artifact start ${startKey} is missing.`)
+      }
+      if (currentStart.phase !== 'dispatching') {
+        throw new Error('Turn artifact start must be marked dispatching before provider acceptance.')
       }
       assertDirectiveNotBound(
         start,
@@ -719,7 +785,7 @@ export class TurnArtifactOutbox {
   }
 
   wasDelivered(key: string): boolean {
-    return this.#artifactReceipt(key) !== undefined
+    return this.#artifactReceipt(key)?.outcome === 'delivered'
   }
 
   ready(now = Date.now()): readonly TurnArtifactOutboxRecord[] {
@@ -1043,6 +1109,41 @@ export class TurnArtifactOutbox {
     })
   }
 
+  /**
+   * Durably terminates only an unmaterializable pre-boundary artifact record.
+   * This is an explicit quarantine outcome, never a delivery acknowledgement.
+   */
+  async markLegacyMaterializationQuarantined(key: string, error: unknown): Promise<void> {
+    await this.load()
+    await this.#mutate(async () => {
+      const current = this.#records.get(key)
+      if (!current) return
+      if (!current.legacyArtifactOnly || current.stage !== 'pending_materialization') {
+        throw new Error(
+          'Only a legacy artifact-only pending materialization may be quarantined.'
+        )
+      }
+      const receiptsBefore = new Map(this.#receipts)
+      const now = new Date().toISOString()
+      const receipt = compactLegacyMaterializationQuarantineReceipt(
+        current,
+        error,
+        now
+      )
+      this.#records.delete(key)
+      this.#receipts.set(key, receipt)
+      try {
+        await this.#persist()
+      } catch (persistError) {
+        if (!isPostRenameDurabilityError(persistError)) {
+          this.#records.set(key, current)
+          this.#receipts = receiptsBefore
+        }
+        throw persistError
+      }
+    })
+  }
+
   async markDelivered(key: string): Promise<void> {
     await this.load()
     await this.#mutate(async () => {
@@ -1069,11 +1170,11 @@ export class TurnArtifactOutbox {
     })
   }
 
-  #artifactReceipt(key: string): TurnArtifactDeliveryReceipt | undefined {
+  #artifactReceipt(key: string): TurnArtifactTerminalReceipt | undefined {
     return this.#receipts.get(key)
   }
 
-  #allArtifactReceipts(): readonly TurnArtifactDeliveryReceipt[] {
+  #allArtifactReceipts(): readonly TurnArtifactTerminalReceipt[] {
     return [...this.#receipts.values()]
   }
 
@@ -1183,7 +1284,8 @@ export class TurnArtifactOutbox {
       watches: [...this.#watches.values()].sort(compareWatches),
       records: [...this.#records.values()].sort(compareRecords),
       receipts: [...this.#receipts.values()].sort((left, right) => (
-        left.deliveredAt.localeCompare(right.deliveredAt) || left.key.localeCompare(right.key)
+        artifactReceiptTimestamp(left).localeCompare(artifactReceiptTimestamp(right)) ||
+        left.key.localeCompare(right.key)
       )),
       lifecycleSettlements: [...this.#lifecycleSettlements.values()].sort(compareLifecycleSettlements),
       lifecycleReceipts: [...this.#lifecycleReceipts.values()].sort((left, right) => (
@@ -1452,7 +1554,6 @@ function assertAttemptLedgerComplete(
 }
 
 function parseOutbox(value: unknown): PersistedOutbox & Readonly<{ migrate: boolean }> {
-  const legacy = isRecord(value) && value.version !== OUTBOX_VERSION
   const persistedVersion = isRecord(value) ? Number(value.version) : Number.NaN
   if (
     !isRecord(value) ||
@@ -1509,11 +1610,17 @@ function parseOutbox(value: unknown): PersistedOutbox & Readonly<{ migrate: bool
   // remain replayable across that migration boundary. V4 boundary owners stay
   // recoverable, but their missing attribution is normalized to fail-closed
   // signed-out state instead of being rebound to the current Principal.
-  const preBoundaryOwnership = persistedVersion < 4
-  const legacyPrincipal = persistedVersion < OUTBOX_VERSION
+  const preBoundaryOwnership = persistedVersion < BOUNDARY_OWNERSHIP_VERSION
+  const legacyPrincipal = persistedVersion < PRINCIPAL_ATTRIBUTION_VERSION
+  const legacyStartPhase = persistedVersion < START_PHASE_VERSION
+  const legacyArtifactSchema = persistedVersion < PRINCIPAL_ATTRIBUTION_VERSION
   const starts = preBoundaryOwnership
     ? []
-    : rawStarts.map((start) => parsePersistedStart(start, legacyPrincipal))
+    : rawStarts.map((start) => parsePersistedStart(
+        start,
+        legacyPrincipal,
+        legacyStartPhase
+      ))
   const watches = preBoundaryOwnership
     ? []
     : rawWatches.map((watch) => parsePersistedWatch(watch, legacyPrincipal))
@@ -1531,12 +1638,16 @@ function parseOutbox(value: unknown): PersistedOutbox & Readonly<{ migrate: bool
   }
   const records = value.records.map((record) => parseRecord(
     record,
-    legacy || (isRecord(record) && record.legacyArtifactOnly === true)
+    legacyArtifactSchema || (isRecord(record) && record.legacyArtifactOnly === true)
   ))
   if (new Set(records.map((record) => record.key)).size !== records.length) {
     throw new Error('Completed turn artifact outbox contains duplicate intent keys.')
   }
-  const receipts = value.receipts.map((receipt) => parseReceipt(receipt, legacy))
+  const receipts = value.receipts.map((receipt) => parseReceipt(
+    receipt,
+    legacyArtifactSchema,
+    persistedVersion < OUTBOX_VERSION
+  ))
   const receiptKeys = new Set(receipts.map((receipt) => receipt.key))
   if (receiptKeys.size !== receipts.length) {
     throw new Error('Completed turn artifact outbox contains duplicate delivery receipts.')
@@ -1659,7 +1770,8 @@ function parseStartInput(
 
 function parsePersistedStart(
   value: unknown,
-  legacyPrincipal = false
+  legacyPrincipal = false,
+  legacyStartPhase = false
 ): PendingTurnArtifactStart {
   const start = parseStartInput(value, legacyPrincipal, true)
   if (!isRecord(value)) throw new Error('Turn artifact start must be an object.')
@@ -1667,9 +1779,19 @@ function parsePersistedStart(
   if (value.key !== key) throw new Error('Turn artifact start has an invalid key.')
   return Object.freeze({
     ...start,
+    phase: parseStartPhase(value.phase, legacyStartPhase),
     key,
     registeredAt: timestamp(value.registeredAt, 'registeredAt')
   })
+}
+
+function parseStartPhase(
+  value: unknown,
+  legacyStartPhase: boolean
+): TurnArtifactStartPhase {
+  if (value === 'prepared' || value === 'dispatching') return value
+  if (legacyStartPhase && value === undefined) return 'dispatching'
+  throw new Error('Turn artifact start phase is invalid.')
 }
 
 function parseWatchInput(
@@ -2100,7 +2222,11 @@ function portableRelativePath(value: string): boolean {
     value.split('/').every((part) => Boolean(part) && part !== '.' && part !== '..')
 }
 
-function parseReceipt(value: unknown, legacy = false): TurnArtifactDeliveryReceipt {
+function parseReceipt(
+  value: unknown,
+  legacy = false,
+  legacyOutcome = legacy
+): TurnArtifactTerminalReceipt {
   if (!isRecord(value)) throw new Error('Completed turn artifact receipt must be an object.')
   // V1/V2 kept the full immutable intent as the delivery tombstone. Migrate
   // those records in memory to a compact identity + digest before V3 persists.
@@ -2172,7 +2298,7 @@ function parseReceipt(value: unknown, legacy = false): TurnArtifactDeliveryRecei
   if (principalContextAttributionDigest(principalContext ?? null) !== principalContextDigest) {
     throw new Error('Completed turn artifact receipt Principal context proof is invalid.')
   }
-  return Object.freeze({
+  const receiptBase = {
     key,
     runtimeId,
     threadId,
@@ -2185,15 +2311,74 @@ function parseReceipt(value: unknown, legacy = false): TurnArtifactDeliveryRecei
     principalDigest,
     ...(principalContext ? { principalContext } : {}),
     principalContextDigest,
-    intentDigest,
-    deliveredAt: timestamp(value.deliveredAt, 'deliveredAt')
-  })
+    intentDigest
+  } satisfies TurnArtifactReceiptBase
+  const outcome = value.outcome === undefined && legacyOutcome
+    ? 'delivered'
+    : value.outcome
+  if (outcome === 'delivered') {
+    return Object.freeze({
+      ...receiptBase,
+      outcome,
+      deliveredAt: timestamp(value.deliveredAt, 'deliveredAt')
+    })
+  }
+  if (outcome === 'legacy_materialization_quarantined') {
+    if (
+      receiptBase.deliveryAttemptId !== undefined ||
+      receiptBase.deliveryAttemptOrdinal !== undefined ||
+      receiptBase.issuerEpoch !== undefined ||
+      receiptBase.boundaryLeaseId !== undefined
+    ) {
+      throw new Error('A quarantined legacy artifact receipt cannot own a Host boundary.')
+    }
+    const attempts = value.attempts
+    if (!Number.isSafeInteger(attempts) || Number(attempts) <= 0) {
+      throw new Error('A quarantined legacy artifact receipt requires positive attempts.')
+    }
+    return Object.freeze({
+      ...receiptBase,
+      outcome,
+      firstSeenAt: timestamp(value.firstSeenAt, 'firstSeenAt'),
+      quarantinedAt: timestamp(value.quarantinedAt, 'quarantinedAt'),
+      attempts: Number(attempts),
+      error: required(value.error, 'receipt.error', 4_000)
+    })
+  }
+  throw new Error('Completed turn artifact receipt has an invalid outcome.')
 }
 
 function compactReceipt(
   intent: TurnArtifactReplayIntent,
   deliveredAt: string
 ): TurnArtifactDeliveryReceipt {
+  return Object.freeze({
+    ...compactReceiptBase(intent),
+    outcome: 'delivered',
+    deliveredAt
+  })
+}
+
+function compactLegacyMaterializationQuarantineReceipt(
+  record: PendingTurnArtifactMaterialization,
+  error: unknown,
+  quarantinedAt: string
+): TurnArtifactLegacyMaterializationQuarantineReceipt {
+  const message = errorMessage(error).slice(0, 4_000) ||
+    'Legacy turn artifact materialization failed without an error message.'
+  return Object.freeze({
+    ...compactReceiptBase(record.intent),
+    outcome: 'legacy_materialization_quarantined',
+    firstSeenAt: record.createdAt,
+    quarantinedAt,
+    attempts: record.attempts + 1,
+    error: message
+  })
+}
+
+function compactReceiptBase(
+  intent: TurnArtifactReplayIntent
+): TurnArtifactReceiptBase {
   return Object.freeze({
     key: turnArtifactIntentKey(intent),
     runtimeId: intent.runtimeId,
@@ -2220,12 +2405,15 @@ function compactReceipt(
     principalDigest: principalAttributionDigest(intent.principal ?? null),
     ...(intent.principalContext ? { principalContext: intent.principalContext } : {}),
     principalContextDigest: principalContextAttributionDigest(intent.principalContext ?? null),
-    intentDigest: turnArtifactIntentDigest(intent),
-    deliveredAt
+    intentDigest: turnArtifactIntentDigest(intent)
   })
 }
 
-function receiptBinding(receipt: TurnArtifactDeliveryReceipt): TurnArtifactDirectiveBinding {
+function artifactReceiptTimestamp(receipt: TurnArtifactTerminalReceipt): string {
+  return receipt.outcome === 'delivered' ? receipt.deliveredAt : receipt.quarantinedAt
+}
+
+function receiptBinding(receipt: TurnArtifactTerminalReceipt): TurnArtifactDirectiveBinding {
   return Object.freeze({
     runtimeId: receipt.runtimeId,
     threadId: receipt.threadId,
@@ -2537,7 +2725,7 @@ function assertSameIntent(
 }
 
 function assertReceiptMatchesIntent(
-  receipt: TurnArtifactDeliveryReceipt,
+  receipt: TurnArtifactTerminalReceipt,
   intent: TurnArtifactReplayIntent,
   key: string
 ): void {
@@ -2552,8 +2740,8 @@ function assertReceiptMatchesIntent(
 }
 
 function assertSameArtifactReceipt(
-  left: TurnArtifactDeliveryReceipt,
-  right: TurnArtifactDeliveryReceipt
+  left: TurnArtifactTerminalReceipt,
+  right: TurnArtifactTerminalReceipt
 ): void {
   if (
     left.key !== right.key ||
@@ -2576,13 +2764,33 @@ function assertSameArtifactReceipt(
     ) ||
     left.principalContextDigest !== right.principalContextDigest ||
     left.intentDigest !== right.intentDigest ||
-    left.deliveredAt !== right.deliveredAt
+    !sameArtifactReceiptOutcome(left, right)
   ) throw new Error(`Completed turn artifact receipt proof collision: ${left.key}`)
+}
+
+function sameArtifactReceiptOutcome(
+  left: TurnArtifactTerminalReceipt,
+  right: TurnArtifactTerminalReceipt
+): boolean {
+  if (left.outcome !== right.outcome) return false
+  if (left.outcome === 'delivered' && right.outcome === 'delivered') {
+    return left.deliveredAt === right.deliveredAt
+  }
+  if (
+    left.outcome === 'legacy_materialization_quarantined' &&
+    right.outcome === 'legacy_materialization_quarantined'
+  ) {
+    return left.firstSeenAt === right.firstSeenAt &&
+      left.quarantinedAt === right.quarantinedAt &&
+      left.attempts === right.attempts &&
+      left.error === right.error
+  }
+  return false
 }
 
 function assertWatchMatchesReceipt(
   watch: TurnArtifactWatch,
-  receipt: TurnArtifactDeliveryReceipt,
+  receipt: TurnArtifactTerminalReceipt,
   key: string
 ): void {
   if (

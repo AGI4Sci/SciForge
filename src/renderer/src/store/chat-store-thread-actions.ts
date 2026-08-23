@@ -26,7 +26,7 @@ import {
   buildCodeRuntimePrompt,
   getActiveAgentApiKey
 } from '@shared/app-settings'
-import type { AgentRuntimeContextState, AgentRuntimeFileReference } from '@shared/agent-runtime-contract'
+import type { AgentRuntimeContextState } from '@shared/agent-runtime-contract'
 import type { ChatState, ChatStoreGet, ChatStoreSet, QueuedUserMessage } from './chat-store-types'
 import { resetAgentFocusState } from './chat-store-focus-actions'
 import {
@@ -77,6 +77,7 @@ import {
 import { providerSupportsCapability } from './chat-store-provider-capabilities'
 import { rekeySessionRightPanelWorkspace } from '../lib/session-right-panel-lifecycle'
 import { draftSessionRightPanelId } from '../lib/session-right-panel-owner'
+import { normalizeRuntimeFileReferences } from '../lib/runtime-file-references'
 
 type SseAbortRef = { current: AbortController | null }
 
@@ -125,44 +126,6 @@ function watchBackgroundThreadCompletion(
   }))
   watchTurnCompletionNotification(normalizedThreadId)
   syncTurnCompletionPoll(set, get)
-}
-
-function normalizeRuntimeFileReferencePath(value: string): string | null {
-  const normalized = value.trim().replaceAll('\\', '/').replace(/\/+/g, '/').replace(/^\.\//u, '')
-  if (!normalized || normalized === '.' || normalized === '..') return null
-  if (normalized.includes('\0')) return null
-  if (normalized.startsWith('/') || /^[A-Za-z]:\//u.test(normalized)) return null
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:/u.test(normalized)) return null
-  const parts = normalized.split('/').filter((part) => part && part !== '.')
-  if (parts.length === 0 || parts.includes('..')) return null
-  return parts.join('/')
-}
-
-function fileNameFromRelativePath(relativePath: string): string {
-  return relativePath.split('/').filter(Boolean).pop() ?? relativePath
-}
-
-function normalizeRuntimeFileReferences(
-  references: AgentRuntimeFileReference[] | undefined
-): AgentRuntimeFileReference[] {
-  if (!references?.length) return []
-  const safeReferences: AgentRuntimeFileReference[] = []
-  for (const reference of references) {
-    const relativePath =
-      normalizeRuntimeFileReferencePath(reference.relativePath) ??
-      normalizeRuntimeFileReferencePath(reference.path)
-    if (!relativePath) continue
-    safeReferences.push({
-      path: relativePath,
-      relativePath,
-      name: reference.name.trim() || fileNameFromRelativePath(relativePath),
-      ...(reference.kind ? { kind: reference.kind } : {}),
-      ...(reference.mimeType ? { mimeType: reference.mimeType } : {}),
-      delivery: reference.delivery ?? (reference.modelRouterObject ? 'model_router_object' : 'inline_context'),
-      ...(reference.modelRouterObject ? { modelRouterObject: true } : {})
-    })
-  }
-  return safeReferences
 }
 
 async function readProviderContextState(
@@ -788,6 +751,7 @@ export function createThreadActions(
         )
       }))
       const runtimeText = buildCodeRuntimePrompt(settings, latestQueued.text)
+      const fileReferences = normalizeRuntimeFileReferences(latestQueued.fileReferences)
       const turnHandle = await provider.sendUserMessage(targetThreadId, runtimeText, {
         clientDirectiveId: queued.id,
         ...(latestQueued.mode ? { mode: latestQueued.mode } : {}),
@@ -801,7 +765,7 @@ export function createThreadActions(
         ...(latestQueued.governanceProfile ? { governanceProfile: latestQueued.governanceProfile } : {}),
         displayText: latestQueued.displayText ?? latestQueued.text,
         ...(latestQueued.attachmentIds?.length ? { attachmentIds: latestQueued.attachmentIds } : {}),
-        ...(latestQueued.fileReferences?.length ? { fileReferences: latestQueued.fileReferences } : {})
+        ...(fileReferences.length ? { fileReferences } : {})
       })
       const deliveredThreadId = turnHandle.threadId?.trim() || targetThreadId
       set((state) => ({

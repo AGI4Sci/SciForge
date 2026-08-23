@@ -4,12 +4,13 @@ import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { access, mkdir, open, readFile, realpath, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
-const projectRoot = await realpath(join(dirname(fileURLToPath(import.meta.url)), '..'))
+const scriptPath = await realpath(fileURLToPath(import.meta.url))
+const projectRoot = await realpath(join(dirname(scriptPath), '..'))
 const workspaceId = createHash('sha256').update(projectRoot).digest('hex').slice(0, 16)
 const lockDir = join(tmpdir(), 'sciforge-dev-instances')
 const lockPath = join(lockDir, `${workspaceId}.json`)
@@ -22,6 +23,35 @@ const requiredDevDependencies = [
   'node_modules/typescript/package.json',
   'node_modules/electron-vite/package.json'
 ]
+
+export const DEV_FORWARD_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP'])
+
+export function devChildSpawnOptions(platform = process.platform) {
+  return {
+    // On POSIX, detached children lead a new process group. Keeping inherited
+    // stdio preserves the interactive dev experience while allowing shutdown
+    // signals to reach electron-vite and every Electron descendant together.
+    detached: platform !== 'win32'
+  }
+}
+
+export function forwardSignalToDevChild(
+  target,
+  signal,
+  { platform = process.platform, killProcess = process.kill } = {}
+) {
+  const pid = target?.pid
+  if (!target || target.killed || !Number.isSafeInteger(pid) || pid <= 0) return false
+  try {
+    if (platform === 'win32') target.kill(signal)
+    else killProcess(-pid, signal)
+    return true
+  } catch (error) {
+    // The process group may have completed between the signal and this call.
+    if (error?.code === 'ESRCH') return false
+    throw error
+  }
+}
 
 async function assertDevDependenciesInstalled() {
   const missing = []
@@ -117,7 +147,8 @@ function run(command, args, env) {
     child = spawn(command, args, {
       cwd: projectRoot,
       env,
-      stdio: 'inherit'
+      stdio: 'inherit',
+      ...devChildSpawnOptions()
     })
     child.once('error', reject)
     child.once('exit', (code, signal) => {
@@ -129,30 +160,68 @@ function run(command, args, env) {
   })
 }
 
+let interruptedBy = null
+
 function forwardSignal(signal) {
-  if (child && !child.killed) child.kill(signal)
-}
-
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
-  process.on(signal, () => forwardSignal(signal))
-}
-
-try {
-  await assertDevDependenciesInstalled()
-  await acquireLock()
-  ensureElectronBinaryInstalled()
-  const env = {
-    ...process.env,
-    SCIFORGE_DEV_INSTANCE_ID: instanceId,
-    SCIFORGE_DEV_WORKSPACE_ID: workspaceId
+  interruptedBy ??= signal
+  try {
+    forwardSignalToDevChild(child, signal)
+  } catch (error) {
+    console.error(
+      `[sciforge dev] Could not forward ${signal} to the development process tree: ${error instanceof Error ? error.message : String(error)}`
+    )
+    process.exitCode = 1
   }
-  const npmCli = process.env.npm_execpath
-  if (npmCli) await run(process.execPath, [npmCli, 'run', 'build:agent-support'], env)
-  else await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:agent-support'], env)
-  await run(process.execPath, [join(projectRoot, 'node_modules/electron-vite/bin/electron-vite.js'), 'dev'], env)
-} catch (error) {
-  console.error(`[sciforge dev] ${error instanceof Error ? error.message : String(error)}`)
-  process.exitCode = 1
-} finally {
-  await releaseLock()
 }
+
+function installSignalHandlers() {
+  const handlers = new Map()
+  for (const signal of DEV_FORWARD_SIGNALS) {
+    const handler = () => forwardSignal(signal)
+    handlers.set(signal, handler)
+    process.on(signal, handler)
+  }
+  return () => {
+    for (const [signal, handler] of handlers) process.removeListener(signal, handler)
+  }
+}
+
+function throwIfInterrupted() {
+  if (interruptedBy) throw new Error(`Interrupted by ${interruptedBy}.`)
+}
+
+async function main() {
+  const removeSignalHandlers = installSignalHandlers()
+  try {
+    await assertDevDependenciesInstalled()
+    await acquireLock()
+    ensureElectronBinaryInstalled()
+    const env = {
+      ...process.env,
+      SCIFORGE_DEV_INSTANCE_ID: instanceId,
+      SCIFORGE_DEV_WORKSPACE_ID: workspaceId
+    }
+    throwIfInterrupted()
+    const npmCli = process.env.npm_execpath
+    if (npmCli) await run(process.execPath, [npmCli, 'run', 'build:agent-support'], env)
+    else await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:agent-support'], env)
+    throwIfInterrupted()
+    await run(process.execPath, [join(projectRoot, 'node_modules/electron-vite/bin/electron-vite.js'), 'dev'], env)
+  } catch (error) {
+    console.error(`[sciforge dev] ${error instanceof Error ? error.message : String(error)}`)
+    process.exitCode = 1
+  } finally {
+    removeSignalHandlers()
+    await releaseLock()
+  }
+}
+
+async function isDirectExecution() {
+  const entryPath = process.argv[1]
+  if (!entryPath) return false
+  const resolvedEntry = resolve(entryPath)
+  const canonicalEntry = await realpath(resolvedEntry).catch(() => resolvedEntry)
+  return canonicalEntry === scriptPath
+}
+
+if (await isDirectExecution()) await main()

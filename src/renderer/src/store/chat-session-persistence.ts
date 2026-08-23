@@ -1,5 +1,4 @@
 import type { AttachmentReference } from '../agent/types'
-import type { AgentRuntimeFileReference } from '@shared/agent-runtime-contract'
 import type { AgentRuntimeId } from '@shared/app-settings'
 import { workspaceLocatorSchema } from '@sciforge/domain-sdk/workspace-host'
 import {
@@ -8,6 +7,7 @@ import {
   writeBrowserStorageItem
 } from '../lib/browser-storage'
 import type { AppRoute, QueuedUserMessage } from './chat-store-types'
+import { normalizeRuntimeFileReferences } from '../lib/runtime-file-references'
 
 export const CHAT_SESSION_STORAGE_KEY = 'sciforge.chatSession.v1'
 export const CHAT_SESSION_RECOVERY_STORAGE_KEY = 'sciforge.chatSession.recovery.v1'
@@ -16,6 +16,9 @@ const MAX_MESSAGE_CHARS = 100_000
 const MAX_SHORT_CHARS = 4_000
 const MAX_PERSISTED_SESSION_CHARS = 2_000_000
 const MAX_RECOVERY_SESSION_CHARS = 512_000
+const LEGACY_WORKSPACE_FILE_CONTEXT_PREFIX =
+  'The user referenced these workspace files. Use them as context for the request.'
+const SAFE_FILE_REFERENCE_ONLY_PROMPT = 'Please use the referenced workspace file(s) as context.'
 
 export type PersistedChatSession = {
   activeThreadId: string | null
@@ -89,40 +92,22 @@ function attachment(value: unknown): AttachmentReference | null {
   return output
 }
 
-function fileReference(value: unknown): AgentRuntimeFileReference | null {
-  const input = record(value)
-  const path = text(input?.path)
-  const relativePath = text(input?.relativePath)
-  const name = text(input?.name)
-  if (!input || !path || !relativePath || !name) return null
-  const kind = input.kind === 'file' || input.kind === 'directory' || input.kind === 'image' ||
-    input.kind === 'pdf' || input.kind === 'text'
-    ? input.kind
-    : undefined
-  const delivery = input.delivery === 'inline_context' || input.delivery === 'model_router_object'
-    ? input.delivery
-    : undefined
-  const mimeType = text(input.mimeType)
-  return {
-    path,
-    relativePath,
-    name,
-    ...(kind ? { kind } : {}),
-    ...(delivery ? { delivery } : {}),
-    ...(mimeType ? { mimeType } : {}),
-    ...(input.modelRouterObject === true ? { modelRouterObject: true } : {})
-  }
+function migrateLegacyWorkspaceFileContext(runtimeText: string, displayText?: string): string {
+  return runtimeText.startsWith(LEGACY_WORKSPACE_FILE_CONTEXT_PREFIX)
+    ? displayText ?? SAFE_FILE_REFERENCE_ONLY_PROMPT
+    : runtimeText
 }
 
 function sanitizeQueuedMessage(value: unknown, restored: boolean): QueuedUserMessage | null {
   const input = record(value)
   const id = text(input?.id)
-  const messageText = text(input?.text, MAX_MESSAGE_CHARS)
-  if (!input || !id || !messageText) return null
+  const persistedMessageText = text(input?.text, MAX_MESSAGE_CHARS)
+  if (!input || !id || !persistedMessageText) return null
   const threadId = text(input.threadId)
   const targetThreadId = text(input.targetThreadId)
   const persistedRuntimeId = runtimeId(input.runtimeId)
   const displayText = text(input.displayText, MAX_MESSAGE_CHARS)
+  const messageText = migrateLegacyWorkspaceFileContext(persistedMessageText, displayText)
   const mode = text(input.mode)
   const sourceRoute = appRoute(input.sourceRoute)
   const workspaceRoot = text(input.workspaceRoot, MAX_MESSAGE_CHARS)
@@ -141,9 +126,7 @@ function sanitizeQueuedMessage(value: unknown, restored: boolean): QueuedUserMes
   const attachments = Array.isArray(input.attachments)
     ? input.attachments.map(attachment).filter((item): item is AttachmentReference => item != null)
     : []
-  const fileReferences = Array.isArray(input.fileReferences)
-    ? input.fileReferences.map(fileReference).filter((item): item is AgentRuntimeFileReference => item != null)
-    : []
+  const fileReferences = normalizeRuntimeFileReferences(input.fileReferences)
   const failure = record(input.sendFailure)
   const failureUserBlockId = text(failure?.userBlockId)
   const failureMessage = text(failure?.message, MAX_MESSAGE_CHARS)
@@ -152,7 +135,10 @@ function sanitizeQueuedMessage(value: unknown, restored: boolean): QueuedUserMes
   const delivery = record(input.deliveryAttempt)
   const deliveryStartedAt = finiteNumber(delivery?.startedAt)
   const deliveryUserBlockId = text(delivery?.userBlockId) ?? id
-  const deliveryAttemptedText = text(delivery?.attemptedText, MAX_MESSAGE_CHARS) ?? displayText ?? messageText
+  const persistedDeliveryAttemptedText = text(delivery?.attemptedText, MAX_MESSAGE_CHARS)
+  const deliveryAttemptedText = persistedDeliveryAttemptedText
+    ? migrateLegacyWorkspaceFileContext(persistedDeliveryAttemptedText, displayText)
+    : displayText ?? messageText
   const deliveryAttemptedDisplayText = text(delivery?.attemptedDisplayText, MAX_MESSAGE_CHARS)
   const hasDurableAttachmentIds = Boolean(attachmentIds?.length)
 

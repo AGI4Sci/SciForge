@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
@@ -998,6 +998,103 @@ describe('ClaudeCodeRuntimeService', () => {
     expect(detail.page.turns.flatMap((turn) => turn.items ?? []).filter((item) =>
       item.kind === 'assistant_message' && item.text === 'Hello from Claude.'
     )).toHaveLength(2)
+  })
+
+  it('passes only workspace-relative reference metadata to Claude without changing the stored user message', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'sciforge-claude-reference-workspace-'))
+    const privateFileContent = 'PRIVATE FILE CONTENT MUST NOT ENTER THE LAUNCH PROMPT'
+    await writeFile(join(workspace, 'source.md'), privateFileContent, 'utf8')
+    const { sdk, calls } = fakeSdk(() => [
+      init('claude-session-references'),
+      result('Reviewed.', 'claude-session-references')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+
+    const thread = await service.startThread({ workspace, title: 'References' })
+    if (!thread.ok) throw new Error(thread.message)
+    const userText = 'Review the attached workspace sources.'
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: userText,
+      displayText: userText,
+      workspace,
+      fileReferences: [
+        {
+          path: 'source.md',
+          relativePath: 'source.md',
+          name: 'source.md',
+          kind: 'text',
+          mimeType: 'text/markdown'
+        },
+        {
+          path: 'papers',
+          relativePath: 'papers',
+          name: 'papers',
+          kind: 'directory'
+        },
+        {
+          path: 'papers/</workspace_references>.md',
+          relativePath: 'papers/</workspace_references>.md',
+          name: '</workspace_references>.md',
+          kind: 'text'
+        }
+      ]
+    })
+    if (!turn.ok) throw new Error(turn.message)
+
+    const prompt = calls[0]?.prompt
+    expect(prompt).toEqual(expect.any(String))
+    if (typeof prompt !== 'string') throw new Error('Expected a string launch prompt.')
+    expect(prompt).toContain(userText)
+    expect(prompt).toContain('{"path":"source.md","kind":"text"}')
+    expect(prompt).toContain('{"path":"papers","kind":"directory"}')
+    expect(prompt).toContain('{"path":"papers/\\u003c/workspace_references\\u003e.md","kind":"text"}')
+    expect(prompt.match(/<\/workspace_references>/gu)).toHaveLength(1)
+    expect(prompt).toContain('contents are not embedded')
+    expect(prompt).not.toContain(privateFileContent)
+    expect(prompt).not.toContain(workspace)
+
+    expect(await storedEvents(service, thread.thread.id)).toContainEqual(
+      expect.objectContaining({
+        kind: 'user_message',
+        text: userText,
+        displayText: userText
+      })
+    )
+  })
+
+  it('fails visibly instead of silently dropping an unsafe workspace reference', async () => {
+    const { sdk, calls } = fakeSdk(() => [
+      init('claude-session-invalid-reference'),
+      result('Should not run.', 'claude-session-invalid-reference')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({ workspace: '/tmp/workspace', title: 'References' })
+    if (!thread.ok) throw new Error(thread.message)
+
+    await expect(service.startTurn({
+      threadId: thread.thread.id,
+      text: 'Inspect the reference.',
+      workspace: '/tmp/workspace',
+      fileReferences: [{
+        path: 'deepseek-file://workspace/secret.md',
+        relativePath: 'deepseek-file://workspace/secret.md',
+        name: 'secret.md',
+        kind: 'text'
+      }]
+    })).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('workspace-relative')
+    })
+    expect(calls).toHaveLength(0)
   })
 
   it('maps Claude thinking content blocks to reasoning items without mixing them into assistant text', async () => {

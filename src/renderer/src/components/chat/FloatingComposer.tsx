@@ -404,8 +404,7 @@ async function droppedWorkspaceReference(
     relativePath,
     name: file.name || relativePath.split('/').filter(Boolean).pop() || relativePath,
     workspaceRoot,
-    kind,
-    ...(kind === 'image' ? { modelRouterObject: true } : {})
+    kind
   }
 }
 

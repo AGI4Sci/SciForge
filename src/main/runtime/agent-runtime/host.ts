@@ -8,6 +8,7 @@ import type {
   DomainMainTurnLifecycleEvent,
   DomainTurnArtifactEvent
 } from '@sciforge/domain-sdk/host'
+import { toWellFormedUnicode, truncateWellFormedUtf8 } from '@sciforge/domain-sdk/unicode'
 import {
   getActiveAgentRuntime,
   getAgentCapabilitySettings,
@@ -190,6 +191,7 @@ export type AgentRuntimePendingTurnStartRelease = AgentRuntimePendingTurnStartRe
 
 const THREAD_TURN_QUEUE_POLL_MS = 1_000
 const THREAD_TURN_QUEUE_TIMEOUT_MS = 10 * 60_000
+const REQUIRED_BEFORE_TURN_TIMEOUT_MS = 60_000
 const RUNTIME_HANDOFF_TRANSCRIPT_MAX_BYTES = 32_000
 const RUNTIME_HANDOFF_TRANSCRIPT_ITEM_MAX_BYTES = 4_000
 const RUNTIME_HANDOFF_TRANSCRIPT_TOOL_LIMIT = 8
@@ -251,6 +253,7 @@ const EMPTY_AGENT_PRINCIPAL_CONTEXT = definePrincipalContextSnapshot({
 export class AgentRuntimeHost {
   private readonly adapters: Map<AgentRuntimeId, AgentRuntimeAdapter>
   private readonly turnQueues = new Map<string, Promise<unknown>>()
+  private readonly activeDirectiveDeliveries = new Set<string>()
   private readonly threadStatusReadsInFlight = new Map<string, Promise<AgentRuntimeThreadStatus>>()
   private readonly auxiliaryReadsInFlight = new Map<string, Promise<unknown>>()
   private readonly auxiliaryReadCache = new Map<string, { expiresAt: number; value: unknown }>()
@@ -659,13 +662,14 @@ export class AgentRuntimeHost {
   }
 
   async startTurn(input: AgentRuntimeTurnStartInput): Promise<AgentRuntimeTurnHandle> {
-    return this.withUserDirectiveDelivery(input, async (clientDirectiveId) => {
+    return this.withUserDirectiveDelivery(input, async (clientDirectiveId, beginDirectiveDelivery) => {
       const handle = await this.startTurnInternal({
         ...input,
         ...(clientDirectiveId ? { clientDirectiveId } : {})
       }, {
         includeSharedContext: true,
-        clientDirectiveIdWasHostGenerated: Boolean(clientDirectiveId && !input.clientDirectiveId?.trim())
+        clientDirectiveIdWasHostGenerated: Boolean(clientDirectiveId && !input.clientDirectiveId?.trim()),
+        beginDirectiveDelivery
       })
       return { value: handle, turnId: handle.turnId }
     }, (turnId) => ({ threadId: input.threadId, turnId }))
@@ -676,6 +680,7 @@ export class AgentRuntimeHost {
     options: {
       includeSharedContext: boolean
       clientDirectiveIdWasHostGenerated?: boolean
+      beginDirectiveDelivery?: () => Promise<void>
     }
   ): Promise<AgentRuntimeTurnHandle> {
     const { adapter, context: baseContext } = await this.resolveRequiredRuntime(
@@ -685,7 +690,7 @@ export class AgentRuntimeHost {
     const context = await this.withWorkspaceHostPlacement(baseContext, input.workspaceLocator)
     const placedInput = withWorkspaceLocatorPath(input)
     await this.autoCompactThreadIfNeeded(adapter, context, placedInput)
-    const safeInput = this.withWorkspaceRelativeFileReferences(context, placedInput)
+    const safeInput = this.withSafeRelativeFileReferences(placedInput)
     const contextualInput = options.includeSharedContext
       ? await this.withSharedGoalInstruction(
           adapter.id,
@@ -828,6 +833,11 @@ export class AgentRuntimeHost {
               if (pending) boundArtifactWatch = watch
             }
           }
+        },
+        async () => {
+          await options.beginDirectiveDelivery?.()
+          if (!artifactStart || !this.options.turnArtifacts) return
+          artifactStart = await this.options.turnArtifacts.markStartDispatching(artifactStart)
         }
       )
     } catch (error) {
@@ -912,6 +922,37 @@ export class AgentRuntimeHost {
     if (!publisher || this.disposed) return 0
     const watches = await publisher.pending()
     for (const watch of watches) this.startTurnArtifactCapture(watch)
+    const starts = await publisher.pendingStarts()
+    for (const start of starts) {
+      if (start.phase !== 'prepared') continue
+      const rejected = await publisher.rejectStart(start, Object.freeze({
+        kind: 'after-turn',
+        state: 'rejected',
+        settlementSource: 'runtime',
+        issuerEpoch: start.issuerEpoch,
+        boundaryLeaseId: start.boundaryLeaseId,
+        deliveryAttemptId: start.deliveryAttemptId,
+        deliveryAttemptOrdinal: start.deliveryAttemptOrdinal,
+        clientDirectiveId: start.clientDirectiveId,
+        runtimeId: start.runtimeId,
+        threadId: start.threadId,
+        ...(start.principalContext ? { principalContext: start.principalContext } : {}),
+        ...(start.principal ? { principal: start.principal } : {}),
+        ...(start.workspaceRoot ? { workspaceRoot: start.workspaceRoot } : {}),
+        occurredAt: new Date().toISOString()
+      }))
+      if (rejected) {
+        const runtimeId = optionalRuntimeId(start.runtimeId)
+        if (runtimeId) {
+          await this.options.services?.contextLedger?.rejectUnownedDirectiveDelivery({
+            runtimeId,
+            threadId: start.threadId,
+            id: start.clientDirectiveId,
+            error: 'The app restarted before provider dispatch began; the saved message can be retried safely.'
+          })
+        }
+      }
+    }
     return watches.length + (await publisher.pendingStarts()).length
   }
 
@@ -1469,7 +1510,7 @@ export class AgentRuntimeHost {
   }
 
   async steerTurn(input: AgentRuntimeTurnSteerInput): Promise<void> {
-    await this.withUserDirectiveDelivery(input, async (clientDirectiveId) => {
+    await this.withUserDirectiveDelivery(input, async (clientDirectiveId, beginDirectiveDelivery) => {
       const { adapter, context } = await this.resolveRequiredRuntime(
         input.runtimeId,
         input.threadId,
@@ -1500,7 +1541,8 @@ export class AgentRuntimeHost {
           input.threadId,
           input.turnId,
           canonicalInput,
-          steerInput
+          steerInput,
+          beginDirectiveDelivery
         )
       })
       return { value: undefined, turnId: input.turnId }
@@ -1518,7 +1560,10 @@ export class AgentRuntimeHost {
 
   private async withUserDirectiveDelivery<T>(
     input: AgentRuntimeTurnStartInput | AgentRuntimeTurnSteerInput,
-    deliver: (clientDirectiveId?: string) => Promise<{ value: T; turnId: string }>,
+    deliver: (
+      clientDirectiveId?: string,
+      beginDirectiveDelivery?: () => Promise<void>
+    ) => Promise<{ value: T; turnId: string }>,
     duplicate: (turnId: string) => T
   ): Promise<T> {
     const service = this.options.services?.contextLedger
@@ -1528,50 +1573,79 @@ export class AgentRuntimeHost {
       const directiveId = 'turnId' in input ? existingDirectiveId : clientDirectiveId
       return (await deliver(directiveId)).value
     }
-    await service.acceptDirective({
+    const accepted = await service.acceptDirective({
       runtimeId: input.runtimeId,
       threadId: input.threadId,
       id: clientDirectiveId,
       text: userDirectiveText(input)
     })
-    const dispatch = await service.beginDirectiveDelivery({
-      runtimeId: input.runtimeId,
-      threadId: input.threadId,
-      id: clientDirectiveId
-    })
-    if (!dispatch.deliver) {
-      const turnId = dispatch.directive.turnId?.trim()
+    if (accepted.delivery === 'delivered') {
+      const turnId = accepted.turnId?.trim()
       if (!turnId) throw new Error(`Delivered runtime directive ${clientDirectiveId} has no turn id.`)
       return duplicate(turnId)
     }
-    let delivered: { value: T; turnId: string }
-    try {
-      delivered = await deliver(clientDirectiveId)
-    } catch (deliveryError) {
-      try {
-        await service.finishDirectiveDelivery({
-          runtimeId: input.runtimeId,
-          threadId: input.threadId,
-          id: clientDirectiveId,
-          delivery: isDefiniteDirectiveRejection(deliveryError) ? 'rejected' : 'uncertain',
-          error: errorMessage(deliveryError)
-        })
-      } catch (persistenceError) {
-        throw new AggregateError(
-          [deliveryError, persistenceError],
-          'Runtime directive delivery failed and its acknowledgement state could not be persisted.'
-        )
-      }
-      throw deliveryError
+    const activeKey = directiveDeliveryKey(input.runtimeId, input.threadId, clientDirectiveId)
+    if (this.activeDirectiveDeliveries.has(activeKey)) {
+      throw new Error(`Runtime directive ${clientDirectiveId} is already being delivered.`)
     }
-    await service.finishDirectiveDelivery({
-      runtimeId: input.runtimeId,
-      threadId: input.threadId,
-      id: clientDirectiveId,
-      delivery: 'delivered',
-      turnId: delivered.turnId
-    })
-    return delivered.value
+    if (accepted.delivery === 'delivering' || accepted.delivery === 'uncertain') {
+      await service.beginDirectiveDelivery({
+        runtimeId: input.runtimeId,
+        threadId: input.threadId,
+        id: clientDirectiveId
+      })
+    }
+    this.activeDirectiveDeliveries.add(activeKey)
+    let deliveryBegan = false
+    const beginDirectiveDelivery = async (): Promise<void> => {
+      if (deliveryBegan) return
+      const dispatch = await service.beginDirectiveDelivery({
+        runtimeId: input.runtimeId,
+        threadId: input.threadId,
+        id: clientDirectiveId
+      })
+      if (!dispatch.deliver) {
+        throw new Error(`Runtime directive ${clientDirectiveId} changed before provider dispatch.`)
+      }
+      deliveryBegan = true
+    }
+    try {
+      let delivered: { value: T; turnId: string }
+      try {
+        delivered = await deliver(clientDirectiveId, beginDirectiveDelivery)
+      } catch (deliveryError) {
+        if (deliveryBegan) {
+          try {
+            await service.finishDirectiveDelivery({
+              runtimeId: input.runtimeId,
+              threadId: input.threadId,
+              id: clientDirectiveId,
+              delivery: isDefiniteDirectiveRejection(deliveryError) ? 'rejected' : 'uncertain',
+              error: errorMessage(deliveryError)
+            })
+          } catch (persistenceError) {
+            throw new AggregateError(
+              [deliveryError, persistenceError],
+              'Runtime directive delivery failed and its acknowledgement state could not be persisted.'
+            )
+          }
+        }
+        throw deliveryError
+      }
+      if (!deliveryBegan) {
+        throw new Error(`Runtime directive ${clientDirectiveId} completed before provider dispatch.`)
+      }
+      await service.finishDirectiveDelivery({
+        runtimeId: input.runtimeId,
+        threadId: input.threadId,
+        id: clientDirectiveId,
+        delivery: 'delivered',
+        turnId: delivered.turnId
+      })
+      return delivered.value
+    } finally {
+      this.activeDirectiveDeliveries.delete(activeKey)
+    }
   }
 
   async renameThread(input: AgentRuntimeThreadRenameInput): Promise<void> {
@@ -2489,7 +2563,7 @@ export class AgentRuntimeHost {
       text: userText,
       displayText,
       ...(clientDirectiveId ? { clientDirectiveId } : {})
-    }, async (directiveId) => {
+    }, async (directiveId, beginDirectiveDelivery) => {
       const handle = await this.startTurnInternal({
         runtimeId: targetRuntimeId,
         threadId: targetThread.id,
@@ -2505,7 +2579,7 @@ export class AgentRuntimeHost {
         ...(governanceProfile(payload.governanceProfile) ? { governanceProfile: governanceProfile(payload.governanceProfile) } : {}),
         ...(attachmentIds ? { attachmentIds } : {}),
         ...(fileReferences ? { fileReferences } : {})
-      }, { includeSharedContext: false })
+      }, { includeSharedContext: false, beginDirectiveDelivery })
       return { value: handle, turnId: handle.turnId }
     }, (turnId) => ({ threadId: targetThread.id, turnId }))
     if (targetThreadId && title) {
@@ -2950,19 +3024,21 @@ export class AgentRuntimeHost {
     }
   }
 
-  private withWorkspaceRelativeFileReferences(
-    context: AgentRuntimeAdapterContext,
+  private withSafeRelativeFileReferences(
     input: AgentRuntimeTurnStartInput
   ): AgentRuntimeTurnStartInput {
     const references = input.fileReferences
     if (!references?.length) return input
-    const workspaceRoot = input.workspace?.trim() || context.settings.workspaceRoot?.trim() || ''
-    const safeReferences = references
-      .map((reference) => normalizeRuntimeFileReference(reference, workspaceRoot))
-      .filter((reference): reference is AgentRuntimeFileReference => reference != null)
+    const normalizedReferences = references.map((reference) => normalizeRuntimeFileReference(reference))
+    if (normalizedReferences.some((reference) => reference == null)) {
+      throw new Error(
+        'Invalid workspace file reference: every path must be workspace-relative and remain inside the workspace.'
+      )
+    }
+    const safeReferences = normalizedReferences as AgentRuntimeFileReference[]
     return {
       ...input,
-      ...(safeReferences.length ? { fileReferences: safeReferences } : { fileReferences: undefined })
+      fileReferences: safeReferences
     }
   }
 
@@ -3198,7 +3274,8 @@ export class AgentRuntimeHost {
     clientDirectiveIdWasHostGenerated: boolean,
     beforeDispatch?: (
       canonicalInput: AgentRuntimeTurnStartInput
-    ) => Promise<AgentRuntimeAdapterContext>
+    ) => Promise<AgentRuntimeAdapterContext>,
+    beforeProviderDispatch?: () => Promise<void>
   ): Promise<AgentRuntimeTurnHandle> {
     return this.enqueueThreadOperation(adapter.id, input.threadId, async () => {
         const callerId = capabilityAgentCallerId({
@@ -3211,7 +3288,12 @@ export class AgentRuntimeHost {
           const steeringInput = clientDirectiveIdWasHostGenerated
             ? omitClientDirectiveId(steeringInputWithDirective)
             : steeringInputWithDirective
-          const steered = await this.steerActiveTurnIfSupported(adapter, context, steeringInput)
+          const steered = await this.steerActiveTurnIfSupported(
+            adapter,
+            context,
+            steeringInput,
+            beforeProviderDispatch
+          )
           if (steered) {
             if (input.visibleContextBindingId) {
               await this.options.services?.visibleContext?.discardSurfaceBinding?.(
@@ -3224,7 +3306,12 @@ export class AgentRuntimeHost {
           await this.waitForThreadTerminal(adapter, context, input)
           const canonicalInput = await this.withCanonicalVisibleState(adapter.id, input)
           const dispatchContext = beforeDispatch ? await beforeDispatch(canonicalInput) : context
-          const handle = await this.startAdapterTurn(adapter, dispatchContext, canonicalInput)
+          const handle = await this.startAdapterTurn(
+            adapter,
+            dispatchContext,
+            canonicalInput,
+            beforeProviderDispatch
+          )
           this.options.services?.visibleContext?.assignSurfaceTurn?.(
             callerId,
             handle.turnId,
@@ -3269,7 +3356,8 @@ export class AgentRuntimeHost {
   private async startAdapterTurn(
     adapter: AgentRuntimeAdapter,
     context: AgentRuntimeAdapterContext,
-    input: AgentRuntimeTurnStartInput
+    input: AgentRuntimeTurnStartInput,
+    beforeProviderDispatch?: () => Promise<void>
   ): Promise<AgentRuntimeTurnHandle> {
     const {
       visibleContextSurfaceId: _surfaceId,
@@ -3306,6 +3394,7 @@ export class AgentRuntimeHost {
       )
     }
     this.assertCapturedPrincipalContextCurrent(capturedPrincipalContext)
+    await beforeProviderDispatch?.()
     let handle: AgentRuntimeTurnHandle
     if (adapter.prepareTurnCapture && dispatchContext.onTurnAccepted) {
       const prepared = await adapter.prepareTurnCapture(dispatchContext, adapterInput)
@@ -3783,7 +3872,8 @@ export class AgentRuntimeHost {
   private async steerActiveTurnIfSupported(
     adapter: AgentRuntimeAdapter,
     context: AgentRuntimeAdapterContext,
-    input: AgentRuntimeTurnStartInput
+    input: AgentRuntimeTurnStartInput,
+    beforeProviderDispatch?: () => Promise<void>
   ): Promise<AgentRuntimeTurnHandle | null> {
     const threadId = input.threadId.trim()
     if (!threadId) return null
@@ -3812,7 +3902,8 @@ export class AgentRuntimeHost {
         text: input.text,
         ...(input.clientDirectiveId ? { clientDirectiveId: input.clientDirectiveId } : {}),
         ...(input.executionIntent ? { executionIntent: input.executionIntent } : {})
-      }
+      },
+      beforeProviderDispatch
     )
     await this.publishSyntheticEvent(adapter, context, {
       kind: 'runtime_status',
@@ -3852,7 +3943,8 @@ export class AgentRuntimeHost {
     threadId: string,
     turnId: string,
     integrityInput: AgentRuntimeTurnStartInput,
-    steerInput: AgentRuntimeTurnSteerInput
+    steerInput: AgentRuntimeTurnSteerInput,
+    beforeProviderDispatch?: () => Promise<void>
   ): Promise<void> {
     this.assertKnownTurnPrincipalContextCurrent(runtimeId, threadId, turnId)
     const rollback = this.executionIntegrity.rememberSteerInput(
@@ -3864,6 +3956,7 @@ export class AgentRuntimeHost {
     try {
       await this.updateTurnGovernanceSnapshot(adapter, context, threadId, turnId)
       this.assertKnownTurnPrincipalContextCurrent(runtimeId, threadId, turnId)
+      await beforeProviderDispatch?.()
       await adapter.steerTurn(context, steerInput)
     } catch (error) {
       rollback()
@@ -4323,7 +4416,10 @@ export class AgentRuntimeHost {
   private async publishTurnLifecycle(event: DomainMainTurnLifecycleEvent): Promise<void> {
     if (event.kind === 'before-turn' && this.requiredBeforeTurnSubscribers.size > 0) {
       const results = await Promise.allSettled(
-        [...this.requiredBeforeTurnSubscribers].map((listener) => Promise.resolve(listener(event)))
+        [...this.requiredBeforeTurnSubscribers].map((listener) => requiredBeforeTurnBarrier(
+          listener,
+          event
+        ))
       )
       const failures = results.flatMap((result) => (
         result.status === 'rejected' ? [result.reason] : []
@@ -4865,6 +4961,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function requiredBeforeTurnBarrier(
+  listener: (event: DomainMainBeforeTurnEvent) => void | Promise<void>,
+  event: DomainMainBeforeTurnEvent
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(
+        `Required before-turn subscriber timed out after ${REQUIRED_BEFORE_TURN_TIMEOUT_MS}ms.`
+      ))
+    }, REQUIRED_BEFORE_TURN_TIMEOUT_MS)
+    timeout.unref?.()
+    Promise.resolve()
+      .then(() => listener(event))
+      .then(resolve, reject)
+      .finally(() => clearTimeout(timeout))
+  })
+}
+
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve()
   return new Promise((resolve) => {
@@ -4947,16 +5061,7 @@ function renderModelCompactionInput(items: AgentRuntimeItem[], maxBytes: number)
 }
 
 function truncateUtf8Text(text: string, maxBytes: number): string {
-  if (maxBytes <= 0 || Buffer.byteLength(text, 'utf8') <= maxBytes) return text
-  let bytes = 0
-  const output: string[] = []
-  for (const char of text) {
-    const size = Buffer.byteLength(char, 'utf8')
-    if (bytes + size > maxBytes) break
-    output.push(char)
-    bytes += size
-  }
-  return output.join('')
+  return truncateWellFormedUtf8(text, maxBytes)
 }
 
 function extractResponsesOutputText(payload: Record<string, unknown>): string {
@@ -5132,11 +5237,7 @@ function arrayOfRuntimeFileReferences(value: unknown): AgentRuntimeFileReference
         relativePath,
         name,
         ...(runtimeFileReferenceKind(item.kind) ? { kind: runtimeFileReferenceKind(item.kind) } : {}),
-        ...(optionalString(item.mimeType) ? { mimeType: optionalString(item.mimeType) } : {}),
-        ...(runtimeFileReferenceDelivery(item.delivery)
-          ? { delivery: runtimeFileReferenceDelivery(item.delivery) }
-          : {}),
-        ...(item.modelRouterObject === true ? { modelRouterObject: true } : {})
+        ...(optionalString(item.mimeType) ? { mimeType: optionalString(item.mimeType) } : {})
       } satisfies AgentRuntimeFileReference
     })
   return references.length ? references : undefined
@@ -5262,10 +5363,6 @@ function runtimeFileReferenceKind(value: unknown): AgentRuntimeFileReference['ki
     : undefined
 }
 
-function runtimeFileReferenceDelivery(value: unknown): AgentRuntimeFileReference['delivery'] | undefined {
-  return value === 'inline_context' || value === 'model_router_object' ? value : undefined
-}
-
 function userDirectiveText(input: AgentRuntimeTurnStartInput | AgentRuntimeTurnSteerInput): string {
   return ('displayText' in input ? input.displayText?.trim() : undefined) || input.text.trim()
 }
@@ -5307,29 +5404,25 @@ const DEFINITE_DIRECTIVE_REJECTION_CODES = new Set([
 ])
 
 function normalizeRuntimeFileReference(
-  reference: AgentRuntimeFileReference,
-  workspaceRoot: string
+  reference: AgentRuntimeFileReference
 ): AgentRuntimeFileReference | null {
-  const relativePath = resolveSafeRuntimeReferencePath(reference, workspaceRoot)
+  const relativePath = resolveSafeRuntimeReferencePath(reference)
   if (!relativePath) return null
   const name = reference.name.trim() || path.posix.basename(relativePath)
-  const delivery = reference.delivery ?? (reference.modelRouterObject ? 'model_router_object' : 'inline_context')
   return {
-    ...reference,
     path: relativePath,
     relativePath,
     name,
-    delivery
+    ...(reference.kind ? { kind: reference.kind } : {}),
+    ...(reference.mimeType ? { mimeType: reference.mimeType } : {})
   }
 }
 
 function resolveSafeRuntimeReferencePath(
-  reference: AgentRuntimeFileReference,
-  workspaceRoot: string
+  reference: AgentRuntimeFileReference
 ): string | null {
   const candidates = [
     reference.relativePath,
-    workspaceRelativePath(reference.path, workspaceRoot),
     reference.path
   ]
   for (const candidate of candidates) {
@@ -5339,23 +5432,12 @@ function resolveSafeRuntimeReferencePath(
   return null
 }
 
-function workspaceRelativePath(candidatePath: string, workspaceRoot: string): string {
-  const candidate = normalizePathLike(candidatePath)
-  const root = trimTrailingSlash(normalizePathLike(workspaceRoot))
-  if (!candidate || !root) return ''
-  const fold = isWindowsAbsolutePath(candidate) || isWindowsAbsolutePath(root)
-  const comparableCandidate = fold ? candidate.toLowerCase() : candidate
-  const comparableRoot = fold ? root.toLowerCase() : root
-  if (comparableCandidate === comparableRoot) return ''
-  if (!comparableCandidate.startsWith(`${comparableRoot}/`)) return ''
-  return candidate.slice(root.length + 1)
-}
-
 function normalizeSafeRelativePath(value: string): string | null {
   const normalized = normalizePathLike(value).replace(/^\.\//u, '')
   if (!normalized || normalized === '.' || normalized === '..') return null
   if (normalized.includes('\0')) return null
   if (isAbsoluteLikePath(normalized)) return null
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/u.test(normalized)) return null
   if (normalized.startsWith('../')) return null
   return normalized
 }
@@ -5363,10 +5445,6 @@ function normalizeSafeRelativePath(value: string): string | null {
 function normalizePathLike(value: string): string {
   const normalized = value.trim().replaceAll('\\', '/').replace(/\/+/gu, '/')
   return path.posix.normalize(normalized)
-}
-
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/gu, '')
 }
 
 function isAbsoluteLikePath(value: string): boolean {
@@ -5926,6 +6004,14 @@ async function* mergeRuntimeEventStreams(
 
 function turnGovernanceKey(runtimeId: AgentRuntimeId, threadId: string, turnId: string): string {
   return `${runtimeId}:${threadId}:${turnId}`
+}
+
+function directiveDeliveryKey(
+  runtimeId: AgentRuntimeId,
+  threadId: string,
+  clientDirectiveId: string
+): string {
+  return `${runtimeId}\u0000${threadId}\u0000${clientDirectiveId}`
 }
 
 function mergeCapabilityApprovalItems(

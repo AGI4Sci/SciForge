@@ -17,7 +17,8 @@ vi.mock('../components/write/WriteDocxViewer', () => ({
     annotationOverlays?: unknown[]
     activeAnnotationId?: string | null
     onAnnotationSelect?: unknown
-    onOpenAnnotations?: unknown
+    annotationsOpen?: boolean
+    onToggleAnnotations?: unknown
   }) => createElement('div', {
     'data-write-docx-viewer': 'true',
     'data-file-path': props.filePath,
@@ -29,7 +30,8 @@ vi.mock('../components/write/WriteDocxViewer', () => ({
     'data-annotation-overlay-count': props.annotationOverlays?.length ?? 0,
     'data-active-annotation-id': props.activeAnnotationId ?? '',
     'data-has-annotation-select': props.onAnnotationSelect ? 'true' : 'false',
-    'data-has-open-annotations': props.onOpenAnnotations ? 'true' : 'false'
+    'data-annotations-open': props.annotationsOpen ? 'true' : 'false',
+    'data-has-toggle-annotations': props.onToggleAnnotations ? 'true' : 'false'
   })
 }))
 
@@ -105,7 +107,8 @@ describe('DocxWorkspaceViewer', () => {
       }],
       activeAnnotationId: 'thread-1',
       onAnnotationSelect: vi.fn(),
-      onOpenAnnotations: vi.fn()
+      annotationsOpen: true,
+      onToggleAnnotations: vi.fn()
     }))
 
     expect(html).toContain('data-write-docx-viewer="true"')
@@ -113,7 +116,8 @@ describe('DocxWorkspaceViewer', () => {
     expect(html).toContain('data-annotation-overlay-count="1"')
     expect(html).toContain('data-active-annotation-id="thread-1"')
     expect(html).toContain('data-has-annotation-select="true"')
-    expect(html).toContain('data-has-open-annotations="true"')
+    expect(html).toContain('data-annotations-open="true"')
+    expect(html).toContain('data-has-toggle-annotations="true"')
   })
 
   it('saves paragraph changes through document.updateParagraph operations', async () => {

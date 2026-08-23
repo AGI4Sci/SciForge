@@ -117,6 +117,8 @@ describe('CapabilityAgentToolSurface', () => {
     expect(surface.tools().every((tool) => tool.inputSchema.type === 'object')).toBe(true)
     expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.discover)?.description)
       .toMatch(/native.*before.*managed|native.*first/iu)
+    expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.look)?.description)
+      .toMatch(/omitting frame inspects frame 1, not the page currently shown in the UI/iu)
     expect(JSON.stringify(surface.tools())).not.toMatch(
       /snapshotToken|componentId|expectedRevision|semanticRevision|invocationId|actionId|coordinates/u
     )

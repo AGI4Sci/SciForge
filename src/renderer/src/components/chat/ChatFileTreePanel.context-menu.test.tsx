@@ -117,6 +117,54 @@ describe('ChatFileTreePanel file context menu', () => {
     expect(container?.textContent).not.toContain('fileTreePreviewInNewRightSidebar')
   })
 
+  it('adds directory and ordinary-file references with their workspace metadata intact', async () => {
+    const directoryReference = {
+      workspaceRoot: '/workspace/project',
+      relativePath: 'AI Scientist/论文目录',
+      name: '论文目录',
+      kind: 'directory' as const
+    }
+    const textReference = {
+      workspaceRoot: '/workspace/project',
+      relativePath: 'notes/研究摘要.md',
+      name: '研究摘要.md',
+      kind: 'text' as const,
+      mimeType: 'text/markdown'
+    }
+    listWorkspaceReferences.mockResolvedValue({
+      ok: true,
+      references: [directoryReference, textReference]
+    })
+    const onAddReference = vi.fn()
+    root = createRoot(container as HTMLDivElement)
+
+    await act(async () => {
+      root?.render(createElement(ChatFileTreePanel, {
+        workspaceRoot: '/workspace/project',
+        onPreviewFile: vi.fn(),
+        onAddReference,
+        onCollapse: vi.fn()
+      }))
+    })
+
+    const addButtons = Array.from(
+      container?.querySelectorAll<HTMLButtonElement>('button[aria-label="workspaceReferenceAdd"]') ?? []
+    )
+    expect(addButtons).toHaveLength(2)
+    await act(async () => {
+      addButtons.forEach((button) => button.click())
+    })
+
+    expect(onAddReference).toHaveBeenNthCalledWith(1, {
+      ...directoryReference,
+      path: directoryReference.relativePath
+    })
+    expect(onAddReference).toHaveBeenNthCalledWith(2, {
+      ...textReference,
+      path: textReference.relativePath
+    })
+  })
+
   it('provides matching English and Chinese action labels', () => {
     expect(enCommon.fileTreePreviewInNewRightSidebar).toBe('Open in new right sidebar')
     expect(zhCommon.fileTreePreviewInNewRightSidebar).toBe('在新右侧栏中打开')

@@ -124,7 +124,19 @@ describe('createCodexAgentRuntimeAdapter', () => {
         source: 'collaboration.remote-session-projection',
         sourceLabel: '手机 Zulip · 私人 Channel / Topic 22',
         privateField: 'must-not-cross-runtime-boundary'
-      }
+      },
+      fileReferences: [{
+        path: 'papers',
+        relativePath: 'papers',
+        name: 'papers',
+        kind: 'directory'
+      }, {
+        path: 'papers/notes.md',
+        relativePath: 'papers/notes.md',
+        name: 'notes.md',
+        kind: 'text',
+        mimeType: 'text/markdown'
+      }]
     })).resolves.toMatchObject({ turnId: 'turn-1' })
 
     expect(startTurn).toHaveBeenCalledWith({
@@ -138,7 +150,18 @@ describe('createCodexAgentRuntimeAdapter', () => {
       workspace: undefined,
       model: undefined,
       reasoningEffort: undefined,
-      fileReferences: undefined,
+      fileReferences: [{
+        path: 'papers',
+        relativePath: 'papers',
+        name: 'papers',
+        kind: 'directory'
+      }, {
+        path: 'papers/notes.md',
+        relativePath: 'papers/notes.md',
+        name: 'notes.md',
+        kind: 'text',
+        mimeType: 'text/markdown'
+      }],
       ownedVisualToolsAvailable: true,
       nativeVisualProofChainPending: true
     })

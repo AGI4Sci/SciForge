@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
@@ -13,6 +13,7 @@ import {
 
 import type {
   CodexAppServerClientEvent,
+  CodexAppServerInputItem,
   CodexAppServerJsonRpcClient,
   CodexAppServerJsonRpcClientOptions,
   CodexAppServerPendingRequest
@@ -40,6 +41,11 @@ afterEach(async () => {
 describe('CodexWorkspaceHostRuntime', () => {
   it('runs Codex beside the workspace and replays sequenced AgentRuntime events', async () => {
     const root = await temporaryWorkspace()
+    await mkdir(join(root, 'papers'), { recursive: true })
+    await mkdir(join(root, 'figures'), { recursive: true })
+    await writeFile(join(root, 'papers', 'notes.md'), 'notes')
+    await writeFile(join(root, 'papers', 'large.pdf'), '%PDF fixture')
+    await writeFile(join(root, 'figures', 'cell.png'), 'image fixture')
     const stateDirectory = await temporaryDirectory('sciforge-remote-codex-state-')
     const fake = fakeCodexClient()
     const runtime = await createCodexWorkspaceHostRuntime({
@@ -83,9 +89,54 @@ describe('CodexWorkspaceHostRuntime', () => {
       runtimeId: 'codex',
       threadId: 'gui-thread-1',
       workspace: root,
-      text: 'inspect the cluster file'
+      text: 'inspect the cluster file',
+      fileReferences: [
+        {
+          path: 'papers',
+          relativePath: 'papers',
+          name: 'papers',
+          kind: 'directory'
+        },
+        {
+          path: 'papers/notes.md',
+          relativePath: 'papers/notes.md',
+          name: 'notes.md',
+          kind: 'text',
+          mimeType: 'text/markdown'
+        },
+        {
+          path: 'papers/large.pdf',
+          relativePath: 'papers/large.pdf',
+          name: 'large.pdf',
+          kind: 'pdf',
+          mimeType: 'application/pdf'
+        },
+        {
+          path: 'figures/cell.png',
+          relativePath: 'figures/cell.png',
+          name: 'cell.png',
+          kind: 'image',
+          mimeType: 'image/png'
+        }
+      ]
     }))
     assert.equal(turn.turnId, 'turn-1')
+    const turnInputs = fake.startTurns[0]?.input ?? []
+    assert.deepEqual(turnInputs[0], {
+      type: 'text',
+      text: 'inspect the cluster file',
+      text_elements: []
+    })
+    assert.equal(turnInputs[1]?.type, 'text')
+    if (turnInputs[1]?.type !== 'text') assert.fail('Expected workspace reference context text.')
+    assert.match(turnInputs[1].text, /"relativePath":"papers"/u)
+    assert.match(turnInputs[1].text, /"relativePath":"papers\/notes\.md"/u)
+    assert.match(turnInputs[1].text, /"relativePath":"papers\/large\.pdf"/u)
+    assert.deepEqual(turnInputs[2], {
+      type: 'localImage',
+      path: join(root, 'figures', 'cell.png')
+    })
+    assert.equal(turnInputs.some((item) => item.type === 'mention'), false)
     assert.equal(
       record(fake.options?.env).HTTPS_PROXY,
       scopedProxyEnvironment(43100).HTTPS_PROXY
@@ -190,6 +241,73 @@ describe('CodexWorkspaceHostRuntime', () => {
     assert.ok(replayedEvents.some((event) => event.kind === 'user_message'))
     assert.ok(replayedEvents.some((event) => event.kind === 'assistant_delta'))
     assert.ok(published.every(({ kind }) => kind === WORKSPACE_HOST_EVENT_KINDS.runtimeEvent))
+  })
+
+  it('reconciles a provider terminal turn that was missed before worker restart', async () => {
+    const root = await temporaryWorkspace()
+    const stateDirectory = await temporaryDirectory('sciforge-remote-codex-recovery-')
+    const first = fakeCodexClient()
+    const runtime1 = await createCodexWorkspaceHostRuntime({
+      workspaceRoot: root,
+      stateDirectory,
+      createClient: () => first.client
+    })
+    runtimes.push(runtime1)
+    const context = runtimeContext(root)
+    await invoke(runtime1, context, 'startThread', {
+      runtimeId: 'codex',
+      threadId: 'gui-thread-recovered',
+      workspace: root,
+      title: 'Recovered turn'
+    })
+    await invoke(runtime1, context, 'startTurn', {
+      runtimeId: 'codex',
+      threadId: 'gui-thread-recovered',
+      workspace: root,
+      text: 'finish before restart'
+    })
+    await runtime1.dispose()
+
+    const second = fakeCodexClient()
+    second.client.readThread = async (input) => {
+      second.reads.push(input)
+      return {
+        thread: {
+          id: input.threadId,
+          name: 'Recovered turn',
+          turns: [{ id: 'turn-1', status: 'completed' }]
+        }
+      }
+    }
+    const runtime2 = await createCodexWorkspaceHostRuntime({
+      workspaceRoot: root,
+      stateDirectory,
+      createClient: () => second.client
+    })
+    runtimes.push(runtime2)
+    await invoke(runtime2, context, 'subscribeEvents', {
+      runtimeId: 'codex',
+      threadId: 'gui-thread-recovered',
+      sinceSeq: 0
+    }, 'stream-recovered')
+
+    const replay = record(await runtime2.replayEvents({
+      contractVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+      runtimeId: 'codex',
+      threadId: 'gui-thread-recovered',
+      sinceSeq: 0,
+      streamId: 'stream-recovered'
+    }, context))
+    const events = array(replay.events).map(record)
+    assert.deepEqual(second.reads.at(-1), {
+      threadId: 'codex-thread-1',
+      includeTurns: true
+    })
+    assert.ok(events.some((event) =>
+      event.kind === 'turn_lifecycle' &&
+      event.turnId === 'turn-1' &&
+      event.state === 'completed'
+    ))
   })
 
   it('reads bounded status, cursor pages, tool artifacts, and replay deltas', async () => {
@@ -412,6 +530,48 @@ describe('CodexWorkspaceHostRuntime', () => {
       threadId: 'thread-1',
       turnId: 'turn-1'
     }])
+  })
+
+  it('discards a client whose turn/start acknowledgement fails and reconnects for the next turn', async () => {
+    const root = await temporaryWorkspace()
+    const stateDirectory = await temporaryDirectory('sciforge-remote-codex-state-')
+    const first = fakeCodexClient()
+    const second = fakeCodexClient()
+    const clients = [first, second]
+    let clientIndex = 0
+    first.client.startTurn = async (input) => {
+      first.startTurns.push(input)
+      throw new Error('Codex app-server did not acknowledge turn/start within 20 ms.')
+    }
+    const runtime = await createCodexWorkspaceHostRuntime({
+      workspaceRoot: root,
+      stateDirectory,
+      createClient: () => clients[clientIndex++]!.client
+    })
+    runtimes.push(runtime)
+    const context = runtimeContext(root)
+
+    await assert.rejects(
+      invoke(runtime, context, 'startTurn', {
+        runtimeId: 'codex',
+        threadId: 'thread-1',
+        workspace: root,
+        text: 'first attempt'
+      }),
+      /did not acknowledge turn\/start/u
+    )
+    assert.equal(first.startTurns.length, 1)
+    assert.equal(first.stopCount, 1)
+
+    const recovered = record(await invoke(runtime, context, 'startTurn', {
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      workspace: root,
+      text: 'retry with a fresh client'
+    }))
+    assert.equal(recovered.turnId, 'turn-1')
+    assert.equal(second.startTurns.length, 1)
+    assert.equal(clientIndex, 2)
   })
 
   it('rotates scoped egress and model access without retaining stale credentials', async () => {
@@ -726,6 +886,7 @@ function fakeCodexClient(): {
   reads: Array<{ threadId: string; includeTurns?: boolean }>
   startTurns: Array<{
     sandboxPolicy: { networkAccess: boolean }
+    input?: CodexAppServerInputItem[]
   }>
   stopCount: number
   options?: CodexAppServerJsonRpcClientOptions
@@ -739,6 +900,7 @@ function fakeCodexClient(): {
   const reads: Array<{ threadId: string; includeTurns?: boolean }> = []
   const startTurns: Array<{
     sandboxPolicy: { networkAccess: boolean }
+    input?: CodexAppServerInputItem[]
   }> = []
   const state: ReturnType<typeof fakeCodexClient> = {
     events,
@@ -781,6 +943,7 @@ function fakeCodexClient(): {
       },
       startTurn: async (input: {
         sandboxPolicy: { networkAccess: boolean }
+        input?: CodexAppServerInputItem[]
       }) => {
         startTurns.push(input)
         return {

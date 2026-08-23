@@ -261,6 +261,7 @@ describe('installed Research Checkpoints and Artifact Versions domains', () => {
         occurredAt: '2099-08-11T08:00:00.000Z'
       }
       for (const listener of firstRequired) await listener(beforeTurn)
+      await firstHandoff.markStartDispatching(start)
       await firstHandoff.bindStart(start, watch)
     } finally {
       await firstActivated.dispose()

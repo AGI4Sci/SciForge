@@ -208,13 +208,11 @@ describe('app-ipc-schemas', () => {
       governanceProfile: 'remote_guard',
       visibleContextOwnerThreadId: ' parent-thread ',
       fileReferences: [{
-        path: ' /tmp/workspace/docs/spec.pdf ',
+        path: ' docs/spec.pdf ',
         relativePath: ' docs/spec.pdf ',
         name: ' spec.pdf ',
         kind: 'pdf',
-        delivery: 'model_router_object',
-        mimeType: ' application/pdf ',
-        modelRouterObject: true
+        mimeType: ' application/pdf '
       }]
     })
 
@@ -241,15 +239,25 @@ describe('app-ipc-schemas', () => {
       governanceProfile: 'remote_guard',
       visibleContextOwnerThreadId: 'parent-thread',
       fileReferences: [{
-        path: '/tmp/workspace/docs/spec.pdf',
+        path: 'docs/spec.pdf',
         relativePath: 'docs/spec.pdf',
         name: 'spec.pdf',
         kind: 'pdf',
-        delivery: 'model_router_object',
-        mimeType: 'application/pdf',
-        modelRouterObject: true
+        mimeType: 'application/pdf'
       }]
     })
+
+    expect(() => agentRuntimeStartTurnPayloadSchema.parse({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      text: 'hello',
+      fileReferences: [{
+        path: 'docs/spec.pdf',
+        relativePath: 'docs/spec.pdf',
+        name: 'spec.pdf',
+        delivery: 'inline_context'
+      }]
+    })).toThrow()
   })
 
   it('accepts stable directive identity on steer payloads', () => {

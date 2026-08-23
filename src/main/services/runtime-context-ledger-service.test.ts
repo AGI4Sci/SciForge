@@ -104,6 +104,27 @@ describe('RuntimeContextLedgerService', () => {
       .resolves.toBe('Use host-owned ledger for cross-runtime context.')
   })
 
+  it('repairs lone surrogates when loading a legacy summary from disk', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'runtime-context-ledger-legacy-unicode-'))
+    const storeDir = join(dataDir, 'runtime-context-ledgers')
+    await mkdir(storeDir, { recursive: true })
+    await writeFile(join(storeDir, 'ledgers.json'), JSON.stringify({
+      ledgers: [{
+        runtimeId: 'codex',
+        threadId: 'legacy-thread',
+        summary: 'before\ud800middle\udc00after',
+        updatedAt: '2026-06-23T00:00:00.000Z'
+      }]
+    }), 'utf8')
+
+    await expect(new RuntimeContextLedgerService(dataDir).get({
+      runtimeId: 'codex',
+      threadId: 'legacy-thread'
+    })).resolves.toMatchObject({
+      summary: 'before�middle�after'
+    })
+  })
+
   it('persists directives before delivery and treats a delivered id as idempotent', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'runtime-context-ledger-'))
     const service = new RuntimeContextLedgerService(dataDir)
@@ -184,6 +205,37 @@ describe('RuntimeContextLedgerService', () => {
       runtimeId: 'claude',
       threadId: 'thread-1'
     })).resolves.toMatchObject({ directives: [{ delivery: 'uncertain' }] })
+  })
+
+  it('allows the Host to reject an interrupted delivery only after proving it has no durable owner', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'runtime-context-ledger-'))
+    const service = new RuntimeContextLedgerService(dataDir)
+    await service.acceptDirective({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      id: 'directive-unowned',
+      text: 'Continue the task.'
+    })
+    await service.beginDirectiveDelivery({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      id: 'directive-unowned'
+    })
+
+    await expect(service.rejectUnownedDirectiveDelivery({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      id: 'directive-unowned',
+      error: 'Interrupted delivery had no durable turn owner.'
+    })).resolves.toMatchObject({
+      delivery: 'rejected',
+      error: 'Interrupted delivery had no durable turn owner.'
+    })
+    await expect(service.beginDirectiveDelivery({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      id: 'directive-unowned'
+    })).resolves.toMatchObject({ deliver: true, directive: { delivery: 'delivering' } })
   })
 
   it('supports explicit clearing of objective and status', async () => {

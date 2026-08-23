@@ -4124,6 +4124,12 @@ process.stdout.write(JSON.stringify({
 
   it('encodes structured workspace references with Codex-supported input variants', async () => {
     const client = controllableClient()
+    const workspace = await realpath(await tempRoot())
+    await mkdir(join(workspace, 'papers'), { recursive: true })
+    await mkdir(join(workspace, 'figures'), { recursive: true })
+    await writeFile(join(workspace, 'papers', 'notes.md'), 'notes')
+    await writeFile(join(workspace, 'papers', 'large.pdf'), '%PDF fixture')
+    await writeFile(join(workspace, 'figures', 'cell.png'), 'image fixture')
     const service = new CodexRuntimeService({
       settings: async () => settings(),
       createClient: () => client
@@ -4133,48 +4139,54 @@ process.stdout.write(JSON.stringify({
       service.startTurn({
         threadId: 'thread-1',
         text: 'Analyze the references',
-        workspace: '/tmp/workspace',
+        workspace,
         fileReferences: [
+          {
+            path: 'papers',
+            relativePath: 'papers',
+            name: 'papers',
+            kind: 'directory'
+          },
+          {
+            path: 'papers/notes.md',
+            relativePath: 'papers/notes.md',
+            name: 'notes.md',
+            kind: 'text',
+            mimeType: 'text/markdown'
+          },
           {
             path: 'papers/large.pdf',
             relativePath: 'papers/large.pdf',
             name: 'large.pdf',
             kind: 'pdf',
-            mimeType: 'application/pdf',
-            modelRouterObject: true
+            mimeType: 'application/pdf'
           },
           {
             path: 'figures/cell.png',
             relativePath: 'figures/cell.png',
             name: 'cell.png',
             kind: 'image',
-            mimeType: 'image/png',
-            modelRouterObject: true
+            mimeType: 'image/png'
           }
         ]
       })
     ).resolves.toMatchObject({ ok: true })
 
-    expect(client.startTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        input: [
-          {
-            type: 'text',
-            text: 'Analyze the references',
-            text_elements: []
-          },
-          {
-            type: 'mention',
-            name: 'large.pdf',
-            path: 'papers/large.pdf'
-          },
-          {
-            type: 'localImage',
-            path: 'figures/cell.png'
-          }
-        ]
-      })
-    )
+    const turnInputs = vi.mocked(client.startTurn).mock.calls[0]?.[0].input ?? []
+    expect(turnInputs[0]).toEqual({
+      type: 'text',
+      text: 'Analyze the references',
+      text_elements: []
+    })
+    expect(turnInputs[1]).toEqual(expect.objectContaining({
+      type: 'text',
+      text: expect.stringContaining('"relativePath":"papers/notes.md"')
+    }))
+    expect(turnInputs[2]).toEqual({
+      type: 'localImage',
+      path: join(workspace, 'figures', 'cell.png')
+    })
+    expect(turnInputs.some((item) => item.type === 'mention')).toBe(false)
   })
 
   it('treats compact as an explicit no-op without starting app-server JSON-RPC', async () => {
@@ -4934,6 +4946,131 @@ process.stdout.write(JSON.stringify({
       latestTurnStatus: 'completed'
     })
     queued.close()
+  })
+
+  it('replays a provider-completed terminal boundary that was missed before restart', async () => {
+    const storageRoot = await tempRoot()
+    const threadStore = new CodexThreadStore({ rootDir: storageRoot })
+    const eventStore = new CodexEventStore({ rootDir: storageRoot })
+    await threadStore.upsert({
+      guiThreadId: 'gui-thread-1',
+      codexThreadId: 'codex-thread-1',
+      workspace: '/tmp/workspace',
+      title: 'Interrupted event stream',
+      latestTurnId: 'turn-1',
+      latestTurnStatus: 'running'
+    })
+    await eventStore.append('gui-thread-1', {
+      threadId: 'gui-thread-1',
+      turnId: 'turn-1',
+      userMessage: {
+        itemId: 'user-1',
+        turnId: 'turn-1',
+        text: 'finish the work'
+      }
+    })
+    const client = controllableClient()
+    vi.mocked(client.readThread).mockResolvedValue({
+      thread: {
+        id: 'codex-thread-1',
+        cwd: '/tmp/workspace',
+        updatedAt: 1_787_304_000,
+        turns: [{ id: 'turn-1', status: 'completed' }]
+      }
+    })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      createClient: () => client
+    })
+
+    const replayed: CodexThreadEventPayload[] = []
+    for await (const event of service.subscribeEvents(
+      'gui-thread-1',
+      0,
+      AbortSignal.timeout(1_000)
+    )) {
+      replayed.push(event)
+      if (event.turnComplete) break
+    }
+
+    expect(client.readThread).toHaveBeenCalledWith({
+      threadId: 'codex-thread-1',
+      includeTurns: true
+    })
+    expect(replayed).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        threadId: 'gui-thread-1',
+        turnId: 'turn-1',
+        turnComplete: true,
+        seq: 2,
+        createdAt: expect.any(String)
+      })
+    ]))
+    await expect(threadStore.get('gui-thread-1')).resolves.toMatchObject({
+      latestSeq: 2,
+      latestTurnId: 'turn-1',
+      latestTurnStatus: 'completed'
+    })
+  })
+
+  it('recovers a terminal boundary after the thread was rebound to an empty backend session', async () => {
+    const storageRoot = await tempRoot()
+    const eventStore = new CodexEventStore({ rootDir: storageRoot })
+    await eventStore.append('gui-thread-1', {
+      threadId: 'gui-thread-1',
+      turnId: 'turn-before-rebind',
+      userMessage: {
+        itemId: 'user-before-rebind',
+        turnId: 'turn-before-rebind',
+        text: 'finish before the backend is rebound'
+      }
+    })
+    const threadStore = new CodexThreadStore({ rootDir: storageRoot })
+    await threadStore.upsert({
+      guiThreadId: 'gui-thread-1',
+      codexThreadId: 'replacement-codex-thread',
+      workspace: '/tmp/workspace',
+      title: 'Rebound thread',
+      latestSeq: 1,
+      latestTurnStatus: 'completed'
+    })
+    const client = controllableClient()
+    vi.mocked(client.readThread).mockRejectedValue(
+      new Error('replacement backend has no turns')
+    )
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      createClient: () => client
+    })
+
+    const replayed: CodexThreadEventPayload[] = []
+    for await (const event of service.subscribeEvents(
+      'gui-thread-1',
+      0,
+      AbortSignal.timeout(1_000)
+    )) {
+      replayed.push(event)
+      if (event.turnComplete) break
+    }
+
+    expect(client.readThread).not.toHaveBeenCalled()
+    expect(replayed).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        threadId: 'gui-thread-1',
+        turnId: 'turn-before-rebind',
+        turnComplete: true,
+        seq: 2,
+        createdAt: expect.any(String)
+      })
+    ]))
+    await expect(threadStore.get('gui-thread-1')).resolves.toMatchObject({
+      codexThreadId: 'replacement-codex-thread',
+      latestSeq: 2,
+      latestTurnId: 'turn-before-rebind',
+      latestTurnStatus: 'completed'
+    })
   })
 
   it('deduplicates redelivered sequence identities without suppressing equal incremental text', async () => {

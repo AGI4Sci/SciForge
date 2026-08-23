@@ -1,3 +1,4 @@
+import { truncateWellFormedUtf8 } from '@sciforge/domain-sdk/unicode'
 import type { WorkspaceHostPayload } from '@sciforge/domain-sdk/workspace-host'
 
 const MAX_INLINE_BYTES = 16_384
@@ -174,15 +175,7 @@ function serializedByteLength(value: unknown): number {
 }
 
 function truncateUtf8(value: string, maxBytes: number): string {
-  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value
-  let low = 0
-  let high = value.length
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2)
-    if (Buffer.byteLength(value.slice(0, middle), 'utf8') <= maxBytes) low = middle
-    else high = middle - 1
-  }
-  return value.slice(0, low)
+  return truncateWellFormedUtf8(value, maxBytes)
 }
 
 function asPayload(value: unknown): WorkspaceHostPayload {

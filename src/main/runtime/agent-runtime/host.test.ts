@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -74,10 +74,6 @@ import type {
   TurnArtifactWatch
 } from '../../services/turn-artifact-outbox'
 import type { TurnArtifactIntentPublisher } from '../../services/turn-artifact-handoff-service'
-import { readWorkspaceFile } from '../../services/workspace-files'
-import { composerReferenceFromWorkspaceReference } from '../../../renderer/src/lib/workspace-reference-composer'
-import { buildComposerFileContextPrompt } from '../../../renderer/src/lib/composer-file-references'
-import { readComposerFileContextEntries } from '../../../renderer/src/lib/composer-file-context'
 import {
   createSettingsMemoryActions,
   type SettingsMemoryRecord,
@@ -163,10 +159,15 @@ function fakeTurnArtifactPublisher(
         deliveryAttemptOrdinal: ordinal,
         deliveryAttemptId,
         boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
+        phase: 'prepared' as const,
         key: `start:${ordinal}`,
         registeredAt: '2026-08-15T00:00:00.000Z'
       })
     }),
+    markStartDispatching: vi.fn(async (start) => Object.freeze({
+      ...start,
+      phase: 'dispatching' as const
+    }) as PendingTurnArtifactStart),
     bindStart: vi.fn(async () => true),
     rejectStart: vi.fn(async () => true),
     pendingStarts: vi.fn(async () => []),
@@ -1747,7 +1748,7 @@ describe('AgentRuntimeHost', () => {
           state: { running: false, messageCount: 9 },
           resources: [{
             kind: 'conversation',
-            capability: { resourceRef: 'res_centerabcdefghijklmnopqrstuvwxyz', operations: [] }
+            capability: { resourceRef: 'res_centerabcdefghijklmnopqrstuvwxyz' }
           }]
         },
         {
@@ -1768,7 +1769,7 @@ describe('AgentRuntimeHost', () => {
           resources: [{
             kind: 'workspaceFile',
             role: 'preview-target',
-            capability: { resourceRef: 'res_rightabcdefghijklmnopqrstuvwxyz', operations: [] }
+            capability: { resourceRef: 'res_rightabcdefghijklmnopqrstuvwxyz' }
           }]
         }
       ]
@@ -4426,19 +4427,14 @@ describe('AgentRuntimeHost', () => {
           path: '/tmp/workspace/src/main.ts',
           relativePath: 'src/main.ts',
           name: 'main.ts',
-          mimeType: 'text/typescript'
-        },
-        {
-          path: '/tmp/outside.ts',
-          relativePath: '../outside.ts',
-          name: 'outside.ts'
+          mimeType: 'text/typescript',
+          ...({ absolutePath: '/tmp/workspace/src/main.ts' } as { absolutePath: string })
         },
         {
           path: '/tmp/workspace/docs/spec.pdf',
           relativePath: 'docs/spec.pdf',
           name: 'spec.pdf',
-          kind: 'pdf',
-          modelRouterObject: true
+          kind: 'pdf'
         }
       ]
     })
@@ -4451,56 +4447,91 @@ describe('AgentRuntimeHost', () => {
             path: 'src/main.ts',
             relativePath: 'src/main.ts',
             name: 'main.ts',
-            mimeType: 'text/typescript',
-            delivery: 'inline_context'
+            mimeType: 'text/typescript'
           },
           {
             path: 'docs/spec.pdf',
             relativePath: 'docs/spec.pdf',
             name: 'spec.pdf',
-            kind: 'pdf',
-            modelRouterObject: true,
-            delivery: 'model_router_object'
+            kind: 'pdf'
           }
         ]
       })
     )
   })
 
-  it('keeps composer-previewed workspace file and directory references consistent across runtimes', async () => {
-    const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-host-workspace-ref-flow-'))
-    await mkdir(join(workspaceRoot, 'docs'), { recursive: true })
-    await writeFile(join(workspaceRoot, 'docs', 'guide.md'), 'Use Vitest for runtime tests.\n', 'utf8')
-    await writeFile(join(workspaceRoot, 'docs', 'notes.txt'), 'Directory notes for all runtimes.\n', 'utf8')
-    const workspaceReferences = new WorkspaceReferenceService()
-    const directoryPreview = await workspaceReferences.preview({ workspaceRoot, path: 'docs' })
-    const filePreview = await workspaceReferences.preview({ workspaceRoot, path: 'docs/guide.md' })
-    expect(directoryPreview.ok).toBe(true)
-    expect(filePreview.ok).toBe(true)
-    if (!directoryPreview.ok || !filePreview.ok) return
-    expect(directoryPreview.preview.contentSummary).toBe('Directory with 2 visible entries.')
-    expect(filePreview.preview.contentSummary).toContain('Use Vitest for runtime tests.')
+  it('rejects unsafe file references instead of silently dropping them', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter]
+    })
 
-    const composerFileReferences = [
-      composerReferenceFromWorkspaceReference(directoryPreview.preview.reference),
-      composerReferenceFromWorkspaceReference(filePreview.preview.reference)
+    await expect(host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Use referenced files',
+      workspace: '/tmp/workspace',
+      fileReferences: [{
+        path: '/tmp/outside.ts',
+        relativePath: '../outside.ts',
+        name: 'outside.ts'
+      }]
+    })).rejects.toThrow('every path must be workspace-relative')
+
+    expect(adapter.startTurn).not.toHaveBeenCalled()
+  })
+
+  it('rejects URI-like workspace references instead of dispatching them', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter]
+    })
+
+    await expect(host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Use referenced files',
+      workspace: '/tmp/workspace',
+      fileReferences: [{
+        path: 'deepseek-file://workspace/secret.ts',
+        relativePath: 'deepseek-file://workspace/secret.ts',
+        name: 'secret.ts'
+      }]
+    })).rejects.toThrow('every path must be workspace-relative')
+
+    expect(adapter.startTurn).not.toHaveBeenCalled()
+  })
+
+  it('keeps path-only workspace file and directory references consistent across runtimes', async () => {
+    const workspaceRoot = '/tmp/workspace'
+    const text = 'Summarize the referenced workspace context.'
+    const fileReferences = [
+      {
+        path: 'docs',
+        relativePath: 'docs',
+        name: 'docs',
+        kind: 'directory' as const
+      },
+      {
+        path: 'docs/guide.md',
+        relativePath: 'docs/guide.md',
+        name: 'guide.md',
+        kind: 'text' as const,
+        mimeType: 'text/markdown'
+      }
     ]
-    expect(composerFileReferences.map((reference) => reference.relativePath)).toEqual(['docs', 'docs/guide.md'])
-    expect(composerFileReferences.every(
-      (reference) => reference.workspaceRoot === directoryPreview.preview.reference.workspaceRoot
-    )).toBe(true)
-    const fileReferences = composerFileReferences.map(({
-      workspaceRoot: _workspaceRoot,
-      ...reference
-    }) => reference)
-    const contextEntries = await readComposerFileContextEntries(composerFileReferences, workspaceRoot, {
-      listWorkspaceReferences: (input) => workspaceReferences.list(input),
-      readWorkspaceFile: (input) => readWorkspaceFile(input)
-    }, { maxDirectoryFiles: 4 })
-    const text = buildComposerFileContextPrompt('Summarize the referenced workspace context.', contextEntries)
-    expect(text).toContain('<workspace_file path="docs" workspace_root=')
-    expect(text).toContain('Expanded files: docs/guide.md, docs/notes.txt')
-    expect(text).toContain('Use Vitest for runtime tests.')
 
     const adapters = (['sciforge', 'codex', 'claude'] as const).map((runtimeId) => fakeAdapter(runtimeId, {
       id: `${runtimeId}-thread`,
@@ -4513,8 +4544,7 @@ describe('AgentRuntimeHost', () => {
         ...settings('codex'),
         workspaceRoot
       }),
-      adapters,
-      services: { workspaceReferences }
+      adapters
     })
 
     for (const runtimeId of ['sciforge', 'codex', 'claude'] as const) {
@@ -4531,22 +4561,20 @@ describe('AgentRuntimeHost', () => {
       expect(adapter.startTurn).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
-          text: expect.stringContaining('Directory notes for all runtimes.'),
+          text,
           fileReferences: [
             {
               path: 'docs',
               relativePath: 'docs',
               name: 'docs',
-              kind: 'directory',
-              delivery: 'inline_context'
+              kind: 'directory'
             },
             {
               path: 'docs/guide.md',
               relativePath: 'docs/guide.md',
               name: 'guide.md',
               kind: 'text',
-              mimeType: expect.stringMatching(/^text\//),
-              delivery: 'inline_context'
+              mimeType: 'text/markdown'
             }
           ]
         })
@@ -7197,6 +7225,67 @@ describe('AgentRuntimeHost', () => {
       .resolves.toMatchObject({ directives: [{ id: 'directive-uncertain', delivery: 'uncertain' }] })
   })
 
+  it('keeps a queued directive accepted until it reaches the provider dispatch boundary', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-host-directives-'))
+    evidenceQueueRoots.push(root)
+    const contextLedger = new RuntimeContextLedgerService(root)
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const firstProviderStart = deferred<AgentRuntimeTurnHandle>()
+    vi.mocked(codex.startTurn)
+      .mockReturnValueOnce(firstProviderStart.promise)
+      .mockResolvedValueOnce({ threadId: 'codex-thread', turnId: 'turn-after-queue' })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      services: { contextLedger },
+      turnArtifacts: fakeTurnArtifactPublisher()
+    })
+
+    const firstStart = host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'First instruction.',
+      clientDirectiveId: 'directive-first'
+    })
+    await vi.waitFor(() => expect(codex.startTurn).toHaveBeenCalledTimes(1))
+    const firstRejected = expect(firstStart).rejects.toThrow('provider rejected first instruction')
+    const secondStart = host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Second instruction.',
+      clientDirectiveId: 'directive-queued'
+    })
+
+    await vi.waitFor(async () => {
+      const ledger = await contextLedger.get({ runtimeId: 'codex', threadId: 'codex-thread' })
+      expect(ledger.directives.find((directive) => directive.id === 'directive-queued'))
+        .toMatchObject({ delivery: 'accepted' })
+    })
+    expect(codex.startTurn).toHaveBeenCalledTimes(1)
+
+    firstProviderStart.reject(Object.assign(new Error('provider rejected first instruction'), {
+      code: 'validation_error'
+    }))
+    await firstRejected
+    await expect(secondStart).resolves.toEqual({
+      threadId: 'codex-thread',
+      turnId: 'turn-after-queue'
+    })
+    await expect(contextLedger.get({ runtimeId: 'codex', threadId: 'codex-thread' }))
+      .resolves.toMatchObject({
+        directives: [
+          { id: 'directive-first', delivery: 'rejected' },
+          { id: 'directive-queued', delivery: 'delivered', turnId: 'turn-after-queue' }
+        ]
+      })
+    await host.dispose()
+  })
+
   it('keeps an ambiguous pending start durable without scanning matching historical text', async () => {
     const issuerEpoch = 'issuer-00000000000000000000000000000000'
     const deliveryAttemptId = `delivery-attempt:${issuerEpoch}:1:00000000000000000000000000000000`
@@ -7212,6 +7301,7 @@ describe('AgentRuntimeHost', () => {
       principal: null,
       principalContext: null,
       workspaceRoot: '/tmp/workspace',
+      phase: 'dispatching',
       key: 'start-1',
       registeredAt: '2026-08-15T00:00:00.000Z'
     })
@@ -7233,6 +7323,70 @@ describe('AgentRuntimeHost', () => {
       settings: async () => settings('codex'), adapters: [codex], turnArtifacts: publisher
     })
     await expect(recovered.recoverCompletedTurnArtifacts()).resolves.toBe(1)
+    expect(publisher.bindStart).not.toHaveBeenCalled()
+    expect(codex.readThreadPage).not.toHaveBeenCalled()
+    await recovered.dispose()
+  })
+
+  it('releases a recovery-safe prepared start without scanning provider history', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-host-directives-'))
+    evidenceQueueRoots.push(root)
+    const contextLedger = new RuntimeContextLedgerService(root)
+    const issuerEpoch = 'issuer-00000000000000000000000000000000'
+    const deliveryAttemptId = `delivery-attempt:${issuerEpoch}:1:00000000000000000000000000000000`
+    const start: PendingTurnArtifactStart = Object.freeze({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      clientDirectiveId: 'directive-prepared-recovery',
+      issuerEpoch,
+      deliveryAttemptOrdinal: 1,
+      deliveryAttemptId,
+      boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
+      inputDigest: 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+      principal: null,
+      principalContext: null,
+      workspaceRoot: '/tmp/workspace',
+      phase: 'prepared',
+      key: 'start-prepared',
+      registeredAt: '2026-08-15T00:00:00.000Z'
+    })
+    await contextLedger.acceptDirective({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      id: start.clientDirectiveId,
+      text: 'Modify the document.'
+    })
+    await contextLedger.beginDirectiveDelivery({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      id: start.clientDirectiveId
+    })
+    const publisher = fakeTurnArtifactPublisher()
+    vi.mocked(publisher.pendingStarts)
+      .mockResolvedValueOnce([start])
+      .mockResolvedValueOnce([])
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread', runtimeId: 'codex', title: 'Codex', workspace: '/tmp/workspace',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const recovered = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      services: { contextLedger },
+      turnArtifacts: publisher
+    })
+
+    await expect(recovered.recoverCompletedTurnArtifacts()).resolves.toBe(0)
+    expect(publisher.rejectStart).toHaveBeenCalledWith(start, expect.objectContaining({
+      kind: 'after-turn',
+      state: 'rejected',
+      settlementSource: 'runtime',
+      boundaryLeaseId: start.boundaryLeaseId
+    }))
+    await expect(contextLedger.get({ runtimeId: 'codex', threadId: 'codex-thread' }))
+      .resolves.toMatchObject({
+        directives: [{ id: start.clientDirectiveId, delivery: 'rejected' }]
+      })
     expect(publisher.bindStart).not.toHaveBeenCalled()
     expect(codex.readThreadPage).not.toHaveBeenCalled()
     await recovered.dispose()
@@ -7265,6 +7419,7 @@ describe('AgentRuntimeHost', () => {
       principal: null,
       principalContext: null,
       workspaceRoot: '/tmp/workspace',
+      phase: 'dispatching',
       key: 'start-explicit',
       registeredAt: '2026-08-15T00:00:00.000Z'
     }
@@ -7333,6 +7488,7 @@ describe('AgentRuntimeHost', () => {
       principal: null,
       principalContext: null,
       workspaceRoot: '/tmp/workspace',
+      phase: 'dispatching',
       key: 'start-governed',
       registeredAt: '2026-08-15T00:00:00.000Z'
     }
@@ -7496,6 +7652,7 @@ describe('AgentRuntimeHost', () => {
       principalContext: null,
       workspaceRoot: ownerLocator.path,
       workspaceLocator: ownerLocator,
+      phase: 'dispatching',
       key: 'start-exact-workspace',
       registeredAt: '2026-08-15T00:00:00.000Z'
     }
@@ -7664,6 +7821,90 @@ describe('AgentRuntimeHost', () => {
       ])
     }
     expect(codex.startTurn).toHaveBeenCalledTimes(failurePoint === 'provider' ? 1 : 0)
+  })
+
+  it('durably marks a start dispatching before invoking the provider', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.startTurn).mockResolvedValue({
+      threadId: 'codex-thread',
+      turnId: 'turn-dispatch-order'
+    })
+    const turnArtifacts = fakeTurnArtifactPublisher()
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      turnArtifacts
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Create the result.',
+      workspace: '/tmp/workspace',
+      clientDirectiveId: 'directive-dispatch-order'
+    })
+
+    expect(turnArtifacts.markStartDispatching).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(turnArtifacts.markStartDispatching).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(codex.startTurn).mock.invocationCallOrder[0]!)
+    await host.dispose()
+  })
+
+  it('times out a stalled required before-turn subscriber and releases the durable boundary', async () => {
+    vi.useFakeTimers()
+    try {
+      const codex = fakeAdapter('codex', {
+        id: 'codex-thread',
+        runtimeId: 'codex',
+        title: 'Codex',
+        updatedAt: '2026-06-10T00:00:00.000Z'
+      })
+      const turnArtifacts = fakeTurnArtifactPublisher()
+      const host = createAgentRuntimeHost({
+        settings: async () => settings('codex'),
+        adapters: [codex],
+        turnArtifacts
+      })
+      let entered!: () => void
+      const subscriberEntered = new Promise<void>((resolve) => { entered = resolve })
+      host.subscribeRequiredBeforeTurn(() => {
+        entered()
+        return new Promise<void>(() => undefined)
+      })
+
+      const start = host.startTurn({
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        text: 'Create the result.',
+        workspace: '/tmp/workspace',
+        clientDirectiveId: 'directive-stalled-preflight'
+      })
+      const rejected = expect(start).rejects.toMatchObject({
+        name: 'AgentRuntimeTurnPreflightError',
+        code: 'runtime_before_turn_barrier_failed',
+        retryable: true
+      })
+      await subscriberEntered
+      await vi.advanceTimersByTimeAsync(60_000)
+
+      await rejected
+      expect(codex.startTurn).not.toHaveBeenCalled()
+      expect(turnArtifacts.publishLifecycleSettlement).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: 'after-turn',
+          state: 'rejected',
+          clientDirectiveId: 'directive-stalled-preflight'
+        })
+      )
+      await host.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('mints a new delivery attempt when the same directive retries after definite rejection', async () => {

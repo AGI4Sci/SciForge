@@ -84,7 +84,8 @@ export type MarkdownWorkspaceViewerProps = {
     selection: DocumentAnnotationSelection
   ) => void
   onAnnotationSelect?: (threadId: string) => void
-  onOpenAnnotations?: () => void
+  annotationsOpen?: boolean
+  onToggleAnnotations?: () => void
   navigationRequest?: DocumentNavigationRequest | null
 }
 
@@ -203,7 +204,8 @@ export function MarkdownWorkspaceViewer({
   activeAnnotationId = null,
   onAnnotationAction,
   onAnnotationSelect,
-  onOpenAnnotations,
+  annotationsOpen = false,
+  onToggleAnnotations,
   navigationRequest = null
 }: MarkdownWorkspaceViewerProps): ReactElement {
   const { t } = useTranslation('common')
@@ -554,13 +556,17 @@ export function MarkdownWorkspaceViewer({
               onCopy={() => void copyForWechat()}
             />
           ) : null}
-          {model.status === 'ready' && onOpenAnnotations ? (
+          {model.status === 'ready' && onToggleAnnotations ? (
             <button
               type="button"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-text"
+              className={compactClassName(
+                'inline-flex h-8 w-8 items-center justify-center rounded-lg transition hover:bg-ds-hover hover:text-ds-text',
+                annotationsOpen ? 'bg-ds-hover text-ds-text' : 'text-ds-muted'
+              )}
               title={t('writeDocxAnnotations')}
               aria-label={t('writeDocxAnnotations')}
-              onClick={() => onOpenAnnotations()}
+              aria-pressed={annotationsOpen}
+              onClick={onToggleAnnotations}
               data-markdown-open-annotations
             >
               <MessageSquare className="h-4 w-4" aria-hidden="true" />

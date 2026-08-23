@@ -136,10 +136,11 @@ export type DocumentAnnotationPanelRenderInput = {
   text: {
     annotationOverlays: DocumentTextAnnotationOverlay[]
     activeAnnotationId: string | null
+    annotationsOpen: boolean
     navigationRequest: DocumentNavigationRequest | null
     onApplyEdit: (operation: WorkspacePreviewEditOperation) => Promise<void>
     onAnnotationSelect: (threadId: string) => void
-    onOpenAnnotations: () => void
+    onToggleAnnotations: () => void
   }
   sidecar: PdfAnnotationSidecar | null
   panelOpen: boolean
@@ -348,10 +349,6 @@ export function DocumentAnnotationPanelController({
     setPanelOpen(true)
     if (!sidecar && canReadSidecar) void loadSidecar()
   }, [canReadSidecar, clearPdfReviewNotice, loadSidecar, rememberPdfReviewSelection, sidecar])
-
-  const openTextPanel = useCallback((): void => {
-    openPanel()
-  }, [openPanel])
 
   const togglePanel = useCallback((): void => {
     setPanelOpen((open) => {
@@ -851,10 +848,11 @@ export function DocumentAnnotationPanelController({
           text: {
             annotationOverlays: textAnnotationOverlays,
             activeAnnotationId: activeThreadId,
+            annotationsOpen: panelOpen,
             navigationRequest,
             onApplyEdit: applyPreviewOperation,
             onAnnotationSelect: selectThread,
-            onOpenAnnotations: openTextPanel
+            onToggleAnnotations: togglePanel
           },
           sidecar,
           panelOpen

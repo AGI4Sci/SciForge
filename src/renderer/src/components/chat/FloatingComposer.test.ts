@@ -31,7 +31,6 @@ import {
 import { getGoalPanelDraftObjective } from './floating-composer-commands'
 import { useChatStore } from '../../store/chat-store'
 import {
-  buildComposerFileContextPrompt,
   filterWorkspaceFileMentionSuggestions,
   formatComposerFileMentionToken,
   getFileMentionAtCursor,
@@ -272,18 +271,6 @@ describe('FloatingComposer file references', () => {
     expect(removeComposerFileMentionToken(replaced.input, files[2].relativePath)).toBe('open')
   })
 
-  it('builds a compact prompt from referenced workspace files', () => {
-    const prompt = buildComposerFileContextPrompt('summarize this', [{
-      relativePath: 'src/App.tsx',
-      content: 'export function App() {}',
-      truncated: true
-    }])
-
-    expect(prompt).toContain('<workspace_file path="src/App.tsx" truncated="true">')
-    expect(prompt).toContain('export function App() {}')
-    expect(prompt).toContain('User request:\nsummarize this')
-  })
-
   it('converts workspace reference drag payloads into composer references', () => {
     const data: Record<string, string> = {}
     writeWorkspaceReferenceDragData({
@@ -314,8 +301,7 @@ describe('FloatingComposer file references', () => {
         name: 'product plan.pdf',
         workspaceRoot: '/workspace/sciforge',
         kind: 'pdf',
-        mimeType: 'application/pdf',
-        modelRouterObject: true
+        mimeType: 'application/pdf'
       },
       mentionToken: '@"texts/product plan.pdf"'
     })

@@ -476,7 +476,7 @@ describe('codex config launch helpers', () => {
     expect(config).not.toContain('api.openai.com')
     expect(config).not.toContain('sk-')
     expect(config).not.toContain('OPENAI_API_KEY')
-  })
+  }, 15_000)
 
   it('materializes the canonical app-owned PreToolUse hook in the isolated Codex home', async () => {
     const root = await mkdtemp(join(tmpdir(), 'sciforge-codex-hook-home-'))

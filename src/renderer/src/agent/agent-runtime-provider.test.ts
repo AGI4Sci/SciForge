@@ -403,6 +403,18 @@ describe('AgentRuntimeProvider', () => {
       model: 'gpt-5',
       reasoningEffort: 'medium',
       displayText: 'hello',
+      fileReferences: [{
+        path: 'papers',
+        relativePath: 'papers',
+        name: 'papers',
+        kind: 'directory'
+      }, {
+        path: 'papers/notes.md',
+        relativePath: 'papers/notes.md',
+        name: 'notes.md',
+        kind: 'text',
+        mimeType: 'text/markdown'
+      }],
       workspaceLocator: {
         contractVersion: 1,
         hostSessionId: 'host-session-1',
@@ -455,6 +467,18 @@ describe('AgentRuntimeProvider', () => {
       model: 'gpt-5',
       reasoningEffort: 'medium',
       displayText: 'hello',
+      fileReferences: [{
+        path: 'papers',
+        relativePath: 'papers',
+        name: 'papers',
+        kind: 'directory'
+      }, {
+        path: 'papers/notes.md',
+        relativePath: 'papers/notes.md',
+        name: 'notes.md',
+        kind: 'text',
+        mimeType: 'text/markdown'
+      }],
       workspaceLocator: {
         contractVersion: 1,
         hostSessionId: 'host-session-1',
