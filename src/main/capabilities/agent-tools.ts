@@ -121,6 +121,9 @@ export type AgentVisualRuntime = Readonly<{
 const agentOperationRefSchema = z.string().regex(/^op_[A-Za-z0-9_-]{20,}$/u)
 const agentSchemaRefSchema = z.string().regex(/^schema_[A-Za-z0-9_-]{20,}$/u)
 const agentResourceRefSchema = z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/u)
+const agentResourceHandleDescriptionSchema = z.object({
+  resourceRef: agentResourceRefSchema
+}).strict()
 
 const agentDiscoverRequestSchema = capabilityDiscoveryQuerySchema.extend({
   operationRef: agentOperationRefSchema.optional(),
@@ -225,6 +228,11 @@ export type CapabilityAgentBroker = Readonly<{
     caller: CapabilityCallerContext,
     resourceRef: string
   ) => CapabilityResourceHandle | Promise<CapabilityResourceHandle>
+  describeResourceHandle: (
+    caller: CapabilityCallerContext,
+    resource: CapabilityResourceHandle
+  ) => z.infer<typeof agentResourceHandleDescriptionSchema> |
+    Promise<z.infer<typeof agentResourceHandleDescriptionSchema>>
   invoke: (
     caller: CapabilityCallerContext,
     request: CapabilityInvocationRequest,
@@ -648,45 +656,43 @@ export class CapabilityAgentToolSurface {
         dispatchedEffect = descriptor.effect
         result = await invoke(renewed)
       }
+      if (result.actionId !== descriptor.id) {
+        throw new CapabilityAgentToolError(
+          'capability_identity_mismatch',
+          'The capability broker returned an action identity that did not match the Host-resolved operation.'
+        )
+      }
+      let sanitizedOutput: CapabilityJsonValue
+      let resourceRef: string | undefined
       try {
-        if (result.actionId !== descriptor.id) {
-          throw new CapabilityAgentToolError(
-            'capability_identity_mismatch',
-            'The capability broker returned an action identity that did not match the Host-resolved operation.'
+        this.#assertPrincipalLease(context)
+        sanitizedOutput = await this.#sanitizeOutput(caller, cache, result.output, context)
+        resourceRef = parsed.resourceRef
+        if (result.resource) {
+          resourceRef = await this.#rememberResourceHandle(
+            caller,
+            cache,
+            result.resource,
+            context
           )
         }
         this.#assertPrincipalLease(context)
-        const sanitizedOutput = await this.#sanitizeOutput(caller, cache, result.output, context)
-        let resourceRef = parsed.resourceRef
-        if (result.resource) {
-          this.#assertPrincipalLease(context)
-          const observed = await this.#broker.observe(caller, { resource: result.resource })
-          this.#assertPrincipalLease(context)
-          this.#rememberObservation(cache, observed)
-          resourceRef = observed.resourceRef
-        }
-        this.#assertPrincipalLease(context)
-        return {
-          tool: CAPABILITY_AGENT_TOOL_NAMES.invoke,
-          deliveryEffect: descriptor.effect,
-          value: {
-            capabilityId: descriptor.id,
-            operationRef: parsed.operationRef,
-            output: sanitizedOutput,
-            ...(resourceRef ? { resourceRef } : {}),
-            changed: result.changed,
-            replayed: result.replayed,
-            completedAt: result.completedAt
-          }
-        }
       } catch (error) {
-        if (
-          isMutationEffect(descriptor.effect) &&
-          (isPrincipalChangedError(error) || isOutcomeUnknownError(error))
-        ) {
-          throw outcomeUnknownAgentToolError()
-        }
+        if (isMutationEffect(descriptor.effect)) throw outcomeUnknownAgentToolError()
         throw error
+      }
+      return {
+        tool: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+        deliveryEffect: descriptor.effect,
+        value: {
+          capabilityId: descriptor.id,
+          operationRef: parsed.operationRef,
+          output: sanitizedOutput,
+          ...(resourceRef ? { resourceRef } : {}),
+          changed: result.changed,
+          replayed: result.replayed,
+          completedAt: result.completedAt
+        }
       }
     } catch (error) {
       if (
@@ -898,6 +904,21 @@ export class CapabilityAgentToolSurface {
     for (const descriptor of observation.operations) this.#operationRef(cache, descriptor)
   }
 
+  async #rememberResourceHandle(
+    caller: CapabilityCallerContext,
+    cache: CallerCache,
+    handle: CapabilityResourceHandle,
+    context: CapabilityAgentToolRequestContext
+  ): Promise<string> {
+    this.#assertPrincipalLease(context)
+    const described = agentResourceHandleDescriptionSchema.parse(
+      await this.#broker.describeResourceHandle(caller, handle)
+    )
+    this.#assertPrincipalLease(context)
+    cache.resources.set(described.resourceRef, handle)
+    return described.resourceRef
+  }
+
   async #sanitizeOutput(
     caller: CapabilityCallerContext,
     cache: CallerCache,
@@ -906,26 +927,26 @@ export class CapabilityAgentToolSurface {
   ): Promise<CapabilityJsonValue> {
     const handle = capabilityResourceHandleSchema.safeParse(value)
     if (handle.success) {
-      this.#assertPrincipalLease(context)
-      const observation = await this.#broker.observe(caller, { resource: handle.data })
-      this.#assertPrincipalLease(context)
-      this.#rememberObservation(cache, observation)
-      return { resourceRef: observation.resourceRef }
+      return {
+        resourceRef: await this.#rememberResourceHandle(caller, cache, handle.data, context)
+      }
     }
     if (isRecord(value) && 'resource' in value) {
       const nestedHandle = capabilityResourceHandleSchema.safeParse(value.resource)
       if (nestedHandle.success) {
-        this.#assertPrincipalLease(context)
-        const observation = await this.#broker.observe(caller, { resource: nestedHandle.data })
-        this.#assertPrincipalLease(context)
-        this.#rememberObservation(cache, observation)
+        const resourceRef = await this.#rememberResourceHandle(
+          caller,
+          cache,
+          nestedHandle.data,
+          context
+        )
         const entries = await Promise.all(Object.entries(value)
           .filter(([key]) => key !== 'resource')
           .map(async ([key, entry]) => [
             key,
             await this.#sanitizeOutput(caller, cache, entry, context)
           ] as const))
-        return { ...Object.fromEntries(entries), resourceRef: observation.resourceRef }
+        return { ...Object.fromEntries(entries), resourceRef }
       }
     }
     if (Array.isArray(value)) {
@@ -1099,7 +1120,7 @@ function isOutcomeUnknownError(error: unknown): boolean {
 function outcomeUnknownAgentToolError(): CapabilityAgentToolError {
   return new CapabilityAgentToolError(
     'outcome_unknown',
-    'The Principal changed after capability dispatch; the mutation outcome is unknown and must not be retried blindly.',
+    'The capability mutation completed but its result could not be delivered safely; its outcome must not be retried blindly.',
     { retryable: false }
   )
 }

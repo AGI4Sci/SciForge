@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import type { DomainPackageJsonValue } from '@sciforge/domain-sdk/contract'
@@ -22,16 +24,36 @@ import {
   CONTENT_CONTAINER_RESOURCE_KIND,
   CONTENT_SPACE_CAPABILITY_IDS,
   CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
+  CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND,
   ContentSpaceOperationError,
   contentSpaceSuccess,
   defineContentSpaceProvider,
+  toPortableContentContainerReference,
   type ContentSpaceProvider,
   type ContentSpaceResult
 } from '../contract.js'
 import {
+  CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION,
+  CONTENT_SPACE_ADMINISTRATION_OPERATIONS,
+  type ContentSpaceAdministrationPort
+} from '../administration-contract.js'
+import {
+  CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS
+} from '../extended-operations-contract.js'
+import { NATIVE_DOCUMENT_OPERATIONS } from '../native-document-contract.js'
+import type {
+  ContentSpaceExtendedOperationsExecutor,
+  ContentSpaceNativeDocumentExecutor
+} from '../provider-features.js'
+import {
   CONTENT_SPACE_CAPABILITY_FACTORY_CONTRIBUTION,
   CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION
 } from '../definition.js'
+import {
+  CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+  MAIN_CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION,
+  defineContentSpaceVerificationProfileContribution
+} from '../verification-policy.js'
 import * as mainExports from './index.js'
 import { createDomainMainEntry } from './index.js'
 
@@ -48,7 +70,13 @@ const principal: PrincipalSnapshot = Object.freeze({
   deviceId: 'content-space-main-test-device',
   identityVersion: 1
 })
-
+const readyAdministrationStates = Object.freeze(
+  CONTENT_SPACE_ADMINISTRATION_OPERATIONS.map((operation) => Object.freeze({
+    operation,
+    readiness: 'production_ready' as const,
+    reasonCode: 'available' as const
+  }))
+)
 type CapabilityContext = Readonly<{
   caller: Readonly<{
     audience: 'ui' | 'agent' | 'system'
@@ -65,16 +93,21 @@ type CapabilityContext = Readonly<{
 
 type CapabilityDefinition = Readonly<{
   id: string
+  version: string
   title: string
   description: string
   audiences: readonly ('ui' | 'agent' | 'system')[]
   scope: 'global' | 'resource'
   resourceKinds?: readonly string[]
   tags: readonly string[]
-  effect: 'read' | 'external-write'
+  effect: 'read' | 'workspace-write' | 'external-write' | 'destructive'
   approval: 'none' | 'confirmation'
+  autonomousWrite?: 'resource-authorized'
   concurrency: Readonly<{ revision: 'none'; idempotency: 'none' | 'required' }>
-  inputSchema: Readonly<{ safeParse(value: unknown): Readonly<{ success: boolean }> }>
+  inputSchema: Readonly<{
+    parse(value: unknown): unknown
+    safeParse(value: unknown): Readonly<{ success: boolean }>
+  }>
   outputSchema: Readonly<{ safeParse(value: unknown): Readonly<{ success: boolean }> }>
   handler(input: unknown, context: CapabilityContext): Promise<Readonly<{
     output: ContentSpaceResult<unknown>
@@ -110,6 +143,89 @@ describe('Content Space main composition', () => {
       }]
     }))
     expect(createProvider).not.toHaveBeenCalled()
+  })
+
+  it('admits an exact PoC list-containers profile through composed Broker capability routing', async () => {
+    const currentTime = Date.now()
+    const profileContribution = defineContentSpaceVerificationProfileContribution({
+      location: MAIN_CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION,
+      contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+      profile: Object.freeze({
+        profileId: 'fixture-list-containers',
+        providerInstanceRef: PROVIDER_INSTANCE_REF,
+        principal,
+        audience: 'agent' as const,
+        authority: Object.freeze({
+          kind: 'provider-instance' as const,
+          providerInstanceRef: PROVIDER_INSTANCE_REF
+        }),
+        operation: Object.freeze({
+          family: 'ordinary' as const,
+          operation: 'list-containers' as const
+        }),
+        transferLimits: Object.freeze({ maxUploadBytes: 0, maxDownloadBytes: 0 }),
+        validFrom: new Date(currentTime - 60_000).toISOString(),
+        expiresAt: new Date(currentTime + 60_000).toISOString()
+      })
+    })
+    const listContainers = vi.fn(async () => ({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      items: [{
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'root' },
+        scope: 'personal' as const,
+        label: 'Root'
+      }]
+    }))
+    const provider = providerFixture({
+      describeCapabilities: async () => ([{
+        operation: 'list-containers' as const,
+        readiness: 'poc_only' as const,
+        reasonCode: 'verification_profile_required' as const
+      }]),
+      listContainers
+    })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost([
+        ...providerContributions(() => provider),
+        contribution(
+          'fixture.verification-profile',
+          profileContribution,
+          profileContribution,
+          CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+          'forbidden'
+        )
+      ])
+    )
+
+    const listCandidates = definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.listAgentRootCandidates
+    )
+    const input = {
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'personal',
+      page: { limit: 10 }
+    }
+    const result = await listCandidates.handler(input, capabilityContext(undefined, 'agent'))
+
+    expect(result.output).toEqual(contentSpaceSuccess({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'personal',
+      items: [{ libraryLabel: 'Root' }]
+    }))
+    expect(listContainers).toHaveBeenCalledOnce()
+
+    const principalMismatch = await listCandidates.handler(input, capabilityContext(
+      undefined,
+      'agent',
+      { principal: Object.freeze({ ...principal, identityVersion: 2 }) }
+    ))
+    expect(principalMismatch.output).toMatchObject({
+      ok: false,
+      error: { code: 'blocked_by_contract' }
+    })
+    expect(listContainers).toHaveBeenCalledOnce()
   })
 
   it('fails Provider Instance discovery when the Host Principal lease is stale', async () => {
@@ -228,27 +344,60 @@ describe('Content Space main composition', () => {
     expect(JSON.stringify(result.output)).not.toContain('do-not-leak')
   })
 
-  it('declares every write as confirmation + required idempotency', async () => {
+  it('uses the authorized Agent resource as write authority without weakening global writes', async () => {
     const entry = createDomainMainEntry(mainHost())
     const definitions = await activateDefinitions(
       entry.contributions,
       contributionHost(providerContributions(() => providerFixture()))
     )
-    const writeIds = new Set<string>([
+    const confirmedWriteIds = new Set<string>([
       CONTENT_SPACE_CAPABILITY_IDS.createFolder,
       CONTENT_SPACE_CAPABILITY_IDS.uploadNew,
       CONTENT_SPACE_CAPABILITY_IDS.download,
       CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
-      CONTENT_SPACE_CAPABILITY_IDS.agentCreateFolder,
-      CONTENT_SPACE_CAPABILITY_IDS.agentUploadNew,
-      CONTENT_SPACE_CAPABILITY_IDS.agentDownload,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminUpdateSpace,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminPinSpace,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminUnpinSpace,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember,
+      CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentDestructive,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedDestructive,
       CONTENT_SPACE_CAPABILITY_IDS.openPortalTarget
     ])
+    const autonomousResourceWriteIds = new Set<string>([
+      CONTENT_SPACE_CAPABILITY_IDS.agentCreateFolder,
+      CONTENT_SPACE_CAPABILITY_IDS.agentUploadNew,
+      CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentWrite,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace
+    ])
+    const workspaceWriteIds = new Set<string>([
+      CONTENT_SPACE_CAPABILITY_IDS.agentDownload,
+      CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentWorkspaceWrite
+    ])
     for (const capability of definitions) {
-      if (writeIds.has(capability.id)) {
+      if (confirmedWriteIds.has(capability.id)) {
         expect(capability).toMatchObject({
-          effect: 'external-write',
           approval: 'confirmation',
+          concurrency: { idempotency: 'required' }
+        })
+        expect(['external-write', 'destructive']).toContain(capability.effect)
+      } else if (autonomousResourceWriteIds.has(capability.id)) {
+        expect(capability).toMatchObject({
+          audiences: ['agent'],
+          scope: 'resource',
+          approval: 'none',
+          autonomousWrite: 'resource-authorized',
+          concurrency: { idempotency: 'required' }
+        })
+        expect(['external-write', 'destructive']).toContain(capability.effect)
+      } else if (workspaceWriteIds.has(capability.id)) {
+        expect(capability).toMatchObject({
+          audiences: ['agent'],
+          scope: 'resource',
+          effect: 'workspace-write',
+          approval: 'none',
           concurrency: { idempotency: 'required' }
         })
       } else {
@@ -285,6 +434,7 @@ describe('Content Space main composition', () => {
     const openWorkspaceUploadSource = vi.fn(async () => Object.freeze({
       name: 'input.txt',
       size: 5,
+      sha256: createHash('sha256').update('input').digest('hex'),
       read: async () => new TextEncoder().encode('input'),
       close: async () => undefined
     }))
@@ -702,10 +852,39 @@ describe('Content Space main composition', () => {
       sourceSize: source.size,
       reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'report-file' }
     }))
+    let nativeOutcome: 'outcome_unknown' | 'failed' = 'outcome_unknown'
+    const nativeExecute: ContentSpaceNativeDocumentExecutor['execute'] = vi.fn(async (input) =>
+      nativeOutcome === 'outcome_unknown'
+        ? Object.freeze({
+            contractVersion: '1.0.0' as const,
+            resourceType: 'native_document' as const,
+            operation: 'create' as const,
+            invocationId: input.context.invocationId!,
+            outcome: 'outcome_unknown' as const,
+            error: Object.freeze({
+              code: 'outcome_unknown' as const,
+              stage: 'write' as const,
+              message: 'The create outcome is unknown.',
+              retry: 'never' as const
+            })
+          })
+        : Object.freeze({
+            contractVersion: '1.0.0' as const,
+            resourceType: 'native_document' as const,
+            operation: 'create' as const,
+            invocationId: input.context.invocationId!,
+            outcome: 'failed' as const,
+            error: Object.freeze({
+              code: 'provider_unavailable' as const,
+              message: 'The create operation failed.',
+              retry: 'never' as const
+            })
+          }))
     const close = vi.fn(async () => undefined)
     const openWorkspaceUploadSource = vi.fn(async () => Object.freeze({
       name: 'report.md',
       size: 6,
+      sha256: createHash('sha256').update('report').digest('hex'),
       read: async () => new TextEncoder().encode('report'),
       close
     }))
@@ -726,7 +905,10 @@ describe('Content Space main composition', () => {
         }),
         createFolder,
         listEntries,
-        uploadNewFile
+        uploadNewFile,
+        features: {
+          nativeDocuments: nativeDocumentsFixture(nativeExecute)
+        }
       })))
     )
     const providers = await definition(
@@ -762,6 +944,47 @@ describe('Content Space main composition', () => {
       resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
       workspaceId: '/workspace'
     })
+
+    const nativeWrite = definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentWrite
+    )
+    const nativeRequest = {
+      request: {
+        operation: 'create',
+        resourceType: 'native_document',
+        parent: root,
+        title: 'Draft',
+        content: { encoding: 'json', value: { type: 'doc' } }
+      }
+    }
+    const unknownNativeWrite = await nativeWrite.handler(
+      nativeRequest,
+      capabilityContext(undefined, 'agent', {
+        callerId: 'agent:content-flow',
+        workspaceId: '/workspace',
+        resource: rootResource
+      })
+    )
+    expect(unknownNativeWrite).toMatchObject({
+      output: { ok: true, value: { outcome: 'outcome_unknown' } },
+      changed: false
+    })
+    expect(unknownNativeWrite).not.toHaveProperty('semanticRevision')
+    nativeOutcome = 'failed'
+    const failedNativeWrite = await nativeWrite.handler(
+      nativeRequest,
+      capabilityContext(undefined, 'agent', {
+        callerId: 'agent:content-flow',
+        workspaceId: '/workspace',
+        resource: rootResource
+      })
+    )
+    expect(failedNativeWrite).toMatchObject({
+      output: { ok: true, value: { outcome: 'failed' } },
+      changed: false
+    })
+    expect(failedNativeWrite).not.toHaveProperty('semanticRevision')
 
     const createdFolder = await definition(
       definitions,
@@ -914,6 +1137,237 @@ describe('Content Space main composition', () => {
     expect(issueResource).not.toHaveBeenCalled()
   })
 
+  it('authorizes Provider administration once, creates a root resource, and injects that root', async () => {
+    const root = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      containerId: 'admin-created-root'
+    })
+    const portableRoot = toPortableContentContainerReference(root)
+    const summary = Object.freeze({
+      root: portableRoot,
+      label: 'Research Team',
+      contentOwnerUserId: 'user:owner',
+      pinned: false
+    })
+    const updateSpace = vi.fn(async (
+      input: Parameters<ContentSpaceAdministrationPort['updateSpace']>[0]
+    ) => Object.freeze({
+      ...summary,
+      label: input.label
+    }))
+    const createSpace = vi.fn(async (
+      input: Parameters<ContentSpaceAdministrationPort['createSpace']>[0]
+    ) => Object.freeze({
+      ...summary,
+      label: input.label,
+      contentOwnerUserId: input.contentOwnerUserId
+    }))
+    const administration = administrationPortFixture({ createSpace, updateSpace })
+    const bind = vi.fn(async () => Object.freeze({
+      administration
+    }))
+    const describeOperations = vi.fn(() => readyAdministrationStates)
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture({
+        features: { administration: { describeOperations, bind } }
+      })))
+    )
+    let administrationRegistration: any
+    const authorized = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration
+    ).handler({ providerInstanceRef: PROVIDER_INSTANCE_REF }, capabilityContext(
+      undefined,
+      'agent',
+      {
+        callerId: 'agent:administration',
+        workspaceId: '/workspace',
+        issueResource: (registration) => {
+          administrationRegistration = registration
+          return resourceHandle('a', registration.semanticRevision)
+        }
+      }
+    ))
+    expect(authorized.output).toMatchObject({
+      ok: true,
+      value: {
+        providerInstanceRef: PROVIDER_INSTANCE_REF,
+        resource: { token: expect.stringMatching(/^cap_/u) }
+      }
+    })
+    expect(bind).not.toHaveBeenCalled()
+    expect(describeOperations).toHaveBeenCalledOnce()
+
+    let rootRegistration: any
+    const createCapability = definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace
+    )
+    expect(createCapability.inputSchema.safeParse({ label: 'Research Team' }).success).toBe(true)
+    expect(createCapability.inputSchema.safeParse({
+      label: 'Research Team',
+      idempotencyKey: 'idem_create_space_0001'
+    }).success).toBe(false)
+    const created = await createCapability.handler({ label: 'Research Team' }, capabilityContext(undefined, 'agent', {
+      callerId: 'agent:administration',
+      workspaceId: '/workspace',
+      resource: {
+        resourceId: administrationRegistration.resourceId,
+        resourceKind: CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND,
+        workspaceId: '/workspace'
+      },
+      issueResource: (registration) => {
+        rootRegistration = registration
+        return resourceHandle('r', registration.semanticRevision)
+      }
+    }))
+    expect(created.output).toMatchObject({
+      ok: true,
+      value: {
+        space: { root: portableRoot, label: 'Research Team' },
+        resource: { token: expect.stringMatching(/^cap_/u) }
+      }
+    })
+    expect(rootRegistration).toMatchObject({
+      resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
+      workspaceId: '/workspace'
+    })
+    expect(createSpace).toHaveBeenCalledWith({
+      label: 'Research Team',
+      contentOwnerUserId: principal.subject
+    })
+    expect(bind).toHaveBeenLastCalledWith(expect.objectContaining({
+      invocationId: 'invocation_content_space_main_0001'
+    }))
+
+    const updateCapability = definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminUpdateSpace
+    )
+    expect(updateCapability.inputSchema.safeParse({ label: 'Renamed Team' }).success).toBe(true)
+    expect(updateCapability.inputSchema.safeParse({
+      expectedRevision: 'revision:1',
+      label: 'Renamed Team',
+      contentOwnerUserId: 'user:new-owner'
+    }).success).toBe(false)
+    expect(updateCapability.inputSchema.safeParse({
+      expectedRevision: 'revision:1',
+      label: 'Renamed Team',
+      idempotencyKey: 'idem_update_space_0001'
+    }).success).toBe(false)
+
+    const updated = await updateCapability.handler({
+      label: 'Renamed Team'
+    }, capabilityContext(undefined, 'agent', {
+      callerId: 'agent:administration',
+      workspaceId: '/workspace',
+      resource: {
+        resourceId: rootRegistration.resourceId,
+        resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
+        workspaceId: '/workspace'
+      }
+    }))
+    expect(updated).toMatchObject({
+      output: { ok: true, value: { label: 'Renamed Team', root: portableRoot } },
+      changed: true,
+      semanticRevision: expect.any(String)
+    })
+    expect(updateSpace).toHaveBeenCalledWith({
+      root: portableRoot,
+      label: 'Renamed Team'
+    })
+    expect(bind).toHaveBeenCalledWith(expect.objectContaining({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      principal
+    }))
+  })
+
+  it('uses a Provider directory user as the only Agent member mutation identity', async () => {
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture()))
+    )
+    const member = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      kind: 'user' as const,
+      principalId: 'provider-user-b'
+    })
+    const input = { member }
+
+    for (const capabilityId of [
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember
+    ]) {
+      const capability = definition(definitions, capabilityId)
+      expect(capability.version).toBe('2.0.0')
+      expect(capability.inputSchema.parse(input)).toEqual(input)
+      expect(capability.inputSchema.safeParse({
+        contentUserId: 'user-member-b'
+      }).success).toBe(false)
+      expect(capability.inputSchema.safeParse({
+        member,
+        expectedRevision: 'revision:1'
+      }).success).toBe(false)
+    }
+    expect(definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers
+    ).version).toBe('2.0.0')
+  })
+
+  it('versions the literal directory-search and Team-governance Agent wires', async () => {
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture()))
+    )
+
+    expect(definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentExtendedRead).version)
+      .toBe('2.0.0')
+    expect(definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite).version)
+      .toBe('2.0.0')
+    expect(definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedDestructive
+    ).version).toBe('1.0.0')
+  })
+
+  it('bounds Provider administration grants to the same finite capacity as content resources', async () => {
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture({
+        features: {
+          administration: {
+            describeOperations: () => readyAdministrationStates,
+            bind: async () => { throw new Error('Administration binding was not expected.') }
+          }
+        }
+      })))
+    )
+    const authorize = definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration
+    )
+    const issueResource = vi.fn((registration) =>
+      resourceHandle('b', registration.semanticRevision))
+    for (let index = 0; index < 2_048; index += 1) {
+      const result = await authorize.handler(
+        { providerInstanceRef: PROVIDER_INSTANCE_REF },
+        capabilityContext(undefined, 'agent', { issueResource })
+      )
+      expect(result.output.ok).toBe(true)
+    }
+    const overflow = await authorize.handler(
+      { providerInstanceRef: PROVIDER_INSTANCE_REF },
+      capabilityContext(undefined, 'agent', { issueResource })
+    )
+    expect(overflow.output).toMatchObject({
+      ok: false,
+      error: { code: 'bounds_exceeded', retry: 'never' }
+    })
+    expect(issueResource).toHaveBeenCalledTimes(2_048)
+  })
+
   it('rejects raw parent, reference, and Provider identities from every Agent operation schema', async () => {
     const definitions = await activateDefinitions(
       createDomainMainEntry(mainHost()).contributions,
@@ -1030,13 +1484,513 @@ describe('Content Space main composition', () => {
       CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances,
       CONTENT_SPACE_CAPABILITY_IDS.listAgentRootCandidates,
       CONTENT_SPACE_CAPABILITY_IDS.describeCapabilities,
-      CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration
     ])
     const unexpectedAgentGlobalIds = definitions
       .filter(({ audiences, scope }) => audiences.includes('agent') && scope === 'global')
       .map(({ id }) => id)
       .filter((id) => !agentGlobalAllowlist.has(id))
     expect(unexpectedAgentGlobalIds).toEqual([])
+  })
+
+  it('exposes only Workspace-relative locators on Agent native and extended transfers', async () => {
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture()))
+    )
+    const document = { resourceType: 'native_document' as const, reference: FILE }
+    const sourceHandle = `xfer_${'s'.repeat(32)}`
+    const destinationHandle = `xfer_${'d'.repeat(32)}`
+    const nativeWrite = definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentWrite
+    ).inputSchema
+    const nativeWorkspaceWrite = definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentWorkspaceWrite
+    ).inputSchema
+    const extendedWrite = definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite
+    ).inputSchema
+
+    expect(nativeWrite.safeParse({ request: {
+      operation: 'image-upload',
+      document,
+      workspaceRelativePath: 'assets/figure.png',
+      mediaType: 'image/png'
+    } }).success).toBe(true)
+    expect(nativeWrite.safeParse({ request: {
+      operation: 'image-upload', document, sourceHandle, mediaType: 'image/png'
+    } }).success).toBe(false)
+    expect(nativeWorkspaceWrite.safeParse({ request: {
+      operation: 'export',
+      document,
+      format: 'pdf',
+      workspaceRelativePath: 'exports/document.pdf'
+    } }).success).toBe(true)
+    expect(nativeWorkspaceWrite.safeParse({ request: {
+      operation: 'export', document, format: 'pdf', destinationHandle
+    } }).success).toBe(false)
+
+    expect(extendedWrite.safeParse({
+      operation: 'updateFileVersion',
+      request: {
+        reference: FILE,
+        workspaceRelativePath: 'versions/document-v2.pdf',
+        strategy: 'major',
+        expectedVersionId: 'version-one'
+      }
+    }).success).toBe(true)
+    expect(extendedWrite.safeParse({
+      operation: 'addAttachment',
+      request: { master: FILE, name: 'data.csv', sourceHandle }
+    }).success).toBe(false)
+  })
+
+  it('does not let one exact Agent file resource authorize a sibling batch deletion', async () => {
+    const root = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      containerId: 'shared-root'
+    })
+    const fileA = Object.freeze({ providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'file-a' })
+    const fileB = Object.freeze({ providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'file-b' })
+    const execute = vi.fn<ContentSpaceExtendedOperationsExecutor['execute']>(async () =>
+      Object.freeze({
+        ok: true as const,
+        value: Object.freeze({ deleted: Object.freeze([fileA, fileB]), failed: Object.freeze([]) })
+      }))
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture({
+        listContainers: async ({ context }) => ({
+          providerInstanceRef: context.providerInstanceRef,
+          items: [{ reference: root, scope: 'shared', label: 'Shared Research' }]
+        }),
+        listEntries: async ({ parent }) => ({
+          parent,
+          items: [
+            { kind: 'file' as const, reference: fileA, label: 'A.md', size: 1 },
+            { kind: 'file' as const, reference: fileB, label: 'B.md', size: 1 }
+          ]
+        }),
+        features: { extendedOperations: extendedOperationsFixture(execute) }
+      })))
+    )
+    const registrations: any[] = []
+    const caller = {
+      callerId: 'agent:exact-batch',
+      workspaceId: '/workspace',
+      issueResource: (registration: any) => {
+        registrations.push(registration)
+        return resourceHandle(String.fromCharCode(97 + registrations.length), registration.semanticRevision)
+      }
+    }
+    await definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot).handler(
+      { providerInstanceRef: PROVIDER_INSTANCE_REF, scope: 'shared', label: 'Shared Research' },
+      capabilityContext(undefined, 'agent', caller)
+    )
+    const rootRegistration = registrations[0]
+    await definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentListEntries).handler(
+      { page: { limit: 20 } },
+      capabilityContext(undefined, 'agent', {
+        ...caller,
+        resource: {
+          resourceId: rootRegistration.resourceId,
+          resourceKind: rootRegistration.resourceKind,
+          workspaceId: '/workspace'
+        }
+      })
+    )
+
+    const result = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedDestructive
+    ).handler({
+      operation: 'deleteEntries',
+      request: { entries: [fileA, fileB] }
+    }, capabilityContext(undefined, 'agent', {
+      ...caller,
+      resource: {
+        resourceId: registrations[1].resourceId,
+        resourceKind: registrations[1].resourceKind,
+        workspaceId: '/workspace'
+      }
+    }))
+
+    expect(result.output).toMatchObject({ ok: false, error: { code: 'unauthorized' } })
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('authorizes and executes an exact composite selection for a multi-entry copy', async () => {
+    const root = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      containerId: 'shared-root'
+    })
+    const fileA = Object.freeze({ providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'file-a' })
+    const fileB = Object.freeze({ providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'file-b' })
+    const request = Object.freeze({ entries: Object.freeze([fileA, fileB]), destination: root })
+    let nextFailureCode: 'conflict' | 'outcome_unknown' | 'provider_unavailable' | undefined
+    const execute = vi.fn<ContentSpaceExtendedOperationsExecutor['execute']>(async () =>
+      nextFailureCode
+        ? Object.freeze({
+            ok: false as const,
+            error: Object.freeze({
+              code: nextFailureCode,
+              message: 'The composite write did not succeed.',
+              retry: 'never' as const
+            })
+          })
+        : Object.freeze({
+            ok: true as const,
+            value: Object.freeze({
+              items: Object.freeze([
+                { ok: true as const, source: fileA, result: { ...fileA, fileId: 'copy-a' } },
+                { ok: true as const, source: fileB, result: { ...fileB, fileId: 'copy-b' } }
+              ])
+            })
+          }))
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture({
+        listContainers: async ({ context }) => ({
+          providerInstanceRef: context.providerInstanceRef,
+          items: [{ reference: root, scope: 'shared', label: 'Shared Research' }]
+        }),
+        listEntries: async ({ parent }) => ({
+          parent,
+          items: [
+            { kind: 'file' as const, reference: fileA, label: 'A.md', size: 1 },
+            { kind: 'file' as const, reference: fileB, label: 'B.md', size: 1 }
+          ]
+        }),
+        features: { extendedOperations: extendedOperationsFixture(execute) }
+      })))
+    )
+    const registrations: any[] = []
+    const caller = {
+      callerId: 'agent:composite-copy',
+      workspaceId: '/workspace',
+      issueResource: (registration: any) => {
+        registrations.push(registration)
+        return resourceHandle(String.fromCharCode(97 + registrations.length), registration.semanticRevision)
+      }
+    }
+    await definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot).handler(
+      { providerInstanceRef: PROVIDER_INSTANCE_REF, scope: 'shared', label: 'Shared Research' },
+      capabilityContext(undefined, 'agent', caller)
+    )
+    const rootRegistration = registrations[0]
+    const rootResource = {
+      resourceId: rootRegistration.resourceId,
+      resourceKind: rootRegistration.resourceKind,
+      workspaceId: '/workspace'
+    }
+    await definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentListEntries).handler(
+      { page: { limit: 20 } },
+      capabilityContext(undefined, 'agent', { ...caller, resource: rootResource })
+    )
+
+    const authorization = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeFeatureSelection
+    ).handler({ operation: 'copyEntries', request }, capabilityContext(undefined, 'agent', {
+      ...caller,
+      resource: rootResource
+    }))
+    expect(authorization.output).toMatchObject({
+      ok: true,
+      value: { operation: 'copyEntries', requestDigest: expect.stringMatching(/^[a-f0-9]{64}$/u) }
+    })
+    const selection = registrations[3]
+    const concurrentAuthorization = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeFeatureSelection
+    ).handler({ operation: 'copyEntries', request }, capabilityContext(undefined, 'agent', {
+      ...caller,
+      resource: rootResource
+    }))
+    expect(concurrentAuthorization.output).toMatchObject({ ok: true })
+    const concurrentSelection = registrations[4]
+
+    const drifted = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite
+    ).handler({
+      operation: 'copyEntries',
+      request: { destination: root, entries: [fileB, fileA] }
+    }, capabilityContext(undefined, 'agent', {
+      ...caller,
+      resource: {
+        resourceId: selection.resourceId,
+        resourceKind: selection.resourceKind,
+        workspaceId: '/workspace'
+      }
+    }))
+    expect(drifted.output).toMatchObject({ ok: false, error: { code: 'invalid_target' } })
+    expect(execute).not.toHaveBeenCalled()
+
+    const copied = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite
+    ).handler({
+      operation: 'copyEntries',
+      request: { destination: root, entries: [fileA, fileB] }
+    }, capabilityContext(undefined, 'agent', {
+      ...caller,
+      invocationId: 'invocation_composite_copy_success_0001',
+      resource: {
+        resourceId: selection.resourceId,
+        resourceKind: selection.resourceKind,
+        workspaceId: '/workspace'
+      }
+    }))
+
+    expect(copied).toMatchObject({ output: { ok: true }, changed: true })
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.objectContaining({
+        primary: root,
+        authorized: expect.arrayContaining([root, fileA, fileB])
+      }),
+      operation: 'copyEntries',
+      request
+    }))
+
+    const consumedSelection = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite
+    ).handler({ operation: 'copyEntries', request }, capabilityContext(undefined, 'agent', {
+      ...caller,
+      invocationId: 'invocation_composite_copy_consumed_0002',
+      resource: {
+        resourceId: selection.resourceId,
+        resourceKind: selection.resourceKind,
+        workspaceId: '/workspace'
+      }
+    }))
+    expect(consumedSelection.output).toMatchObject({
+      ok: false,
+      error: { code: 'unauthorized' }
+    })
+    expect(execute).toHaveBeenCalledTimes(1)
+
+    let staleObservationError: unknown
+    try {
+      concurrentSelection.observe({
+        audience: 'agent',
+        callerId: caller.callerId,
+        principal,
+        workspaceId: caller.workspaceId
+      }, { signal: new AbortController().signal })
+    } catch (error) {
+      staleObservationError = error
+    }
+    expect(staleObservationError).toMatchObject({ detail: { code: 'unauthorized' } })
+
+    const staleConcurrentSelection = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite
+    ).handler({ operation: 'copyEntries', request }, capabilityContext(undefined, 'agent', {
+      ...caller,
+      invocationId: 'invocation_composite_copy_stale_0003',
+      resource: {
+        resourceId: concurrentSelection.resourceId,
+        resourceKind: concurrentSelection.resourceKind,
+        workspaceId: '/workspace'
+      }
+    }))
+    expect(staleConcurrentSelection.output).toMatchObject({
+      ok: false,
+      error: { code: 'unauthorized' }
+    })
+    expect(execute).toHaveBeenCalledTimes(1)
+
+    const retryableAuthorization = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeFeatureSelection
+    ).handler({ operation: 'copyEntries', request }, capabilityContext(undefined, 'agent', {
+      ...caller,
+      resource: rootResource
+    }))
+    expect(retryableAuthorization.output).toMatchObject({ ok: true })
+    expect(successValue<{ requestDigest: string }>(retryableAuthorization.output).requestDigest)
+      .not.toBe(successValue<{ requestDigest: string }>(authorization.output).requestDigest)
+    const retryableSelection = registrations[5]
+    for (const failureCode of [
+      'conflict',
+      'provider_unavailable',
+      'outcome_unknown'
+    ] as const) {
+      nextFailureCode = failureCode
+      const failed = await definition(
+        definitions,
+        CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite
+      ).handler({ operation: 'copyEntries', request }, capabilityContext(undefined, 'agent', {
+        ...caller,
+        invocationId: `invocation_composite_copy_failure_${failureCode}`,
+        resource: {
+          resourceId: retryableSelection.resourceId,
+          resourceKind: retryableSelection.resourceKind,
+          workspaceId: '/workspace'
+        }
+      }))
+      expect(failed).toMatchObject({
+        output: { ok: true, value: { ok: false, error: { code: failureCode } } },
+        changed: false
+      })
+    }
+    nextFailureCode = undefined
+    const retried = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite
+    ).handler({ operation: 'copyEntries', request }, capabilityContext(undefined, 'agent', {
+      ...caller,
+      invocationId: 'invocation_composite_copy_retry_success_0004',
+      resource: {
+        resourceId: retryableSelection.resourceId,
+        resourceKind: retryableSelection.resourceKind,
+        workspaceId: '/workspace'
+      }
+    }))
+    expect(retried).toMatchObject({ output: { ok: true }, changed: true })
+    expect(execute).toHaveBeenCalledTimes(5)
+    const consumedRetryableSelection = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite
+    ).handler({ operation: 'copyEntries', request }, capabilityContext(undefined, 'agent', {
+      ...caller,
+      invocationId: 'invocation_composite_copy_retry_consumed_0005',
+      resource: {
+        resourceId: retryableSelection.resourceId,
+        resourceKind: retryableSelection.resourceKind,
+        workspaceId: '/workspace'
+      }
+    }))
+    expect(consumedRetryableSelection.output).toMatchObject({
+      ok: false,
+      error: { code: 'unauthorized' }
+    })
+    expect(execute).toHaveBeenCalledTimes(5)
+
+    const moveAuthorization = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeFeatureSelection
+    ).handler({ operation: 'moveEntries', request }, capabilityContext(undefined, 'agent', {
+      ...caller,
+      resource: {
+        resourceId: registrations[1].resourceId,
+        resourceKind: registrations[1].resourceKind,
+        workspaceId: '/workspace'
+      }
+    }))
+    expect(moveAuthorization.output).toMatchObject({ ok: true })
+    const moveSelection = registrations[6]
+    const moved = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite
+    ).handler({ operation: 'moveEntries', request }, capabilityContext(undefined, 'agent', {
+      ...caller,
+      resource: {
+        resourceId: moveSelection.resourceId,
+        resourceKind: moveSelection.resourceKind,
+        workspaceId: '/workspace'
+      }
+    }))
+    expect(moved).toMatchObject({ output: { ok: true }, changed: true })
+    expect(execute).toHaveBeenLastCalledWith(expect.objectContaining({
+      operation: 'moveEntries',
+      target: expect.objectContaining({ authorized: expect.arrayContaining([root, fileA, fileB]) })
+    }))
+
+    await registrations[1].dispose()
+    const afterConstituentDisposal = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite
+    ).handler({ operation: 'copyEntries', request }, capabilityContext(undefined, 'agent', {
+      ...caller,
+      resource: {
+        resourceId: selection.resourceId,
+        resourceKind: selection.resourceKind,
+        workspaceId: '/workspace'
+      }
+    }))
+    expect(afterConstituentDisposal.output).toMatchObject({
+      ok: false,
+      error: { code: 'unauthorized' }
+    })
+    expect(execute).toHaveBeenCalledTimes(6)
+  })
+
+  it('blocks shared-root deletion and direct permission mutation before Provider dispatch', async () => {
+    const root = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      containerId: 'shared-root'
+    })
+    const execute = vi.fn<ContentSpaceExtendedOperationsExecutor['execute']>(async () => {
+      throw new Error('shared-root mutation reached Provider')
+    })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture({
+        listContainers: async ({ context }) => ({
+          providerInstanceRef: context.providerInstanceRef,
+          items: [{ reference: root, scope: 'shared', label: 'Shared Research' }]
+        }),
+        features: { extendedOperations: extendedOperationsFixture(execute) }
+      })))
+    )
+    let rootRegistration: any
+    const caller = {
+      callerId: 'agent:shared-root-guard',
+      workspaceId: '/workspace',
+      issueResource: (registration: any) => {
+        rootRegistration = registration
+        return resourceHandle('g', registration.semanticRevision)
+      }
+    }
+    await definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot).handler(
+      { providerInstanceRef: PROVIDER_INSTANCE_REF, scope: 'shared', label: 'Shared Research' },
+      capabilityContext(undefined, 'agent', caller)
+    )
+    const context = capabilityContext(undefined, 'agent', {
+      ...caller,
+      resource: {
+        resourceId: rootRegistration.resourceId,
+        resourceKind: rootRegistration.resourceKind,
+        workspaceId: '/workspace'
+      }
+    })
+
+    const deleted = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedDestructive
+    ).handler({ operation: 'deleteEntries', request: { entries: [root] } }, context)
+    const changedPermissions = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite
+    ).handler({
+      operation: 'changePermissions',
+      request: {
+        target: root,
+        targetKind: 'shared-container',
+        changes: [{
+          action: 'remove',
+          principal: {
+            providerInstanceRef: PROVIDER_INSTANCE_REF,
+            kind: 'user',
+            principalId: 'user-one'
+          }
+        }]
+      }
+    }, context)
+
+    expect(deleted.output).toMatchObject({ ok: false, error: { code: 'invalid_target' } })
+    expect(changedPermissions.output).toMatchObject({
+      ok: false,
+      error: { code: 'invalid_target' }
+    })
+    expect(execute).not.toHaveBeenCalled()
   })
 })
 
@@ -1079,6 +2033,60 @@ function successValue<Value>(result: ContentSpaceResult<unknown>): Value {
   return result.value as Value
 }
 
+function resourceHandle(marker: string, semanticRevision: string) {
+  return Object.freeze({
+    token: `cap_${marker.repeat(32)}`,
+    semanticRevision,
+    expiresAt: '2026-08-17T17:00:00.000Z'
+  })
+}
+
+function administrationPortFixture(
+  overrides: Partial<ContentSpaceAdministrationPort> = {}
+): ContentSpaceAdministrationPort {
+  const root = toPortableContentContainerReference({
+    providerInstanceRef: PROVIDER_INSTANCE_REF,
+    containerId: 'admin-created-root'
+  })
+  const summary = Object.freeze({
+    root,
+    label: 'Research Team',
+    contentOwnerUserId: 'user:owner',
+    pinned: false
+  })
+  const port: ContentSpaceAdministrationPort = {
+    contractVersion: CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION,
+    listSpaces: async () => Object.freeze({ items: Object.freeze([summary]) }),
+    createSpace: async () => summary,
+    observeSpace: async () => summary,
+    updateSpace: async () => summary,
+    pinSpace: async () => Object.freeze({ ...summary, pinned: true }),
+    unpinSpace: async () => summary,
+    openRoot: async () => Object.freeze({ root }),
+    listMembers: async () => Object.freeze({
+      root,
+      items: Object.freeze([{
+        member: Object.freeze({
+          providerInstanceRef: PROVIDER_INSTANCE_REF,
+          kind: 'user' as const,
+          principalId: 'provider-owner'
+        })
+      }])
+    }),
+    addMember: async (input) => Object.freeze({
+      root,
+      member: input.member
+    }),
+    removeMember: async (input) => Object.freeze({
+      root,
+      member: input.member,
+      removed: true as const
+    }),
+    ...overrides
+  }
+  return Object.freeze(port)
+}
+
 function capabilityContext(
   assertPrincipalCurrent: (() => void) | undefined = () => undefined,
   audience: 'ui' | 'agent' | 'system' = 'ui',
@@ -1086,6 +2094,7 @@ function capabilityContext(
     callerId?: string
     principal?: typeof principal
     workspaceId?: string
+    invocationId?: string
     resource?: CapabilityContext['resource']
     issueResource?: CapabilityContext['issueResource']
   }> = {}
@@ -1097,13 +2106,41 @@ function capabilityContext(
       principal: options.principal ?? principal,
       ...(options.workspaceId ? { workspaceId: options.workspaceId } : {})
     }),
-    invocationId: 'invocation_content_space_main_0001',
+    invocationId: options.invocationId ?? 'invocation_content_space_main_0001',
     signal: new AbortController().signal,
     assertPrincipalCurrent: assertPrincipalCurrent ?? (() => undefined),
     ...(options.resource ? { resource: options.resource } : {}),
     issueResource: options.issueResource ?? (() => {
       throw new Error('Unexpected resource issuance')
     })
+  })
+}
+
+function extendedOperationsFixture(
+  execute: ContentSpaceExtendedOperationsExecutor['execute']
+): ContentSpaceExtendedOperationsExecutor {
+  return Object.freeze({
+    describeOperations: () => Object.keys(
+      CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS
+    ).map((operation) => ({
+      operation: operation as keyof typeof CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS,
+      readiness: 'production_ready' as const,
+      reasonCode: 'available' as const
+    })),
+    execute
+  })
+}
+
+function nativeDocumentsFixture(
+  execute: ContentSpaceNativeDocumentExecutor['execute']
+): ContentSpaceNativeDocumentExecutor {
+  return Object.freeze({
+    describeOperations: () => NATIVE_DOCUMENT_OPERATIONS.map((operation) => ({
+      operation,
+      readiness: 'production_ready' as const,
+      reasonCode: 'available' as const
+    })),
+    execute
   })
 }
 
@@ -1124,6 +2161,7 @@ function providerFixture(overrides: Partial<ContentSpaceProvider> = {}): Content
   }))
   return defineContentSpaceProvider({
     contractVersion: CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
+    attestExternalBinding: async () => undefined,
     describeCapabilities: async () => ready,
     listContainers: async ({ context }) => ({
       providerInstanceRef: context.providerInstanceRef,
@@ -1209,14 +2247,17 @@ function providerContributions(
 function contribution(
   id: string,
   contract: DomainPackageJsonValue,
-  value: unknown
+  value: unknown,
+  version: string = PROVIDER_FACTORY_CONTRACT_VERSION,
+  publicRelease?: 'allowed' | 'forbidden'
 ): DomainMainContribution {
   return Object.freeze({
     id,
     kind: MAIN_EXTENSION_CONTRIBUTION_KIND,
     packageName: '@fixture/content-space-provider',
     owner: Object.freeze({ moduleId: 'fixture.content-space', moduleVersion: '1.0.0' }),
-    version: PROVIDER_FACTORY_CONTRACT_VERSION,
+    version,
+    ...(publicRelease === undefined ? {} : { publicRelease }),
     contract,
     value
   })

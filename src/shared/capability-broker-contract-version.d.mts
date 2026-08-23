@@ -1,0 +1,1 @@
+export declare const CAPABILITY_BROKER_CONTRACT_VERSION: 2

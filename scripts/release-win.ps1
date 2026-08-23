@@ -103,6 +103,12 @@ $ReleaseChannel = Normalize-ReleaseChannel $RequestedChannel
 $ChannelExplicit = $Stable -or $Frontier -or [bool]$Channel
 
 Require-Command 'node'
+$env:SCIFORGE_PUBLIC_RELEASE = '1'
+& node (Join-Path $Root 'scripts\public-release-guard.cjs')
+if ($LASTEXITCODE -ne 0) {
+  Write-Err 'Official public releases require safe public runtime and domain composition.'
+  exit 1
+}
 Require-Command 'npm'
 Require-Command 'gh'
 
@@ -172,7 +178,8 @@ if ($LASTEXITCODE -ne 0) {
 $DistDir = Join-Path $Root 'dist'
 $AssetSpecs = @(
   @{ Label = 'Windows exe'; Filter = '*-win-*.exe' },
-  @{ Label = 'Windows blockmap'; Filter = '*-win-*.exe.blockmap' }
+  @{ Label = 'Windows blockmap'; Filter = '*-win-*.exe.blockmap' },
+  @{ Label = 'Public release receipt'; Filter = 'release-win.json' }
 )
 
 $Assets = @()
@@ -200,7 +207,7 @@ foreach ($asset in $Assets) {
 
 if ($R2 -or $PromoteR2) {
   Write-Info "Uploading Windows asset metadata to R2 ($TagName)..."
-  & node (Join-Path $Root 'scripts\publish-r2.mjs') upload --platform win --tag $TagName --channel $ReleaseChannel
+  & node (Join-Path $Root 'scripts\publish-r2.mjs') upload --platform win --dist $DistDir --tag $TagName --channel $ReleaseChannel
   if ($LASTEXITCODE -ne 0) {
     Write-Err 'R2 upload failed for Windows assets.'
     exit 1
@@ -209,7 +216,7 @@ if ($R2 -or $PromoteR2) {
 
 if ($PromoteR2) {
   Write-Info "Promoting $TagName as R2 latest..."
-  & node (Join-Path $Root 'scripts\publish-r2.mjs') promote --tag $TagName --channel $ReleaseChannel
+  & node (Join-Path $Root 'scripts\publish-r2.mjs') promote --tag $TagName --dist $DistDir --channel $ReleaseChannel --platforms win
   if ($LASTEXITCODE -ne 0) {
     Write-Err 'R2 promote failed.'
     exit 1

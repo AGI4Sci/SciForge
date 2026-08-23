@@ -36,7 +36,7 @@ import {
   type ContentContainerReference,
   type ContentEntryReference,
   type ContentFileReference,
-  type ContentSpaceCapabilityState,
+  type ContentSpaceAdmittedCapabilityState,
   type ContentSpaceResult
 } from '../contract.js'
 
@@ -122,7 +122,7 @@ export type ContentSpaceCapabilityClient = Readonly<{
     typeof contentSpaceProviderInstanceListResultSchema
   >>
   describeCapabilities(providerInstanceRef: string, options?: ContentSpaceReadOptions): Promise<
-    ContentSpaceResult<Readonly<{ items: readonly ContentSpaceCapabilityState[] }>>
+    ContentSpaceResult<Readonly<{ items: readonly ContentSpaceAdmittedCapabilityState[] }>>
   >
   listContainers(input: z.input<typeof contentSpaceListContainersInputSchema>, options?: ContentSpaceReadOptions): Promise<z.infer<typeof contentSpaceContainerPageResultSchema>>
   listEntries(input: z.input<typeof contentSpaceListEntriesInputSchema>, options?: ContentSpaceReadOptions): Promise<z.infer<typeof contentSpaceEntryPageResultSchema>>

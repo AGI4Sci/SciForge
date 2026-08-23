@@ -77,6 +77,70 @@ const sandboxedDefinitionFixture: SandboxedDomainPackageDefinitionInput = {
 }
 
 describe('domain package packaging contract', () => {
+  it('accepts an explicit contribution-level public release exclusion', () => {
+    const definition = defineTrustedDomainPackage({
+      ...definitionFixture,
+      entrypoints: [{
+        process: 'main',
+        export: './main',
+        contributions: [{
+          id: 'fixture.domain-runtime.acceptance-profile',
+          kind: 'main.extension',
+          publicRelease: 'forbidden'
+        }]
+      }]
+    } as unknown as TrustedDomainPackageDefinitionInput)
+
+    assert.equal(
+      definition.entrypoints[0]?.contributions[0]?.publicRelease,
+      'forbidden'
+    )
+  })
+
+  it('keeps ordinary contribution policy optional and rejects unknown values', () => {
+    const ordinary = defineTrustedDomainPackage({
+      ...definitionFixture,
+      entrypoints: [{
+        process: 'main',
+        export: './main',
+        contributions: [{
+          id: 'fixture.domain-runtime.public-extension',
+          kind: 'main.extension'
+        }]
+      }]
+    })
+    assert.equal(
+      Object.hasOwn(ordinary.entrypoints[0]?.contributions[0] ?? {}, 'publicRelease'),
+      false
+    )
+
+    assert.throws(
+      () => defineTrustedDomainPackage({
+        ...definitionFixture,
+        entrypoints: [{
+          process: 'main',
+          export: './main',
+          contributions: [{
+            id: 'fixture.domain-runtime.invalid-release-policy',
+            kind: 'main.extension',
+            publicRelease: 'internal-only'
+          }]
+        }]
+      } as unknown as TrustedDomainPackageDefinitionInput),
+      z.ZodError
+    )
+  })
+
+  it('fails closed on unknown trusted-package fields', () => {
+    assert.throws(
+      () => defineTrustedDomainPackage({
+        ...definitionFixture,
+        undocumentedFlag: true
+      } as unknown as TrustedDomainPackageDefinitionInput),
+      z.ZodError
+    )
+  })
+
   it('defaults trusted packages to production composition and accepts explicit test fixtures', () => {
     assert.equal(defineTrustedDomainPackage(definitionFixture).composition, 'production')
     assert.equal(defineTrustedDomainPackage({
@@ -85,8 +149,8 @@ describe('domain package packaging contract', () => {
     }).composition, 'development-only')
   })
 
-  it('publishes Host API 1.4 while preserving compatible 1.1 package ranges', () => {
-    assert.equal(DOMAIN_PACKAGE_HOST_API_VERSION, '1.4.0')
+  it('publishes Host API 1.5 while preserving compatible 1.1 package ranges', () => {
+    assert.equal(DOMAIN_PACKAGE_HOST_API_VERSION, '1.5.0')
     assert.equal(isDomainPackageHostApiCompatible({
       minimum: '1.1.0',
       maximumExclusive: '2.0.0'

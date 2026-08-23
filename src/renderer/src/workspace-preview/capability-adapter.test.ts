@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import type {
-  CapabilityDescriptor,
-  CapabilityInvocationResult,
-  CapabilityResourceHandle
+import {
+  CAPABILITY_BROKER_CONTRACT_VERSION,
+  type CapabilityDescriptor,
+  type CapabilityInvocationResult,
+  type CapabilityResourceHandle
 } from '@shared/capability-broker'
 import { workspacePreviewExtensionIdSchema } from '@shared/workspace-preview'
 import { createWorkspacePreviewCapabilityAdapter } from './capability-adapter'
@@ -11,7 +12,7 @@ const DOMAIN_MODALITY = workspacePreviewExtensionIdSchema.parse('fixture.preview
 const DOMAIN_SELECTION_TYPE = workspacePreviewExtensionIdSchema.parse('fixture.preview.selection')
 
 const operation: CapabilityDescriptor = {
-  contractVersion: 1,
+  contractVersion: CAPABILITY_BROKER_CONTRACT_VERSION,
   id: 'workspace-preview.apply-edit',
   version: '1',
   title: 'Apply edit',

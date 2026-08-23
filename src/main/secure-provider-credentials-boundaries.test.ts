@@ -67,6 +67,7 @@ describe('secure provider credential architecture', () => {
     expect(users).toEqual([
       'src/main/domain-package-storage.ts',
       'src/main/provider-credential-acceptance.ts',
+      'packages/domains/opencontent-connector/src/main/connection-capabilities.ts',
       'packages/domains/opencontent-connector/src/main/connection-service.ts',
       'packages/domains/opencontent-connector/src/main/index.ts',
       'packages/domain-sdk/src/package-storage.ts'

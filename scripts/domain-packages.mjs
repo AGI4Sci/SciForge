@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process'
-import { access, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises'
+import { access, glob, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -11,6 +11,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const GENERATED_PATHS = Object.freeze({
   definitions: 'src/shared/installed-domain-packages.ts',
   main: 'src/main/modules/installed-domain-main.ts',
+  mainBundle: 'src/main/modules/installed-main-source-packages.ts',
   runtimeMcp: 'src/main/modules/installed-domain-runtime-mcp.ts',
   renderer: 'src/renderer/src/domain-modules/installed-domain-renderer.ts',
   workspaceServer:
@@ -24,6 +25,7 @@ const IMPLICIT_BUNDLED_RUNTIME_PATHS = new Set([
 const MAIN_RUNTIME_MCP_SERVER_CONTRIBUTION_KIND = 'main.runtime-mcp-server'
 const DOMAIN_RUNTIME_MCP_EXPORT = './runtime-mcp'
 const DOMAIN_RUNTIME_MCP_RUNNER_EXPORT = 'runDomainRuntimeMcpServerFromArgv'
+const SCOPED_PACKAGE_NAME_PATTERN = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/
 
 export async function discoverDomainPackages(
   root,
@@ -125,13 +127,16 @@ function validatePreviewContributionContracts(definition) {
   }
 }
 
-export function renderGeneratedDomainPackageFiles(packages) {
+export function renderGeneratedDomainPackageFiles(packages, options = {}) {
   const installedPackages = packages.filter((candidate) =>
     candidate.definition.composition !== 'development-only'
   )
+  const mainBundlePackageNames = options.mainBundlePackageNames ?? []
+  validateMainBundlePackageNames(mainBundlePackageNames)
   return Object.freeze({
     [GENERATED_PATHS.definitions]: renderDefinitions(installedPackages),
     [GENERATED_PATHS.main]: renderMain(installedPackages.filter(hasEntrypoint('main'))),
+    [GENERATED_PATHS.mainBundle]: renderMainBundlePackageNames(mainBundlePackageNames),
     [GENERATED_PATHS.runtimeMcp]: renderRuntimeMcp(
       installedPackages.filter(hasRuntimeMcpServer)
     ),
@@ -142,6 +147,11 @@ export function renderGeneratedDomainPackageFiles(packages) {
       installedPackages.filter(hasEntrypoint('workspace-server'))
     )
   })
+}
+
+function renderMainBundlePackageNames(packageNames) {
+  const values = [...packageNames].sort().map((packageName) => `  '${packageName}'`)
+  return `${GENERATED_HEADER}export const installedMainSourcePackageNames = Object.freeze([\n${values.join(',\n')}\n])\n`
 }
 
 function renderRuntimeMcp(packages) {
@@ -158,7 +168,8 @@ function renderRuntimeMcp(packages) {
 
 export async function generateDomainPackageFiles(root, { check = false } = {}) {
   const packages = await discoverDomainPackages(root)
-  const generated = renderGeneratedDomainPackageFiles(packages)
+  const mainBundlePackageNames = await discoverMainBundlePackageNames(root, packages)
+  const generated = renderGeneratedDomainPackageFiles(packages, { mainBundlePackageNames })
   const stale = []
   for (const [relativePath, content] of Object.entries(generated)) {
     const target = path.join(root, relativePath)
@@ -177,6 +188,121 @@ export async function generateDomainPackageFiles(root, { check = false } = {}) {
     )
   }
   return packages
+}
+
+export async function discoverMainBundlePackageNames(root, packages) {
+  const rootPackageJsonPath = path.join(root, 'package.json')
+  const rootPackageJson = parseJson(
+    await readFile(rootPackageJsonPath, 'utf8'),
+    rootPackageJsonPath
+  )
+  const workspacePackages = await discoverPublicWorkspacePackages(
+    root,
+    rootPackageJson.workspaces
+  )
+  const roots = [
+    rootPackageJson,
+    ...packages
+      .filter((candidate) =>
+        candidate.definition.composition !== 'development-only' &&
+        hasEntrypoint('main')(candidate)
+      )
+      .map((candidate) => candidate.packageJson)
+  ]
+  const visited = new Set()
+  const bundled = new Set()
+  const visit = (packageName) => {
+    if (visited.has(packageName)) return
+    visited.add(packageName)
+    const candidate = workspacePackages.get(packageName)
+    if (!candidate) return
+    if (hasTypeScriptRuntimeEntrypoint(candidate.packageJson)) bundled.add(packageName)
+    for (const dependency of dependencyNames(candidate.packageJson)) visit(dependency)
+  }
+  for (const candidate of roots) {
+    if (workspacePackages.has(candidate.name)) visit(candidate.name)
+    for (const dependency of dependencyNames(candidate)) visit(dependency)
+  }
+  return Object.freeze([...bundled].sort())
+}
+
+async function discoverPublicWorkspacePackages(root, workspaces) {
+  validateUniqueStringArray(workspaces, 'Root package workspaces')
+  const manifestPaths = new Set()
+  for (const workspace of [...workspaces].sort()) {
+    const normalized = normalizeWorkspacePattern(workspace)
+    for await (const manifestPath of glob(`${normalized}/package.json`, { cwd: root })) {
+      manifestPaths.add(manifestPath)
+    }
+  }
+
+  const discovered = new Map()
+  for (const manifestPath of [...manifestPaths].sort()) {
+    const packageJsonPath = path.resolve(root, manifestPath)
+    if (!isWithinDirectory(root, packageJsonPath)) {
+      throw new Error(`Root workspace manifest escapes the repository: ${manifestPath}`)
+    }
+    const packageJson = parseJson(await readFile(packageJsonPath, 'utf8'), packageJsonPath)
+    if (typeof packageJson.name !== 'string' || !SCOPED_PACKAGE_NAME_PATTERN.test(packageJson.name)) {
+      throw new Error(`${relative(packageJsonPath)} must declare a scoped lowercase package name.`)
+    }
+    if (discovered.has(packageJson.name)) {
+      throw new Error(`Duplicate public workspace package name: ${packageJson.name}`)
+    }
+    discovered.set(packageJson.name, Object.freeze({
+      packageRoot: path.dirname(packageJsonPath),
+      packageJson
+    }))
+  }
+  return discovered
+}
+
+function normalizeWorkspacePattern(workspace) {
+  const normalized = workspace.replaceAll('\\', '/').replace(/^(?:\.\/)+/, '')
+  if (
+    normalized.length === 0 ||
+    normalized !== normalized.trim() ||
+    normalized.startsWith('/') ||
+    /^[A-Za-z]:\//.test(normalized) ||
+    normalized.includes('\0') ||
+    normalized.split('/').some((segment) => segment === '..')
+  ) {
+    throw new Error(`Root package workspace must be repository-relative: ${workspace}`)
+  }
+  const portable = path.posix.normalize(normalized).replace(/\/+$/, '')
+  if (portable === 'internal' || portable.startsWith('internal/')) {
+    throw new Error(`Root package workspace must not target an internal overlay: ${workspace}`)
+  }
+  return portable
+}
+
+function dependencyNames(packageJson) {
+  if (packageJson.dependencies === undefined) return []
+  if (!isRecord(packageJson.dependencies)) {
+    throw new Error(`Package ${packageJson.name ?? '<unknown>'} dependencies must be an object.`)
+  }
+  return Object.keys(packageJson.dependencies).sort()
+}
+
+function hasTypeScriptRuntimeEntrypoint(packageJson) {
+  const entrypoints = [packageJson.main, packageJson.module, packageJson.exports]
+  const visit = (value) => {
+    if (typeof value === 'string') {
+      return /\.(?:[cm]?ts|tsx)$/.test(value) && !/\.d\.[cm]?ts$/.test(value)
+    }
+    if (Array.isArray(value)) return value.some(visit)
+    return isRecord(value) && Object.values(value).some(visit)
+  }
+  return entrypoints.some(visit)
+}
+
+function validateMainBundlePackageNames(packageNames) {
+  validateUniqueStringArray(packageNames, 'Generated main source package names')
+  for (const packageName of packageNames) {
+    if (!SCOPED_PACKAGE_NAME_PATTERN.test(packageName)) {
+      throw new Error(`Generated main source package name is invalid: ${packageName}`)
+    }
+  }
 }
 
 function renderDefinitions(packages) {

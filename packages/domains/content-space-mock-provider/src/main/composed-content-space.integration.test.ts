@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -53,6 +55,7 @@ describe('composed Content Space with local mock Provider', () => {
         return Object.freeze({
           name: 'evidence.bin',
           size: uploadBytes.byteLength,
+          sha256: createHash('sha256').update(uploadBytes).digest('hex'),
           read: async ({ offset, length }: Readonly<{ offset: number; length: number }>) =>
             uploadBytes.slice(offset, Math.min(offset + length, uploadBytes.byteLength)),
           close: vi.fn(async () => undefined)

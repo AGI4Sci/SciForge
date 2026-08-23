@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 
 import { describe, expect, it, vi } from 'vitest'
 
@@ -7,7 +8,18 @@ import {
 } from './opencontent-client.js'
 import * as openContentClientModule from './opencontent-client.js'
 
+const principalIsCurrent = () => undefined
+
 describe('OpenContent client enrollment', () => {
+  it('keeps the raw client package-private behind the standard main entrypoint', () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
+    ) as Readonly<{ exports?: Readonly<Record<string, unknown>> }>
+
+    expect(manifest.exports?.['./main']).toBe('./src/main/index.ts')
+    expect(manifest.exports).not.toHaveProperty('./main/client')
+  })
+
   it('does not expose an unavailable fallback client beside the pinned profile client', () => {
     expect(openContentClientModule).not.toHaveProperty('createUnavailableOpenContentClient')
   })
@@ -18,7 +30,10 @@ describe('OpenContent client enrollment', () => {
       fetch: vi.fn(async () => new Response('', { status: 429 }))
     })
 
-    await expect(client.isTokenValid({ token: 'fixture-token-value' }))
+    await expect(client.isTokenValid({
+      token: 'fixture-token-value',
+      assertPrincipalCurrent: principalIsCurrent
+    }))
       .rejects.toMatchObject({ code: 'rate_limited' })
   })
 
@@ -35,7 +50,10 @@ describe('OpenContent client enrollment', () => {
       }))
     })
 
-    await expect(client.isTokenValid({ token: 'fixture-token-value' }))
+    await expect(client.isTokenValid({
+      token: 'fixture-token-value',
+      assertPrincipalCurrent: principalIsCurrent
+    }))
       .rejects.toMatchObject({ code: 'provider_contract_violation' })
     expect(cancelled).toBe(true)
   })
@@ -54,7 +72,10 @@ describe('OpenContent client enrollment', () => {
       fetch: vi.fn(async () => new Response(body, { status: 200 }))
     })
 
-    await expect(client.isTokenValid({ token: 'fixture-token-value' }))
+    await expect(client.isTokenValid({
+      token: 'fixture-token-value',
+      assertPrincipalCurrent: principalIsCurrent
+    }))
       .rejects.toMatchObject({ code: 'provider_contract_violation' })
     expect(cancelled).toBe(true)
   })
@@ -69,7 +90,10 @@ describe('OpenContent client enrollment', () => {
       fetch
     })
 
-    await expect(client.isTokenValid({ token: 'fixture-token-value' })).resolves.toBe(false)
+    await expect(client.isTokenValid({
+      token: 'fixture-token-value',
+      assertPrincipalCurrent: principalIsCurrent
+    })).resolves.toBe(false)
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
@@ -93,7 +117,10 @@ describe('OpenContent client enrollment', () => {
       fetch
     })
 
-    const error = await client.isTokenValid({ token: canary }).catch((caught: unknown) => caught)
+    const error = await client.isTokenValid({
+      token: canary,
+      assertPrincipalCurrent: principalIsCurrent
+    }).catch((caught: unknown) => caught)
 
     expect(error).toMatchObject({ code: 'provider_unavailable' })
     expect(JSON.stringify({
@@ -150,10 +177,12 @@ describe('OpenContent client enrollment', () => {
       baseUrl: 'https://opencontent.invalid',
       fetch
     })
+    const assertPrincipalCurrent = vi.fn(async () => { await Promise.resolve() })
 
     await expect(client.authenticateExistingAccount({
       username: 'fixture-user',
-      password: 'fixture-password'
+      password: 'fixture-password',
+      assertPrincipalCurrent
     })).resolves.toEqual({
       token: 'opaque-token-value-0001',
       account: {
@@ -165,6 +194,7 @@ describe('OpenContent client enrollment', () => {
       }
     })
     expect(requests).toHaveLength(4)
+    expect(assertPrincipalCurrent).toHaveBeenCalledTimes(4)
   })
 
   it('classifies an invalid post-login Token as reauthentication required', async () => {
@@ -176,7 +206,8 @@ describe('OpenContent client enrollment', () => {
 
     await expect(client.authenticateExistingAccount({
       username: 'fixture-user',
-      password: 'fixture-password'
+      password: 'fixture-password',
+      assertPrincipalCurrent: principalIsCurrent
     })).rejects.toMatchObject({ code: 'reauthentication_required' })
     expect(fetch).toHaveBeenCalledTimes(3)
   })
@@ -190,7 +221,8 @@ describe('OpenContent client enrollment', () => {
 
     await expect(client.authenticateExistingAccount({
       username: 'fixture-user',
-      password: 'fixture-password'
+      password: 'fixture-password',
+      assertPrincipalCurrent: principalIsCurrent
     })).rejects.toMatchObject({ code: 'reauthentication_required' })
     expect(fetch).toHaveBeenCalledTimes(4)
   })
@@ -210,40 +242,18 @@ describe('OpenContent client enrollment', () => {
 
     await expect(client.authenticateExistingAccount({
       username: 'fixture-user',
-      password: 'fixture-password'
+      password: 'fixture-password',
+      assertPrincipalCurrent: principalIsCurrent
     })).rejects.toMatchObject({ code: 'provider_contract_violation' })
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
-  it('resolves personal and Team roots to stable folder GUID facts', async () => {
+  it('resolves the personal root to one stable folder GUID fact', async () => {
     const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/flatsdk/api/services/User/GetTopPersonalFolderId')) {
         expect(JSON.parse(String(init?.body))).toEqual({ token: 'fixture-token-value' })
         return jsonResponse({ result: 0, msg: '', data: '1001' })
-      }
-      if (url.endsWith('/flatsdk/api/services/Team/GetMyTeamList')) {
-        return jsonResponse({
-          result: 0,
-          msg: '',
-          data: {
-            pageNum: 1,
-            pageSize: 20,
-            totalCount: 1,
-            teamList: [{
-              teamId: 19,
-              folderId: 2213,
-              teamName: 'sciforge test',
-              teamStatus: 1,
-              teamOwner: 41,
-              permission: 7,
-              teamType: 0,
-              isStick: false
-            }],
-            sortName: 'team_name',
-            sortDesc: 'false'
-          }
-        })
       }
       if (url.endsWith('/flatsdk/api/services/DocList/GetFolderInfoById')) {
         const { folderId } = JSON.parse(String(init?.body)) as { folderId: number }
@@ -252,10 +262,10 @@ describe('OpenContent client enrollment', () => {
           msg: '',
           data: {
             id: folderId,
-            folderGuid: folderId === 1001 ? 'personal-folder-guid' : 'team-folder-guid',
+            folderGuid: 'personal-folder-guid',
             parentFolderId: 0,
-            folderType: folderId === 1001 ? 1 : 2,
-            teamId: folderId === 1001 ? 0 : 19,
+            folderType: 1,
+            teamId: 0,
             permission: 7,
             childFolderCount: 0,
             childFileCount: 0
@@ -269,21 +279,13 @@ describe('OpenContent client enrollment', () => {
       fetch
     })
 
-    await expect(client.listRootFolders({
+    await expect(client.listPersonalRootFolder({
       token: 'fixture-token-value',
-      teamPage: 1,
-      teamPageSize: 20
+      assertPrincipalCurrent: principalIsCurrent
     })).resolves.toEqual({
-      roots: [{
-        source: 'personal-root',
-        folderGuid: 'personal-folder-guid',
-        label: 'Personal library'
-      }, {
-        source: 'team-root',
-        folderGuid: 'team-folder-guid',
-        label: 'sciforge test'
-      }],
-      nextTeamPage: undefined
+      source: 'personal-root',
+      folderGuid: 'personal-folder-guid',
+      label: 'Personal library'
     })
   })
 
@@ -342,7 +344,8 @@ describe('OpenContent client enrollment', () => {
       token: 'fixture-token-value',
       parentFolderGuid: 'team-folder-guid',
       page: 2,
-      pageSize: 20
+      pageSize: 20,
+      assertPrincipalCurrent: principalIsCurrent
     })).resolves.toEqual({
       parentFolderGuid: 'team-folder-guid',
       entries: [{
@@ -357,6 +360,118 @@ describe('OpenContent client enrollment', () => {
       }],
       nextPage: 3
     })
+  })
+
+  it('awaits an asynchronous Principal guard immediately before a folder-list dispatch', async () => {
+    let releaseGuard!: () => void
+    const guardPending = new Promise<void>((resolve) => { releaseGuard = resolve })
+    const fetch = vi.fn(async () => jsonResponse(
+      emptyFolderChildren('team-folder-guid', 9002213, 1, 20)
+    ))
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    const result = client.listFolderEntries({
+      token: 'fixture-token-value',
+      parentFolderGuid: 'team-folder-guid',
+      page: 1,
+      pageSize: 20,
+      assertPrincipalCurrent: () => guardPending
+    })
+    await Promise.resolve()
+    expect(fetch).not.toHaveBeenCalled()
+
+    releaseGuard()
+    await expect(result).resolves.toEqual({
+      parentFolderGuid: 'team-folder-guid',
+      entries: [],
+      nextPage: undefined
+    })
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('does not dispatch a later root-list request after the Principal changes', async () => {
+    let principalCurrent = true
+    const requestedPaths: string[] = []
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      requestedPaths.push(url.pathname)
+      if (url.pathname.endsWith('/flatsdk/api/services/User/GetTopPersonalFolderId')) {
+        principalCurrent = false
+        return jsonResponse({ result: 0, msg: '', data: '1001' })
+      }
+      throw new Error(`A Principal change must stop request ${url.pathname}`)
+    })
+    const assertPrincipalCurrent = vi.fn(async () => {
+      await Promise.resolve()
+      if (!principalCurrent) throw new Error('stale principal')
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.listPersonalRootFolder({
+      token: 'fixture-token-value',
+      assertPrincipalCurrent
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+
+    expect(requestedPaths).toEqual([
+      '/flatsdk/api/services/User/GetTopPersonalFolderId'
+    ])
+    expect(assertPrincipalCurrent).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not misclassify a non-authenticated business rejection as an authorization failure', async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      result: 37,
+      msg: 'provider business rejection',
+      data: null
+    }))
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.listFolderEntries({
+      token: 'fixture-token-value',
+      parentFolderGuid: 'team-folder-guid',
+      page: 1,
+      pageSize: 20,
+      assertPrincipalCurrent: principalIsCurrent
+    })).rejects.toMatchObject({ code: 'provider_unavailable' })
+  })
+
+  it('rejects folder listings whose children belong to another numeric parent', async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      result: 0,
+      msg: '',
+      data: {
+        folderId: 9002213,
+        thisFolder: { id: 9002213, folderGuid: 'team-folder-guid', permission: 7 },
+        docListInfo: {
+          foldersInfo: [{
+            id: 9002214,
+            folderGuid: 'foreign-folder-guid',
+            name: 'Foreign folder',
+            parentFolderId: 9999,
+            childFolderCount: 0,
+            childFileCount: 0,
+            permission: 7
+          }],
+          filesInfo: [],
+          settings: {
+            pageNum: 1,
+            pageSize: 20,
+            totalCount: 1,
+            fileCount: 0,
+            folderCount: 1
+          }
+        }
+      }
+    }))
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.listFolderEntries({
+      token: 'fixture-token-value',
+      parentFolderGuid: 'team-folder-guid',
+      page: 1,
+      pageSize: 20,
+      assertPrincipalCurrent: principalIsCurrent
+    })).rejects.toMatchObject({ code: 'provider_contract_violation' })
   })
 
   it('observes the exact file-detail response without reusing listing field names', async () => {
@@ -380,7 +495,8 @@ describe('OpenContent client enrollment', () => {
     await expect(client.observeEntry({
       token: 'fixture-token-value',
       kind: 'file',
-      resourceGuid: 'child-file-guid'
+      resourceGuid: 'child-file-guid',
+      assertPrincipalCurrent: principalIsCurrent
     })).resolves.toEqual({
       kind: 'file',
       fileGuid: 'child-file-guid',
@@ -469,7 +585,8 @@ describe('OpenContent client enrollment', () => {
     const result = await client.createFolder({
       token: 'fixture-token-value',
       ...publicInput,
-      signal: new AbortController().signal
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
     })
 
     expect(result).toEqual({ folderGuid: 'created-folder-guid' })
@@ -483,6 +600,288 @@ describe('OpenContent client enrollment', () => {
       '/flatsdk/api/services/TemplateCreate/CreateFolder',
       '/flatsdk/api/services/DocList/GetFolderInfoById'
     ])
+  })
+
+  it.each(['2', '7', '19'])(
+    'rejects numeric OpenContent namespace or Team identity %s as a folder parent',
+    async (parentFolderGuid) => {
+      const fetch = vi.fn(async () => {
+        throw new Error('A numeric parent must not reach OpenContent.')
+      })
+      const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+      await expect(client.createFolder({
+        token: 'fixture-token-value',
+        parentFolderGuid,
+        name: 'Experiment',
+        signal: new AbortController().signal,
+        assertPrincipalCurrent: principalIsCurrent
+      })).rejects.toMatchObject({ code: 'invalid_input' })
+      expect(fetch).not.toHaveBeenCalled()
+    }
+  )
+
+  it('does not dispatch a folder mutation when the Principal changes after preflight', async () => {
+    const requestedPaths: string[] = []
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      requestedPaths.push(url.pathname)
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderByGuidOrId')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
+      }
+      throw new Error(`A Principal change must stop request ${url.pathname}`)
+    })
+    let assertionCount = 0
+    const assertPrincipalCurrent = vi.fn(async () => {
+      assertionCount += 1
+      await Promise.resolve()
+      if (assertionCount === 3) throw new Error('sensitive-host-principal-diagnostic')
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    const error = await client.createFolder({
+      token: 'fixture-token-value',
+      parentFolderGuid: 'team-folder-guid',
+      name: 'Experiment',
+      signal: new AbortController().signal,
+      assertPrincipalCurrent
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({ code: 'unauthorized' })
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).not.toContain('sensitive-host-principal-diagnostic')
+    expect(requestedPaths).toEqual([
+      '/flatsdk/api/services/DocList/GetFolderByGuidOrId',
+      '/flatsdk/api/services/DocList/GetFolderChildren'
+    ])
+    expect(assertPrincipalCurrent).toHaveBeenCalledTimes(3)
+  })
+
+  it('guards every paginated name-availability request before folder creation', async () => {
+    let principalCurrent = true
+    const requestedPaths: string[] = []
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      requestedPaths.push(url.pathname)
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderByGuidOrId')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
+        const response = emptyFolderChildren('team-folder-guid', 9002213, 1, 100)
+        response.data.docListInfo.settings.totalCount = 101
+        principalCurrent = false
+        return jsonResponse(response)
+      }
+      throw new Error(`A Principal change must stop request ${url.pathname}`)
+    })
+    const assertPrincipalCurrent = vi.fn(async () => {
+      await Promise.resolve()
+      if (!principalCurrent) throw new Error('stale principal')
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.createFolder({
+      token: 'fixture-token-value',
+      parentFolderGuid: 'team-folder-guid',
+      name: 'Experiment',
+      signal: new AbortController().signal,
+      assertPrincipalCurrent
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+
+    expect(requestedPaths).toEqual([
+      '/flatsdk/api/services/DocList/GetFolderByGuidOrId',
+      '/flatsdk/api/services/DocList/GetFolderChildren'
+    ])
+    expect(assertPrincipalCurrent).toHaveBeenCalledTimes(3)
+  })
+
+  it('refuses to claim a created folder when OpenContent observes it under another parent', async () => {
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderByGuidOrId')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/TemplateCreate/CreateFolder')) {
+        return jsonResponse({ result: 0, data: { id: 3317, name: 'Experiment' } })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderInfoById')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: {
+            id: 3317,
+            folderGuid: 'wrong-parent-folder-guid',
+            parentFolderId: 9999,
+            folderType: 2,
+            teamId: 9000019,
+            permission: 7,
+            childFolderCount: 0,
+            childFileCount: 0
+          }
+        })
+      }
+      throw new Error(`Unexpected request ${url.pathname}`)
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.createFolder({
+      token: 'fixture-token-value',
+      parentFolderGuid: 'team-folder-guid',
+      name: 'Experiment',
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
+    })).rejects.toMatchObject({ code: 'outcome_unknown' })
+  })
+
+  it('reports an indeterminate folder write once without retrying the mutation', async () => {
+    const requestedPaths: string[] = []
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      requestedPaths.push(url.pathname)
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderByGuidOrId')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/TemplateCreate/CreateFolder')) {
+        throw new Error('connection closed after request dispatch')
+      }
+      throw new Error(`Unexpected request ${url.pathname}`)
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.createFolder({
+      token: 'fixture-token-value',
+      parentFolderGuid: 'team-folder-guid',
+      name: 'Experiment',
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
+    })).rejects.toMatchObject({ code: 'outcome_unknown' })
+    expect(requestedPaths.filter((path) => path.endsWith('/TemplateCreate/CreateFolder')))
+      .toHaveLength(1)
+  })
+
+  it('reports outcome unknown without retry when the Principal changes after mutation dispatch', async () => {
+    let principalCurrent = true
+    const requestedPaths: string[] = []
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      requestedPaths.push(url.pathname)
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderByGuidOrId')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/TemplateCreate/CreateFolder')) {
+        principalCurrent = false
+        return jsonResponse({ result: 0, data: { id: 3317, name: 'Experiment' } })
+      }
+      throw new Error(`A Principal change must stop request ${url.pathname}`)
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.createFolder({
+      token: 'fixture-token-value',
+      parentFolderGuid: 'team-folder-guid',
+      name: 'Experiment',
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: async () => {
+        await Promise.resolve()
+        if (!principalCurrent) throw new Error('stale principal')
+      }
+    })).rejects.toMatchObject({ code: 'outcome_unknown' })
+
+    expect(requestedPaths).toEqual([
+      '/flatsdk/api/services/DocList/GetFolderByGuidOrId',
+      '/flatsdk/api/services/DocList/GetFolderChildren',
+      '/flatsdk/api/services/TemplateCreate/CreateFolder'
+    ])
+  })
+
+  it('maps OpenContent folder-name business result 7 to bounded invalid input', async () => {
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderByGuidOrId')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/TemplateCreate/CreateFolder')) {
+        return jsonResponse({ result: 7, data: null })
+      }
+      throw new Error(`Unexpected request ${url.pathname}`)
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.createFolder({
+      token: 'fixture-token-value',
+      parentFolderGuid: 'team-folder-guid',
+      name: 'Experiment',
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
+    })).rejects.toMatchObject({ code: 'invalid_input' })
+  })
+
+  it('reports a malformed successful folder mutation response as outcome unknown', async () => {
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderByGuidOrId')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/TemplateCreate/CreateFolder')) {
+        return jsonResponse({ result: 0, data: null })
+      }
+      throw new Error(`Unexpected request ${url.pathname}`)
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.createFolder({
+      token: 'fixture-token-value',
+      parentFolderGuid: 'team-folder-guid',
+      name: 'Experiment',
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
+    })).rejects.toMatchObject({ code: 'outcome_unknown' })
   })
 
   it('uploads new bytes through main-site creation and bounded region transfer', async () => {
@@ -554,8 +953,184 @@ describe('OpenContent client enrollment', () => {
       name: 'result.txt',
       size: bytes.byteLength,
       read: async ({ offset, length }) => bytes.slice(offset, offset + length),
-      signal: new AbortController().signal
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
     })).resolves.toEqual({ fileGuid: 'uploaded-file-guid' })
+  })
+
+  it('does not dispatch another upload chunk after the Principal changes', async () => {
+    const size = (5 * 1024 * 1024) + 1
+    const uploadChunks: number[] = []
+    let principalCurrent = true
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderByGuidOrId')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/Transport/Upload/CheckAndCreateDocInfo')) {
+        return jsonResponse({
+          result: 0,
+          data: {
+            FileId: 9010802,
+            FileVerId: 11670,
+            ParentFolderId: 9002213,
+            RegionHash: 'fixture-region-hash',
+            RegionId: 1,
+            RegionType: 1,
+            RegionUrl: ''
+          }
+        })
+      }
+      if (url.pathname === '/document/upload') {
+        const form = init?.body as FormData
+        uploadChunks.push(Number(form.get('chunk')))
+        principalCurrent = false
+        return jsonResponse({
+          uploadId: form.get('uploadId'),
+          filename: 'result.bin',
+          status: 'Uploading',
+          message: null,
+          percent: 50,
+          tag: 'false'
+        })
+      }
+      throw new Error(`A Principal change must stop request ${url.pathname}`)
+    })
+    const assertPrincipalCurrent = vi.fn(async () => {
+      await Promise.resolve()
+      if (!principalCurrent) throw new Error('stale principal')
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.uploadNewFile({
+      token: 'fixture-token-value',
+      parentFolderGuid: 'team-folder-guid',
+      name: 'result.bin',
+      size,
+      read: async ({ length }) => new Uint8Array(length),
+      signal: new AbortController().signal,
+      assertPrincipalCurrent
+    })).rejects.toMatchObject({ code: 'outcome_unknown' })
+
+    expect(uploadChunks).toEqual([0])
+  })
+
+  it('returns conflict without uploading when the target name already exists', async () => {
+    const requestedPaths: string[] = []
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      requestedPaths.push(url.pathname)
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderByGuidOrId')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
+        const response = emptyFolderChildren('team-folder-guid', 9002213, 1, 100, [{
+          id: 9010802,
+          fileGuid: 'existing-file-guid',
+          name: 'result.txt',
+          parentFolderId: 9002213,
+          size: 7,
+          permission: 7
+        }])
+        response.data.docListInfo.settings.totalCount = 1
+        response.data.docListInfo.settings.fileCount = 1
+        return jsonResponse(response)
+      }
+      throw new Error(`Upload mutation unexpectedly reached ${url.pathname}`)
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.uploadNewFile({
+      token: 'fixture-token-value',
+      parentFolderGuid: 'team-folder-guid',
+      name: 'result.txt',
+      size: 0,
+      read: async () => new Uint8Array(),
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
+    })).rejects.toMatchObject({ code: 'conflict' })
+    expect(requestedPaths).toEqual([
+      '/flatsdk/api/services/DocList/GetFolderByGuidOrId',
+      '/flatsdk/api/services/DocList/GetFolderChildren'
+    ])
+  })
+
+  it('refuses to claim an upload whose final file fact is outside the requested parent', async () => {
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderByGuidOrId')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/Transport/Upload/CheckAndCreateDocInfo')) {
+        return jsonResponse({
+          result: 0,
+          data: {
+            FileId: 9010802,
+            FileVerId: 11670,
+            ParentFolderId: 9002213,
+            RegionHash: 'fixture-region-hash',
+            RegionId: 1,
+            RegionType: 1,
+            RegionUrl: ''
+          }
+        })
+      }
+      if (url.pathname === '/document/upload') {
+        const form = init?.body as FormData
+        return jsonResponse({
+          uploadId: form.get('uploadId'),
+          filename: 'result.txt',
+          status: 'End',
+          message: null,
+          percent: 100,
+          tag: 'false'
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFileByIdOrGuid')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: {
+            fileId: 9010802,
+            fileGuid: 'wrong-parent-file-guid',
+            fileName: 'result.txt',
+            parentFolderId: 9999,
+            fileSize: 0,
+            permission: 7
+          }
+        })
+      }
+      throw new Error(`Unexpected request ${url.pathname}`)
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.uploadNewFile({
+      token: 'fixture-token-value',
+      parentFolderGuid: 'team-folder-guid',
+      name: 'result.txt',
+      size: 0,
+      read: async () => new Uint8Array(),
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
+    })).rejects.toMatchObject({ code: 'outcome_unknown' })
   })
 
   it('downloads one GUID through check then streams only response bytes', async () => {
@@ -589,9 +1164,50 @@ describe('OpenContent client enrollment', () => {
       token: 'fixture-token-value',
       fileGuid: 'download-file-guid',
       write: async (chunk) => { writes.push(Uint8Array.from(chunk)) },
-      signal: new AbortController().signal
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
     })).resolves.toEqual({ bytesWritten: bytes.byteLength })
     expect(Buffer.concat(writes)).toEqual(Buffer.from(bytes))
+  })
+
+  it('does not dispatch the download transfer after the Principal changes during its check', async () => {
+    let principalCurrent = true
+    const requestedPaths: string[] = []
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      requestedPaths.push(url.pathname)
+      if (url.pathname.endsWith('/flatsdk/api/services/Transport/Download/DownloadCheck')) {
+        principalCurrent = false
+        return jsonResponse({
+          result: 0,
+          data: {
+            regionId: 1,
+            regionType: 1,
+            regionHash: 'fixture-download-hash',
+            regionUrl: ''
+          }
+        })
+      }
+      throw new Error(`A Principal change must stop request ${url.pathname}`)
+    })
+    const assertPrincipalCurrent = vi.fn(async () => {
+      await Promise.resolve()
+      if (!principalCurrent) throw new Error('stale principal')
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.downloadFile({
+      token: 'fixture-token-value',
+      fileGuid: 'download-file-guid',
+      write: async () => undefined,
+      signal: new AbortController().signal,
+      assertPrincipalCurrent
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+
+    expect(requestedPaths).toEqual([
+      '/flatsdk/api/services/Transport/Download/DownloadCheck'
+    ])
+    expect(assertPrincipalCurrent).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -599,7 +1215,15 @@ function emptyFolderChildren(
   folderGuid: string,
   folderId: number,
   pageNum: number,
-  pageSize: number
+  pageSize: number,
+  filesInfo: Array<Readonly<{
+    id: number
+    fileGuid: string
+    name: string
+    parentFolderId: number
+    size: number
+    permission: number
+  }>> = []
 ) {
   return {
     result: 0,
@@ -609,7 +1233,7 @@ function emptyFolderChildren(
       thisFolder: { id: folderId, folderGuid, permission: 7 },
       docListInfo: {
         foldersInfo: [],
-        filesInfo: [],
+        filesInfo,
         settings: { pageNum, pageSize, totalCount: 0, fileCount: 0, folderCount: 0 }
       }
     }

@@ -227,7 +227,8 @@ function readContext(): ContentSpaceProviderOperationContext {
     principal,
     providerInstanceRef: PROVIDER_INSTANCE_REF,
     deadlineAt: new Date(NOW.getTime() + 60_000).toISOString(),
-    signal: new AbortController().signal
+    signal: new AbortController().signal,
+    assertPrincipalCurrent: () => undefined
   })
 }
 

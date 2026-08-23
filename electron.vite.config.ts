@@ -1,17 +1,56 @@
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+import { installedMainSourcePackageNames } from './src/main/modules/installed-main-source-packages'
+
+type MainBundleOutput = Readonly<Record<string, Readonly<{
+  type: string
+  imports?: readonly string[]
+  dynamicImports?: readonly string[]
+}>>>
+
+export function assertNoBareMainSourcePackageImports(
+  bundle: MainBundleOutput,
+  packageNames: readonly string[] = installedMainSourcePackageNames
+): void {
+  const bareImports = new Set<string>()
+  for (const output of Object.values(bundle)) {
+    if (output.type !== 'chunk') continue
+    for (const specifier of [...(output.imports ?? []), ...(output.dynamicImports ?? [])]) {
+      if (packageNames.some((packageName) =>
+        specifier === packageName || specifier.startsWith(`${packageName}/`)
+      )) {
+        bareImports.add(specifier)
+      }
+    }
+  }
+  if (bareImports.size > 0) {
+    throw new Error(
+      `Electron main bundle left public source package imports external: ${[...bareImports].sort().join(', ')}`
+    )
+  }
+}
+
+function mainSourcePackageBundleGuard(): Plugin {
+  return {
+    name: 'sciforge:main-source-package-bundle-guard',
+    generateBundle(_options, bundle) {
+      assertNoBareMainSourcePackageImports(bundle)
+    }
+  }
+}
 
 export default defineConfig({
   main: {
-    // These public runtime packages are source-owned workspaces. Bundle them
-    // into the main artifact so source and packaged Electron never have to
-    // execute TypeScript package entrypoints or resolve source-level `.js`
-    // specifiers through Node's ESM loader.
+    // The generated list is the public TypeScript workspace dependency closure
+    // of the Host and installed main domains. Packaged Electron must not depend
+    // on source entrypoints remaining in node_modules.
     plugins: [
       externalizeDepsPlugin({
-        exclude: ['@sciforge/codex-runtime', '@sciforge/workspace-egress']
-      })
+        exclude: [...installedMainSourcePackageNames]
+      }),
+      mainSourcePackageBundleGuard()
     ],
     build: {
       rollupOptions: {

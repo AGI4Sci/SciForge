@@ -1,10 +1,25 @@
 import { z } from 'zod'
-import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
+import {
+  principalSnapshotSchema
+} from '@sciforge/domain-sdk/principal'
 
 export const OPENCONTENT_PROVIDER_KIND = 'opencontent' as const
 export const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo' as const
 export const OPENCONTENT_CONTENT_SPACE_SERVICE_ID = 'opencontent.content-space' as const
-export const OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION = '1.0.0' as const
+export const OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION = '3.0.0' as const
+
+const openContentBindingDigestSchema = z.string().regex(/^[0-9a-f]{64}$/u)
+
+export const openContentExternalBindingAttestationSchema = z.object({
+  providerInstanceRef: z.string().trim().min(3).max(256),
+  principal: principalSnapshotSchema,
+  externalSubject: openContentBindingDigestSchema,
+  bindingRevision: openContentBindingDigestSchema
+}).strict().readonly()
+
+export type OpenContentExternalBindingAttestation = z.infer<
+  typeof openContentExternalBindingAttestationSchema
+>
 
 export const OPENCONTENT_CONNECTION_CAPABILITY_IDS = Object.freeze({
   status: 'opencontent.connection.status',
@@ -27,24 +42,6 @@ const openContentUnbindSuccessOutputSchema = z.object({
   state: z.literal('disconnected'),
   remoteRevocation: z.literal('unsupported')
 }).strict().readonly()
-
-export const openContentExternalAccountSchema = z.object({
-  id: z.string().trim().min(1).max(256),
-  identityId: z.number().int().nonnegative().safe(),
-  account: z.string().trim().min(1).max(256),
-  name: z.string().trim().min(1).max(256),
-  topPersonalFolderId: z.string().regex(/^\d+$/u)
-}).strict().readonly()
-
-export const openContentAuthenticatedSessionSchema = z.object({
-  token: z.string().trim().min(16).max(4096),
-  account: openContentExternalAccountSchema
-}).strict().readonly()
-
-export type OpenContentExternalAccount = z.infer<typeof openContentExternalAccountSchema>
-export type OpenContentAuthenticatedSession = z.infer<
-  typeof openContentAuthenticatedSessionSchema
->
 
 const openContentExternalAccountSummarySchema = z.object({
   id: z.string().trim().min(1).max(256),
@@ -123,79 +120,6 @@ export const openContentUnbindOutputSchema = z.discriminatedUnion('outcome', [
 export type OpenContentEnrollmentError = z.infer<typeof openContentEnrollmentErrorSchema>
 export type OpenContentConnectionResult = z.infer<typeof openContentConnectionResultSchema>
 export type OpenContentUnbindResult = z.infer<typeof openContentUnbindOutputSchema>
-
-export type OpenContentContentSpaceFacade = Readonly<{
-  listRootFolders(input: Readonly<{
-    principal: PrincipalSnapshot
-    providerInstanceRef: string
-    teamPage: number
-    teamPageSize: number
-    includePersonal?: boolean
-    includeTeams?: boolean
-    signal?: AbortSignal
-    assertPrincipalCurrent(): void
-  }>): Promise<Readonly<{
-    roots: readonly Readonly<{
-      source: 'personal-root' | 'team-root'
-      folderGuid: string
-      label: string
-    }>[]
-    nextTeamPage?: number
-  }>>
-  listFolderEntries(input: Readonly<{
-    principal: PrincipalSnapshot
-    providerInstanceRef: string
-    parentFolderGuid: string
-    page: number
-    pageSize: number
-    signal?: AbortSignal
-    assertPrincipalCurrent(): void
-  }>): Promise<Readonly<{
-    parentFolderGuid: string
-    entries: readonly (
-      | Readonly<{ kind: 'container'; folderGuid: string; label: string }>
-      | Readonly<{ kind: 'file'; fileGuid: string; label: string; size: number }>
-    )[]
-    nextPage?: number
-  }>>
-  observeEntry(input: Readonly<{
-    principal: PrincipalSnapshot
-    providerInstanceRef: string
-    kind: 'container' | 'file'
-    resourceGuid: string
-    signal?: AbortSignal
-    assertPrincipalCurrent(): void
-  }>): Promise<
-    | Readonly<{ kind: 'container'; folderGuid: string; label: string }>
-    | Readonly<{ kind: 'file'; fileGuid: string; label: string; size: number }>
-  >
-  createFolder(input: Readonly<{
-    principal: PrincipalSnapshot
-    providerInstanceRef: string
-    parentFolderGuid: string
-    name: string
-    signal: AbortSignal
-    assertPrincipalCurrent(): void
-  }>): Promise<Readonly<{ folderGuid: string }>>
-  uploadNewFile(input: Readonly<{
-    principal: PrincipalSnapshot
-    providerInstanceRef: string
-    parentFolderGuid: string
-    name: string
-    size: number
-    read(range: Readonly<{ offset: number; length: number }>): Promise<Uint8Array>
-    signal: AbortSignal
-    assertPrincipalCurrent(): void
-  }>): Promise<Readonly<{ fileGuid: string }>>
-  downloadFile(input: Readonly<{
-    principal: PrincipalSnapshot
-    providerInstanceRef: string
-    fileGuid: string
-    write(chunk: Uint8Array): Promise<void>
-    signal: AbortSignal
-    assertPrincipalCurrent(): void
-  }>): Promise<Readonly<{ bytesWritten: number }>>
-}>
 
 export type OpenContentConnectorErrorCode =
   | 'invalid_input'

@@ -53,6 +53,10 @@ case "$(uname -s)" in
     ;;
 esac
 
+export SCIFORGE_PUBLIC_RELEASE=1
+node "${ROOT}/scripts/public-release-guard.cjs" \
+  || die "Official public releases require safe public runtime and domain composition."
+
 release_check_prerequisites
 release_acquire_lock
 
@@ -109,6 +113,7 @@ collect() {
 
 collect "Windows exe" "dist/SciForge-*-win-*.exe"
 collect "Windows blockmap" "dist/SciForge-*-win-*.exe.blockmap"
+collect "public release receipt" "dist/release-win.json"
 
 cyan "Uploading ${#ASSETS[@]} Windows asset(s) to ${TAG_NAME}..."
 for asset in "${ASSETS[@]}"; do
@@ -119,13 +124,13 @@ done
 
 if [[ "${R2_UPLOAD}" == "true" ]]; then
   cyan "Uploading Windows asset metadata to R2 (${TAG_NAME})..."
-  node "${ROOT}/scripts/publish-r2.mjs" upload --platform win --tag "${TAG_NAME}" --channel "${RELEASE_CHANNEL}" \
+  node "${ROOT}/scripts/publish-r2.mjs" upload --platform win --dist "${ROOT}/dist" --tag "${TAG_NAME}" --channel "${RELEASE_CHANNEL}" \
     || die "R2 upload failed for Windows assets"
 fi
 
 if [[ "${R2_PROMOTE}" == "true" ]]; then
   cyan "Promoting ${TAG_NAME} as R2 latest..."
-  node "${ROOT}/scripts/publish-r2.mjs" promote --tag "${TAG_NAME}" --channel "${RELEASE_CHANNEL}" \
+  node "${ROOT}/scripts/publish-r2.mjs" promote --tag "${TAG_NAME}" --dist "${ROOT}/dist" --channel "${RELEASE_CHANNEL}" --platforms win \
     || die "R2 promote failed"
 fi
 

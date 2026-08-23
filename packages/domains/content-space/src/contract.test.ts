@@ -5,6 +5,10 @@ import { parsePortableResourceReference } from '@sciforge/domain-sdk/portable-re
 import * as contract from './contract.js'
 
 describe('Content Space public contract', () => {
+  it('publishes the third-major Provider boundary for directory-member administration', () => {
+    expect(contract.CONTENT_SPACE_PROVIDER_CONTRACT_VERSION).toBe('3.0.0')
+  })
+
   it('projects the bounded Provider Kind needed for renderer-owned enrollment matching', () => {
     expect(contract.contentSpaceProviderInstanceSummarySchema.parse({
       providerInstanceRef: 'provider-instance-a',
@@ -174,20 +178,131 @@ describe('Content Space public contract', () => {
     }).readiness).toBe('production_ready')
   })
 
+  it('admits a verification profile only for exact PoC verification evidence', () => {
+    expect(contract.contentSpaceAdmittedCapabilityStateSchema.parse({
+      operation: 'list-containers',
+      readiness: 'poc_only',
+      reasonCode: 'verification_profile_required',
+      admission: {
+        status: 'admitted',
+        reasonCode: 'verification_profile_admitted'
+      }
+    }).admission.status).toBe('admitted')
+    expect(() => contract.contentSpaceAdmittedCapabilityStateSchema.parse({
+      operation: 'list-containers',
+      readiness: 'poc_only',
+      reasonCode: 'provider_contract_missing',
+      admission: {
+        status: 'admitted',
+        reasonCode: 'verification_profile_admitted'
+      }
+    })).toThrow()
+  })
+
+  it('accepts only opaque token-free external binding evidence', () => {
+    const attestation = {
+      providerInstanceRef: 'provider-instance-a',
+      principal: {
+        authority: 'sciforge.identity-access',
+        subject: 'principal-a',
+        assurance: 'local-selection',
+        deviceId: 'device-a',
+        identityVersion: 1
+      },
+      externalSubject: 'a'.repeat(64),
+      bindingRevision: 'b'.repeat(64)
+    }
+    expect(contract.contentSpaceExternalBindingAttestationSchema.parse(attestation))
+      .toEqual(attestation)
+    expect(() => contract.contentSpaceExternalBindingAttestationSchema.parse({
+      ...attestation,
+      connectionId: 'private-connection'
+    })).toThrow()
+    expect(() => contract.contentSpaceExternalBindingAttestationSchema.parse({
+      ...attestation,
+      externalSubject: 'provider-user-42'
+    })).toThrow()
+  })
+
   it('does not expose a caller-controlled ArtifactReference issuer', () => {
     expect(contract).not.toHaveProperty('issueArtifactReference')
+  })
+
+  it('pins schema-parsed feature ports instead of retaining mutable provider aliases', () => {
+    const nativeDocuments = {
+      describeOperations: async () => [],
+      execute: async () => ({})
+    }
+    const mutableFeatures = { nativeDocuments }
+    const mutableProvider = {
+      ...providerFixture(),
+      features: mutableFeatures
+    } as unknown as contract.ContentSpaceProvider
+
+    const defined = contract.defineContentSpaceProvider(mutableProvider)
+
+    expect(defined.features).not.toBe(mutableFeatures)
+    expect(defined.features?.nativeDocuments).not.toBe(nativeDocuments)
+    expect(Object.isFrozen(defined.features)).toBe(true)
+    expect(Object.isFrozen(defined.features?.nativeDocuments)).toBe(true)
   })
 
   it('accepts only the exact cohesive Provider contract', () => {
     const provider = providerFixture()
     expect(contract.defineContentSpaceProvider(provider)).toBe(provider)
+    const providerWithFeatures = {
+      ...provider,
+      features: {
+        nativeDocuments: {
+          describeOperations: async () => [],
+          execute: async () => ({})
+        },
+        extendedOperations: {
+          describeOperations: async () => [],
+          execute: async () => ({})
+        },
+        administration: {
+          describeOperations: async () => [],
+          bind: async () => ({}) as never
+        }
+      }
+    } as unknown as contract.ContentSpaceProvider
+    const definedProviderWithFeatures = contract.defineContentSpaceProvider(providerWithFeatures)
+    expect(definedProviderWithFeatures).not.toBe(providerWithFeatures)
+    expect(definedProviderWithFeatures).toEqual(providerWithFeatures)
+    expect(Object.isFrozen(definedProviderWithFeatures.features)).toBe(true)
+    expect(Object.isFrozen(definedProviderWithFeatures.features?.nativeDocuments)).toBe(true)
+    expect(Object.isFrozen(definedProviderWithFeatures.features?.extendedOperations)).toBe(true)
+    expect(Object.isFrozen(definedProviderWithFeatures.features?.administration)).toBe(true)
+    expect(() => contract.defineContentSpaceProvider({
+      ...provider,
+      executeNativeDocument: async () => ({})
+    } as unknown as contract.ContentSpaceProvider)).toThrow()
+    expect(() => contract.defineContentSpaceProvider({
+      ...provider,
+      features: {
+        nativeDocuments: {
+          describeOperations: async () => [],
+          execute: async () => ({}),
+          rawClient: {}
+        }
+      }
+    } as unknown as contract.ContentSpaceProvider)).toThrow()
+    expect(() => contract.defineContentSpaceProvider({
+      ...provider,
+      features: {
+        administration: {
+          bind: async () => ({}) as never
+        }
+      }
+    } as unknown as contract.ContentSpaceProvider)).toThrow()
     expect(() => contract.defineContentSpaceProvider({
       ...provider,
       rawClient: {}
     } as typeof provider)).toThrow()
     expect(() => contract.defineContentSpaceProvider({
       ...provider,
-      contractVersion: '2.0.0'
+      contractVersion: '1.0.0'
     } as unknown as typeof provider)).toThrow()
   })
 
@@ -216,6 +331,7 @@ describe('Content Space public contract', () => {
 function providerFixture(): contract.ContentSpaceProvider {
   return {
     contractVersion: contract.CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
+    attestExternalBinding: async () => undefined,
     describeCapabilities: async () => [],
     listContainers: async ({ context }) => ({
       providerInstanceRef: context.providerInstanceRef,

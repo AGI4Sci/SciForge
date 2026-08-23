@@ -5,8 +5,7 @@ on:
     paths:
       - ".github/workflows/collaboration-ci.yml"
       - "packages/collaboration-*/**"
-      - "packages/domains/collaboration/**"
-      - "packages/domains/identity-access/**"
+      - "packages/domains/**"
       - "packages/domain-sdk/**"
       - "infra/keycloak/**"
       - "docs/adr/**"
@@ -26,6 +25,7 @@ on:
       - "src/main/principal-context*"
       - "src/main/capabilities/agent-tools*"
       - "src/main/capabilities/broker*"
+      - "src/main/capabilities/content-space-discovery.test.ts"
       - "src/main/capabilities/identity-principal-transition.integration.test.ts"
       - "src/main/capabilities/registry*"
       - "src/main/ipc/register-app-ipc-handlers*"
@@ -43,8 +43,7 @@ on:
     paths:
       - ".github/workflows/collaboration-ci.yml"
       - "packages/collaboration-*/**"
-      - "packages/domains/collaboration/**"
-      - "packages/domains/identity-access/**"
+      - "packages/domains/**"
       - "packages/domain-sdk/**"
       - "infra/keycloak/**"
       - "docs/adr/**"
@@ -64,6 +63,7 @@ on:
       - "src/main/principal-context*"
       - "src/main/capabilities/agent-tools*"
       - "src/main/capabilities/broker*"
+      - "src/main/capabilities/content-space-discovery.test.ts"
       - "src/main/capabilities/identity-principal-transition.integration.test.ts"
       - "src/main/capabilities/registry*"
       - "src/main/ipc/register-app-ipc-handlers*"
@@ -113,8 +113,14 @@ jobs:
       - name: Run full application typecheck
         run: npm run typecheck
 
+      - name: Run installed domain package tests
+        run: npm run domain-packages:test
+
       - name: Run lint
         run: npm run lint
+
+      - name: Verify CI routing contract
+        run: node --test scripts/collaboration-ci.test.mjs
 
       - name: Run collaboration production-path tests
         run: npm run collaboration:test
@@ -124,6 +130,7 @@ jobs:
           npx vitest run \
             src/main/capabilities/broker.test.ts \
             src/main/capabilities/agent-tools.test.ts \
+            src/main/capabilities/content-space-discovery.test.ts \
             src/renderer/src/lib/capability-client.test.ts
 
       - name: Run identity package and persistence tests

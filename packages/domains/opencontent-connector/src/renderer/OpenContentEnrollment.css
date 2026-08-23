@@ -341,6 +341,10 @@
   margin-top: 3px;
 }
 
+.opencontent-enrollment__local-cleanup {
+  margin-top: 12px;
+}
+
 @container (max-width: 420px) {
   .opencontent-enrollment__form,
   .opencontent-enrollment__reauth,

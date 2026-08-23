@@ -1,11 +1,11 @@
 # opencontent-connector Specification
 
 ## Purpose
-Defines the OpenContent integration package that enrolls existing accounts and owns Principal-bound authentication, secure Token use, validated transport, and one Host-mediated Content Space adapter facade.
+Defines the OpenContent integration package that enrolls existing accounts and owns Principal-bound authentication, secure Token use, validated HTTP and supplier transport, and one Host-mediated Content Space Provider facade.
 ## Requirements
 ### Requirement: Connector is one independently composed integration package
 
-`opencontent-connector` SHALL be a trusted compile-time package discovered through standard manifest/generated composition. Its renderer entrypoint SHALL expose only Human enrollment/status UI; its main entrypoint SHALL own connection state, credential use, endpoint policy, authentication, schemas, transport, and redaction. It SHALL register no ContentSpaceProvider, DocumentProvider, portable resolver, raw public client, Agent credential surface, sidecar, or Host vendor switch.
+`opencontent-connector` SHALL be a trusted compile-time package discovered through standard manifest/generated composition. Its renderer entrypoint SHALL expose only Human enrollment/status UI; its main entrypoint SHALL own connection state, credential use, endpoint policy, authentication, schemas, transport, and redaction. It SHALL register no ContentSpaceProvider, DocumentProvider, portable resolver, raw public client, Agent credential surface, public sidecar contribution, or Host vendor switch.
 
 #### Scenario: Connector is absent
 
@@ -46,7 +46,11 @@ Secret material SHALL exist only in the owner-scoped secure credential facility.
 
 ### Requirement: Instance policy and callable transport are trusted and private
 
-The Connector SHALL contribute a non-secret OpenContent Provider Instance directory entry and bind its exact reference to Connector-private HTTPS endpoint, tenant/build expectations, limits, and readiness/audience policy. The endpoint SHALL come only from explicit package-owned deployment configuration; no development or demonstration origin SHALL be compiled as a default, and an absent or invalid endpoint SHALL fail unavailable before credential or network use. Callers SHALL NOT supply an endpoint or promote readiness. A generic Host mediator SHALL issue the narrow token-free callable facade only to the allowlisted OpenContent Content Space adapter owner; the global contribution list SHALL contain only a non-callable descriptor.
+The Connector SHALL contribute a non-secret OpenContent Provider Instance directory entry and bind its exact reference to Connector-private HTTPS endpoint, tenant/build expectations, limits, and readiness/audience policy. Its package manifest SHALL declare deployment contract version `1`, source-relative path `.sciforge/private/deployments/opencontent-connector.json`, packaged Resources-relative path `domain-deployments/opencontent-connector.json`, maximum size `4096`, and `publicRelease: forbidden`, without an endpoint literal. The sidecar SHALL contain exactly `{ contractVersion: 1, providerInstanceRef: "opencontent-edoc2-demo", origin }`; `origin` SHALL be an absolute HTTPS origin with no userinfo, path, query, fragment, or unknown field. During activation the Connector SHALL synchronously open only the exact mode-specific path, request no-follow semantics when the platform exposes them, and always bind the opened descriptor to the pre-open regular-file identity, size, modification time, change time, and birth time. It SHALL verify a file no larger than `4096` bytes by descriptor, perform a read bounded to `4097` bytes from that same descriptor, reject identity, size, modification-time, change-time, or birth-time drift after the read, close the descriptor, and freeze the strict result. It SHALL also reject relative roots, escapes, symlinked ancestors or files, malformed JSON, or schema drift, and SHALL NOT fall back between source and packaged paths or read environment, argv, caller, renderer, or package settings. No development or demonstration origin SHALL be compiled as a default.
+
+Provider Instance discovery, capability registration, and the Host-mediated service descriptor SHALL remain composed without the sidecar. Every legal bind, status, ordinary facade, Team, or supplier call SHALL instead fail `provider_unavailable` before settings, credentials, network, transfer, or process work. Node-local unbind and credential retirement SHALL remain available without the sidecar and SHALL perform no Provider business call. The integration-owned unavailable enrollment view SHALL expose that existing local unbind only after explicit Human confirmation and SHALL state that remote files are not deleted. Unknown Provider Instances SHALL retain `invalid_provider_instance`/`invalid_input` priority. Only valid configuration MAY construct the HTTP client and Team runtime, and supplier transport SHALL be exposed only when both deployment configuration and verified supplier assets are available. Callers SHALL NOT supply an endpoint or promote readiness. A generic Host mediator SHALL issue the single narrow token-free callable facade only to the allowlisted OpenContent Content Space adapter owner; the global contribution list SHALL contain only a non-callable descriptor.
+
+Generic manifest-driven packaging SHALL preserve every deployment-configuration declaration whether or not its source sidecar exists, and SHALL create an `extraResources` entry plus exact size/digest receipt only for an active source. Electron Builder SHALL capture this immutable composition exactly once before copying and pass that same composition to the after-pack public-release guard and packaged verifier without recomputation. The verifier SHALL require every active receipt's exact contained regular non-symlink target, size, and digest, and SHALL require every inactive declaration's target to be absent. Official public releases SHALL reject every active `publicRelease: forbidden` configuration, and no deployment sidecar SHALL enter public npm files.
 
 #### Scenario: Consumer impersonates the adapter or supplies an endpoint
 
@@ -55,8 +59,23 @@ The Connector SHALL contribute a non-secret OpenContent Provider Instance direct
 
 #### Scenario: Deployment endpoint is not configured
 
-- **WHEN** the Provider-owned OpenContent base URL is absent
-- **THEN** enrollment and content operations SHALL fail unavailable without contacting a fallback service
+- **WHEN** the exact package-owned sidecar is missing or invalid
+- **THEN** the Provider Instance, capabilities, and service descriptor SHALL remain registered while every Provider-backed call listed above fails `provider_unavailable` before storage, credentials, network, or process work and without contacting a fallback service, and local unbind remains available to remove stored credentials and settings
+
+#### Scenario: Human clears an unavailable local connection
+
+- **WHEN** the selected Provider Instance is unavailable and the Human explicitly confirms Disconnect in the integration-owned enrollment view
+- **THEN** the Connector SHALL remove the current Principal's local credential and settings through the existing unbind path without a Provider business call or remote-file deletion
+
+#### Scenario: Source changes after packaging composition is captured
+
+- **WHEN** an active source sidecar is removed or changed after Electron Builder captures its receipt
+- **THEN** after-pack verification SHALL still require the captured target, size, and digest and SHALL NOT recompute an empty or different composition
+
+#### Scenario: An inactive deployment target is injected
+
+- **WHEN** a manifest declaration has no active source receipt but its packaged target exists
+- **THEN** after-pack verification SHALL reject the residual target
 
 ### Requirement: Authentication and transport validate exact schemas
 
@@ -66,6 +85,17 @@ Every admitted operation SHALL validate HTTP status, OpenContent business result
 
 - **WHEN** either condition occurs
 - **THEN** the Connector SHALL return a bounded typed failure and SHALL NOT emit a resource reference
+
+### Requirement: Supplier execution has one Connector-owned transport
+
+The Connector SHALL own the typed supplier invocation/result protocol, executable command allowlist, verified asset resolution, runtime snapshot, bounded runner, and isolated process transport. It SHALL expose to the owning Provider only a token-free `./main-contract` facade and typed supplier invocation surface. Asset paths, argv, environment, credentials, raw process results, runner construction, snapshots, and integrity override hooks SHALL remain package-private. The Provider SHALL own receipt-to-Content-Space semantics and SHALL NOT create a second supplier process, raw CLI path, or transport.
+
+The pinned supplier snapshot SHALL freeze exactly 86 inventory commands and an exact 50-command admitted adapter union. The supplier `download`, `file-list`, `kbox-list`, `file-internal-link`, `meta-modeldata`, and `collab-link` commands SHALL remain inventory-only and SHALL NOT enter the admitted union. Ordinary download and directory listing SHALL remain on the typed Connector facade, while PDF export SHALL remain a format of `native-document:export`. The wider inventory MAY contain commands that are not executable. Only the package-owned reviewed union MAY reach the process transport; commands without an exact Provider semantic contract SHALL fail before source transfer, temporary-file creation, or subprocess dispatch. Static CLI inventory characterization SHALL remain a Connector package test and SHALL NOT be represented as canonical packaged callability.
+
+#### Scenario: Provider requests a command outside the executable union
+
+- **WHEN** the typed Provider adapter requests a supplier command that is present only in inventory
+- **THEN** the Connector SHALL reject it before process launch and SHALL NOT reinterpret it through an alias or generic argv surface
 
 ### Requirement: Writes and two-stage transfers preserve safety and uncertainty
 
@@ -78,7 +108,7 @@ Create-folder/upload-new SHALL never overwrite, auto-rename, retarget, retry bli
 
 ### Requirement: Development admission is exact and production remains blocked
 
-The reviewed shared demonstration instance MAY execute only through a trusted development profile that fixes the Provider Instance, least-privilege account class, exact operations, transfer limits, and UI/Agent audiences. Renderer, Agent, Task, portable input, environment text, or ordinary configuration SHALL NOT widen it. Production readiness remains a separate decision.
+The fixed Provider Instance MAY execute a `poc_only` operation only through a trusted development profile that fixes the Provider Instance, complete Host Principal snapshot, exact authority, operation, transfer limits, bounded validity window, and UI/Agent audience. Any operation that is not an explicitly allowed bootstrap or exact-root zero-transfer read SHALL also bind the profile to the Connector-attested opaque external subject and current binding revision. Deployment configuration establishes runtime availability only; it is not an operation verification profile and cannot change readiness or admission. Renderer, Agent, Task, portable input, environment text, Host assurance, or ordinary configuration SHALL NOT nominate an external account or widen the profile. Production readiness remains a separate decision.
 
 #### Scenario: One operation lacks a pinned contract
 
@@ -87,7 +117,7 @@ The reviewed shared demonstration instance MAY execute only through a trusted de
 
 ### Requirement: Shared Documents and Project semantics remain absent
 
-The Connector SHALL define no Document port/provider, collaborative editing, Project binding, Workspace synchronization, ACL/member administration, or shared administrator fallback.
+The Connector SHALL define no Document port/provider, collaborative editing, Project binding, Workspace synchronization, domain-level administration capability, or shared administrator fallback. Its narrow token-free facade MAY expose Provider-specific Team administration transport only to the owning ContentSpaceProvider integration; that transport SHALL register no capability, confer no authority, and accept no caller-selected credential or external account.
 
 #### Scenario: Change 1 is installed alone
 

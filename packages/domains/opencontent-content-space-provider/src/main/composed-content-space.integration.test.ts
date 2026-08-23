@@ -1,6 +1,9 @@
 import { generateKeyPairSync } from 'node:crypto'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   CONTENT_SPACE_CAPABILITY_IDS,
@@ -42,7 +45,7 @@ import {
 
 import { createDomainMainEntry as createAdapterMainEntry } from './index.js'
 
-const TRUSTED_ORIGIN = 'https://test1.edoc2.com'
+const TRUSTED_ORIGIN = 'https://tenant.example'
 const TOKEN_CANARY = 'opaque-integration-token-0001'
 const PASSWORD_CANARY = 'password-canary-do-not-return'
 const LEGACY_PROVIDER_INSTANCE_REF = 'opencontent-default'
@@ -57,6 +60,19 @@ const principal = Object.freeze({
 
 const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+const deploymentRoot = mkdtempSync(join(tmpdir(), 'sciforge-opencontent-composed-'))
+const deploymentPath = join(
+  deploymentRoot,
+  '.sciforge/private/deployments/opencontent-connector.json'
+)
+mkdirSync(dirname(deploymentPath), { recursive: true })
+writeFileSync(deploymentPath, JSON.stringify({
+  contractVersion: 1,
+  providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+  origin: TRUSTED_ORIGIN
+}), 'utf8')
+afterAll(() => rmSync(deploymentRoot, { recursive: true, force: true }))
+afterEach(() => vi.unstubAllGlobals())
 
 type CapabilityDefinition = Readonly<{
   id: string
@@ -67,7 +83,7 @@ type CapabilityDefinition = Readonly<{
 }>
 
 describe('composed Content Space with the OpenContent Provider adapter', () => {
-  it('binds once and keeps personal and Team library reads working after runtime restart', async () => {
+  it('persists the binding while unverified reads fail closed before Provider access', async () => {
     const storage = persistentStorage()
     const transport = deterministicOpenContentTransport()
     const first = await composeRuntime(storage, transport.fetch)
@@ -92,7 +108,7 @@ describe('composed Content Space with the OpenContent Provider adapter', () => {
         }
       })
 
-      const personal = await invokeContentSpace<ContentSpaceContainerPage>(
+      const personal = await invoke<ContentSpaceResult<ContentSpaceContainerPage>>(
         first.contentDefinitions,
         CONTENT_SPACE_CAPABILITY_IDS.listContainers,
         {
@@ -102,16 +118,12 @@ describe('composed Content Space with the OpenContent Provider adapter', () => {
         'invocation_content_space_personal_0002'
       )
       expect(personal).toEqual({
-        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-        items: [{
-          reference: {
-            providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-            containerId: 'personal-folder-guid'
-          },
-          scope: 'personal',
-          label: 'Personal library'
-        }],
-        nextCursor: 'teams_1'
+        ok: false,
+        error: {
+          code: 'blocked_by_contract',
+          message: 'The selected Provider does not enable this operation.',
+          retry: 'never'
+        }
       })
       expectSafePublicOutput({ bound, personal })
     } finally {
@@ -120,39 +132,46 @@ describe('composed Content Space with the OpenContent Provider adapter', () => {
 
     const second = await composeRuntime(storage, transport.fetch)
     try {
-      const teams = await invokeContentSpace<ContentSpaceContainerPage>(
+      const status = await invoke(
+        second.connectorDefinitions,
+        OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
+        { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF },
+        'invocation_opencontent_status_after_restart_0003'
+      )
+      expect(status).toMatchObject({
+        outcome: 'success',
+        status: {
+          state: 'connected',
+          providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+          externalAccount: { identityId: 42, account: 'fixture-scientist' }
+        }
+      })
+
+      const teams = await invoke<ContentSpaceResult<ContentSpaceContainerPage>>(
         second.contentDefinitions,
         CONTENT_SPACE_CAPABILITY_IDS.listContainers,
         {
           providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
           page: { limit: 20, cursor: 'teams_1' }
         },
-        'invocation_content_space_teams_after_restart_0003'
+        'invocation_content_space_teams_after_restart_0004'
       )
       expect(teams).toEqual({
-        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-        items: [{
-          reference: {
-            providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-            containerId: 'team-folder-guid'
-          },
-          scope: 'shared',
-          label: 'SciForge Research'
-        }]
+        ok: false,
+        error: {
+          code: 'blocked_by_contract',
+          message: 'The selected Provider does not enable this operation.',
+          retry: 'never'
+        }
       })
-      expectSafePublicOutput(teams)
+      expectSafePublicOutput({ status, teams })
       expect(transport.loginRequests).toHaveLength(1)
       expect(transport.requestedPaths).toEqual([
         '/inbiz/org/api/auth/GetLoginRsaPublicKey',
         '/flatsdk/api/services/Auth/UserLogin',
         '/flatsdk/api/services/Auth/CheckUserTokenValidity',
         '/flatsdk/api/services/User/GetUserInfoByToken',
-        '/flatsdk/api/services/Auth/CheckUserTokenValidity',
-        '/flatsdk/api/services/User/GetTopPersonalFolderId',
-        '/flatsdk/api/services/DocList/GetFolderInfoById',
-        '/flatsdk/api/services/Auth/CheckUserTokenValidity',
-        '/flatsdk/api/services/Team/GetMyTeamList',
-        '/flatsdk/api/services/DocList/GetFolderInfoById'
+        '/flatsdk/api/services/Auth/CheckUserTokenValidity'
       ])
     } finally {
       await second.dispose()
@@ -201,6 +220,7 @@ async function composeRuntime(
   storage: ReturnType<typeof persistentStorage>,
   fetchImplementation: typeof fetch
 ) {
+  vi.stubGlobal('fetch', fetchImplementation)
   const internalServices = inMemoryInternalServices()
   const packageSecrets: DomainMainPackageSecretStoreHost = Object.freeze({
     has: vi.fn(async () => false),
@@ -211,6 +231,8 @@ async function composeRuntime(
   })
   const commonHost = Object.freeze({
     getUserDataDir: () => '/private/tmp/sciforge-opencontent-content-space-composed-test',
+    getAppRoot: () => deploymentRoot,
+    isPackaged: () => false,
     defineCapability: (options: unknown) => options,
     internalServices
   })
@@ -218,7 +240,7 @@ async function composeRuntime(
     ...commonHost,
     packageSettings: storage.settings,
     packageSecrets
-  }), { fetch: fetchImplementation })
+  }))
   const adapterEntry = createAdapterMainEntry(commonHost)
   const contentEntry = createContentSpaceMainEntry(commonHost)
   const lifecycle = runtimeContribution<DomainMainRuntimeLifecycleContribution>(
@@ -272,17 +294,6 @@ async function invoke<Value>(
   if (!definition) throw new Error(`Missing capability ${id}.`)
   const { output } = await definition.handler(input, capabilityContext(invocationId))
   return output as Value
-}
-
-async function invokeContentSpace<Value>(
-  definitions: readonly CapabilityDefinition[],
-  id: string,
-  input: unknown,
-  invocationId: string
-): Promise<Value> {
-  const result = await invoke<ContentSpaceResult<Value>>(definitions, id, input, invocationId)
-  if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
-  return result.value
 }
 
 function capabilityDefinitions(

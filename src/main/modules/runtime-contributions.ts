@@ -91,6 +91,9 @@ export function listMainExtensionContributions(
     ...(contribution.declaration.version === undefined
       ? {}
       : { version: contribution.declaration.version }),
+    ...(contribution.declaration.publicRelease === undefined
+      ? {}
+      : { publicRelease: contribution.declaration.publicRelease }),
     contract: contribution.contract!,
     value: contribution.value
   })))

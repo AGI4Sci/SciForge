@@ -11,6 +11,34 @@ import {
 } from './runtime-mcp-tool-gateway'
 
 describe('RuntimeCapabilityBroker', () => {
+  it('passes local resource-handle descriptions through to the Host Broker', () => {
+    const caller = {
+      audience: 'agent' as const,
+      callerId: 'runtime-resource-projection',
+      workspaceId: '/tmp/workspace',
+      approvals: []
+    }
+    const resource = {
+      token: `cap_${'r'.repeat(32)}`,
+      semanticRevision: '1',
+      expiresAt: '2026-07-16T12:00:00.000Z'
+    }
+    const description = {
+      resourceRef: `res_${'r'.repeat(32)}`
+    }
+    const describeResourceHandle = vi.fn(() => description)
+    const runtime = createRuntimeCapabilityBroker({
+      broker: { ...emptyBroker(), describeResourceHandle },
+      managedTools: createRuntimeMcpToolGateway({
+        servers: [],
+        clientFactory: async () => { throw new Error('unused') }
+      })
+    })
+
+    expect(runtime.describeResourceHandle(caller, resource)).toEqual(description)
+    expect(describeResourceHandle).toHaveBeenCalledWith(caller, resource)
+  })
+
   it('keeps managed MCP schemas behind the four runtime-neutral tools', async () => {
     const callTool = vi.fn(async () => ({
       content: [{ type: 'text', text: 'rendered' }],
@@ -451,6 +479,7 @@ function emptyBroker(): CapabilityAgentBroker {
   return {
     discover: async () => [],
     observe: async () => { throw new Error('unused') },
+    describeResourceHandle: async () => { throw new Error('unused') },
     bindResourceRef: async () => { throw new Error('unused') },
     invoke: async () => { throw new Error('unused') },
     listEvents: async () => []

@@ -23,14 +23,26 @@ import {
   type DomainMainPrincipalProvider,
   type PrincipalContextSnapshot
 } from '@sciforge/domain-sdk/principal'
-import type { CapabilityJsonValue } from '../../shared/capability-broker'
+import type {
+  CapabilityInvocationResult,
+  CapabilityJsonValue
+} from '../../shared/capability-broker'
+import { unwrapCapabilityTransportEnvelope } from '../../shared/capability-transport-error'
 import { CapabilityBroker } from './broker'
+import { CAPABILITY_IPC_CHANNELS, registerCapabilityIpc } from './ipc'
+import type { AppCapabilityDependencies } from './app-registry'
 import {
   CapabilityRegistry,
   defineCapability,
   type CapabilityDefinition,
   type DefineCapabilityOptions
 } from './registry'
+import {
+  createApplicationCapabilityRegistry,
+  createApplicationDomainCatalog
+} from '../modules/application-composition'
+import { createNonSecretPackageStorageForTest } from '../modules/domain-package-storage.test-helper'
+import { HostPrincipalContext } from '../principal-context'
 import type { z } from 'zod'
 
 const roots: string[] = []
@@ -40,6 +52,40 @@ afterEach(() => {
 })
 
 describe('Identity Principal transition Host integration', () => {
+  it('creates the first Local Account through application composition and public IPC', async () => {
+    const fixture = identityApplicationIpcFixture(temporaryRoot('sciforge-identity-app-ipc-'))
+
+    const initial = await fixture.invoke(IDENTITY_CAPABILITY_IDS.listAccounts, {})
+    expect(initial.output).toMatchObject({
+      state: { status: 'available', accountCount: 0, currentAccount: null },
+      accounts: []
+    })
+
+    const created = await fixture.invoke(
+      IDENTITY_CAPABILITY_IDS.createAccount,
+      { username: 'Alice' },
+      'create-first-account'
+    )
+
+    expect(created.output).toMatchObject({
+      status: 'available',
+      accountCount: 1,
+      currentAccount: { username: 'Alice' }
+    })
+    const currentAccount = (created.output as { currentAccount: { userId: string } }).currentAccount
+    expect(fixture.principalContext.current()).toMatchObject({
+      subject: currentAccount.userId,
+      assurance: 'local-selection'
+    })
+
+    const listed = await fixture.invoke(IDENTITY_CAPABILITY_IDS.listAccounts, {})
+    expect(listed.output).toMatchObject({
+      state: { accountCount: 1, currentAccount: { userId: currentAccount.userId } },
+      accounts: [{ userId: currentAccount.userId, username: 'Alice' }]
+    })
+    fixture.dispose()
+  })
+
   it('registers every Cloud mutation through the real Host schema as a global authority action', async () => {
     const fixture = identityBrokerFixture(temporaryRoot('sciforge-identity-schema-'))
     const descriptors = CLOUD_MUTATION_IDS.map((id) => fixture.definition(id).descriptor)
@@ -238,6 +284,67 @@ describe('Identity Principal transition Host integration', () => {
     fixture.dispose()
   })
 })
+
+function identityApplicationIpcFixture(root: string) {
+  const catalog = createApplicationDomainCatalog({
+    getUserDataDir: () => root,
+    getDeviceId: () => 'device-integration-1',
+    packageStorageFor: createNonSecretPackageStorageForTest(),
+    capabilityInvokerFor: () => Object.freeze({
+      invoke: async () => {
+        throw new Error('Nested domain capabilities are unavailable in this test.')
+      }
+    })
+  })
+  const principalContext = new HostPrincipalContext(catalog)
+  const broker = new CapabilityBroker(
+    createApplicationCapabilityRegistry(catalog, unavailableDependencies()),
+    { resolveCurrentPrincipalContext: () => principalContext.snapshot() }
+  )
+  const registration = registerCapabilityIpc({
+    broker,
+    ipc: {
+      removeHandler: vi.fn(),
+      handle: vi.fn()
+    } as never,
+    isTrustedIpcSender: () => true
+  })
+  const sender = {
+    id: 41,
+    send: vi.fn(),
+    isDestroyed: () => false,
+    once: vi.fn(),
+    removeListener: vi.fn()
+  }
+  let transportRequest = 0
+  return {
+    principalContext,
+    invoke: async (
+      actionId: string,
+      input: CapabilityJsonValue,
+      invocationId?: string
+    ): Promise<CapabilityInvocationResult> => unwrapCapabilityTransportEnvelope(
+      await registration.invoke(CAPABILITY_IPC_CHANNELS.invoke, {
+        transportRequestId: `123e4567-e89b-42d3-a456-${String(++transportRequest).padStart(12, '0')}`,
+        request: {
+          actionId,
+          ...(invocationId ? { invocationId } : {}),
+          input
+        }
+      }, sender)
+    ),
+    dispose: () => {
+      registration.dispose()
+      catalog.dispose()
+    }
+  }
+}
+
+function unavailableDependencies(): AppCapabilityDependencies {
+  return new Proxy({}, {
+    get: () => () => undefined
+  }) as AppCapabilityDependencies
+}
 
 const CLOUD_MUTATION_IDS = [
   IDENTITY_CAPABILITY_IDS.cloudLogin,

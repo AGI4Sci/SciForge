@@ -1,7 +1,5 @@
 # Provider Integration Infrastructure
 
-> Current-state audit: 2026-08-17. Content Space and Provider Composition are implemented. OpenContent enrollment, credentials, Connector, and adapter form active Change 1 under ADR-0025 and ADRs 0026–0027.
-
 Provider Integration Infrastructure is SciForge's shared language for portable provider identity, trusted Provider composition, and node-local authenticated access. It is technical integration infrastructure used by business contexts, not a business bounded context or an Agent capability.
 
 ## Language
@@ -22,8 +20,8 @@ _Avoid_: connection registry, credential store, endpoint from a reference
 A domain-specific interface that defines one coherent family of provider-backed semantics. Shared Documents owns DocumentProvider; Content Space owns ContentSpaceProvider.
 _Avoid_: universal Provider, vendor SDK, raw Client
 
-**Provider Integration Package**:
-A separately owned integration unit that implements one or more Provider Contracts while keeping each implementation independently identifiable and replaceable.
+**Provider Integration**:
+A separately owned domain package that implements one or more Provider Contracts while keeping each implementation independently identifiable and replaceable.
 _Avoid_: Host feature, runtime marketplace plugin, vendor switch
 
 **Provider Contribution**:
@@ -46,6 +44,18 @@ _Avoid_: portable credential, shared administrator session, universal connection
 A named node-local Provider Access Binding used when a Provider requires separate enrollment and credentials. V1 permits at most one active connection for each `(Human Principal, Provider Instance)` on one Agent Host.
 _Avoid_: Provider Instance, mandatory first-party login, portable credential, shared administrator session
 
+**Connector**:
+A provider-specific main-process boundary that owns trusted endpoint and tenant policy, enrollment, credentials, Connection/session state, transport, and Provider schema validation. It exposes only narrow token-free facades to Provider Integrations and owns no business-domain semantics.
+_Avoid_: Provider Contract, Agent tool, renderer client, Host routing switch
+
+**Provider Deployment Configuration**:
+A package-declared, deployment-owned private binding between one fixed Provider Instance Reference and the HTTPS origin required to construct its Connector runtime. Its absence or invalidity leaves discovery installed but makes Provider-backed calls unavailable before Connection storage, credentials, network, or supplier execution; confirmed node-local unbind and credential retirement remain available without a Provider call.
+_Avoid_: compiled demo endpoint, environment override, caller-selected URL, package setting, fallback Provider
+
+**Provider Binding Attestation**:
+Token-free evidence binding one Provider Instance and complete current Principal to an opaque stable external subject and opaque Connection revision. It is re-attested against the actual current session before business dispatch and is neither a credential nor portable authority. Provider account and display-name metadata may refresh without changing that stable subject; they never participate in identity continuity.
+_Avoid_: Host assurance, raw external account ID, cached login claim, portable Connection
+
 **Provider Connection Retirement**:
 The irreversible local invalidation of a Provider Connection whose trusted Provider Instance is no longer installed or admitted. A retired connection never authorizes another Provider Instance; its integration owner remains responsible for deleting the credential while the owning Human Principal is current.
 _Avoid_: Provider Migration, credential reuse, implicit rebinding, abandoned credential
@@ -59,11 +69,11 @@ Secret material associated with one Provider Connection and protected for use on
 _Avoid_: Provider Connection, Token in public/caller-controlled URL, shared integration key. A verified provider-mandated query Token is permitted only inside the owning main-process Connector's immediate request to a pinned HTTPS target and never becomes a public or durable URL.
 
 **Provider Enrollment**:
-A Human-only interaction that proves control of an existing External Account and creates or replaces the current Principal's node-local Provider Connection. Enrollment UI belongs to the Provider Integration Package while credential use and network transport remain main-process only.
+A Human-only interaction that proves control of an existing External Account and creates or replaces the current Principal's node-local Provider Connection. Enrollment UI belongs to the Provider Integration while credential use and network transport remain main-process only.
 _Avoid_: SciForge login, provider account creation, Content Space operation, Agent-supplied credential
 
 **Provider Enrollment View**:
-A Provider Integration-owned Human interface mounted only after a concrete Provider Instance is selected inside the consuming domain's surface. Its placement does not transfer credential or connection ownership to that domain.
+A Provider Integration-owned Human interface mounted only after a concrete Provider Instance is selected inside the consuming domain's surface. Its placement does not transfer credential or connection ownership to that domain. If Provider status is unavailable, the view may still expose the integration's existing node-local unbind only after explicit Human confirmation and without contacting the Provider.
 _Avoid_: plugin configuration, standalone Provider panel, Content Space-owned credential form
 
 **Provider Connection Authority**:
@@ -72,20 +82,20 @@ _Avoid_: caller-selected account, Project credential, Coordinator credential, ad
 
 **Portable Resource Reference Envelope**:
 A versioned, bounded, non-secret carrier for one registered logical provider-resource reference. It is durable and cross-node but grants no access by itself.
-_Avoid_: Local Broker Resource Reference, capability handle, arbitrary URI, metadata bag
+_Avoid_: Broker Resource, capability handle, arbitrary URI, metadata bag
 
-**Local Broker Resource Reference**:
+**Broker Resource**:
 A process-local, audience-bound executable reference issued only after a portable reference has been validated, locally resolved, and reauthorized for the current Human Principal.
 _Avoid_: portable reference, cloud resource ID, persistent handle
 
-**Capability Readiness**:
-The explicit state of one provider-backed operation: `poc_only`, `blocked_by_contract`, or `production_ready`.
-_Avoid_: feature flag, demo success, endpoint exists
+**Supplier-backed Connector Transport**:
+Public SciForge-authored wire contracts, reviewed command allowlist, asset verification, and bounded process transport owned by a Connector. Receipt-to-domain semantics remain owned by the consuming Provider integration. It is never a separately versioned feature package, Provider Contract, capability surface, or supplier payload.
+_Avoid_: public runtime package, private attachment, Agent runtime, second Connector, vendor SDK passthrough
+
+**Private Supplier Overlay**:
+Optional receipt-backed supplier runtime data installed outside the public dependency graph and loaded only from fixed source or packaged locations. Its presence changes candidate runtime inventory, never readiness, admission, identity, or authority.
+_Avoid_: private domain package, production switch, `node_modules` fallback, credential bundle
 
 **Provider Migration**:
 An explicit governed operation that copies or converts a resource to a different Provider Instance and produces a new reference. It is never an availability fallback.
 _Avoid_: automatic failover, reference reinterpretation, silent provider switch
-
-**OpenContent Verification Profile**:
-A trusted development-only policy binding an exact Provider Instance, least-privilege account class, operation set, limits, and permitted UI/Agent audiences. The current shared demonstration instance may be used only through this profile; callers cannot select endpoints or promote readiness, and production admission remains separate.
-_Avoid_: production fallback, shared-tenant security boundary, caller-selected mode

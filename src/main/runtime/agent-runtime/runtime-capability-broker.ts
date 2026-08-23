@@ -90,6 +90,9 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
   bindResourceRef: CapabilityAgentBroker['bindResourceRef'] = (caller, resourceRef) => (
     this.#broker.bindResourceRef(caller, resourceRef)
   )
+  describeResourceHandle: CapabilityAgentBroker['describeResourceHandle'] = (caller, resource) => (
+    this.#broker.describeResourceHandle(caller, resource)
+  )
   listEvents: CapabilityAgentBroker['listEvents'] = (caller, query) => this.#broker.listEvents(caller, query)
 
   async invoke(

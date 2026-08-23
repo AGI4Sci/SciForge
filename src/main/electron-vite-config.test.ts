@@ -1,5 +1,36 @@
 import { describe, expect, it } from 'vitest'
-import config from '../../electron.vite.config'
+import config, { assertNoBareMainSourcePackageImports } from '../../electron.vite.config'
+import { installedMainSourcePackageNames } from './modules/installed-main-source-packages'
+
+describe('electron main source package bundling', () => {
+  it('consumes the generated public source dependency closure', () => {
+    expect(installedMainSourcePackageNames.length).toBeGreaterThan(0)
+    expect(installedMainSourcePackageNames).toEqual(
+      [...new Set(installedMainSourcePackageNames)].sort()
+    )
+    expect((config as { main?: { plugins?: Array<{ name?: string } | null> } }).main?.plugins)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'sciforge:main-source-package-bundle-guard' })
+      ]))
+  })
+
+  it('rejects bare generated source-package imports in a main artifact', () => {
+    expect(() => assertNoBareMainSourcePackageImports({
+      'index.js': {
+        type: 'chunk',
+        imports: ['node:fs', './chunks/runtime.js'],
+        dynamicImports: ['@fixture/source-runtime/main']
+      }
+    }, ['@fixture/source-runtime'])).toThrow(/@fixture\/source-runtime\/main/)
+
+    expect(() => assertNoBareMainSourcePackageImports({
+      'index.js': {
+        type: 'chunk',
+        imports: ['./chunks/runtime.js']
+      }
+    }, ['@fixture/source-runtime'])).not.toThrow()
+  })
+})
 
 describe('electron renderer dev server config', () => {
   it('keeps the privileged browser debug surface on a strict loopback file boundary', () => {

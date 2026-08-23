@@ -133,6 +133,8 @@ export type DomainRendererFileTransferHost = Readonly<{
 export type DomainMainUploadSource = Readonly<{
   name: string
   size: number
+  /** SHA-256 of the immutable Host-owned upload snapshot. */
+  sha256: string
   read(input: Readonly<{ offset: number; length: number }>): Promise<Uint8Array>
   close(): Promise<void>
 }>
@@ -176,7 +178,7 @@ export type DomainMainFileTransferHost = Readonly<{
     maxBytes: number
     signal?: AbortSignal
   }>): Promise<DomainMainUploadSource>
-  /** Agent-only, confirmed, no-overwrite Workspace destination. */
+  /** Agent-only, Broker-authorized, no-overwrite Workspace destination. */
   openWorkspaceDownloadDestination(input: Readonly<{
     relativePath: DomainWorkspaceRelativePath
     maxBytes: number

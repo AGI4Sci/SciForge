@@ -8,9 +8,9 @@ import {
   OPENCONTENT_CONTENT_SPACE_SERVICE_ID,
   OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION,
   OPENCONTENT_PROVIDER_INSTANCE_REF,
-  OPENCONTENT_PROVIDER_KIND,
-  type OpenContentContentSpaceFacade
+  OPENCONTENT_PROVIDER_KIND
 } from '@sciforge/domain-opencontent-connector/contract'
+import type { OpenContentContentSpaceFacade } from '@sciforge/domain-opencontent-connector/main-contract'
 
 import {
   OPENCONTENT_CONTENT_SPACE_FACTORY_CONTRACT,

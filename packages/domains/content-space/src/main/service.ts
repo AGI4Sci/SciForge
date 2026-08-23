@@ -5,13 +5,37 @@ import {
   DOMAIN_FILE_TRANSFER_LIMITS,
   DomainFileTransferError
 } from '@sciforge/domain-sdk/file-transfer'
+import type { DomainMainFileTransferHost } from '@sciforge/domain-sdk/host'
 import { DomainExternalNavigationError } from '@sciforge/domain-sdk/external-navigation'
+import {
+  contentSpaceAdministrationOperationStateListSchema,
+  contentSpaceAdministrationAddMemberInputSchema,
+  contentSpaceAdministrationAddMemberReceiptSchema,
+  contentSpaceAdministrationCreateSpaceInputSchema,
+  contentSpaceAdministrationListMembersInputSchema,
+  contentSpaceAdministrationListSpacesInputSchema,
+  contentSpaceAdministrationMemberPageSchema,
+  contentSpaceAdministrationMemberReferenceSchema,
+  contentSpaceAdministrationObserveSpaceInputSchema,
+  contentSpaceAdministrationOpenRootInputSchema,
+  contentSpaceAdministrationPinSpaceInputSchema,
+  contentSpaceAdministrationRemoveMemberInputSchema,
+  contentSpaceAdministrationRemoveMemberReceiptSchema,
+  contentSpaceAdministrationRootOpenResultSchema,
+  contentSpaceAdministrationSpacePageSchema,
+  contentSpaceAdministrationSpaceSummarySchema,
+  contentSpaceAdministrationUnpinSpaceInputSchema,
+  contentSpaceAdministrationUpdateSpaceInputSchema,
+  defineContentSpaceAdministrationPort,
+  type ContentSpaceAdministrationOperation
+} from '../administration-contract.js'
 import {
   principalSnapshotSchema,
   type PrincipalSnapshot
 } from '@sciforge/domain-sdk/principal'
 import {
-  ProviderCompositionError
+  ProviderCompositionError,
+  providerInstanceRefSchema
 } from '@sciforge/domain-sdk/provider-composition'
 
 import {
@@ -20,15 +44,18 @@ import {
   artifactReferenceSchema,
   contentContainerReferenceSchema,
   contentFileReferenceSchema,
+  contentSpaceAdmittedCapabilityStateListSchema,
   contentSpaceCapabilityListSchema,
   contentSpaceCapabilityStateListSchema,
   contentSpaceContainerPageSchema,
   contentSpaceEntryNameSchema,
   contentSpaceEntryObservationSchema,
   contentSpaceEntryPageSchema,
+  contentSpaceExternalBindingAttestationSchema,
   contentSpaceImmutableVersionProofSchema,
   contentSpaceInvocationIdSchema,
   contentSpacePageRequestSchema,
+  contentSpaceProviderEntryObservationSchema,
   contentSpaceProviderImmutableVersionObservationSchema,
   contentSpaceProviderInstanceListSchema,
   createFolderReceiptSchema,
@@ -45,10 +72,52 @@ import {
   type ContentSpaceProvider,
   type ContentSpaceProviderOperationContext,
   type ContentSpaceProviderWriteContext,
+  type ContentSpaceReadinessReason,
   type ContentSpaceUploadSource,
-  type DownloadReceipt
+  type DownloadReceipt,
+  parsePortableContentContainerReference
 } from '../contract.js'
+import {
+  CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS,
+  contentSpaceAgentExtendedRequestSchema,
+  type ContentSpaceExtendedOperationKey
+} from '../extended-operations-contract.js'
+import {
+  agentNativeDocumentReceiptSchema,
+  agentNativeDocumentRequestSchema,
+  nativeDocumentReceiptSchema,
+  nativeDocumentRequestSchema,
+  type AgentNativeDocumentReceipt,
+  type AgentNativeDocumentRequest,
+  type NativeDocumentReceipt,
+  type NativeDocumentRequest
+} from '../native-document-contract.js'
+import {
+  collectContentEntryReferences,
+  collectProviderInstanceRefs,
+  contentSpaceExtendedOperationStateListSchema,
+  contentSpaceNativeDocumentOperationStateListSchema,
+  contentSpaceProviderNativeDocumentReceiptSchema,
+  defineContentSpaceProviderAdministrationBinding,
+  extendedOperationAuthority,
+  extendedOperationEffect,
+  nativeDocumentOperationEffect,
+  nativeDocumentRequestTarget,
+  sameContentEntryReference,
+  type ContentSpaceProviderContentTarget,
+  type ContentSpaceProviderFeatureEffect,
+  type ContentSpaceProviderFeatureTarget
+} from '../provider-features.js'
 import { ContentSpaceProviderCatalog } from './provider-catalog.js'
+import {
+  contentSpaceVerificationPolicyAdmits,
+  contentSpaceVerificationPolicyRequiresExternalBinding,
+  defineContentSpaceVerificationPolicy,
+  type ContentSpaceVerificationAuthority,
+  type ContentSpaceVerificationOperation,
+  type ContentSpaceVerificationPolicy,
+  type ContentSpaceVerificationTransferLimits
+} from '../verification-policy.js'
 
 export type ContentSpaceServiceCallContext = Readonly<{
   /** Host-current Principal captured and revalidated at the invoking trust boundary. */
@@ -57,12 +126,22 @@ export type ContentSpaceServiceCallContext = Readonly<{
   assertPrincipalCurrent(): void | Promise<void>
   /** Trusted Broker audience; absent direct/internal calls cannot execute PoC operations. */
   audience?: 'ui' | 'agent' | 'system'
+  /** Broker-owned root and exact issued resource; ordinary caller payloads cannot replace either. */
+  verificationBinding?: Readonly<{
+    root: ContentContainerReference
+    reference: ContentEntryReference
+  }>
   signal?: AbortSignal
 }>
 
 export type ContentSpaceServiceWriteCallContext = ContentSpaceServiceCallContext & Readonly<{
   invocationId: string
   signal: AbortSignal
+}>
+
+/** Feature reads need only a Host-issued receipt identity; the service owns their deadline. */
+export type ContentSpaceServiceFeatureCallContext = ContentSpaceServiceCallContext & Readonly<{
+  invocationId: string
 }>
 
 export type ContentSpacePlatformGates = Readonly<{
@@ -74,17 +153,27 @@ export class ContentSpaceService {
   readonly #catalog: ContentSpaceProviderCatalog
   readonly #now: () => Date
   readonly #operationDeadlineMs: number
+  readonly #featureOperationDeadlineMs: number
   readonly #platform: ContentSpacePlatformGates
+  readonly #featureFileTransfers?: DomainMainFileTransferHost
+  readonly #verificationPolicy?: ContentSpaceVerificationPolicy
   readonly #pinned = new Map<string, Promise<ContentSpaceProvider>>()
 
   constructor(input: Readonly<{
     catalog: ContentSpaceProviderCatalog
     platform: ContentSpacePlatformGates
+    featureFileTransfers?: DomainMainFileTransferHost
+    verificationPolicy?: ContentSpaceVerificationPolicy
     now?: () => Date
     operationDeadlineMs?: number
+    featureOperationDeadlineMs?: number
   }>) {
     this.#catalog = input.catalog
     this.#platform = Object.freeze({ ...input.platform })
+    this.#featureFileTransfers = input.featureFileTransfers
+    this.#verificationPolicy = input.verificationPolicy
+      ? defineContentSpaceVerificationPolicy(input.verificationPolicy)
+      : undefined
     this.#now = input.now ?? (() => new Date())
     this.#operationDeadlineMs = input.operationDeadlineMs ??
       CONTENT_SPACE_LIMITS.operationDeadlineMs
@@ -92,6 +181,13 @@ export class ContentSpaceService {
       this.#operationDeadlineMs < 1 ||
       this.#operationDeadlineMs > CONTENT_SPACE_LIMITS.operationDeadlineMs) {
       fail('invalid_input', 'Content Space operation deadline is invalid.')
+    }
+    this.#featureOperationDeadlineMs = input.featureOperationDeadlineMs ??
+      CONTENT_SPACE_LIMITS.featureOperationDeadlineMs
+    if (!Number.isSafeInteger(this.#featureOperationDeadlineMs) ||
+      this.#featureOperationDeadlineMs < 1 ||
+      this.#featureOperationDeadlineMs > CONTENT_SPACE_LIMITS.featureOperationDeadlineMs) {
+      fail('invalid_input', 'Content Space feature operation deadline is invalid.')
     }
   }
 
@@ -120,8 +216,411 @@ export class ContentSpaceService {
       call.assertPrincipalCurrent
     )
     return parseOutput(contentSpaceCapabilityListSchema, {
-      items: await this.#describe(provider, context, call.assertPrincipalCurrent, call.audience)
+      items: await this.#describe(provider, context, call)
     })
+  }
+
+  async executeNativeDocument(
+    input: Readonly<{
+      target: ContentSpaceProviderContentTarget
+      request: unknown
+    }>,
+    call: ContentSpaceServiceFeatureCallContext
+  ): Promise<NativeDocumentReceipt | AgentNativeDocumentReceipt> {
+    const agentTransfer = call.audience === 'agent'
+    const request: NativeDocumentRequest | AgentNativeDocumentRequest = agentTransfer
+      ? parseInput(agentNativeDocumentRequestSchema, input.request)
+      : parseInput(nativeDocumentRequestSchema, input.request)
+    const target = parseContentFeatureTarget(input.target)
+    if (!sameContentEntryReference(nativeDocumentRequestTarget(request), target.primary)) {
+      fail('invalid_target', 'The native-document request does not match Broker authority.')
+    }
+    const effect = nativeDocumentOperationEffect(request.operation)
+    let { provider, context } = await this.#featureInvocation(
+      target.primary.providerInstanceRef,
+      effect,
+      call
+    )
+    const executor = provider.features?.nativeDocuments
+    if (!executor) {
+      fail('blocked_by_contract', 'Native documents are unavailable for this Content Space.')
+    }
+    const operationStates = parseOutput(
+      contentSpaceNativeDocumentOperationStateListSchema,
+      await boundedProviderCall(
+        () => executor.describeOperations(context),
+        context.signal,
+        call.assertPrincipalCurrent
+      )
+    )
+    const operationState = operationStates.find((candidate) =>
+      candidate.operation === request.operation
+    )
+    const admittedContext = operationState
+      ? await this.#admittedContext(
+          provider,
+          operationState,
+          context,
+          call,
+          { family: 'native-document', operation: request.operation },
+          verificationAuthorityForTarget(target),
+          nativeDocumentTransferLimits(request.operation)
+        )
+      : undefined
+    if (!admittedContext) {
+      fail(
+        'blocked_by_contract',
+        `Native-document operation ${request.operation} is unavailable.`
+      )
+    }
+    context = admittedContext
+
+    const prepared = await this.#prepareNativeDocumentTransfer(
+      request,
+      context,
+      call.assertPrincipalCurrent
+    )
+    let receipt: z.output<typeof contentSpaceProviderNativeDocumentReceiptSchema>
+    try {
+      const dispatched = () => boundedProviderCall(
+        () => executor.execute({
+          ...providerFeatureExecutionContext(effect, context),
+          target,
+          operation: request.operation,
+          request: prepared.request,
+          ...(prepared.source ? { source: prepared.source.provider } : {}),
+          ...(prepared.destination ? { destination: prepared.destination.provider } : {})
+        }),
+        context.signal,
+        call.assertPrincipalCurrent,
+        effect !== 'read'
+      )
+      const rawReceipt = effect === 'read'
+        ? await dispatched()
+        : await writeDispatch(dispatched)
+      receipt = effect === 'read'
+        ? parseOutput(contentSpaceProviderNativeDocumentReceiptSchema, rawReceipt)
+        : parseWriteOutput(contentSpaceProviderNativeDocumentReceiptSchema, rawReceipt)
+      assertNativeDocumentReceiptBinding(receipt, request, context.invocationId,
+        target.primary.providerInstanceRef, effect)
+
+      if (prepared.destination) {
+        if (receipt.outcome !== 'succeeded') {
+          await prepared.destination.abort()
+          return parseOutput(
+            agentTransfer ? agentNativeDocumentReceiptSchema : nativeDocumentReceiptSchema,
+            receipt
+          )
+        }
+        if (receipt.result.kind !== 'artifact') {
+          fail('outcome_unknown', 'Provider transfer receipt is not an artifact.', 'never')
+        }
+        await prepared.destination.commit({
+          bytesWritten: receipt.result.bytesWritten,
+          digest: receipt.result.digest?.value
+        })
+        const { digest: _digest, ...providerArtifact } = receipt.result
+        return parseOutput(
+          agentTransfer ? agentNativeDocumentReceiptSchema : nativeDocumentReceiptSchema,
+          {
+            ...receipt,
+            result: {
+              ...providerArtifact,
+              ...(prepared.destination.locator.kind === 'workspace'
+                ? { workspaceRelativePath: prepared.destination.locator.relativePath }
+                : { transferHandle: prepared.destination.locator.handle })
+            }
+          }
+        )
+      }
+      return effect === 'read'
+        ? parseOutput(
+          agentTransfer ? agentNativeDocumentReceiptSchema : nativeDocumentReceiptSchema,
+          receipt
+        )
+        : parseWriteOutput(
+          agentTransfer ? agentNativeDocumentReceiptSchema : nativeDocumentReceiptSchema,
+          receipt
+        )
+    } finally {
+      await prepared.destination?.abort()
+      await prepared.source?.close(effect !== 'read')
+    }
+  }
+
+  async executeExtendedOperation(
+    input: Readonly<{
+      target: ContentSpaceProviderFeatureTarget
+      operation: ContentSpaceExtendedOperationKey
+      request: unknown
+    }>,
+    call: ContentSpaceServiceFeatureCallContext
+  ): Promise<unknown> {
+    const contract = CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS[input.operation]
+    if (!contract) fail('invalid_input', 'The extended Content Space operation is invalid.')
+    const request = parseInput(
+      call.audience === 'agent'
+        ? contentSpaceAgentExtendedRequestSchema(input.operation)
+        : contract.requestSchema,
+      input.request
+    )
+    const target = parseFeatureTarget(input.target)
+    const providerInstanceRef = featureTargetProvider(target)
+    assertExtendedFeatureAuthority(input.operation, request, target)
+    assertContentRootMutationAllowed(input.operation, request, target)
+    if (collectProviderInstanceRefs(request).some((candidate) =>
+      candidate !== providerInstanceRef
+    )) {
+      fail('invalid_target', 'The extended request attempted to change Provider authority.')
+    }
+    if (target.kind === 'content') {
+      const authorized = target.authorized
+      if (collectContentEntryReferences(request).some((reference) =>
+        !authorized.some((candidate) => sameContentEntryReference(candidate, reference))
+      )) {
+        fail('unauthorized', 'An extended request references an unauthorized Content resource.')
+      }
+    }
+
+    const effect = extendedOperationEffect(input.operation)
+    let { provider, context } = await this.#featureInvocation(
+      providerInstanceRef,
+      effect,
+      call
+    )
+    const executor = provider.features?.extendedOperations
+    if (!executor) {
+      fail('blocked_by_contract', 'Extended operations are unavailable for this Content Space.')
+    }
+    const operationStates = parseOutput(
+      contentSpaceExtendedOperationStateListSchema,
+      await boundedProviderCall(
+        () => executor.describeOperations(context),
+        context.signal,
+        call.assertPrincipalCurrent
+      )
+    )
+    const operationState = operationStates.find((candidate) =>
+      candidate.operation === input.operation
+    )
+    const admittedContext = operationState
+      ? await this.#admittedContext(
+          provider,
+          operationState,
+          context,
+          call,
+          { family: 'extended', operation: input.operation },
+          verificationAuthorityForTarget(target),
+          extendedOperationTransferLimits(input.operation)
+        )
+      : undefined
+    if (!admittedContext) {
+      fail(
+        'blocked_by_contract',
+        `Extended Content Space operation ${input.operation} is unavailable.`
+      )
+    }
+    context = admittedContext
+    const prepared = await this.#prepareExtendedOperationTransfer(
+      input.operation,
+      request,
+      context,
+      call.assertPrincipalCurrent
+    )
+    try {
+      const dispatched = () => boundedProviderCall(
+        () => executor.execute({
+          ...providerFeatureExecutionContext(effect, context),
+          target,
+          operation: input.operation,
+          request: prepared.request,
+          ...(prepared.source ? { source: prepared.source.provider } : {}),
+          ...(prepared.destination ? { destination: prepared.destination.provider } : {})
+        }),
+        context.signal,
+        call.assertPrincipalCurrent,
+        effect !== 'read'
+      )
+      const rawResult = effect === 'read'
+        ? await dispatched()
+        : await writeDispatch(dispatched)
+      const attestedResult = attestExtendedUploadReceipt(
+        input.operation,
+        rawResult,
+        prepared.source,
+        request
+      )
+      let result = effect === 'read'
+        ? parseOutput(contract.resultSchema, attestedResult)
+        : parseWriteOutput(contract.resultSchema, attestedResult)
+      result = normalizeExtendedPortalResult(input.operation, result, this.#now())
+      if (collectProviderInstanceRefs(result).some((candidate) =>
+        candidate !== providerInstanceRef
+      )) {
+        fail(
+          effect === 'read' ? 'provider_unavailable' : 'outcome_unknown',
+          'Extended Provider output changed authority.',
+          'never'
+        )
+      }
+      if (prepared.destination) {
+        if (!isRecord(result) || result.ok !== true || !isRecord(result.value)) {
+          await prepared.destination.abort()
+          return result
+        }
+        const digest = isRecord(result.value.digest) &&
+          typeof result.value.digest.value === 'string'
+          ? result.value.digest.value
+          : undefined
+        await prepared.destination.commit({
+          ...(typeof result.value.bytesWritten === 'number'
+            ? { bytesWritten: result.value.bytesWritten }
+            : {}),
+          ...(digest ? { digest } : {})
+        })
+      }
+      return result
+    } finally {
+      await prepared.destination?.abort()
+      await prepared.source?.close(effect !== 'read')
+    }
+  }
+
+  async authorizeProviderAdministration(
+    providerInstanceRef: string,
+    call: ContentSpaceServiceWriteCallContext
+  ): Promise<Readonly<{ providerInstanceRef: string }>> {
+    const parsedProvider = parseInput(providerInstanceRefSchema, providerInstanceRef)
+    const { provider, context } = await this.#featureInvocation(
+      parsedProvider,
+      'external-write',
+      call
+    )
+    const feature = provider.features?.administration
+    if (!feature) {
+      fail('blocked_by_contract', 'Provider administration is unavailable for this Content Space.')
+    }
+    const operationStates = parseOutput(
+      contentSpaceAdministrationOperationStateListSchema,
+      await boundedProviderCall(
+        () => feature.describeOperations(context),
+        context.signal,
+        call.assertPrincipalCurrent
+      )
+    )
+    let operationAvailable = false
+    for (const state of operationStates) {
+      if (await this.#admittedContext(
+        provider,
+        state,
+        context,
+        call,
+        { family: 'administration', operation: state.operation },
+        providerVerificationAuthority(parsedProvider),
+        NO_VERIFICATION_TRANSFERS
+      )) {
+        operationAvailable = true
+        break
+      }
+    }
+    if (!operationAvailable) {
+      fail('blocked_by_contract', 'Provider administration has no available Agent operation.')
+    }
+    return Object.freeze({ providerInstanceRef: parsedProvider })
+  }
+
+  async executeAdministration(
+    input: Readonly<{
+      target: ContentSpaceProviderFeatureTarget
+      operation: ContentSpaceAdministrationOperation
+      request: unknown
+    }>,
+    call: ContentSpaceServiceFeatureCallContext
+  ): Promise<unknown> {
+    const target = parseFeatureTarget(input.target)
+    const providerInstanceRef = featureTargetProvider(target)
+    const request = parseAdministrationRequest(input.operation, input.request)
+    assertAdministrationTarget(input.operation, request, target)
+    const effect = administrationOperationEffect(input.operation)
+    let { provider, context } = await this.#featureInvocation(
+      providerInstanceRef,
+      effect,
+      call
+    )
+    const feature = provider.features?.administration
+    if (!feature) {
+      fail('blocked_by_contract', 'Provider administration is unavailable for this Content Space.')
+    }
+    const operationStates = parseOutput(
+      contentSpaceAdministrationOperationStateListSchema,
+      await boundedProviderCall(
+        () => feature.describeOperations(context),
+        context.signal,
+        call.assertPrincipalCurrent
+      )
+    )
+    const operationState = operationStates.find((candidate) =>
+      candidate.operation === input.operation
+    )
+    const admittedContext = operationState
+      ? await this.#admittedContext(
+          provider,
+          operationState,
+          context,
+          call,
+          { family: 'administration', operation: input.operation },
+          verificationAuthorityForTarget(target),
+          NO_VERIFICATION_TRANSFERS
+        )
+      : undefined
+    if (!admittedContext) {
+      fail(
+        'blocked_by_contract',
+        `Content Space administration operation ${input.operation} is unavailable.`
+      )
+    }
+    context = admittedContext
+    let bound: Awaited<ReturnType<typeof feature.bind>>
+    try {
+      bound = await boundedProviderCall(
+        () => feature.bind(context),
+        context.signal,
+        call.assertPrincipalCurrent
+      )
+    } catch (error) {
+      if (error instanceof ContentSpaceOperationError) throw error
+      fail('provider_unavailable', 'Provider administration binding is unavailable.')
+    }
+    let administration
+    try {
+      administration = defineContentSpaceProviderAdministrationBinding(bound).administration
+    } catch {
+      fail('provider_unavailable', 'Provider administration binding is invalid.')
+    }
+    const dispatch = () => boundedProviderCall(
+      () => dispatchAdministrationOperation(
+        input.operation,
+        request,
+        administration
+      ),
+      context.signal,
+      call.assertPrincipalCurrent,
+      effect !== 'read'
+    )
+    const rawOutput = effect === 'read'
+      ? await dispatch()
+      : await writeDispatch(dispatch)
+    const output = effect === 'read'
+      ? parseAdministrationOutput(input.operation, rawOutput, false)
+      : parseAdministrationOutput(input.operation, rawOutput, true)
+    assertAdministrationOutputBinding(
+      input.operation,
+      request,
+      output,
+      providerInstanceRef,
+      effect
+    )
+    return output
   }
 
   async listContainers(
@@ -129,10 +628,11 @@ export class ContentSpaceService {
     call: ContentSpaceServiceCallContext
   ) {
     const page = parseInput(contentSpacePageRequestSchema, input.page)
-    const { provider, context } = await this.#authorizedProvider(
+    let { provider, context } = await this.#authorizedProvider(
       input.providerInstanceRef,
       'list-containers',
-      call
+      call,
+      providerVerificationAuthority(input.providerInstanceRef)
     )
     const output = parseOutput(contentSpaceContainerPageSchema, await boundedProviderCall(
       () => provider.listContainers({ context, page }),
@@ -158,18 +658,19 @@ export class ContentSpaceService {
   ) {
     const parent = parseInput(contentContainerReferenceSchema, input.parent)
     const page = parseInput(contentSpacePageRequestSchema, input.page)
-    const { provider, context } = await this.#authorizedProvider(
+    let { provider, context } = await this.#authorizedProvider(
       parent.providerInstanceRef,
       'list-entries',
-      call
+      call,
+      callVerificationAuthority(call, parent)
     )
-    await this.#assertResourceReady(
+    context = await this.#assertResourceReady(
       provider,
       context,
       parent,
       'list-entries',
-      call.assertPrincipalCurrent,
-      call.audience
+      call,
+      callVerificationAuthority(call, parent)
     )
     const output = parseOutput(contentSpaceEntryPageSchema, await boundedProviderCall(
       () => provider.listEntries({ context, parent, page }),
@@ -203,24 +704,23 @@ export class ContentSpaceService {
     const { provider, context, capabilities } = await this.#authorizedProvider(
       reference.providerInstanceRef,
       'observe-entry',
-      call
+      call,
+      callVerificationAuthority(call, reference)
     )
     if ('immutableVersionId' in reference) {
       await this.#assertArtifactStillProven(
         provider,
         context,
         reference,
-        call.assertPrincipalCurrent,
-        call.audience
+        call.assertPrincipalCurrent
       )
     }
     return this.#observeBoundEntry(
       provider,
       context,
       reference,
-      call.assertPrincipalCurrent,
-      capabilities,
-      call.audience
+      call,
+      capabilities
     )
   }
 
@@ -230,18 +730,19 @@ export class ContentSpaceService {
   ) {
     const parent = parseInput(contentContainerReferenceSchema, input.parent)
     const name = parseInput(contentSpaceEntryNameSchema, input.name)
-    const { provider, context } = await this.#authorizedWriteProvider(
+    let { provider, context } = await this.#authorizedWriteProvider(
       parent.providerInstanceRef,
       'create-folder',
-      call
+      call,
+      callVerificationAuthority(call, parent)
     )
-    await this.#assertResourceReady(
+    context = await this.#assertResourceReady(
       provider,
       context,
       parent,
       'create-folder',
-      call.assertPrincipalCurrent,
-      call.audience
+      call,
+      callVerificationAuthority(call, parent)
     )
     const receipt = parseWriteOutput(createFolderReceiptSchema, await writeDispatch(() => boundedProviderCall(
       () => provider.createFolder({ context, parent, name }),
@@ -270,18 +771,19 @@ export class ContentSpaceService {
   ) {
     const parent = parseInput(contentContainerReferenceSchema, input.parent)
     const name = parseInput(contentSpaceEntryNameSchema, input.name)
-    const { provider, context } = await this.#authorizedWriteProvider(
+    let { provider, context } = await this.#authorizedWriteProvider(
       parent.providerInstanceRef,
       'upload-new',
-      call
+      call,
+      callVerificationAuthority(call, parent)
     )
-    await this.#assertResourceReady(
+    context = await this.#assertResourceReady(
       provider,
       context,
       parent,
       'upload-new',
-      call.assertPrincipalCurrent,
-      call.audience
+      call,
+      callVerificationAuthority(call, parent)
     )
     let source: ContentSpaceUploadSource & Readonly<{ close(): Promise<void> }>
     try {
@@ -377,28 +879,38 @@ export class ContentSpaceService {
     call: ContentSpaceServiceWriteCallContext
   ): Promise<DownloadReceipt> {
     const reference = parseInput(zDownloadReference, input.reference)
-    const { provider, context } = await this.#authorizedWriteProvider(
+    let { provider, context } = await this.#authorizedWriteProvider(
       reference.providerInstanceRef,
       'download',
-      call
+      call,
+      callVerificationAuthority(call, reference)
     )
     if ('immutableVersionId' in reference) {
       await this.#assertArtifactStillProven(
         provider,
         context,
         reference,
-        call.assertPrincipalCurrent,
-        call.audience
+        call.assertPrincipalCurrent
       )
     }
-    await this.#assertResourceReady(
+    const readiness = await this.#resourceReadiness(
       provider,
       context,
       reference,
       'download',
-      call.assertPrincipalCurrent,
-      call.audience
+      call,
+      callVerificationAuthority(call, reference)
     )
+    context = readiness.context
+    if (readiness.observation.entry.kind !== 'file') {
+      fail('provider_unavailable', 'Provider download observation is not a file.')
+    }
+    // An Artifact observation describes the current file entry, so its size is not
+    // a valid oracle for a historical version. Artifact downloads retain their
+    // immutable-version proof and optional digest checks below.
+    const expectedByteLength = 'immutableVersionId' in reference
+      ? undefined
+      : readiness.observation.entry.size
     let destination: Awaited<ReturnType<typeof input.openDestination>>
     try {
       destination = await boundedProviderCall(
@@ -481,6 +993,7 @@ export class ContentSpaceService {
       if (receipt.invocationId !== context.invocationId ||
         !sameDownloadReference(receipt.reference, reference) ||
         receipt.bytesWritten !== byteLength ||
+        (expectedByteLength !== undefined && byteLength !== expectedByteLength) ||
         (receipt.digest && receipt.digest.value !== actualDigest) ||
         ('digest' in reference && reference.digest && reference.digest.value !== actualDigest)) {
         fail('provider_unavailable', 'Provider download output is not bound to written bytes.')
@@ -533,59 +1046,34 @@ export class ContentSpaceService {
     call: ContentSpaceServiceCallContext
   ) {
     const reference = parseInput(zContentEntryReference, rawReference)
-    const { provider, context } = await this.#authorizedProvider(
+    let { provider, context } = await this.#authorizedProvider(
       reference.providerInstanceRef,
       'portal-target',
-      call
+      call,
+      callVerificationAuthority(call, reference)
     )
     if ('immutableVersionId' in reference) {
       await this.#assertArtifactStillProven(
         provider,
         context,
         reference,
-        call.assertPrincipalCurrent,
-        call.audience
+        call.assertPrincipalCurrent
       )
     }
-    await this.#assertResourceReady(
+    context = await this.#assertResourceReady(
       provider,
       context,
       reference,
       'portal-target',
-      call.assertPrincipalCurrent,
-      call.audience
+      call,
+      callVerificationAuthority(call, reference)
     )
     const target = await boundedProviderCall(
       () => provider.resolvePortalTarget({ context, reference }),
       context.signal,
       call.assertPrincipalCurrent
     )
-    if (!isRecord(target) || typeof target.url !== 'string' ||
-      typeof target.expiresAt !== 'string') {
-      fail('unsafe_portal_target', 'Provider portal target is invalid.')
-    }
-    let url: URL
-    try {
-      url = new URL(target.url)
-    } catch {
-      fail('unsafe_portal_target', 'Provider portal target is invalid.')
-    }
-    const expiresAt = Date.parse(target.expiresAt)
-    const now = this.#now().getTime()
-    if (target.url.length > 2_048 || target.url !== target.url.trim() ||
-      target.url.includes('\\') ||
-      target.url.includes('#') || hasRawAuthorityUserInfo(target.url) ||
-      hasControlOrSpaceCharacter(target.url) || url.protocol !== 'https:' ||
-      Boolean(url.username || url.password || url.hash) ||
-      !Number.isFinite(expiresAt) || expiresAt <= now ||
-      expiresAt - now > CONTENT_SPACE_LIMITS.maxPortalLifetimeMs) {
-      fail('unsafe_portal_target', 'Provider portal target is not safe and bounded.')
-    }
-    return Object.freeze({
-      // Preserve the exact Provider string: HTTPS query parameters may be signed.
-      url: target.url,
-      expiresAt: new Date(expiresAt).toISOString()
-    })
+    return safeProviderPortalTarget(target, this.#now())
   }
 
   async openPortalTarget(
@@ -629,18 +1117,19 @@ export class ContentSpaceService {
     call: ContentSpaceServiceCallContext
   ) {
     const reference = parseInput(contentFileReferenceSchema, rawReference)
-    const { provider, context } = await this.#authorizedProvider(
+    let { provider, context } = await this.#authorizedProvider(
       reference.providerInstanceRef,
       'observe-immutable-version',
-      call
+      call,
+      callVerificationAuthority(call, reference)
     )
-    await this.#assertResourceReady(
+    context = await this.#assertResourceReady(
       provider,
       context,
       reference,
       'observe-immutable-version',
-      call.assertPrincipalCurrent,
-      call.audience
+      call,
+      callVerificationAuthority(call, reference)
     )
     const observation = parseOutput(
       contentSpaceProviderImmutableVersionObservationSchema,
@@ -666,22 +1155,283 @@ export class ContentSpaceService {
     })
   }
 
+  async #featureInvocation(
+    providerInstanceRef: string,
+    effect: ContentSpaceProviderFeatureEffect,
+    call: ContentSpaceServiceFeatureCallContext
+  ): Promise<Readonly<{
+    provider: ContentSpaceProvider
+    context: ContentSpaceProviderWriteContext
+  }>> {
+    const invocationId = parseInput(contentSpaceInvocationIdSchema, call.invocationId)
+    if (effect !== 'read' && !(call.signal instanceof AbortSignal)) {
+      fail('invalid_input', 'A cancellable feature invocation is required.')
+    }
+    const operationContext = this.#operationContext(
+      providerInstanceRef,
+      call,
+      this.#featureOperationDeadlineMs
+    )
+    if (!(operationContext.signal instanceof AbortSignal)) {
+      fail('cancelled', 'The bounded feature invocation signal is unavailable.')
+    }
+    const provider = await this.#providerForCall(
+      providerInstanceRef,
+      operationContext,
+      call.assertPrincipalCurrent
+    )
+    return Object.freeze({
+      provider,
+      context: Object.freeze({
+        ...operationContext,
+        invocationId,
+        signal: operationContext.signal
+      })
+    })
+  }
+
+  async #prepareNativeDocumentTransfer(
+    request: NativeDocumentRequest | AgentNativeDocumentRequest,
+    context: ContentSpaceProviderWriteContext,
+    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent']
+  ): Promise<PreparedNativeDocumentTransfer> {
+    if (request.operation === 'image-upload' || request.operation === 'import') {
+      const providerRequest = withoutTransferLocator(request)
+      const locator: FeatureUploadLocator = 'workspaceRelativePath' in request
+        ? Object.freeze({ kind: 'workspace', relativePath: request.workspaceRelativePath })
+        : Object.freeze({ kind: 'handle', handle: request.sourceHandle })
+      return Object.freeze({
+        request: Object.freeze(providerRequest),
+        source: await this.#openFeatureSource(
+          locator,
+          context,
+          assertPrincipalCurrent
+        )
+      })
+    }
+
+    if (request.operation === 'image-download' || request.operation === 'export') {
+      const providerRequest = withoutTransferLocator(request)
+      const locator: FeatureDownloadLocator = 'workspaceRelativePath' in request
+        ? Object.freeze({ kind: 'workspace', relativePath: request.workspaceRelativePath })
+        : Object.freeze({ kind: 'handle', handle: request.destinationHandle })
+      return Object.freeze({
+        request: Object.freeze(providerRequest),
+        destination: await this.#openFeatureDestination(
+          locator,
+          context,
+          assertPrincipalCurrent
+        )
+      })
+    }
+
+    return Object.freeze({ request })
+  }
+
+  async #prepareExtendedOperationTransfer(
+    operation: ContentSpaceExtendedOperationKey,
+    request: any,
+    context: ContentSpaceProviderWriteContext,
+    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent']
+  ): Promise<PreparedNativeDocumentTransfer> {
+    if (operation === 'updateFileVersion' || operation === 'addAttachment') {
+      const providerRequest = withoutTransferLocator(request)
+      const locator: FeatureUploadLocator = 'workspaceRelativePath' in request
+        ? Object.freeze({ kind: 'workspace', relativePath: request.workspaceRelativePath })
+        : Object.freeze({ kind: 'handle', handle: request.sourceHandle })
+      return Object.freeze({
+        request: Object.freeze(providerRequest),
+        source: await this.#openFeatureSource(
+          locator,
+          context,
+          assertPrincipalCurrent
+        )
+      })
+    }
+    return Object.freeze({ request })
+  }
+
+  async #openFeatureSource(
+    locator: FeatureUploadLocator,
+    context: ContentSpaceProviderWriteContext,
+    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent']
+  ): Promise<NonNullable<PreparedNativeDocumentTransfer['source']>> {
+    const transfers = this.#featureFileTransfers
+    if (!transfers) fail('source_unavailable', 'Host file transfer is unavailable.')
+    let source: Awaited<ReturnType<DomainMainFileTransferHost['openUploadSource']>>
+    try {
+      source = await boundedProviderCall(
+        () => locator.kind === 'workspace'
+          ? transfers.openWorkspaceUploadSource({
+            relativePath: locator.relativePath,
+            maxBytes: CONTENT_SPACE_LIMITS.maxUploadBytes,
+            signal: context.signal
+          })
+          : transfers.openUploadSource({
+            handle: locator.handle,
+            maxBytes: CONTENT_SPACE_LIMITS.maxUploadBytes,
+            signal: context.signal
+          }),
+        context.signal,
+        assertPrincipalCurrent
+      )
+    } catch (error) {
+      throw transferError(error, 'source_unavailable')
+    }
+    const sha256 = source.sha256
+    if (!Number.isSafeInteger(source.size) || source.size < 0 ||
+      source.size > CONTENT_SPACE_LIMITS.maxUploadBytes) {
+      void source.close().catch(() => undefined)
+      fail('bounds_exceeded', 'Feature source exceeds Content Space bounds.')
+    }
+    if (typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(sha256)) {
+      void source.close().catch(() => undefined)
+      fail('source_unavailable', 'Host upload snapshot attestation is unavailable.')
+    }
+    let closed = false
+    return Object.freeze({
+      provider: Object.freeze({
+        name: source.name,
+        size: source.size,
+        sha256,
+        read: (range: Readonly<{ offset: number; length: number }>) => source.read(range)
+      }),
+      byteLength: source.size,
+      sha256,
+      close: async (outcomeUncertain: boolean) => {
+        if (closed) return
+        closed = true
+        try {
+          await boundedProviderCall(
+            () => source.close(),
+            context.signal,
+            assertPrincipalCurrent,
+            outcomeUncertain
+          )
+        } catch (error) {
+          if (outcomeUncertain) {
+            fail('outcome_unknown', 'Feature source cleanup is uncertain.', 'never')
+          }
+          throw transferError(error, 'source_unavailable')
+        }
+      }
+    })
+  }
+
+  async #openFeatureDestination(
+    locator: FeatureDownloadLocator,
+    context: ContentSpaceProviderWriteContext,
+    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent']
+  ): Promise<NonNullable<PreparedNativeDocumentTransfer['destination']>> {
+    const transfers = this.#featureFileTransfers
+    if (!transfers) fail('destination_unavailable', 'Host file transfer is unavailable.')
+    let destination: Awaited<ReturnType<DomainMainFileTransferHost['openDownloadDestination']>>
+    try {
+      destination = await boundedProviderCall(
+        () => locator.kind === 'workspace'
+          ? transfers.openWorkspaceDownloadDestination({
+            relativePath: locator.relativePath,
+            maxBytes: CONTENT_SPACE_LIMITS.maxFileBytes,
+            signal: context.signal
+          })
+          : transfers.openDownloadDestination({
+            handle: locator.handle,
+            maxBytes: CONTENT_SPACE_LIMITS.maxFileBytes,
+            signal: context.signal
+          }),
+        context.signal,
+        assertPrincipalCurrent
+      )
+    } catch (error) {
+      throw transferError(error, 'destination_unavailable')
+    }
+    let byteLength = 0
+    let writing = false
+    let accepting = true
+    let settled = false
+    let actualDigest: string | undefined
+    const digest = createHash('sha256')
+    const providerDestination: ContentSpaceDownloadDestination = Object.freeze({
+      write: async (chunk) => {
+        if (!accepting || writing || !(chunk instanceof Uint8Array) ||
+          chunk.byteLength < 1 ||
+          chunk.byteLength > DOMAIN_FILE_TRANSFER_LIMITS.maxChunkBytes ||
+          byteLength + chunk.byteLength > CONTENT_SPACE_LIMITS.maxFileBytes) {
+          fail('provider_unavailable', 'Provider returned an invalid transfer chunk.')
+        }
+        writing = true
+        try {
+          const owned = Uint8Array.from(chunk)
+          await destination.write(owned)
+          byteLength += owned.byteLength
+          digest.update(owned)
+        } catch (error) {
+          throw transferError(error, 'destination_unavailable')
+        } finally {
+          writing = false
+        }
+      }
+    })
+    const abort = async () => {
+      if (settled) return
+      accepting = false
+      try {
+        await boundedProviderCall(
+          () => destination.abort(),
+          context.signal,
+          assertPrincipalCurrent,
+          true
+        )
+        settled = true
+      } catch {
+        fail('outcome_unknown', 'Feature destination could not be settled.', 'never')
+      }
+    }
+    return Object.freeze({
+      locator,
+      provider: providerDestination,
+      abort,
+      commit: async (expected: Readonly<{
+        bytesWritten?: number
+        digest?: string
+      }>) => {
+        if (settled) fail('outcome_unknown', 'Feature destination is already settled.')
+        accepting = false
+        actualDigest ??= digest.digest('hex')
+        if ((expected.bytesWritten !== undefined && expected.bytesWritten !== byteLength) ||
+          (expected.digest !== undefined && expected.digest !== actualDigest)) {
+          await abort()
+          fail('outcome_unknown', 'Provider transfer receipt does not match written bytes.')
+        }
+        try {
+          await boundedProviderCall(
+            () => destination.commit(),
+            context.signal,
+            assertPrincipalCurrent,
+            true
+          )
+          settled = true
+        } catch {
+          fail('outcome_unknown', 'Feature destination commit is uncertain.', 'never')
+        }
+      }
+    })
+  }
+
   async #assertArtifactStillProven(
     provider: ContentSpaceProvider,
     context: ContentSpaceProviderOperationContext,
     artifact: ArtifactReference,
-    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent'],
-    audience: ContentSpaceServiceCallContext['audience']
+    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent']
   ): Promise<void> {
     const file = contentFileReferenceSchema.parse({
       providerInstanceRef: artifact.providerInstanceRef,
       fileId: artifact.fileId
     })
-    const capabilities = await this.#describe(
+    const capabilities = await this.#providerCapabilities(
       provider,
       context,
-      assertPrincipalCurrent,
-      audience
+      assertPrincipalCurrent
     )
     const immutableState = capabilities.find((candidate) =>
       candidate.operation === 'observe-immutable-version'
@@ -694,8 +1444,11 @@ export class ContentSpaceService {
       context,
       file,
       'observe-immutable-version',
-      assertPrincipalCurrent,
-      audience
+      Object.freeze({
+        reauthorizedPrincipal: context.principal,
+        assertPrincipalCurrent
+      }),
+      contentVerificationAuthority(file)
     )
     const observation = parseOutput(
       contentSpaceProviderImmutableVersionObservationSchema,
@@ -717,19 +1470,25 @@ export class ContentSpaceService {
     provider: ContentSpaceProvider,
     context: ContentSpaceProviderOperationContext,
     reference: ContentEntryReference,
-    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent'],
+    call: ContentSpaceServiceCallContext,
     globalCapabilities?: readonly z.infer<
-      typeof contentSpaceCapabilityStateListSchema
-    >[number][],
-    audience: ContentSpaceServiceCallContext['audience'] = 'system'
+      typeof contentSpaceAdmittedCapabilityStateListSchema
+    >[number][]
   ) {
-    const output = parseOutput(contentSpaceEntryObservationSchema, await boundedProviderCall(
+    const output = parseOutput(contentSpaceProviderEntryObservationSchema, await boundedProviderCall(
       () => provider.observeEntry({ context, reference }),
       context.signal,
-      assertPrincipalCurrent
+      call.assertPrincipalCurrent
     ))
     assertObservationBinding(reference, output.entry.reference)
-    const resourceCapabilities = this.#effectiveCapabilities(output.capabilities, false)
+    const resourceCapabilities = await this.#admittedCapabilities(
+      provider,
+      output.capabilities,
+      context,
+      call,
+      callVerificationAuthority(call, reference),
+      false
+    )
     return contentSpaceEntryObservationSchema.parse({
       ...output,
       capabilities: globalCapabilities
@@ -737,75 +1496,159 @@ export class ContentSpaceService {
             const globalState = globalCapabilities.find((candidate) =>
               candidate.operation === state.operation
             )
-            return globalState && readinessExecutable(globalState.readiness, audience)
+            return globalState?.admission.status === 'admitted'
               ? state
               : Object.freeze({
-                  operation: state.operation,
-                  readiness: 'blocked_by_contract' as const,
-                  reasonCode: globalState?.reasonCode ?? 'provider_contract_missing'
+                  ...state,
+                  admission: globalState?.admission ?? Object.freeze({
+                    status: 'blocked' as const,
+                    reasonCode: 'resource_capability_missing' as const
+                  })
                 })
           })
         : resourceCapabilities
     })
   }
 
-  async #assertResourceReady(
+  async #assertResourceReady<Context extends ContentSpaceProviderOperationContext>(
     provider: ContentSpaceProvider,
-    context: ContentSpaceProviderOperationContext,
+    context: Context,
     reference: ContentEntryReference,
     operation: ContentSpaceOperation,
-    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent'],
-    audience: ContentSpaceServiceCallContext['audience']
-  ): Promise<void> {
-    const observation = await this.#observeBoundEntry(
+    call: ContentSpaceServiceCallContext,
+    authority: ContentSpaceVerificationAuthority
+  ): Promise<Context> {
+    return (await this.#resourceReadiness(
       provider,
       context,
       reference,
-      assertPrincipalCurrent
+      operation,
+      call,
+      authority
+    )).context
+  }
+
+  async #resourceReadiness<Context extends ContentSpaceProviderOperationContext>(
+    provider: ContentSpaceProvider,
+    context: Context,
+    reference: ContentEntryReference,
+    operation: ContentSpaceOperation,
+    call: ContentSpaceServiceCallContext,
+    authority: ContentSpaceVerificationAuthority
+  ) {
+    const observation = parseOutput(
+      contentSpaceProviderEntryObservationSchema,
+      await boundedProviderCall(
+        () => provider.observeEntry({ context, reference }),
+        context.signal,
+        call.assertPrincipalCurrent
+      )
     )
+    assertObservationBinding(reference, observation.entry.reference)
     const state = observation.capabilities.find((candidate) =>
       candidate.operation === operation
     )
-    if (!state || !readinessExecutable(state.readiness, audience)) {
+    const admittedContext = state
+      ? await this.#admittedContext(
+          provider,
+          state,
+          context,
+          call,
+          { family: 'ordinary', operation },
+          authority,
+          ordinaryOperationTransferLimits(operation)
+        )
+      : undefined
+    if (!admittedContext) {
       fail('blocked_by_contract', `Content Space resource operation ${operation} is unavailable.`)
     }
+    return Object.freeze({ context: admittedContext, observation })
   }
 
   async #authorizedProvider(
     providerInstanceRef: string,
     operation: ContentSpaceOperation,
-    call: ContentSpaceServiceCallContext
+    call: ContentSpaceServiceCallContext,
+    authority: ContentSpaceVerificationAuthority
   ): Promise<Readonly<{
     provider: ContentSpaceProvider
     context: ContentSpaceProviderOperationContext
     capabilities: readonly z.infer<
-      typeof contentSpaceCapabilityStateListSchema
+      typeof contentSpaceAdmittedCapabilityStateListSchema
     >[number][]
   }>> {
-    const context = this.#operationContext(providerInstanceRef, call)
+    let context = this.#operationContext(providerInstanceRef, call)
     const provider = await this.#providerForCall(
       providerInstanceRef,
       context,
       call.assertPrincipalCurrent
     )
-    const capabilities = await this.#describe(
+    const providerCapabilities = await this.#providerCapabilities(
       provider,
       context,
-      call.assertPrincipalCurrent,
-      call.audience
+      call.assertPrincipalCurrent
     )
     assertNotCancelled(context.signal)
-    const state = capabilities.find((candidate) => candidate.operation === operation)
-    if (!state || !readinessExecutable(state.readiness, call.audience)) {
+    if ((!this.#platform.fileTransfers &&
+        (operation === 'upload-new' || operation === 'download')) ||
+      (!this.#platform.externalNavigation && operation === 'portal-target')) {
+      fail('blocked_by_contract', `Content Space operation ${operation} is Host-gated.`)
+    }
+    const state = providerCapabilities.find((candidate) => candidate.operation === operation)
+    const admittedContext = state
+      ? await this.#admittedContext(
+          provider,
+          state,
+          context,
+          call,
+          { family: 'ordinary', operation },
+          authority,
+          ordinaryOperationTransferLimits(operation)
+        )
+      : undefined
+    if (!admittedContext) {
       fail('blocked_by_contract', `Content Space operation ${operation} is unavailable.`)
     }
-    return Object.freeze({ provider, context, capabilities })
+    context = admittedContext
+    if (operationRequiresObservation(operation)) {
+      const observationState = providerCapabilities.find((candidate) =>
+        candidate.operation === 'observe-entry'
+      )
+      const observationContext = observationState
+        ? await this.#admittedContext(
+            provider,
+            observationState,
+            context,
+            call,
+            { family: 'ordinary', operation: 'observe-entry' },
+            authority,
+            NO_VERIFICATION_TRANSFERS
+          )
+        : undefined
+      if (!observationContext) {
+        fail('blocked_by_contract', 'Content Space observation is unavailable.')
+      }
+      context = observationContext
+    }
+    return Object.freeze({
+      provider,
+      context,
+      capabilities: await this.#admittedCapabilities(
+        provider,
+        providerCapabilities,
+        context,
+        call,
+        authority,
+        true
+      )
+    })
   }
 
   async #authorizedWriteProvider(
     providerInstanceRef: string,
     operation: ContentSpaceOperation,
-    call: ContentSpaceServiceWriteCallContext
+    call: ContentSpaceServiceWriteCallContext,
+    authority: ContentSpaceVerificationAuthority
   ): Promise<Readonly<{
     provider: ContentSpaceProvider
     context: ContentSpaceProviderWriteContext
@@ -817,7 +1660,7 @@ export class ContentSpaceService {
     assertNotCancelled(call.signal)
     const result = await this.#authorizedProvider(providerInstanceRef, operation, {
       ...call
-    })
+    }, authority)
     if (!result.context.signal) {
       fail('cancelled', 'The bounded Provider operation signal is unavailable.')
     }
@@ -834,59 +1677,211 @@ export class ContentSpaceService {
   async #describe(
     provider: ContentSpaceProvider,
     context: ContentSpaceProviderOperationContext,
-    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent'],
-    audience: ContentSpaceServiceCallContext['audience']
+    call: ContentSpaceServiceCallContext
   ) {
-    return this.#effectiveCapabilities(
-      parseOutput(
-        contentSpaceCapabilityStateListSchema,
-        await boundedProviderCall(
-          () => provider.describeCapabilities(context),
-          context.signal,
-          assertPrincipalCurrent
-        )
-      ),
-      true,
-      audience
+    return this.#admittedCapabilities(
+      provider,
+      await this.#providerCapabilities(provider, context, call.assertPrincipalCurrent),
+      context,
+      call,
+      providerVerificationAuthority(context.providerInstanceRef),
+      true
     )
   }
 
-  #effectiveCapabilities(
-    states: readonly z.infer<typeof contentSpaceCapabilityStateListSchema>[number][],
-    requireObservationGate: boolean,
-    audience: ContentSpaceServiceCallContext['audience'] = 'system'
+  async #providerCapabilities(
+    provider: ContentSpaceProvider,
+    context: ContentSpaceProviderOperationContext,
+    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent']
   ) {
+    return parseOutput(
+      contentSpaceCapabilityStateListSchema,
+      await boundedProviderCall(
+        () => provider.describeCapabilities(context),
+        context.signal,
+        assertPrincipalCurrent
+      )
+    )
+  }
+
+  async #admittedContext<Context extends ContentSpaceProviderOperationContext>(
+    provider: ContentSpaceProvider,
+    state: Readonly<{
+      readiness: 'poc_only' | 'blocked_by_contract' | 'production_ready'
+      reasonCode: ContentSpaceReadinessReason
+    }>,
+    context: Context,
+    call: ContentSpaceServiceCallContext,
+    operation: ContentSpaceVerificationOperation,
+    authority: ContentSpaceVerificationAuthority,
+    transferLimits: ContentSpaceVerificationTransferLimits
+  ): Promise<Context | undefined> {
+    if (operationReady(state)) return context
+    if (state.readiness !== 'poc_only' ||
+      state.reasonCode !== 'verification_profile_required') return undefined
+    const admission = {
+      state,
+      providerInstanceRef: context.providerInstanceRef,
+      principal: context.principal,
+      audience: call.audience,
+      authority,
+      operation,
+      transferLimits,
+      ...(context.expectedExternalBinding
+        ? { externalBinding: context.expectedExternalBinding }
+        : {}),
+      now: this.#now()
+    }
+    if (contentSpaceVerificationPolicyAdmits(this.#verificationPolicy, admission)) {
+      return context
+    }
+    if (context.expectedExternalBinding ||
+      !contentSpaceVerificationPolicyRequiresExternalBinding(
+        this.#verificationPolicy,
+        admission
+      )) return undefined
+
+    const rawAttestation = await boundedProviderCall(
+      () => provider.attestExternalBinding(context),
+      context.signal,
+      call.assertPrincipalCurrent
+    )
+    if (rawAttestation === undefined) return undefined
+    const externalBinding = parseOutput(
+      contentSpaceExternalBindingAttestationSchema,
+      rawAttestation
+    )
+    const boundContext = Object.freeze({
+      ...context,
+      expectedExternalBinding: externalBinding
+    }) as Context
+    return contentSpaceVerificationPolicyAdmits(this.#verificationPolicy, {
+      ...admission,
+      externalBinding
+    })
+      ? boundContext
+      : undefined
+  }
+
+  async #admittedCapabilities(
+    provider: ContentSpaceProvider,
+    states: readonly z.infer<typeof contentSpaceCapabilityStateListSchema>[number][],
+    context: ContentSpaceProviderOperationContext,
+    call: ContentSpaceServiceCallContext,
+    authority: ContentSpaceVerificationAuthority,
+    requireObservationGate: boolean
+  ) {
+    const admittedStates: Array<
+      z.input<typeof contentSpaceAdmittedCapabilityStateListSchema>[number]
+    > = []
+    let boundContext = context
+    let observationAdmission: z.input<
+      typeof contentSpaceAdmittedCapabilityStateListSchema
+    >[number]['admission'] | undefined
     const observationState = states.find((state) => state.operation === 'observe-entry')
-    const observationReady = observationState
-      ? readinessExecutable(observationState.readiness, audience)
-      : false
-    return contentSpaceCapabilityStateListSchema.parse(states.map((state) => {
-      const observationBlocked = requireObservationGate && !observationReady && [
-        'list-entries',
-        'create-folder',
-        'upload-new',
-        'download',
-        'portal-target',
-        'observe-immutable-version'
-      ].includes(state.operation)
-      const platformBlocked =
+    if (observationState) {
+      const result = await this.#ordinaryAdmission(
+        provider,
+        observationState,
+        boundContext,
+        call,
+        authority
+      )
+      boundContext = result.context
+      observationAdmission = result.admission
+    }
+    for (const state of states) {
+      const result = state === observationState && observationAdmission
+        ? { context: boundContext, admission: observationAdmission }
+        : await this.#ordinaryAdmission(provider, state, boundContext, call, authority)
+      boundContext = result.context
+      const providerAdmission = result.admission
+      const platformBlocked = state.readiness !== 'blocked_by_contract' && (
         (!this.#platform.fileTransfers &&
           (state.operation === 'upload-new' || state.operation === 'download')) ||
         (!this.#platform.externalNavigation && state.operation === 'portal-target')
-      return platformBlocked
-        ? Object.freeze({
-            operation: state.operation,
-            readiness: 'blocked_by_contract' as const,
-            reasonCode: 'platform_gate_blocked' as const
-          })
-        : observationBlocked
+      )
+      const observationBlocked = requireObservationGate &&
+        providerAdmission.status === 'admitted' &&
+        operationRequiresObservation(state.operation) &&
+        observationAdmission?.status !== 'admitted'
+      admittedStates.push(Object.freeze({
+        ...state,
+        admission: platformBlocked
           ? Object.freeze({
-              operation: state.operation,
-              readiness: 'blocked_by_contract' as const,
-              reasonCode: observationState?.reasonCode ?? 'provider_contract_missing'
+              status: 'blocked' as const,
+              reasonCode: 'platform_gate_blocked' as const
             })
-          : state
-    }))
+          : observationBlocked
+            ? Object.freeze({
+                status: 'blocked' as const,
+                reasonCode: 'resource_capability_missing' as const
+              })
+            : providerAdmission
+      }))
+    }
+    return contentSpaceAdmittedCapabilityStateListSchema.parse(admittedStates)
+  }
+
+  async #ordinaryAdmission(
+    provider: ContentSpaceProvider,
+    state: z.infer<typeof contentSpaceCapabilityStateListSchema>[number],
+    context: ContentSpaceProviderOperationContext,
+    call: ContentSpaceServiceCallContext,
+    authority: ContentSpaceVerificationAuthority
+  ): Promise<Readonly<{
+    context: ContentSpaceProviderOperationContext
+    admission: z.input<typeof contentSpaceAdmittedCapabilityStateListSchema>[number]['admission']
+  }>> {
+    const admittedContext = await this.#admittedContext(
+      provider,
+      state,
+      context,
+      call,
+      { family: 'ordinary', operation: state.operation },
+      authority,
+      ordinaryOperationTransferLimits(state.operation)
+    )
+    if (admittedContext && state.readiness === 'production_ready') {
+      return Object.freeze({
+        context: admittedContext,
+        admission: Object.freeze({
+        status: 'admitted' as const,
+        reasonCode: 'production_ready' as const
+        })
+      })
+    }
+    if (state.readiness === 'blocked_by_contract') {
+      return Object.freeze({
+        context,
+        admission: Object.freeze({
+          status: 'blocked' as const,
+          reasonCode: state.reasonCode === 'available'
+            ? 'provider_contract_missing' as const
+            : state.reasonCode
+        })
+      })
+    }
+    if (admittedContext) {
+      return Object.freeze({
+        context: admittedContext,
+        admission: Object.freeze({
+          status: 'admitted' as const,
+          reasonCode: 'verification_profile_admitted' as const
+        })
+      })
+    }
+    return Object.freeze({
+      context,
+      admission: Object.freeze({
+        status: 'blocked' as const,
+        reasonCode: call.audience
+          ? state.reasonCode === 'available'
+            ? 'provider_contract_missing' as const
+            : state.reasonCode
+          : 'audience_policy_blocked' as const
+      })
+    })
   }
 
   #provider(providerInstanceRef: string): Promise<ContentSpaceProvider> {
@@ -947,16 +1942,18 @@ export class ContentSpaceService {
 
   #operationContext(
     providerInstanceRef: string,
-    call: ContentSpaceServiceCallContext
+    call: ContentSpaceServiceCallContext,
+    deadlineMs = this.#operationDeadlineMs
   ): ContentSpaceProviderOperationContext {
     const principal = parseInput(principalSnapshotSchema, call.reauthorizedPrincipal)
     assertNotCancelled(call.signal)
-    const signal = createBoundedOperationSignal(call.signal, this.#operationDeadlineMs)
+    const signal = createBoundedOperationSignal(call.signal, deadlineMs)
     return Object.freeze({
       principal,
       providerInstanceRef,
+      assertPrincipalCurrent: call.assertPrincipalCurrent,
       deadlineAt: new Date(
-        this.#now().getTime() + this.#operationDeadlineMs
+        this.#now().getTime() + deadlineMs
       ).toISOString(),
       signal
     })
@@ -968,6 +1965,461 @@ const zContentEntryReference = artifactReferenceSchema.or(
   contentContainerReferenceSchema
 ).or(contentFileReferenceSchema)
 const zDownloadReference = artifactReferenceSchema.or(contentFileReferenceSchema)
+
+type FeatureUploadLocator =
+  | Readonly<{ kind: 'handle'; handle: string }>
+  | Readonly<{ kind: 'workspace'; relativePath: string }>
+
+type FeatureDownloadLocator = FeatureUploadLocator
+
+function withoutTransferLocator(
+  request: Readonly<Record<string, unknown>>
+): Readonly<Record<string, unknown>> {
+  const {
+    sourceHandle: _sourceHandle,
+    destinationHandle: _destinationHandle,
+    workspaceRelativePath: _workspaceRelativePath,
+    ...providerRequest
+  } = request
+  return providerRequest
+}
+
+type PreparedNativeDocumentTransfer = Readonly<{
+  request: unknown
+  source?: Readonly<{
+    provider: ContentSpaceUploadSource
+    byteLength: number
+    sha256: string
+    close(outcomeUncertain: boolean): Promise<void>
+  }>
+  destination?: Readonly<{
+    locator: FeatureDownloadLocator
+    provider: ContentSpaceDownloadDestination
+    commit(expected: Readonly<{
+      bytesWritten?: number
+      digest?: string
+    }>): Promise<void>
+    abort(): Promise<void>
+  }>
+}>
+
+function attestExtendedUploadReceipt(
+  operation: ContentSpaceExtendedOperationKey,
+  rawResult: unknown,
+  source: PreparedNativeDocumentTransfer['source'],
+  request: unknown
+): unknown {
+  if (operation !== 'updateFileVersion' || !source ||
+    !isRecord(rawResult) || rawResult.ok !== true || !isRecord(rawResult.value)) {
+    return rawResult
+  }
+  const receipt = rawResult.value
+  if (!isRecord(request) || !isRecord(request.reference) ||
+    !isRecord(receipt.reference) ||
+    receipt.reference.providerInstanceRef !== request.reference.providerInstanceRef ||
+    receipt.reference.fileId !== request.reference.fileId ||
+    receipt.versionId === request.expectedVersionId ||
+    receipt.strategy !== request.strategy) {
+    fail(
+      'outcome_unknown',
+      'Provider version receipt does not prove the requested same-file update.'
+    )
+  }
+  const returnedByteLength = receipt.byteLength
+  const returnedDigest = receipt.digest
+  if ((returnedByteLength !== undefined && returnedByteLength !== source.byteLength) ||
+    (returnedDigest !== undefined && (!isRecord(returnedDigest) ||
+      returnedDigest.algorithm !== 'sha256' || returnedDigest.value !== source.sha256))) {
+    fail('outcome_unknown', 'Provider version receipt disagrees with the Host upload snapshot.')
+  }
+  return Object.freeze({
+    ...rawResult,
+    value: Object.freeze({
+      ...receipt,
+      byteLength: source.byteLength,
+      digest: Object.freeze({ algorithm: 'sha256' as const, value: source.sha256 })
+    })
+  })
+}
+
+function providerFeatureExecutionContext(
+  effect: ContentSpaceProviderFeatureEffect,
+  context: ContentSpaceProviderWriteContext
+) {
+  return effect === 'read'
+    ? Object.freeze({
+        effect: 'read' as const,
+        context: context as ContentSpaceProviderOperationContext
+      })
+    : Object.freeze({ effect, context })
+}
+
+function parseContentFeatureTarget(value: unknown): ContentSpaceProviderContentTarget {
+  if (!isRecord(value) || value.kind !== 'content' || !Array.isArray(value.authorized)) {
+    fail('invalid_input', 'The Content Space feature target is invalid.')
+  }
+  const root = parseInput(contentContainerReferenceSchema, value.root)
+  const primary = parseInput(zContentEntryReference, value.primary)
+  const authorized = Object.freeze(value.authorized.map((reference) =>
+    parseInput(zContentEntryReference, reference)
+  ))
+  if (authorized.length < 1 || authorized.length > 2_048 ||
+    primary.providerInstanceRef !== root.providerInstanceRef ||
+    authorized.some((reference) => reference.providerInstanceRef !== root.providerInstanceRef) ||
+    !authorized.some((reference) => sameContentEntryReference(reference, primary))) {
+    fail('invalid_target', 'The Content Space feature target is not Broker-bound.')
+  }
+  return Object.freeze({ kind: 'content', root, primary, authorized })
+}
+
+function parseFeatureTarget(value: unknown): ContentSpaceProviderFeatureTarget {
+  if (isRecord(value) && value.kind === 'provider-administration') {
+    const providerInstanceRef = parseInput(providerInstanceRefSchema, value.providerInstanceRef)
+    if (Object.keys(value).sort().join(',') !== 'kind,providerInstanceRef') {
+      fail('invalid_input', 'The Provider administration target is invalid.')
+    }
+    return Object.freeze({ kind: 'provider-administration', providerInstanceRef })
+  }
+  return parseContentFeatureTarget(value)
+}
+
+function featureTargetProvider(target: ContentSpaceProviderFeatureTarget): string {
+  return target.kind === 'content'
+    ? target.primary.providerInstanceRef
+    : target.providerInstanceRef
+}
+
+function assertExtendedFeatureAuthority(
+  operation: ContentSpaceExtendedOperationKey,
+  request: unknown,
+  target: ContentSpaceProviderFeatureTarget
+): void {
+  const authority = extendedOperationAuthority(operation, request)
+  if (authority.kind === 'provider') {
+    if (target.kind !== 'provider-administration' ||
+      target.providerInstanceRef !== authority.providerInstanceRef) {
+      fail('unauthorized', 'Provider-scoped operations require explicit administration authority.')
+    }
+    return
+  }
+  if (target.kind !== 'content' ||
+    !sameContentEntryReference(target.primary, authority.reference)) {
+    fail('invalid_target', 'The extended operation does not match Broker authority.')
+  }
+}
+
+function assertContentRootMutationAllowed(
+  operation: ContentSpaceExtendedOperationKey,
+  request: any,
+  target: ContentSpaceProviderFeatureTarget
+): void {
+  if (target.kind !== 'content') return
+  const protectedTargets: readonly ContentEntryReference[] = (() => {
+    switch (operation) {
+      case 'renameEntry':
+      case 'updateEntryProperties':
+      case 'changePermissions':
+        return [request.target]
+      case 'copyEntries':
+      case 'moveEntries':
+      case 'deleteEntries':
+        return request.entries
+      case 'createShortcut':
+        return [request.target]
+      default:
+        return []
+    }
+  })()
+  if (protectedTargets.some((reference) =>
+    sameContentEntryReference(reference, target.root)
+  )) {
+    fail(
+      'invalid_target',
+      'A Content Space root may only be changed through Content Space administration.'
+    )
+  }
+}
+
+function assertNativeDocumentReceiptBinding(
+  receipt: z.output<typeof contentSpaceProviderNativeDocumentReceiptSchema>,
+  request: NativeDocumentRequest | AgentNativeDocumentRequest,
+  invocationId: string,
+  providerInstanceRef: string,
+  effect: ContentSpaceProviderFeatureEffect
+): void {
+  const resultDocument = receipt.outcome === 'succeeded' &&
+    'document' in receipt.result
+    ? receipt.result.document.reference
+    : undefined
+  const requestedDocument = 'document' in request
+    ? request.document.reference
+    : undefined
+  if (receipt.operation !== request.operation || receipt.invocationId !== invocationId ||
+    (resultDocument !== undefined && resultDocument.providerInstanceRef !== providerInstanceRef) ||
+    (requestedDocument !== undefined && resultDocument !== undefined &&
+      !sameContentEntryReference(requestedDocument, resultDocument))) {
+    fail(
+      effect === 'read' ? 'provider_unavailable' : 'outcome_unknown',
+      'Native-document Provider receipt is not bound to the invocation.',
+      'never'
+    )
+  }
+}
+
+function administrationOperationEffect(
+  operation: ContentSpaceAdministrationOperation
+): ContentSpaceProviderFeatureEffect {
+  if (operation === 'remove-member') return 'destructive'
+  if (operation === 'list-spaces' || operation === 'observe-space' ||
+    operation === 'open-root' || operation === 'list-members') return 'read'
+  return 'external-write'
+}
+
+function parseAdministrationRequest(
+  operation: ContentSpaceAdministrationOperation,
+  value: unknown
+): any {
+  const schemas = {
+    'list-spaces': contentSpaceAdministrationListSpacesInputSchema,
+    'create-space': contentSpaceAdministrationCreateSpaceInputSchema,
+    'observe-space': contentSpaceAdministrationObserveSpaceInputSchema,
+    'update-space': contentSpaceAdministrationUpdateSpaceInputSchema,
+    'pin-space': contentSpaceAdministrationPinSpaceInputSchema,
+    'unpin-space': contentSpaceAdministrationUnpinSpaceInputSchema,
+    'open-root': contentSpaceAdministrationOpenRootInputSchema,
+    'list-members': contentSpaceAdministrationListMembersInputSchema,
+    'add-member': contentSpaceAdministrationAddMemberInputSchema,
+    'remove-member': contentSpaceAdministrationRemoveMemberInputSchema
+  } as const
+  return parseInput(schemas[operation], value)
+}
+
+function parseAdministrationOutput(
+  operation: ContentSpaceAdministrationOperation,
+  value: unknown,
+  write: boolean
+): any {
+  const schemas = {
+    'list-spaces': contentSpaceAdministrationSpacePageSchema,
+    'create-space': contentSpaceAdministrationSpaceSummarySchema,
+    'observe-space': contentSpaceAdministrationSpaceSummarySchema,
+    'update-space': contentSpaceAdministrationSpaceSummarySchema,
+    'pin-space': contentSpaceAdministrationSpaceSummarySchema,
+    'unpin-space': contentSpaceAdministrationSpaceSummarySchema,
+    'open-root': contentSpaceAdministrationRootOpenResultSchema,
+    'list-members': contentSpaceAdministrationMemberPageSchema,
+    'add-member': contentSpaceAdministrationAddMemberReceiptSchema,
+    'remove-member': contentSpaceAdministrationRemoveMemberReceiptSchema
+  } as const
+  return write ? parseWriteOutput(schemas[operation], value) : parseOutput(schemas[operation], value)
+}
+
+async function dispatchAdministrationOperation(
+  operation: ContentSpaceAdministrationOperation,
+  request: any,
+  administration: ReturnType<typeof defineContentSpaceAdministrationPort>
+): Promise<unknown> {
+  switch (operation) {
+    case 'list-spaces': return administration.listSpaces(request)
+    case 'create-space': return administration.createSpace(request)
+    case 'observe-space': return administration.observeSpace(request)
+    case 'update-space': return administration.updateSpace(request)
+    case 'pin-space': return administration.pinSpace(request)
+    case 'unpin-space': return administration.unpinSpace(request)
+    case 'open-root': return administration.openRoot(request)
+    case 'list-members': return administration.listMembers(request)
+    case 'add-member': return administration.addMember(request)
+    case 'remove-member': return administration.removeMember(request)
+  }
+}
+
+function assertAdministrationTarget(
+  operation: ContentSpaceAdministrationOperation,
+  request: any,
+  target: ContentSpaceProviderFeatureTarget
+): void {
+  if (operation === 'list-spaces' || operation === 'create-space') {
+    if (target.kind !== 'provider-administration') {
+      fail('unauthorized', 'This administration operation requires Provider authority.')
+    }
+    return
+  }
+  if (target.kind !== 'content' || !('containerId' in target.primary) ||
+    !sameContentEntryReference(target.primary, target.root)) {
+    fail('unauthorized', 'This administration operation requires an authorized root.')
+  }
+  let requestRoot: ContentContainerReference
+  try {
+    requestRoot = parsePortableContentContainerReference(request.root)
+  } catch {
+    fail('invalid_target', 'The administration root is invalid.')
+  }
+  if (!sameContentEntryReference(requestRoot, target.primary)) {
+    fail('invalid_target', 'The administration request does not match Broker authority.')
+  }
+  if ((operation === 'add-member' || operation === 'remove-member') &&
+    request.member.providerInstanceRef !== requestRoot.providerInstanceRef) {
+    fail('invalid_target', 'The administration member does not match the root Provider Instance.')
+  }
+}
+
+function assertAdministrationOutputBinding(
+  operation: ContentSpaceAdministrationOperation,
+  request: any,
+  output: any,
+  providerInstanceRef: string,
+  effect: ContentSpaceProviderFeatureEffect
+): void {
+  try {
+    const parseRoot = (value: unknown): ContentContainerReference => {
+      const root = parsePortableContentContainerReference(value)
+      if (root.providerInstanceRef !== providerInstanceRef) throw new Error('Provider drift')
+      return root
+    }
+    const parseMember = (value: unknown) => {
+      const member = contentSpaceAdministrationMemberReferenceSchema.parse(value)
+      if (member.providerInstanceRef !== providerInstanceRef) throw new Error('Provider drift')
+      return member
+    }
+    const assertExactRoot = (actual: unknown, expected: unknown): void => {
+      if (!sameContainer(parseRoot(actual), parseRoot(expected))) throw new Error('Root drift')
+    }
+    const assertExactMember = (actual: unknown, expected: unknown): void => {
+      const returnedMember = parseMember(actual)
+      const requestedMember = parseMember(expected)
+      if (returnedMember.kind !== requestedMember.kind ||
+        returnedMember.principalId !== requestedMember.principalId) {
+        throw new Error('Member drift')
+      }
+    }
+    const assertPage = (
+      itemCount: number,
+      nextCursor: string | undefined,
+      page: Readonly<{ limit: number; cursor?: string }>
+    ): void => {
+      if (itemCount > page.limit ||
+        (nextCursor !== undefined && nextCursor === page.cursor) ||
+        (itemCount === 0 && nextCursor !== undefined)) {
+        throw new Error('Page drift')
+      }
+    }
+
+    switch (operation) {
+      case 'list-spaces': {
+        const roots: ContentContainerReference[] = output.items.map(
+          (item: any) => parseRoot(item.root)
+        )
+        assertPage(output.items.length, output.nextCursor, request.page)
+        if (!allUnique(roots.map((root) =>
+          `${root.providerInstanceRef}\u0000${root.containerId}`
+        ))) throw new Error('Duplicate roots')
+        break
+      }
+      case 'create-space':
+        parseRoot(output.root)
+        if (output.label !== request.label ||
+          output.contentOwnerUserId !== request.contentOwnerUserId) {
+          throw new Error('Created space drift')
+        }
+        break
+      case 'observe-space':
+        assertExactRoot(output.root, request.root)
+        break
+      case 'update-space':
+        assertExactRoot(output.root, request.root)
+        if (output.label !== request.label) throw new Error('Updated label drift')
+        break
+      case 'pin-space':
+        assertExactRoot(output.root, request.root)
+        if (output.pinned !== true) throw new Error('Pinned state drift')
+        break
+      case 'unpin-space':
+        assertExactRoot(output.root, request.root)
+        if (output.pinned !== false) throw new Error('Unpinned state drift')
+        break
+      case 'open-root':
+        assertExactRoot(output.root, request.root)
+        break
+      case 'list-members': {
+        assertExactRoot(output.root, request.root)
+        const members: Array<ReturnType<typeof parseMember>> = output.items.map(
+          (item: any) => parseMember(item.member)
+        )
+        assertPage(output.items.length, output.nextCursor, request.page)
+        if (!allUnique(members.map((member) =>
+          `${member.providerInstanceRef}\u0000${member.kind}\u0000${member.principalId}`
+        ))) throw new Error('Duplicate members')
+        break
+      }
+      case 'add-member':
+        assertExactRoot(output.root, request.root)
+        assertExactMember(output.member, request.member)
+        break
+      case 'remove-member':
+        assertExactRoot(output.root, request.root)
+        assertExactMember(output.member, request.member)
+        break
+      default: {
+        const exhaustive: never = operation
+        throw new Error(`Unsupported administration operation: ${exhaustive}`)
+      }
+    }
+  } catch {
+    fail(
+      effect === 'read' ? 'provider_unavailable' : 'outcome_unknown',
+      'Provider administration output is not bound to the request or authority.',
+      'never'
+    )
+  }
+}
+
+function normalizeExtendedPortalResult(
+  operation: ContentSpaceExtendedOperationKey,
+  result: unknown,
+  now: Date
+): any {
+  if (operation !== 'resolveInternalLink' &&
+    operation !== 'resolveCollaborationInvitation') return result
+  if (!isRecord(result) || result.ok !== true || !isRecord(result.value)) return result
+  return Object.freeze({
+    ...result,
+    value: Object.freeze({
+      ...result.value,
+      target: safeProviderPortalTarget(result.value.target, now)
+    })
+  })
+}
+
+function safeProviderPortalTarget(
+  target: unknown,
+  nowValue: Date
+): Readonly<{ url: string; expiresAt: string }> {
+  if (!isRecord(target) || typeof target.url !== 'string' ||
+    typeof target.expiresAt !== 'string') {
+    fail('unsafe_portal_target', 'Provider portal target is invalid.')
+  }
+  let url: URL
+  try {
+    url = new URL(target.url)
+  } catch {
+    fail('unsafe_portal_target', 'Provider portal target is invalid.')
+  }
+  const expiresAt = Date.parse(target.expiresAt)
+  const now = nowValue.getTime()
+  if (target.url.length > 2_048 || target.url !== target.url.trim() ||
+    target.url.includes('\\') || target.url.includes('#') ||
+    hasRawAuthorityUserInfo(target.url) || hasControlOrSpaceCharacter(target.url) ||
+    url.protocol !== 'https:' || Boolean(url.username || url.password || url.hash) ||
+    !Number.isFinite(expiresAt) || expiresAt <= now ||
+    expiresAt - now > CONTENT_SPACE_LIMITS.maxPortalLifetimeMs) {
+    fail('unsafe_portal_target', 'Provider portal target is not safe and bounded.')
+  }
+  return Object.freeze({
+    // Preserve the exact Provider string: HTTPS query parameters may be signed.
+    url: target.url,
+    expiresAt: new Date(expiresAt).toISOString()
+  })
+}
 
 type BoundedOperationSignalLease = Readonly<{
   deadlineAt: number
@@ -1013,25 +2465,32 @@ async function boundedProviderCall<Value>(
   expireBoundedOperationSignal(signal)
   if (signal?.aborted) {
     fail(
-      outcomeUncertainOnAbort ? 'outcome_unknown' : 'cancelled',
-      outcomeUncertainOnAbort
-        ? 'The Provider operation outcome cannot be proven.'
-        : 'The Provider operation was cancelled or exceeded its deadline.'
+      'cancelled',
+      'The Provider operation was cancelled or exceeded its deadline.'
     )
   }
   await assertCurrentPrincipal(assertPrincipalCurrent, false, signal)
+  let operationInvoked = false
+  const invokeOperation = () => {
+    operationInvoked = true
+    return operation()
+  }
   let result: Value | undefined
   let operationFailed = false
   let operationErrorValue: unknown
   try {
     result = signal
-      ? await raceProviderOperation(operation, signal, outcomeUncertainOnAbort)
-      : await operation()
+      ? await raceProviderOperation(invokeOperation, signal, outcomeUncertainOnAbort)
+      : await invokeOperation()
   } catch (error) {
     operationFailed = true
     operationErrorValue = error
   }
-  await assertCurrentPrincipal(assertPrincipalCurrent, outcomeUncertainOnAbort, signal)
+  await assertCurrentPrincipal(
+    assertPrincipalCurrent,
+    outcomeUncertainOnAbort && operationInvoked,
+    signal
+  )
   if (operationFailed) throw operationErrorValue
   return result as Value
 }
@@ -1043,6 +2502,7 @@ function raceProviderOperation<Value>(
 ): Promise<Value> {
   return new Promise<Value>((resolve, reject) => {
     let completed = false
+    let operationInvoked = false
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined
     const complete = (action: () => void) => {
       if (completed) return
@@ -1051,12 +2511,15 @@ function raceProviderOperation<Value>(
       if (deadlineTimer) clearTimeout(deadlineTimer)
       action()
     }
-    const onAbort = () => complete(() => reject(operationError(
-      outcomeUncertainOnAbort ? 'outcome_unknown' : 'cancelled',
-      outcomeUncertainOnAbort
-        ? 'The Provider operation outcome cannot be proven.'
-        : 'The Provider operation was cancelled or exceeded its deadline.'
-    )))
+    const onAbort = () => complete(() => {
+      const outcomeUncertain = outcomeUncertainOnAbort && operationInvoked
+      reject(operationError(
+        outcomeUncertain ? 'outcome_unknown' : 'cancelled',
+        outcomeUncertain
+          ? 'The Provider operation outcome cannot be proven.'
+          : 'The Provider operation was cancelled or exceeded its deadline.'
+      ))
+    })
     signal.addEventListener('abort', onAbort, { once: true })
     const lease = boundedOperationSignalLeases.get(signal)
     if (lease) {
@@ -1077,6 +2540,7 @@ function raceProviderOperation<Value>(
     try {
       // Invoke synchronously after the final abort check so an already-cancelled
       // write cannot be queued for a later microtask dispatch.
+      operationInvoked = true
       dispatched = operation()
     } catch (error) {
       complete(() => reject(error))
@@ -1224,12 +2688,105 @@ function sameDownloadReference(
   return leftVersion === rightVersion && leftDigest === rightDigest
 }
 
-function readinessExecutable(
-  readiness: 'poc_only' | 'blocked_by_contract' | 'production_ready',
-  audience: ContentSpaceServiceCallContext['audience']
+const NO_VERIFICATION_TRANSFERS = Object.freeze({
+  maxUploadBytes: 0,
+  maxDownloadBytes: 0
+})
+const UPLOAD_VERIFICATION_LIMITS = Object.freeze({
+  maxUploadBytes: CONTENT_SPACE_LIMITS.maxUploadBytes,
+  maxDownloadBytes: 0
+})
+const DOWNLOAD_VERIFICATION_LIMITS = Object.freeze({
+  maxUploadBytes: 0,
+  maxDownloadBytes: CONTENT_SPACE_LIMITS.maxFileBytes
+})
+
+function providerVerificationAuthority(
+  providerInstanceRef: string
+): ContentSpaceVerificationAuthority {
+  return Object.freeze({ kind: 'provider-instance', providerInstanceRef })
+}
+
+function contentVerificationAuthority(
+  reference: ContentEntryReference
+): ContentSpaceVerificationAuthority {
+  const root = 'containerId' in reference
+    ? Object.freeze({
+        providerInstanceRef: reference.providerInstanceRef,
+        containerId: reference.containerId
+      })
+    : Object.freeze({
+        providerInstanceRef: reference.providerInstanceRef,
+        fileId: reference.fileId
+      })
+  return Object.freeze({ kind: 'content-root', root })
+}
+
+function callVerificationAuthority(
+  call: ContentSpaceServiceCallContext,
+  fallback: ContentEntryReference
+): ContentSpaceVerificationAuthority {
+  const binding = call.verificationBinding
+  if (!binding) return contentVerificationAuthority(fallback)
+  const root = parseInput(contentContainerReferenceSchema, binding.root)
+  const reference = parseInput(zContentEntryReference, binding.reference)
+  if (!sameContentEntryReference(reference, fallback) ||
+    root.providerInstanceRef !== fallback.providerInstanceRef) {
+    fail('unauthorized', 'The Broker verification binding changed Content authority.')
+  }
+  return contentVerificationAuthority(root)
+}
+
+function verificationAuthorityForTarget(
+  target: ContentSpaceProviderFeatureTarget
+): ContentSpaceVerificationAuthority {
+  return target.kind === 'provider-administration'
+    ? providerVerificationAuthority(target.providerInstanceRef)
+    : contentVerificationAuthority(target.root)
+}
+
+function ordinaryOperationTransferLimits(
+  operation: ContentSpaceOperation
+): ContentSpaceVerificationTransferLimits {
+  if (operation === 'upload-new') return UPLOAD_VERIFICATION_LIMITS
+  if (operation === 'download') return DOWNLOAD_VERIFICATION_LIMITS
+  return NO_VERIFICATION_TRANSFERS
+}
+
+function nativeDocumentTransferLimits(
+  operation: NativeDocumentRequest['operation']
+): ContentSpaceVerificationTransferLimits {
+  if (operation === 'image-upload' || operation === 'import') {
+    return UPLOAD_VERIFICATION_LIMITS
+  }
+  if (operation === 'image-download' || operation === 'export') {
+    return DOWNLOAD_VERIFICATION_LIMITS
+  }
+  return NO_VERIFICATION_TRANSFERS
+}
+
+function extendedOperationTransferLimits(
+  operation: ContentSpaceExtendedOperationKey
+): ContentSpaceVerificationTransferLimits {
+  if (operation === 'updateFileVersion' || operation === 'addAttachment') {
+    return UPLOAD_VERIFICATION_LIMITS
+  }
+  return NO_VERIFICATION_TRANSFERS
+}
+
+function operationRequiresObservation(operation: ContentSpaceOperation): boolean {
+  return operation !== 'list-containers' && operation !== 'observe-entry'
+}
+
+function operationReady(
+  state: Readonly<{
+    readiness: 'poc_only' | 'blocked_by_contract' | 'production_ready'
+    reasonCode: ContentSpaceReadinessReason
+  }>
 ): boolean {
-  return readiness === 'production_ready' ||
-    (readiness === 'poc_only' && (audience === 'ui' || audience === 'agent'))
+  // `poc_only` is descriptive until composition installs a separately
+  // reviewed, trusted PoC policy/audience gate. No such gate exists here.
+  return state.readiness === 'production_ready' && state.reasonCode === 'available'
 }
 
 function operationError(

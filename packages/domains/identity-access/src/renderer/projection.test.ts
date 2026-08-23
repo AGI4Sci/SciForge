@@ -85,6 +85,37 @@ describe('IdentityRendererProjection', () => {
     expect(projection.getSnapshot().state).toMatchObject({ currentAccount: null, identityVersion: 2 })
   })
 
+  it('retains a committed account creation when the post-write list refresh fails', async () => {
+    const account = {
+      userId: '9c5c66c8-64ba-4485-8fee-3449d84d26c7',
+      username: 'Alice',
+      createdAt: '2026-08-21T00:00:00.000Z',
+      updatedAt: '2026-08-21T00:00:00.000Z'
+    }
+    const committed: IdentityAvailableState = {
+      ...signedOut,
+      identityVersion: 1,
+      accountCount: 1,
+      currentAccount: account
+    }
+    const client: IdentityRendererClient = clientFixture({
+      inspect: vi.fn(async () => committed),
+      listAccounts: vi.fn(async () => { throw new Error('refresh failed') }),
+      createAccount: vi.fn(async () => committed)
+    })
+    const projection = new IdentityRendererProjection(client)
+
+    await expect(projection.createAccount('Alice')).resolves.toBeUndefined()
+
+    expect(client.createAccount).toHaveBeenCalledOnce()
+    expect(client.listAccounts).toHaveBeenCalledOnce()
+    expect(projection.getSnapshot()).toMatchObject({
+      loading: false,
+      state: committed,
+      error: 'refresh failed'
+    })
+  })
+
   it('recovers unavailable state only through backup-and-reset and retains the backup path', async () => {
     const unavailable = {
       status: 'unavailable' as const,

@@ -7,6 +7,7 @@ import type {
   CapabilityObservation,
   CapabilityResourceHandle
 } from '../../shared/capability-broker'
+import { capabilityResourceHandleSchema } from '../../shared/capability-broker'
 import {
   CAPABILITY_AGENT_TOOL_NAMES,
   CapabilityAgentToolError,
@@ -18,7 +19,11 @@ import {
   type CapabilityAgentToolRequestContext
 } from './agent-tools'
 import { CapabilityBroker } from './broker'
-import { CapabilityRegistry, defineCapability } from './registry'
+import {
+  CapabilityRegistry,
+  defineCapability,
+  type CapabilityHandlerContext
+} from './registry'
 
 const nestedArtifactInputSchema = z.object({
   task: z.string().min(1),
@@ -578,6 +583,15 @@ describe('CapabilityAgentToolSurface', () => {
       broker: {
         discover,
         observe,
+        describeResourceHandle: vi.fn((_caller, resource) => (
+          resource.token === surfaceHandle.token
+            ? {
+                resourceRef: surfaceObservation.resourceRef
+              }
+            : {
+                resourceRef: documentObservation.resourceRef
+              }
+        )),
         bindResourceRef: vi.fn(async () => documentHandle),
         invoke,
         listEvents: vi.fn(async () => [])
@@ -623,7 +637,6 @@ describe('CapabilityAgentToolSurface', () => {
     expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({
       actionId: mutate.id,
       resourceRef: documentRef,
-      resourceLabel: 'Paper',
       input: { title: 'Updated' }
     }), expect.any(Object))
     expect(invoke).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -813,35 +826,27 @@ describe('CapabilityAgentToolSurface', () => {
     expect(observe).not.toHaveBeenCalled()
   })
 
-  it('rechecks the Principal lease after nested observation sanitization', async () => {
+  it('rechecks the Principal lease after nested resource-handle projection', async () => {
     const outerHandle = handle('1', 'o')
     const nestedHandle = handle('1', 'n')
     let leaseCurrent = true
-    let observations = 0
     const surface = createCapabilityAgentToolSurface({
       broker: {
         ...brokerStub(),
         bindResourceRef: vi.fn(async () => outerHandle),
-        observe: vi.fn(async () => {
-          observations += 1
-          if (observations === 1) {
-            return observation(
-              outerHandle,
-              `res_${'o'.repeat(26)}`,
-              'document',
-              nestedHandle,
-              []
-            )
-          }
+        observe: vi.fn(async () => observation(
+          outerHandle,
+          `res_${'o'.repeat(26)}`,
+          'document',
+          nestedHandle,
+          []
+        )),
+        describeResourceHandle: vi.fn(async () => {
           await Promise.resolve()
           leaseCurrent = false
-          return observation(
-            nestedHandle,
-            `res_${'n'.repeat(26)}`,
-            'document',
-            { title: 'Principal A state' },
-            []
-          )
+          return {
+            resourceRef: `res_${'n'.repeat(26)}`
+          }
         })
       },
       assertPrincipalLease: () => {
@@ -855,6 +860,361 @@ describe('CapabilityAgentToolSurface', () => {
       arguments: { resourceRef: `res_${'o'.repeat(26)}` },
       context
     })).rejects.toMatchObject({ code: 'principal_changed' })
+  })
+
+  it('preserves an observation failure before a resource mutation is dispatched', async () => {
+    const mutate = defineCapability({
+      id: 'provider-administration.create-before-observation',
+      version: '1',
+      title: 'Create after administration observation',
+      description: 'Requires a live provider-administration resource.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['provider-administration'],
+      effect: 'external-write',
+      approval: 'none',
+      autonomousWrite: 'resource-authorized',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.literal(true) }).strict(),
+      handler: vi.fn(async () => ({
+        output: { ok: true as const },
+        changed: true,
+        semanticRevision: '2'
+      }))
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([mutate]))
+    let observationFails = false
+    const adminHandle = broker.issueResourceHandle(caller, {
+      resourceId: 'provider-administration-before-observation',
+      resourceKind: 'provider-administration',
+      workspaceId: caller.workspaceId,
+      audiences: ['agent'],
+      semanticRevision: '1',
+      observe: async () => {
+        if (observationFails) throw new Error('Administration observation unavailable.')
+        return {
+          state: { providerInstanceRef: 'provider-instance-fixture' },
+          semanticRevision: '1',
+          operationIds: [mutate.descriptor.id]
+        }
+      }
+    })
+    const transferred = await broker.observe(caller, { resource: adminHandle })
+    const surface = createCapabilityAgentToolSurface({ broker, resolveCaller: () => caller })
+    observationFails = true
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: transferred.resourceRef },
+      context
+    })).rejects.toMatchObject({ code: 'observation_failed' })
+    expect(mutate.handler).not.toHaveBeenCalled()
+  })
+
+  it('delivers a committed mutation resource without an implicit Provider observation', async () => {
+    const rootHandleSchema = z.object({
+      token: z.string(),
+      semanticRevision: z.string(),
+      expiresAt: z.string()
+    }).strict()
+    const dispatch = vi.fn()
+    const mutate = defineCapability({
+      id: 'provider-administration.create-output-observation',
+      version: '1',
+      title: 'Create provider root with observable output',
+      description: 'Creates a root and returns its Broker resource.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['provider-administration'],
+      producedResourceKinds: ['content-root'],
+      effect: 'external-write',
+      approval: 'none',
+      autonomousWrite: 'resource-authorized',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ root: rootHandleSchema }).strict(),
+      handler: async (_input, handlerContext) => {
+        dispatch()
+        return {
+          output: {
+            root: handlerContext.issueResource({
+              resourceId: 'created-content-root',
+              resourceKind: 'content-root',
+              workspaceId: handlerContext.caller.workspaceId,
+              audiences: ['agent'],
+              semanticRevision: '1',
+              observe: async () => {
+                throw new Error('Created root observation unavailable.')
+              }
+            })
+          },
+          changed: true,
+          semanticRevision: '2'
+        }
+      }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([mutate]))
+    const adminHandle = broker.issueResourceHandle(caller, {
+      resourceId: 'provider-administration-output-observation',
+      resourceKind: 'provider-administration',
+      workspaceId: caller.workspaceId,
+      audiences: ['agent'],
+      semanticRevision: '1',
+      observe: async () => ({
+        state: { providerInstanceRef: 'provider-instance-fixture' },
+        semanticRevision: '1',
+        operationIds: [mutate.descriptor.id]
+      })
+    })
+    const transferred = await broker.observe(caller, { resource: adminHandle })
+    const surface = createCapabilityAgentToolSurface({ broker, resolveCaller: () => caller })
+    const observed = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: transferred.resourceRef },
+      context
+    })
+    if (observed.tool !== CAPABILITY_AGENT_TOOL_NAMES.observe) {
+      throw new Error('Expected provider-administration observation.')
+    }
+
+    const invoked = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: {
+        operationRef: observed.value.operations[0]!.operationRef,
+        resourceRef: transferred.resourceRef,
+        input: {}
+      },
+      context: { ...context, turnId: 'turn-output-observation', callId: 'call-create-root' }
+    })
+    expect(invoked).toMatchObject({
+      value: {
+        output: { root: { resourceRef: expect.stringMatching(/^res_/u) } },
+        changed: true
+      }
+    })
+    expect(dispatch).toHaveBeenCalledOnce()
+    expect(broker.listAuditRecords()).toContainEqual(expect.objectContaining({
+      actionId: mutate.descriptor.id,
+      status: 'success'
+    }))
+    if (invoked.tool !== CAPABILITY_AGENT_TOOL_NAMES.invoke) {
+      throw new Error('Expected provider-administration invocation.')
+    }
+    const rootResourceRef = (invoked.value.output as {
+      root: { resourceRef: string }
+    }).root.resourceRef
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: rootResourceRef },
+      context: { ...context, turnId: 'turn-output-observation', callId: 'call-observe-root' }
+    })).rejects.toMatchObject({ code: 'observation_failed' })
+    expect(dispatch).toHaveBeenCalledOnce()
+  })
+
+  it('reports outcome_unknown when a committed mutation nested handle expires before projection', async () => {
+    let now = new Date('2026-07-16T11:00:00.000Z')
+    const nestedDispatch = vi.fn()
+    const issueExpiringResource = (
+      handlerContext: CapabilityHandlerContext,
+      resourceId: string
+    ): CapabilityResourceHandle => {
+      const resource = handlerContext.issueResource({
+        resourceId,
+        resourceKind: 'content-root',
+        workspaceId: handlerContext.caller.workspaceId,
+        audiences: ['agent'],
+        semanticRevision: '1',
+        expiresInMs: 1,
+        observe: async () => ({ state: {}, semanticRevision: '1' })
+      })
+      now = new Date(now.getTime() + 2)
+      return resource
+    }
+    const nestedOutputMutation = defineCapability({
+      id: 'provider-administration.create-expired-nested-output',
+      version: '1',
+      title: 'Create an expiring nested output resource',
+      description: 'Commits an external write before returning a nested resource.',
+      audiences: ['agent'],
+      scope: 'global',
+      producedResourceKinds: ['content-root'],
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({
+        created: z.object({ resource: capabilityResourceHandleSchema }).strict()
+      }).strict(),
+      handler: async (_input, handlerContext) => {
+        nestedDispatch()
+        const resource = issueExpiringResource(handlerContext, 'expired-nested-output-root')
+        return {
+          output: {
+            created: { resource }
+          },
+          changed: false
+        }
+      }
+    })
+    const broker = new CapabilityBroker(
+      new CapabilityRegistry([nestedOutputMutation]),
+      { now: () => now }
+    )
+    const surface = createCapabilityAgentToolSurface({
+      broker,
+      resolveCaller: () => caller,
+      requestApproval: async () => 'allowed' as const
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { capabilityId: nestedOutputMutation.descriptor.id },
+      context: { ...context, turnId: 'expired-nested-output', callId: 'discover-expired-nested' }
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) {
+      throw new Error('Expected mutation discovery.')
+    }
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: discovered.value[0]!.operationRef, input: {} },
+      context: { ...context, turnId: 'expired-nested-output', callId: 'invoke-expired-nested' }
+    })).rejects.toMatchObject({ code: 'outcome_unknown', retryable: false })
+    expect(nestedDispatch).toHaveBeenCalledOnce()
+    expect(broker.listAuditRecords()).toContainEqual(expect.objectContaining({
+      actionId: nestedOutputMutation.descriptor.id,
+      status: 'success'
+    }))
+  })
+
+  it('reports outcome_unknown when a committed mutation result resource expires before projection', async () => {
+    let now = new Date('2026-07-16T11:00:00.000Z')
+    const dispatch = vi.fn()
+    const mutation = defineCapability({
+      id: 'provider-administration.update-expired-result-resource',
+      version: '1',
+      title: 'Update an expiring result resource',
+      description: 'Commits an external write before returning its refreshed resource.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['provider-administration'],
+      effect: 'external-write',
+      approval: 'none',
+      autonomousWrite: 'resource-authorized',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.literal(true) }).strict(),
+      handler: async () => {
+        dispatch()
+        return {
+          output: { ok: true as const },
+          changed: true,
+          semanticRevision: '2'
+        }
+      }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([mutation]), {
+      now: () => now,
+      handleTtlMs: 100
+    })
+    const administration = broker.issueResourceHandle(caller, {
+      resourceId: 'expiring-result-resource-administration',
+      resourceKind: 'provider-administration',
+      workspaceId: caller.workspaceId,
+      audiences: ['agent'],
+      semanticRevision: '1',
+      observe: async () => ({
+        state: { providerInstanceRef: 'provider-instance-fixture' },
+        semanticRevision: '1',
+        operationIds: [mutation.descriptor.id]
+      })
+    })
+    const transferred = await broker.observe(caller, { resource: administration })
+    let expireProjection = false
+    const expiringProjectionBroker: CapabilityAgentBroker = {
+      discover: (invokeCaller, query) => broker.discover(invokeCaller, query),
+      observe: (invokeCaller, request) => broker.observe(invokeCaller, request),
+      bindResourceRef: (invokeCaller, resourceRef) => (
+        broker.bindResourceRef(invokeCaller, resourceRef)
+      ),
+      describeResourceHandle: (invokeCaller, resource) => {
+        if (expireProjection) now = new Date(now.getTime() + 101)
+        return broker.describeResourceHandle(invokeCaller, resource)
+      },
+      invoke: (invokeCaller, request, options) => (
+        broker.invoke(invokeCaller, request, { signal: options?.signal })
+      ),
+      listEvents: (invokeCaller, query) => broker.listEvents(invokeCaller, query)
+    }
+    const surface = createCapabilityAgentToolSurface({
+      broker: expiringProjectionBroker,
+      resolveCaller: () => caller
+    })
+    const observed = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: transferred.resourceRef },
+      context: { ...context, turnId: 'expired-result-resource', callId: 'observe-administration' }
+    })
+    if (observed.tool !== CAPABILITY_AGENT_TOOL_NAMES.observe) {
+      throw new Error('Expected administration observation.')
+    }
+    expireProjection = true
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: {
+        operationRef: observed.value.operations[0]!.operationRef,
+        resourceRef: transferred.resourceRef,
+        input: {}
+      },
+      context: { ...context, turnId: 'expired-result-resource', callId: 'invoke-expired-result' }
+    })).rejects.toMatchObject({ code: 'outcome_unknown', retryable: false })
+    expect(dispatch).toHaveBeenCalledOnce()
+    expect(broker.listAuditRecords()).toContainEqual(expect.objectContaining({
+      actionId: mutation.descriptor.id,
+      status: 'success'
+    }))
+  })
+
+  it('preserves Broker output validation failures before mutation result delivery', async () => {
+    const dispatch = vi.fn()
+    const mutation = defineCapability({
+      id: 'provider-administration.invalid-output-before-delivery',
+      version: '1',
+      title: 'Return an invalid mutation output',
+      description: 'Fails Broker output validation before a result is delivered.',
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.literal(true) }).strict(),
+      handler: async () => {
+        dispatch()
+        return { output: { ok: false } as never, changed: false }
+      }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([mutation]))
+    const surface = createCapabilityAgentToolSurface({
+      broker,
+      resolveCaller: () => caller,
+      requestApproval: async () => 'allowed' as const
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { capabilityId: mutation.descriptor.id },
+      context: { ...context, turnId: 'invalid-output', callId: 'discover-invalid-output' }
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) {
+      throw new Error('Expected mutation discovery.')
+    }
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: discovered.value[0]!.operationRef, input: {} },
+      context: { ...context, turnId: 'invalid-output', callId: 'invoke-invalid-output' }
+    })).rejects.toMatchObject({ code: 'invalid_output' })
+    expect(dispatch).toHaveBeenCalledOnce()
   })
 
   it('reports outcome_unknown when Principal changes while sanitizing a committed mutation result', async () => {
@@ -873,16 +1233,12 @@ describe('CapabilityAgentToolSurface', () => {
         ...brokerStub(),
         discover: vi.fn(async () => [operation]),
         invoke,
-        observe: vi.fn(async () => {
+        describeResourceHandle: vi.fn(async () => {
           await Promise.resolve()
           leaseCurrent = false
-          return observation(
-            outputHandle,
-            `res_${'s'.repeat(26)}`,
-            'document',
-            { title: 'Committed result' },
-            []
-          )
+          return {
+            resourceRef: `res_${'s'.repeat(26)}`
+          }
         })
       },
       assertPrincipalLease: () => {
@@ -1744,6 +2100,9 @@ function brokerStub(): CapabilityAgentBroker {
   return {
     discover: vi.fn(async () => []),
     observe: vi.fn(),
+    describeResourceHandle: vi.fn((_caller, resource) => ({
+      resourceRef: `res_${resource.token.slice('cap_'.length)}`
+    })),
     bindResourceRef: vi.fn(() => {
       throw new CapabilityAgentToolError('unknown_resource_ref', 'The resource reference is unknown or expired.')
     }),

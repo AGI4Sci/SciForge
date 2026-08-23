@@ -192,6 +192,50 @@ describe('OpenContent enrollment fragment', () => {
     expect(onConnectionChanged).toHaveBeenCalledTimes(1)
   })
 
+  it.each([
+    ['unavailable access state', Object.freeze({
+      phase: 'unavailable' as const,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+    })],
+    ['resolved provider-unavailable result', resolvedViewState({
+      outcome: 'error',
+      error: { code: 'provider_unavailable', action: 'retry' }
+    })]
+  ])('allows confirmed local disconnect through the %s', async (_case, viewState) => {
+    const status = vi.fn(async (): Promise<OpenContentConnectionResult> => ({
+      outcome: 'error',
+      error: { code: 'provider_unavailable', action: 'retry' }
+    }))
+    const bind = vi.fn(async () => connectedResult('Research Library', 'scientist'))
+    const unbind = vi.fn(async (): Promise<OpenContentUnbindResult> => ({
+      outcome: 'success',
+      state: 'disconnected',
+      remoteRevocation: 'unsupported'
+    }))
+    const onConnectionChanged = vi.fn()
+    const mounted = await mountEnrollment({
+      client: connectionClient({ status, bind, unbind }),
+      onConnectionChanged,
+      viewState
+    })
+
+    expect(mounted.container.textContent).toContain('Connection unavailable')
+    await click(buttonByText(mounted.container, 'Disconnect'))
+    expect(unbind).not.toHaveBeenCalled()
+    expect(mounted.container.textContent).toContain('Disconnect on this device?')
+    expect(mounted.container.textContent).toContain('remote files will not be deleted')
+
+    await click(buttonByText(mounted.container, 'Yes, disconnect'))
+    expect(unbind).toHaveBeenCalledTimes(1)
+    expect(unbind).toHaveBeenCalledWith(
+      OPENCONTENT_PROVIDER_INSTANCE_REF,
+      { signal: expect.any(AbortSignal) }
+    )
+    expect(status).not.toHaveBeenCalled()
+    expect(bind).not.toHaveBeenCalled()
+    expect(onConnectionChanged).toHaveBeenCalledTimes(1)
+  })
+
   it('hides unavailable details and delegates retry to the owning access read', async () => {
     const status = vi.fn(async () => ({
       outcome: 'success' as const,

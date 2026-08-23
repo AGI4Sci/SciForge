@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { generateKeyPairSync } from 'node:crypto'
+
+import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 
 import {
   DomainMainProviderCredentialError,
@@ -6,7 +8,7 @@ import {
   type DomainMainProviderCredentialStoreHost
 } from '@sciforge/domain-sdk/package-storage'
 
-import type { OpenContentClient } from './opencontent-client.js'
+import { createOpenContentClient, type OpenContentClient } from './opencontent-client.js'
 import { createOpenContentConnectionService } from './connection-service.js'
 import { OPENCONTENT_PROVIDER_INSTANCE_REF } from '../contract.js'
 
@@ -19,6 +21,13 @@ const principal = Object.freeze({
 })
 
 describe('OpenContent connection service', () => {
+  it('exposes one atomic current-session operation surface', () => {
+    expectTypeOf<ReturnType<typeof createOpenContentConnectionService>>()
+      .toHaveProperty('useCurrentSession')
+    expectTypeOf<ReturnType<typeof createOpenContentConnectionService>>()
+      .not.toHaveProperty('useCurrentToken')
+  })
+
   it('rejects an unknown status target before reading connection storage', async () => {
     const settings = inMemorySettings()
     const read = vi.spyOn(settings, 'read')
@@ -26,7 +35,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials: inMemoryCredentials(),
-      client: stubClient()
+      getRuntime: configuredRuntime(stubClient())
     })
 
     await expect(service.status({
@@ -43,7 +52,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings: inMemorySettings(),
       credentials: inMemoryCredentials(),
-      client: stubClient({ authenticateExistingAccount })
+      getRuntime: configuredRuntime(stubClient({ authenticateExistingAccount }))
     })
 
     await expect(service.bindExistingAccount({
@@ -63,7 +72,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials: inMemoryCredentials(),
-      client: stubClient()
+      getRuntime: configuredRuntime(stubClient())
     })
 
     await expect(service.unbind({
@@ -72,6 +81,41 @@ describe('OpenContent connection service', () => {
       assertPrincipalCurrent: () => undefined
     })).rejects.toMatchObject({ code: 'invalid_input' })
     expect(read).not.toHaveBeenCalled()
+  })
+
+  it('clears the local connection when deployment runtime is unavailable', async () => {
+    const settings = inMemorySettings()
+    const credentials = inMemoryCredentials()
+    let runtime: Readonly<{ client: OpenContentClient }> | undefined = Object.freeze({
+      client: stubClient()
+    })
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings,
+      credentials,
+      getRuntime: () => runtime,
+      createConnectionId: () => 'connection-current'
+    })
+    await service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+    expect(credentials.values.size).toBe(1)
+
+    runtime = undefined
+    await expect(service.unbind({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })).resolves.toEqual({ state: 'disconnected', remoteRevocation: 'unsupported' })
+
+    expect(credentials.values).toEqual(new Map())
+    await expect(settings.read()).resolves.toMatchObject({
+      value: { version: 2, connections: [], retiredConnections: [] }
+    })
   })
 
   it('rejects a second same-kind Instance before credentials or Provider network access', async () => {
@@ -84,10 +128,10 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: stubClient({ isTokenValid })
+      getRuntime: configuredRuntime(stubClient({ isTokenValid }))
     })
 
-    await expect(service.useCurrentToken({
+    await expect(service.useCurrentSession({
       principal,
       providerInstanceRef: 'opencontent-edoc2-secondary',
       assertPrincipalCurrent: () => undefined
@@ -106,7 +150,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: stubClient({ isTokenValid })
+      getRuntime: configuredRuntime(stubClient({ isTokenValid }))
     })
 
     await expect(service.status({
@@ -135,7 +179,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: stubClient()
+      getRuntime: configuredRuntime(stubClient())
     })
 
     await expect(service.status({
@@ -180,7 +224,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: stubClient()
+      getRuntime: configuredRuntime(stubClient())
     })
     const otherPrincipal = Object.freeze({ ...principal, subject: 'local-account-b' })
 
@@ -218,7 +262,7 @@ describe('OpenContent connection service', () => {
         retiredCredentialIds: ['connection-retired'],
         externalAccount: {
           id: 'external-user-a',
-          identityId: 41,
+          identityId: 9000041,
           account: 'fixture-user-a',
           name: 'Fixture User A'
         },
@@ -252,7 +296,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: stubClient()
+      getRuntime: configuredRuntime(stubClient())
     })
     const assertPrincipalCurrent = () => {
       if (currentSubject !== principal.subject) throw new Error('Principal changed during cleanup.')
@@ -262,7 +306,7 @@ describe('OpenContent connection service', () => {
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent
-    })).rejects.toThrow('Principal changed during cleanup.')
+    })).rejects.toMatchObject({ code: 'unauthorized' })
 
     expect(values.has(
       `${principal.subject}:${OPENCONTENT_PROVIDER_INSTANCE_REF}:connection-retired`
@@ -286,7 +330,7 @@ describe('OpenContent connection service', () => {
         token: 'first-opaque-token',
         account: {
           id: 'external-user-a',
-          identityId: 41,
+          identityId: 9000041,
           account: 'fixture-user-a',
           name: 'Fixture User A',
           topPersonalFolderId: '1001'
@@ -296,7 +340,7 @@ describe('OpenContent connection service', () => {
         token: 'second-opaque-token',
         account: {
           id: 'external-user-b',
-          identityId: 42,
+          identityId: 9000042,
           account: 'fixture-user-b',
           name: 'Fixture User B',
           topPersonalFolderId: '1002'
@@ -307,10 +351,15 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: {
+      getRuntime: configuredRuntime({
         authenticateExistingAccount,
         isTokenValid: async () => true,
-        listRootFolders: async () => ({ roots: [] }),
+        observeCurrentExternalAccount: async () => fixtureExternalAccount('external-user-b'),
+        listPersonalRootFolder: async () => ({
+          source: 'personal-root',
+          folderGuid: 'personal-folder-guid',
+          label: 'Personal library'
+        }),
         listFolderEntries: async ({ parentFolderGuid }) => ({
           parentFolderGuid,
           entries: []
@@ -321,7 +370,7 @@ describe('OpenContent connection service', () => {
         createFolder: async () => ({ folderGuid: 'created-folder-guid' }),
         uploadNewFile: async () => ({ fileGuid: 'uploaded-file-guid' }),
         downloadFile: async () => ({ bytesWritten: 0 })
-      },
+      }),
       createConnectionId: () => `connection-${++sequence}`,
       now: () => new Date('2026-08-17T06:00:00.000Z')
     })
@@ -362,6 +411,66 @@ describe('OpenContent connection service', () => {
     expect(authenticateExistingAccount).toHaveBeenCalledTimes(2)
   })
 
+  it('does not persist a binding when the Principal changes between enrollment requests', async () => {
+    const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+    let principalCurrent = true
+    const requestedPaths: string[] = []
+    const client = createOpenContentClient({
+      baseUrl: 'https://opencontent.invalid',
+      fetch: vi.fn(async (input: string | URL | Request) => {
+        const url = new URL(String(input))
+        requestedPaths.push(url.pathname)
+        if (url.pathname === '/inbiz/org/api/auth/GetLoginRsaPublicKey') {
+          return jsonResponse({
+            result: 0,
+            message: null,
+            data: { PublicKey: publicKeyPem, Algorithm: 'RSA', Padding: 'OAEP-SHA256' },
+            totalCount: 0
+          })
+        }
+        if (url.pathname === '/flatsdk/api/services/Auth/UserLogin') {
+          principalCurrent = false
+          return jsonResponse({
+            result: 0,
+            msg: '',
+            data: 'opaque-token-value-0001',
+            clientId: null
+          })
+        }
+        throw new Error(`A Principal change must stop request ${url.pathname}`)
+      })
+    })
+    const settings = inMemorySettings()
+    const credentials = inMemoryCredentials()
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings,
+      credentials,
+      getRuntime: configuredRuntime(client)
+    })
+
+    const error = await service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user',
+      password: 'fixture-password',
+      assertPrincipalCurrent: async () => {
+        await Promise.resolve()
+        if (!principalCurrent) throw new Error('sensitive-principal-diagnostic')
+      }
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({ code: 'unauthorized' })
+    expect((error as Error).message).not.toContain('sensitive-principal-diagnostic')
+    expect(requestedPaths).toEqual([
+      '/inbiz/org/api/auth/GetLoginRsaPublicKey',
+      '/flatsdk/api/services/Auth/UserLogin'
+    ])
+    expect(credentials.values).toEqual(new Map())
+    await expect(settings.read()).resolves.toMatchObject({ value: null })
+  })
+
   it('keeps a committed rebind successful when stale-credential cleanup fails', async () => {
     const settings = inMemorySettings()
     const credentials = inMemoryCredentials()
@@ -373,7 +482,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: stubClient({ authenticateExistingAccount }),
+      getRuntime: configuredRuntime(stubClient({ authenticateExistingAccount })),
       createConnectionId: () => `connection-${++sequence}`
     })
 
@@ -442,7 +551,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings: inMemorySettings(),
       credentials: inMemoryCredentials(),
-      client: stubClient({ isTokenValid }),
+      getRuntime: configuredRuntime(stubClient({ isTokenValid })),
       createConnectionId: () => 'connection-current'
     })
     await service.bindExistingAccount({
@@ -473,19 +582,24 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: {
+      getRuntime: configuredRuntime({
         authenticateExistingAccount: async () => ({
           token: 'bound-opaque-token',
           account: {
             id: 'external-user-a',
-            identityId: 41,
+            identityId: 9000041,
             account: 'fixture-user-a',
             name: 'Fixture User A',
             topPersonalFolderId: '1001'
           }
         }),
         isTokenValid: async () => true,
-        listRootFolders: async () => ({ roots: [] }),
+        observeCurrentExternalAccount: async () => fixtureExternalAccount('external-user-a'),
+        listPersonalRootFolder: async () => ({
+          source: 'personal-root',
+          folderGuid: 'personal-folder-guid',
+          label: 'Personal library'
+        }),
         listFolderEntries: async ({ parentFolderGuid }) => ({
           parentFolderGuid,
           entries: []
@@ -496,7 +610,7 @@ describe('OpenContent connection service', () => {
         createFolder: async () => ({ folderGuid: 'created-folder-guid' }),
         uploadNewFile: async () => ({ fileGuid: 'uploaded-file-guid' }),
         downloadFile: async () => ({ bytesWritten: 0 })
-      },
+      }),
       createConnectionId: () => 'connection-current'
     })
     await service.bindExistingAccount({
@@ -507,18 +621,18 @@ describe('OpenContent connection service', () => {
       assertPrincipalCurrent: () => undefined
     })
 
-    await expect(service.useCurrentToken({
+    await expect(service.useCurrentSession({
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
-    }, async (token) => token.length)).resolves.toBe(18)
+    }, async ({ token }) => token.length)).resolves.toBe(18)
     const otherPrincipal = Object.freeze({ ...principal, subject: 'local-account-b' })
     await expect(service.status({
       principal: otherPrincipal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
     })).resolves.toEqual({ state: 'disconnected' })
-    await expect(service.useCurrentToken({
+    await expect(service.useCurrentSession({
       principal: otherPrincipal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
@@ -535,7 +649,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
     })).resolves.toEqual({ state: 'disconnected' })
-    await expect(service.useCurrentToken({
+    await expect(service.useCurrentSession({
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
@@ -543,6 +657,320 @@ describe('OpenContent connection service', () => {
       code: 'reauthentication_required'
     })
     expect(credentials.values).toEqual(new Map())
+  })
+
+  it('exposes one atomic session with the Token and login-readback external identity', async () => {
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings: inMemorySettings(),
+      credentials: inMemoryCredentials(),
+      getRuntime: configuredRuntime(stubClient()),
+      createConnectionId: () => 'connection-current'
+    })
+    await service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+
+    const observed = await service.useCurrentSession({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    }, async (session) => ({
+      ...session,
+      frozen: Object.isFrozen(session)
+    }))
+
+    expect(observed).toEqual({
+      token: 'bound-opaque-token',
+      externalIdentityId: 9000041,
+      bindingAttestation: {
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        principal,
+        externalSubject: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        bindingRevision: expect.stringMatching(/^[0-9a-f]{64}$/u)
+      },
+      frozen: true
+    })
+  })
+
+  it('attests the exact Principal and rotates only the binding revision on same-account rebind', async () => {
+    let sequence = 0
+    const authenticateExistingAccount = vi.fn<OpenContentClient['authenticateExistingAccount']>()
+      .mockResolvedValue(authenticatedSession('external-user-a', 'fixture-user-a'))
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings: inMemorySettings(),
+      credentials: inMemoryCredentials(),
+      getRuntime: configuredRuntime(stubClient({ authenticateExistingAccount })),
+      createConnectionId: () => `connection-${++sequence}`
+    })
+    const bind = () => service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+
+    await bind()
+    const first = await service.attestExternalBinding({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })
+    await bind()
+    const rebound = await service.attestExternalBinding({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })
+
+    expect(first).toEqual({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      principal,
+      externalSubject: expect.stringMatching(/^[0-9a-f]{64}$/u),
+      bindingRevision: expect.stringMatching(/^[0-9a-f]{64}$/u)
+    })
+    expect(Object.isFrozen(first)).toBe(true)
+    expect(rebound.externalSubject).toBe(first.externalSubject)
+    expect(rebound.bindingRevision).not.toBe(first.bindingRevision)
+    expect(JSON.stringify([first, rebound])).not.toMatch(
+      /external-user-a|fixture-user-a|connection-[12]|"identityId"/u
+    )
+  })
+
+  it('rejects a superseded binding attestation before the protected operation', async () => {
+    let sequence = 0
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings: inMemorySettings(),
+      credentials: inMemoryCredentials(),
+      getRuntime: configuredRuntime(stubClient()),
+      createConnectionId: () => `connection-${++sequence}`
+    })
+    const bind = () => service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+    await bind()
+    const attestation = await service.attestExternalBinding({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })
+    await expect(service.useCurrentSession({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedBindingAttestation: attestation,
+      assertPrincipalCurrent: () => undefined
+    }, async () => 'admitted')).resolves.toBe('admitted')
+
+    await bind()
+    const operation = vi.fn(async () => 'must not run')
+    await expect(service.useCurrentSession({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedBindingAttestation: attestation,
+      assertPrincipalCurrent: () => undefined
+    }, operation)).rejects.toMatchObject({ code: 'unauthorized' })
+    expect(operation).not.toHaveBeenCalled()
+  })
+
+  it('requires every external binding attestation field to match exactly', async () => {
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings: inMemorySettings(),
+      credentials: inMemoryCredentials(),
+      getRuntime: configuredRuntime(stubClient()),
+      createConnectionId: () => 'connection-current'
+    })
+    await service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+    const attestation = await service.attestExternalBinding({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })
+    const mismatches = [
+      { ...attestation, providerInstanceRef: 'opencontent-other-instance' },
+      { ...attestation, principal: { ...principal, identityVersion: 2 } },
+      { ...attestation, externalSubject: 'c'.repeat(64) },
+      { ...attestation, bindingRevision: 'd'.repeat(64) }
+    ]
+
+    for (const expectedBindingAttestation of mismatches) {
+      const operation = vi.fn(async () => 'must not run')
+      await expect(service.useCurrentSession({
+        principal,
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        expectedBindingAttestation,
+        assertPrincipalCurrent: () => undefined
+      }, operation)).rejects.toMatchObject({ code: 'unauthorized' })
+      expect(operation).not.toHaveBeenCalled()
+    }
+  })
+
+  it('keeps a valid binding when only Provider display fields change', async () => {
+    let observedAccount: Awaited<ReturnType<
+      OpenContentClient['observeCurrentExternalAccount']
+    >> = fixtureExternalAccount('external-user-a')
+    const observeCurrentExternalAccount = vi.fn<
+      OpenContentClient['observeCurrentExternalAccount']
+    >(async () => observedAccount)
+    const operation = vi.fn(async (session) => session.bindingAttestation)
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings: inMemorySettings(),
+      credentials: inMemoryCredentials(),
+      getRuntime: configuredRuntime(stubClient({ observeCurrentExternalAccount })),
+      createConnectionId: () => 'connection-current'
+    })
+    await service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+    const attestation = await service.attestExternalBinding({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })
+    observedAccount = Object.freeze({
+      ...observedAccount,
+      account: 'renamed-fixture-user-a',
+      name: 'Changed Provider Name'
+    })
+
+    await expect(service.useCurrentSession({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedBindingAttestation: attestation,
+      assertPrincipalCurrent: () => undefined
+    }, operation)).resolves.toEqual(attestation)
+
+    expect(observeCurrentExternalAccount).toHaveBeenCalledTimes(2)
+    expect(operation).toHaveBeenCalledOnce()
+    await expect(service.status({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })).resolves.toMatchObject({ state: 'connected' })
+  })
+
+  it.each([{
+    field: 'id',
+    observedAccount: Object.freeze({
+      ...fixtureExternalAccount('external-user-a'),
+      id: 'external-user-other'
+    })
+  }, {
+    field: 'identityId',
+    observedAccount: Object.freeze({
+      ...fixtureExternalAccount('external-user-a'),
+      identityId: 9000099
+    })
+  }])('requires reauthentication when stable external account $field changes', async ({
+    observedAccount
+  }) => {
+    const operation = vi.fn(async () => 'must not run')
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings: inMemorySettings(),
+      credentials: inMemoryCredentials(),
+      getRuntime: configuredRuntime(stubClient({
+        observeCurrentExternalAccount: async () => observedAccount
+      })),
+      createConnectionId: () => 'connection-current'
+    })
+    await service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+
+    await expect(service.useCurrentSession({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    }, operation)).rejects.toMatchObject({ code: 'reauthentication_required' })
+    expect(operation).not.toHaveBeenCalled()
+    await expect(service.status({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })).resolves.toMatchObject({ state: 'reauthentication_required' })
+  })
+
+  it('does not let a rebind replace the account during an active atomic session', async () => {
+    const authenticateExistingAccount = vi.fn<OpenContentClient['authenticateExistingAccount']>()
+      .mockResolvedValueOnce(authenticatedSession('external-user-a', 'fixture-user-a'))
+      .mockResolvedValueOnce(authenticatedSession('external-user-b', 'fixture-user-b'))
+    let connectionSequence = 0
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings: inMemorySettings(),
+      credentials: inMemoryCredentials(),
+      getRuntime: configuredRuntime(stubClient({ authenticateExistingAccount })),
+      createConnectionId: () => `connection-${++connectionSequence}`
+    })
+    await service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password-a',
+      assertPrincipalCurrent: () => undefined
+    })
+
+    let enterSession!: () => void
+    const enteredSession = new Promise<void>((resolve) => { enterSession = resolve })
+    let releaseSession!: () => void
+    const sessionReleased = new Promise<void>((resolve) => { releaseSession = resolve })
+    const activeSession = service.useCurrentSession({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    }, async (session) => {
+      enterSession()
+      await sessionReleased
+      return session.externalIdentityId
+    })
+    await enteredSession
+
+    let rebindCompleted = false
+    const rebind = service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-b',
+      password: 'fixture-password-b',
+      assertPrincipalCurrent: () => undefined
+    }).then((status) => {
+      rebindCompleted = true
+      return status
+    })
+    await Promise.resolve()
+    expect(rebindCompleted).toBe(false)
+
+    releaseSession()
+    await expect(activeSession).resolves.toBe(9000041)
+    await expect(rebind).resolves.toMatchObject({
+      externalAccount: { identityId: 9000042 }
+    })
   })
 
   it('returns and persists reauthentication_required when public status finds an invalid Token', async () => {
@@ -554,19 +982,24 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: {
+      getRuntime: configuredRuntime({
         authenticateExistingAccount: async () => ({
           token: 'bound-opaque-token',
           account: {
             id: 'external-user-a',
-            identityId: 41,
+            identityId: 9000041,
             account: 'fixture-user-a',
             name: 'Fixture User A',
             topPersonalFolderId: '1001'
           }
         }),
         isTokenValid,
-        listRootFolders: async () => ({ roots: [] }),
+        observeCurrentExternalAccount: async () => fixtureExternalAccount('external-user-a'),
+        listPersonalRootFolder: async () => ({
+          source: 'personal-root',
+          folderGuid: 'personal-folder-guid',
+          label: 'Personal library'
+        }),
         listFolderEntries: async ({ parentFolderGuid }) => ({
           parentFolderGuid,
           entries: []
@@ -577,7 +1010,7 @@ describe('OpenContent connection service', () => {
         createFolder: async () => ({ folderGuid: 'created-folder-guid' }),
         uploadNewFile: async () => ({ fileGuid: 'uploaded-file-guid' }),
         downloadFile: async () => ({ bytesWritten: 0 })
-      },
+      }),
       createConnectionId: () => 'connection-current'
     })
     await service.bindExistingAccount({
@@ -610,19 +1043,27 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: {
+      getRuntime: configuredRuntime({
         authenticateExistingAccount: async () => ({
           token: 'bound-opaque-token',
           account: {
             id: 'external-user-a',
-            identityId: 41,
+            identityId: 9000041,
             account: 'fixture-user-a',
             name: 'Fixture User A',
             topPersonalFolderId: '1001'
           }
         }),
         isTokenValid: async () => true,
-        listRootFolders: async () => ({ roots: [] }),
+        observeCurrentExternalAccount: async () => authenticatedSession(
+          'external-user-a',
+          'fixture-user-a'
+        ).account,
+        listPersonalRootFolder: async () => ({
+          source: 'personal-root',
+          folderGuid: 'personal-folder-guid',
+          label: 'Personal library'
+        }),
         listFolderEntries: async ({ parentFolderGuid }) => ({
           parentFolderGuid,
           entries: []
@@ -633,7 +1074,7 @@ describe('OpenContent connection service', () => {
         createFolder: async () => ({ folderGuid: 'created-folder-guid' }),
         uploadNewFile: async () => ({ fileGuid: 'uploaded-file-guid' }),
         downloadFile: async () => ({ bytesWritten: 0 })
-      },
+      }),
       createConnectionId: () => 'connection-current'
     })
     await service.bindExistingAccount({
@@ -648,7 +1089,7 @@ describe('OpenContent connection service', () => {
       'The operating-system secure storage service is unavailable.'
     ))
 
-    await expect(service.useCurrentToken({
+    await expect(service.useCurrentSession({
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
@@ -661,6 +1102,40 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
     })).resolves.toMatchObject({ state: 'connected' })
+  })
+
+  it('removes a newly stored Token if the Principal lease expires before settings commit', async () => {
+    const stored = inMemoryCredentials()
+    let principalCurrent = true
+    const credentials: DomainMainProviderCredentialStoreHost = {
+      ...stored,
+      replace: async (access, secret) => {
+        await stored.replace(access, secret)
+        principalCurrent = false
+      }
+    }
+    const settings = inMemorySettings()
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings,
+      credentials,
+      getRuntime: configuredRuntime(stubClient()),
+      createConnectionId: () => 'connection-principal-expired'
+    })
+
+    await expect(service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: async () => {
+        await Promise.resolve()
+        if (!principalCurrent) throw new Error('Principal changed after Token storage.')
+      }
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+
+    expect(stored.values).toEqual(new Map())
+    await expect(settings.read()).resolves.toMatchObject({ value: null })
   })
 })
 
@@ -722,14 +1197,19 @@ function stubClient(
       token: 'bound-opaque-token',
       account: {
         id: 'external-user-a',
-        identityId: 41,
+        identityId: 9000041,
         account: 'fixture-user-a',
         name: 'Fixture User A',
         topPersonalFolderId: '1001'
       }
     }),
     isTokenValid: async () => true,
-    listRootFolders: async () => ({ roots: [] }),
+    observeCurrentExternalAccount: async () => fixtureExternalAccount('external-user-a'),
+    listPersonalRootFolder: async () => ({
+      source: 'personal-root',
+      folderGuid: 'personal-folder-guid',
+      label: 'Personal library'
+    }),
     listFolderEntries: async ({ parentFolderGuid }) => ({ parentFolderGuid, entries: [] }),
     observeEntry: async ({ kind, resourceGuid }) => kind === 'container'
       ? { kind, folderGuid: resourceGuid, label: 'Folder' }
@@ -741,16 +1221,39 @@ function stubClient(
   }
 }
 
+function configuredRuntime(client: OpenContentClient) {
+  const runtime = Object.freeze({ client })
+  return () => runtime
+}
+
 function authenticatedSession(id: string, account: string) {
   return Object.freeze({
     token: `opaque-token-${id}`,
     account: Object.freeze({
       id,
-      identityId: id === 'external-user-a' ? 41 : 42,
+      identityId: id === 'external-user-a' ? 9000041 : 9000042,
       account,
-      name: account,
+      name: id === 'external-user-a' ? 'Fixture User A' : 'Fixture User B',
       topPersonalFolderId: id === 'external-user-a' ? '1001' : '1002'
     })
+  })
+}
+
+function fixtureExternalAccount(id: 'external-user-a' | 'external-user-b') {
+  const account = id === 'external-user-a' ? 'fixture-user-a' : 'fixture-user-b'
+  return Object.freeze({
+    id,
+    identityId: id === 'external-user-a' ? 9000041 : 9000042,
+    account,
+    name: id === 'external-user-a' ? 'Fixture User A' : 'Fixture User B',
+    topPersonalFolderId: id === 'external-user-a' ? '1001' : '1002'
+  })
+}
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' }
   })
 }
 

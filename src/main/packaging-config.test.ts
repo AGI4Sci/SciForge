@@ -68,6 +68,19 @@ type RootPackageJson = {
   scripts: Record<string, string>
 }
 
+type InternalRuntimeComposition = Readonly<{
+  extraResources: readonly Readonly<{ from: string; to: string }>[]
+  packagedRuntimes: readonly Readonly<{
+    packageName: string
+    packageDir: string
+    assets: readonly Readonly<{
+      sourceRoot: string
+      packagedResourcesPath: string
+      requiredPaths: readonly string[]
+    }>[]
+  }>[]
+}>
+
 const workspacePreviewWorkerPackageDirs = [
   'packages/workers/workspace-bioimaging',
   'packages/workers/workspace-deck',
@@ -85,6 +98,9 @@ const macNotarize = require('../../scripts/mac-notarize.cjs')
 const releaseWorkerManifest = require(
   '../../scripts/release-worker-manifest.cjs'
 ) as ReleaseWorkerManifest
+const internalRuntimePackaging = require(
+  '../../scripts/internal-runtime-packaging.cjs'
+) as Readonly<{ internalRuntimeComposition: InternalRuntimeComposition }>
 const rootPackage = require('../../package.json') as RootPackageJson
 const projectRoot = dirname(require.resolve('../../package.json'))
 
@@ -243,6 +259,62 @@ afterEach(() => {
 })
 
 describe('electron-builder release packaging', () => {
+  it('derives statically verified removable internal resources from package manifests', () => {
+    const composition = internalRuntimePackaging.internalRuntimeComposition
+
+    expect(rootPackage.workspaces.some(
+      (workspace) => workspace === 'internal' || workspace.startsWith('internal/')
+    )).toBe(false)
+    expect(rootPackage.scripts['verify:internal-runtimes']).toBe(
+      'node ./scripts/internal-runtime-packaging.cjs --verify'
+    )
+    expect(rootPackage.scripts.predev).toBeUndefined()
+    expect(rootPackage.scripts['build:agent-support']?.match(
+      /npm run verify:internal-runtimes/gu
+    )).toHaveLength(1)
+    expect(builderConfig.extraResources).toEqual(expect.arrayContaining(
+      [...composition.extraResources]
+    ))
+    expect(afterPack.INTERNAL_RUNTIME_COMPOSITION).toEqual(composition)
+    for (const runtime of composition.packagedRuntimes) {
+      expect(() => statSync(join(projectRoot, runtime.packageDir, 'package.json'))).not.toThrow()
+      for (const asset of runtime.assets) {
+        expect(isPathInside(asset.sourceRoot, runtime.packageDir)).toBe(true)
+        for (const requiredPath of asset.requiredPaths) {
+          expect(() => statSync(join(projectRoot, asset.sourceRoot, requiredPath))).not.toThrow()
+        }
+      }
+    }
+  })
+
+  it('validates receipt-derived complete internal runtime inventories after packaging', () => {
+    const root = tempRoot()
+    const context = createMacPackContext(root)
+    const resourcesPath = afterPack._internals.packedResourcesDir(context)
+    const composition = internalRuntimePackaging.internalRuntimeComposition
+    for (const runtime of composition.packagedRuntimes) {
+      for (const asset of runtime.assets) {
+        cpSync(
+          join(projectRoot, asset.sourceRoot),
+          join(resourcesPath, asset.packagedResourcesPath),
+          { recursive: true }
+        )
+      }
+    }
+
+    expect(() => {
+      afterPack._internals.verifyPackagedInternalRuntimes(context)
+    }).not.toThrow()
+
+    const firstAsset = composition.packagedRuntimes[0]?.assets[0]
+    const firstRequiredPath = firstAsset?.requiredPaths[0]
+    if (!firstAsset || !firstRequiredPath) return
+    rmSync(join(resourcesPath, firstAsset.packagedResourcesPath, firstRequiredPath))
+    expect(() => {
+      afterPack._internals.verifyPackagedInternalRuntimes(context)
+    }).toThrow(/missing file/u)
+  })
+
   it('embeds an explicitly configured host-owned extension public keyring', () => {
     const root = tempRoot()
     const keyringPath = join(root, 'official-keys.json')
@@ -763,13 +835,16 @@ describe('root package workspace contracts', () => {
       expect(releaseWorkerManifest.bundledPackageDirs).not.toContain(workspacePreviewWorkerPackageDir)
     }
     expect(rootPackage.workspaces.some((workspace) => workspace.startsWith('plugins/'))).toBe(false)
+    expect(rootPackage.workspaces.some(
+      (workspace) => workspace === 'internal' || workspace.startsWith('internal/')
+    )).toBe(false)
     expect(rootPackage.workspaces).not.toContain('kun')
     expect(rootPackage.workspaces).not.toContain('packages/workers/gui-owl-computer-use')
     expect(rootPackage.scripts).toMatchObject({
       'build:execution-governance': 'npm --workspace @sciforge/execution-governance run build',
       'build:full-trace': 'npm --workspace @sciforge/full-trace run build',
       'build:multi-agent': 'npm --workspace @sciforge/multi-agent run build',
-      'build:agent-support': 'npm run build:execution-governance && npm run build:full-trace && npm run build:multi-agent && npm run build:workspace-host && npm run build:collaboration-dependencies',
+      'build:agent-support': 'npm run build:execution-governance && npm run build:full-trace && npm run build:multi-agent && npm run build:workspace-host && npm run build:collaboration-dependencies && npm run verify:internal-runtimes',
       'build:workspace-host': 'npm --workspace @sciforge/workspace-host run build:artifact',
       'model-router:start': 'npm --workspace @sciforge/model-router run start',
       'model-router:test': 'npm --workspace @sciforge/model-router run test',

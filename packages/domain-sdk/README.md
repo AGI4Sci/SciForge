@@ -126,6 +126,13 @@ development or contract-test fixture must declare `"composition": "development-o
 still validates and tests that package, while generated production definition and process
 compositions omit it generically.
 
+An individual contribution declaration may set `"publicRelease": "forbidden"` when that active
+contribution must never enter an official public artifact. Omitted or explicit `"allowed"` keeps
+the ordinary default. Official prebuild and after-pack checks read this policy from the same
+manifest set returned by standard domain discovery and reject any active production contribution
+marked `forbidden`. This is a contribution policy with a concrete release consumer, not a second
+package distribution/composition classification.
+
 ## Renderer contributions
 
 `@sciforge/domain-sdk/renderer-contributions` is the public boundary for package-owned Workbench

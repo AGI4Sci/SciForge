@@ -77,12 +77,14 @@ describe('capability IPC adapter', () => {
       expectedContractVersion: CAPABILITY_BROKER_CONTRACT_VERSION,
       requiredCapabilityIds: ['test-resource.update']
     }) as {
+      contractVersion: number
       status: string
       registryFingerprint: string
       availableCapabilityIds: string[]
       missingCapabilityIds: string[]
     }
     expect(ready).toMatchObject({
+      contractVersion: 2,
       status: 'ready',
       availableCapabilityIds: ['test-resource.update'],
       missingCapabilityIds: []

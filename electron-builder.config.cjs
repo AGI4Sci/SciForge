@@ -1,5 +1,13 @@
 const { existsSync, readFileSync } = require('node:fs')
 const { join } = require('node:path')
+const deploymentConfigurationPackaging = require(
+  './scripts/domain-package-deployment-config.cjs'
+)
+const afterPackPackaging = require('./scripts/after-pack.cjs')
+const publicReleaseArtifactReceipt = require(
+  './scripts/public-release-artifact-receipt.cjs'
+)
+const { internalRuntimeComposition } = require('./scripts/internal-runtime-packaging.cjs')
 const releaseWorkerManifest = require('./scripts/release-worker-manifest.cjs')
 
 function loadLocalReleaseEnv() {
@@ -32,6 +40,20 @@ function loadLocalReleaseEnv() {
 
 loadLocalReleaseEnv()
 
+const deploymentConfigurationComposition =
+  deploymentConfigurationPackaging.createDomainPackageDeploymentConfigurationComposition(
+    __dirname
+  )
+const publicReleaseArtifactHooks =
+  publicReleaseArtifactReceipt.createPublicReleaseArtifactHooks({
+    afterPack: afterPackPackaging.createAfterPackHook({
+      deploymentConfigurationComposition
+    }),
+    projectRoot: __dirname,
+    internalRuntimeComposition,
+    deploymentConfigurationComposition
+  })
+
 const hasExplicitMacSigningIdentity = Boolean(
   process.env.CSC_LINK ||
     process.env.CSC_NAME ||
@@ -60,7 +82,11 @@ const releaseAppVersion = (
   process.env.DEEPSEEK_GUI_APP_VERSION ||
   ''
 ).trim()
-const artifactVersion = releaseAppVersion || '${version}'
+const packageMetadata = JSON.parse(
+  readFileSync(join(__dirname, 'package.json'), 'utf8')
+)
+const packageAppVersion = String(packageMetadata.version || '').trim()
+const applicationVersion = releaseAppVersion || packageAppVersion
 const officialExtensionKeysFile = (
   process.env.SCIFORGE_OFFICIAL_EXTENSION_KEYS_FILE || ''
 ).trim()
@@ -80,6 +106,11 @@ function normalizeUpdateChannel(raw) {
 if (releaseAppVersion && !/^\d+\.\d+\.\d+$/.test(releaseAppVersion)) {
   throw new Error(
     `SCIFORGE_APP_VERSION must be a valid x.y.z semver for electron-updater, got: ${releaseAppVersion}`
+  )
+}
+if (!/^\d+\.\d+\.\d+$/.test(applicationVersion)) {
+  throw new Error(
+    `Electron Builder application version must be a valid x.y.z semver, got: ${applicationVersion}`
   )
 }
 
@@ -113,6 +144,8 @@ module.exports = {
     ...releaseWorkerManifest.createBundledFileSets()
   ],
   extraResources: [
+    ...internalRuntimeComposition.extraResources,
+    ...deploymentConfigurationComposition.extraResources,
     { from: 'LICENSE', to: 'compliance/LICENSE' },
     { from: 'THIRD_PARTY_NOTICES.md', to: 'compliance/THIRD_PARTY_NOTICES.md' },
     { from: 'src/asset/img/README.md', to: 'compliance/ASSET_PROVENANCE.md' },
@@ -127,14 +160,15 @@ module.exports = {
         }]
       : [])
   ],
-  artifactName: `SciForge-${artifactVersion}-\${os}-\${arch}.\${ext}`,
+  artifactName: `SciForge-${applicationVersion}-\${os}-\${arch}.\${ext}`,
   publish: [
     {
       provider: 'generic',
       url: genericUpdateUrl
     }
   ],
-  afterPack: './scripts/after-pack.cjs',
+  afterPack: publicReleaseArtifactHooks.afterPack,
+  afterAllArtifactBuild: publicReleaseArtifactHooks.afterAllArtifactBuild,
   afterSign: './scripts/mac-notarize.cjs',
   mac: {
     category: 'public.app-category.developer-tools',
@@ -180,7 +214,7 @@ module.exports = {
     target: [{ target: 'AppImage', arch: ['x64'] }]
   },
   extraMetadata: {
-    ...(releaseAppVersion ? { version: releaseAppVersion } : {}),
+    version: applicationVersion,
     updateChannel,
     buildHints: {
       macSigningEnabled: hasExplicitMacSigningIdentity,

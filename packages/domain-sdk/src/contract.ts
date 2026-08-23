@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 export const DOMAIN_PACKAGE_CONTRACT_VERSION = 1
-export const DOMAIN_PACKAGE_HOST_API_VERSION = '1.4.0'
+export const DOMAIN_PACKAGE_HOST_API_VERSION = '1.5.0'
 export const DOMAIN_PACKAGE_IMPLICIT_RUNTIME_PATHS = Object.freeze([
   'package.json',
   'sciforge.domain.json'
@@ -62,6 +62,11 @@ export const domainPackageContributionKindSchema = z.string()
   .min(1)
   .max(128)
   .regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/, 'Use a lowercase contribution kind.')
+
+export const domainPackageContributionPublicReleasePolicySchema = z.enum([
+  'allowed',
+  'forbidden'
+])
 
 export const domainPackagePublisherIdSchema = z.string()
   .trim()
@@ -143,6 +148,7 @@ export const domainPackageContributionDeclarationSchema = z.object({
   id: domainPackageContributionIdSchema,
   kind: domainPackageContributionKindSchema,
   version: domainPackageVersionSchema.optional(),
+  publicRelease: domainPackageContributionPublicReleasePolicySchema.optional(),
   priority: z.number().int().min(-10_000).max(10_000).default(100)
 }).strict()
 
@@ -319,6 +325,9 @@ export type DomainPackageHostApiRange = z.infer<typeof domainPackageHostApiRange
 export type DomainPackageModule = z.infer<typeof domainPackageModuleSchema>
 export type DomainPackageContributionDeclaration = z.infer<
   typeof domainPackageContributionDeclarationSchema
+>
+export type DomainPackageContributionPublicReleasePolicy = z.infer<
+  typeof domainPackageContributionPublicReleasePolicySchema
 >
 export type DomainPackageEntrypoint = z.infer<typeof domainPackageEntrypointSchema>
 export type SandboxedDomainPackageEntrypoint = z.infer<

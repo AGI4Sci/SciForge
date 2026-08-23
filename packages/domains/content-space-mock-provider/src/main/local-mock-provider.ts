@@ -87,6 +87,10 @@ export function createLocalMockContentSpaceProvider(
   return defineContentSpaceProvider({
     contractVersion: CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
 
+    async attestExternalBinding() {
+      return undefined
+    },
+
     async describeCapabilities(context) {
       assertContext(context, providerInstanceRef, now)
       return ALL_CAPABILITIES

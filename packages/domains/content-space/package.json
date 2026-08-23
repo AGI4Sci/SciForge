@@ -1,15 +1,20 @@
 {
   "name": "@sciforge/domain-content-space",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "license": "MIT",
   "type": "module",
   "private": false,
   "description": "Provider-neutral Content Space domain package for SciForge.",
   "exports": {
+    "./administration-contract": "./src/administration-contract.ts",
     "./contract": "./src/contract.ts",
     "./definition": "./src/definition.ts",
+    "./extended-operations-contract": "./src/extended-operations-contract.ts",
     "./main": "./src/main/index.ts",
-    "./renderer": "./src/renderer/index.tsx"
+    "./native-document-contract": "./src/native-document-contract.ts",
+    "./provider-features": "./src/provider-features.ts",
+    "./renderer": "./src/renderer/index.tsx",
+    "./verification-policy": "./src/verification-policy.ts"
   },
   "files": [
     "src",
@@ -22,7 +27,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sciforge/domain-sdk": "^0.2.1",
+    "@sciforge/domain-sdk": "^0.2.3",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

@@ -168,6 +168,15 @@ export type ActiveCapabilityInvocation = Readonly<{
   effect: CapabilityDefinition['descriptor']['effect']
   approval: CapabilityDefinition['descriptor']['approval']
   approved: boolean
+  scope: CapabilityDefinition['descriptor']['scope']
+  autonomousWrite?: CapabilityDefinition['descriptor']['autonomousWrite']
+  /** Exact input resource already resolved, authorized, and pinned by the Broker. */
+  authorizedResource?: Readonly<{
+    resourceRef: string
+    resourceKind: string
+    workspaceId?: string
+    semanticRevision: string
+  }>
 }>
 
 type ActiveCapabilityInvocationState = {
@@ -556,6 +565,23 @@ export class CapabilityBroker {
       semanticRevision: state.semanticRevision,
       ...(state.layoutRevision ? { layoutRevision: state.layoutRevision } : {})
     }
+  }
+
+  /**
+   * Projects one already authorized handle to its opaque resource reference
+   * without invoking the provider observer.
+   */
+  describeResourceHandle(
+    rawCaller: CapabilityCallerContextInput,
+    rawHandle: CapabilityResourceHandle
+  ): Readonly<{
+    resourceRef: string
+  }> {
+    const caller = this.#hostResourceCaller(rawCaller)
+    const { state } = this.#resolveHandle(caller, rawHandle)
+    return Object.freeze({
+      resourceRef: state.resourceRef
+    })
   }
 
   async observe(
@@ -1175,7 +1201,21 @@ export class CapabilityBroker {
           ...(request.invocationId ? { invocationId: request.invocationId } : {}),
           effect: definition.descriptor.effect,
           approval,
-          approved
+          approved,
+          scope: definition.descriptor.scope,
+          ...(definition.descriptor.autonomousWrite
+            ? { autonomousWrite: definition.descriptor.autonomousWrite }
+            : {}),
+          ...(resource
+            ? {
+                authorizedResource: Object.freeze({
+                  resourceRef: resource.resourceRef,
+                  resourceKind: resource.resourceKind,
+                  ...(resource.workspaceId ? { workspaceId: resource.workspaceId } : {}),
+                  semanticRevision: resource.semanticRevision
+                })
+              }
+            : {})
         })
       }
       rawResult = await this.#activeInvocation.run(activeState, async () => {

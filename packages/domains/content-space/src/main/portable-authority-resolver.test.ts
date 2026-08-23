@@ -180,6 +180,7 @@ describe('Content Space portable authority resolver', () => {
 function resolverFixture(observeEntry: ContentSpaceProvider['observeEntry']) {
   const provider = defineContentSpaceProvider({
     contractVersion: CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
+    attestExternalBinding: async () => undefined,
     describeCapabilities: async () => [{
       operation: 'observe-entry',
       readiness: 'production_ready',
