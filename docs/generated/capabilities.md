@@ -73,16 +73,16 @@ Registered actions: **266**
 | `collaboration.status.read` | 1.0.0 | ui | read | none | global |
 | `collaboration.sync.retry` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.task.list` | 1.0.0 | ui | read | none | global |
-| `content-space.agent-admin-add-member` | 2.0.0 | agent | external-write | none | resource |
+| `content-space.agent-admin-add-member` | 2.0.0 | agent | external-write | confirmation | resource |
 | `content-space.agent-admin-create-space` | 1.0.0 | agent | external-write | none | resource |
 | `content-space.agent-admin-list-members` | 2.0.0 | agent | read | none | resource |
 | `content-space.agent-admin-list-spaces` | 1.0.0 | agent | read | none | resource |
 | `content-space.agent-admin-observe-space` | 1.0.0 | agent | read | none | resource |
 | `content-space.agent-admin-open-root` | 1.0.0 | agent | read | none | resource |
-| `content-space.agent-admin-pin-space` | 1.0.0 | agent | external-write | none | resource |
-| `content-space.agent-admin-remove-member` | 2.0.0 | agent | destructive | none | resource |
-| `content-space.agent-admin-unpin-space` | 1.0.0 | agent | external-write | none | resource |
-| `content-space.agent-admin-update-space` | 1.0.0 | agent | external-write | none | resource |
+| `content-space.agent-admin-pin-space` | 1.0.0 | agent | external-write | confirmation | resource |
+| `content-space.agent-admin-remove-member` | 2.0.0 | agent | destructive | confirmation | resource |
+| `content-space.agent-admin-unpin-space` | 1.0.0 | agent | external-write | confirmation | resource |
+| `content-space.agent-admin-update-space` | 1.0.0 | agent | external-write | confirmation | resource |
 | `content-space.agent-create-folder` | 1.0.0 | agent | external-write | none | resource |
 | `content-space.agent-download` | 1.0.0 | agent | workspace-write | none | resource |
 | `content-space.agent-extended-destructive` | 1.0.0 | agent | destructive | none | resource |
@@ -20973,14 +20973,13 @@ Adds one Provider directory user to the exact authorized shared root.
 - Version: `2.0.0`
 - Audiences: agent
 - Effect: `external-write`
-- Approval: none
+- Approval: confirmation
 - Scope: resource
 
 ### Contract
 
 ```json
 {
-  "autonomousWrite": "resource-authorized",
   "concurrency": {
     "idempotency": "required",
     "revision": "none"
@@ -22289,14 +22288,13 @@ Pins the exact authorized root through its Provider administration feature.
 - Version: `1.0.0`
 - Audiences: agent
 - Effect: `external-write`
-- Approval: none
+- Approval: confirmation
 - Scope: resource
 
 ### Contract
 
 ```json
 {
-  "autonomousWrite": "resource-authorized",
   "concurrency": {
     "idempotency": "required",
     "revision": "none"
@@ -22479,14 +22477,13 @@ Removes one Provider directory user from the exact authorized shared root.
 - Version: `2.0.0`
 - Audiences: agent
 - Effect: `destructive`
-- Approval: none
+- Approval: confirmation
 - Scope: resource
 
 ### Contract
 
 ```json
 {
-  "autonomousWrite": "resource-authorized",
   "concurrency": {
     "idempotency": "required",
     "revision": "none"
@@ -22719,14 +22716,13 @@ Unpins the exact authorized root through its Provider administration feature.
 - Version: `1.0.0`
 - Audiences: agent
 - Effect: `external-write`
-- Approval: none
+- Approval: confirmation
 - Scope: resource
 
 ### Contract
 
 ```json
 {
-  "autonomousWrite": "resource-authorized",
   "concurrency": {
     "idempotency": "required",
     "revision": "none"
@@ -22909,14 +22905,13 @@ Updates the exact authorized root without allowing the request to replace its Pr
 - Version: `1.0.0`
 - Audiences: agent
 - Effect: `external-write`
-- Approval: none
+- Approval: confirmation
 - Scope: resource
 
 ### Contract
 
 ```json
 {
-  "autonomousWrite": "resource-authorized",
   "concurrency": {
     "idempotency": "required",
     "revision": "none"
@@ -48626,7 +48621,7 @@ Creates one short-lived Broker selection for an exact typed multi-resource exten
 
 ## `content-space.authorize-provider-administration`
 
-Confirms one Provider administration scope for this Agent and Principal. Subsequent scoped administration writes do not require per-operation confirmation.
+Confirms one Provider administration scope for this Agent and Principal. Root update, pin, unpin, add-member, and remove-member mutations still require fresh per-operation confirmation.
 
 - Version: `1.0.0`
 - Audiences: agent

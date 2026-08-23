@@ -6,7 +6,7 @@ Ordinary shared Content Container membership SHALL use one provider-neutral `Pro
 
 Member add/remove SHALL require an exact authorized shared root, current Principal, current Provider binding attestation, and a member reference for the same Provider Instance. Administration v3 member inputs, page items, and mutation receipts SHALL represent member identity only through that `member` field and SHALL expose no member role. Content Space SHALL expose no role-mutation or ownership-transfer operation. It SHALL reject legacy top-level `contentUserId` member payloads, non-user principals, cross-Provider references, retired role or revision fields, malformed Provider output, and output authority drift before treating the operation as successful. A Provider integration MAY translate the opaque principal ID only behind its package boundary and SHALL use its existing token-free Connector facade and current Principal-bound Connection; it SHALL NOT add an extended-operation invite path or Host identity-mapping fallback.
 
-`updateSpace`, `pinSpace`, `unpinSpace`, `addMember`, and `removeMember` SHALL accept no `expectedRevision` or other Administration compare-and-mutate field, and Administration summaries, pages, open results, and mutation receipts SHALL return no Administration, root, Team, or member revision. Their Agent capabilities SHALL declare `concurrency.revision: "none"`. This declaration SHALL mean that the public contract provides no optimistic-concurrency or CAS guarantee; a Provider observation, pre-read, or supplier value SHALL NOT be represented as an atomic precondition.
+`updateSpace`, `pinSpace`, `unpinSpace`, `addMember`, and `removeMember` SHALL accept no `expectedRevision` or other Administration compare-and-mutate field, and Administration summaries, pages, open results, and mutation receipts SHALL return no Administration, root, Team, or member revision. Their Agent capabilities SHALL declare `concurrency.revision: "none"` and SHALL each require fresh per-invocation Human confirmation. An ordinary content-root resource alone SHALL NOT satisfy that confirmation or reach Provider dispatch. This declaration SHALL mean that the public contract provides no optimistic-concurrency or CAS guarantee; a Provider observation, pre-read, or supplier value SHALL NOT be represented as an atomic precondition.
 
 Every shared-container Administration operation that depends on current container or member state SHALL require the selected Provider to prove a complete, bounded, internally consistent enumeration before remote mutation. Container and member pages SHALL have stable pagination metadata, continuous progress, no repeated identity, and an exact terminal count. If completeness cannot be proven, the operation SHALL fail `provider_contract_violation` before mutation.
 
@@ -38,6 +38,11 @@ Content Space SHALL expose no Project provisioning operation, intent/report sche
 
 - **WHEN** a caller supplies `expectedRevision`, an Administration revision, or a member role to an Administration v3 request
 - **THEN** Content Space SHALL reject the request before Provider dispatch and SHALL NOT reinterpret the field as a concurrency or membership contract
+
+#### Scenario: Ordinary root is used for an Administration mutation without fresh confirmation
+
+- **WHEN** an Agent invokes `updateSpace`, `pinSpace`, `unpinSpace`, `addMember`, or `removeMember` with an ordinary root resource but no fresh confirmation for that exact invocation
+- **THEN** the Broker SHALL deny the invocation before Provider binding or remote mutation
 
 #### Scenario: Administration output drifts from the request
 

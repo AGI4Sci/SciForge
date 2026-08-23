@@ -14,9 +14,10 @@ regular-file identity. It checks that descriptor before and after a
 `4097`-byte-bounded read, rejects identity, size, modification-time,
 change-time, or birth-time drift, closes it, and freezes the parsed value.
 Missing, oversized, malformed, non-canonical, non-HTTPS, or
-symlinked configuration makes the Provider unavailable before package settings,
-credentials, network, or supplier-process access; Provider discovery,
-capability definitions, and the internal service descriptor remain registered.
+symlinked configuration makes Provider-backed calls unavailable before package
+settings, credentials, network, or supplier-process access; local unbind and
+credential retirement remain available. Provider discovery, capability
+definitions, and the internal service descriptor remain registered.
 There is no environment, argv, caller, renderer, package-setting,
 alternate-path, or fallback endpoint channel.
 
@@ -81,8 +82,10 @@ the same Connector facade for every business operation. Immediately before
 remote dispatch, the Connector revalidates the Host Principal, authenticates
 the actual current session, observes the current external account, recomputes
 the opaque values, and requires an exact match. Unbind, rebind, credential
-replacement, account change, or Connection-revision drift fails before the
-Provider operation or Connector-owned supplier subprocess.
+replacement, stable external `id`/`identityId` change, or Connection-revision
+drift fails before the Provider operation or Connector-owned supplier
+subprocess. Account and display-name metadata may refresh without changing
+binding continuity.
 
 See the [attachment distribution boundary](../../../docs/opencontent-attachment-distribution.md)
 for installation, integrity, packaging, and public-release rules, and the

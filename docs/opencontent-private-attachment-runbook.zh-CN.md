@@ -28,7 +28,7 @@
 
 安装附件不会自动安装 PoC 验证策略。Provider 声明的 readiness 只描述逐操作证据；本次 invocation admission 另行核对当前 Principal、Broker authority、audience、platform、transfer limit 和静态 verification profile。即使一次 PoC 调用获准，其 readiness 仍是 `poc_only`，不会变成 `production_ready`。
 
-PoC 操作只有在经过单独评审的静态 profile 精确匹配 Provider Instance、完整 Host Principal snapshot（含 assurance）、authority（Provider Instance 或个人/团队 content root）、operation、audience、可执行的 upload/download 最大字节数和最长 24 小时的有效窗口时，才能通过正式能力链执行。Provider-scoped 操作、mutation、Administration 或非零 transfer 还必须匹配 v2 Provider Binding Attestation：精确 Provider Instance 与 Principal，以及不暴露原始账号标识的 opaque external subject 和 opaque binding revision。Content Space 先通过 pinned Provider 取得并匹配证明；每次业务 dispatch 前，Provider 再把精确期望传给 Connector，由 Connector 对真实当前 session 重新认证、重新计算并精确比较。解绑、重绑、凭据替换、外部账号变化或 revision 漂移都会在业务调用前 fail closed。
+PoC 操作只有在经过单独评审的静态 profile 精确匹配 Provider Instance、完整 Host Principal snapshot（含 assurance）、authority（Provider Instance 或个人/团队 content root）、operation、audience、可执行的 upload/download 最大字节数和最长 24 小时的有效窗口时，才能通过正式能力链执行。Provider-scoped 操作、mutation、Administration 或非零 transfer 还必须匹配 v2 Provider Binding Attestation：精确 Provider Instance 与 Principal，以及不暴露原始账号标识的 opaque external subject 和 opaque binding revision。Content Space 先通过 pinned Provider 取得并匹配证明；每次业务 dispatch 前，Provider 再把精确期望传给 Connector，由 Connector 对真实当前 session 重新认证、重新计算并精确比较。解绑、重绑、凭据替换、稳定外部身份（`id` 或 `identityId`）变化或 revision 漂移都会在业务调用前 fail closed；`account`/`name` 展示字段变化不会使绑定失效。
 
 调用参数、Renderer、Agent、prompt、Task、普通环境变量/配置、文件类型、附件存在或相邻操作成功都不能启用或扩大 profile；`blocked_by_contract` 永远不能被 profile 放行。Host assurance 不是外部 OpenContent 账号类别，binding attestation 也不是 credential 或 portable authority。
 
@@ -297,7 +297,7 @@ npm run verify:internal-runtimes
 
 ### 9.10 调用在 admission 后报告 binding 不再匹配
 
-这通常表示 Connection 在准入与业务 dispatch 之间发生解绑、重绑、凭据替换、外部账号变化或 revision 漂移。不要复用旧 invocation、旧 profile 或旧 Broker resource，也不要重试外部写入。先由当前 Principal 重新完成连接验收，再生成并评审新的短时静态 profile；原始账号标识和 credential 不得进入 profile 或故障记录。
+这通常表示 Connection 在准入与业务 dispatch 之间发生解绑、重绑、凭据替换、稳定外部身份（`id` 或 `identityId`）变化或 revision 漂移。`account`/`name` 展示字段变化不会触发重新认证。不要复用旧 invocation、旧 profile 或旧 Broker resource，也不要重试外部写入。先由当前 Principal 重新完成连接验收，再生成并评审新的短时静态 profile；原始账号标识和 credential 不得进入 profile 或故障记录。
 
 ## 10. 更新附件版本
 

@@ -76,9 +76,11 @@ exactly once during activation. Source builds use
 `resources/domain-deployments/opencontent-connector.json`. No mode falls
 back to the other, and environment, argv, caller, renderer, or package settings
 cannot supply an origin. Missing or invalid configuration leaves the Provider
-Instance, capability factory, and service descriptor composed, but every legal
-Provider call fails `provider_unavailable` before settings, credentials,
-network, or supplier-process work. This availability gate is independent of
+Instance, capability factory, and service descriptor composed, but every
+Provider-backed call fails `provider_unavailable` before settings, credentials,
+network, or supplier-process work. Node-local unbind and credential retirement
+remain available without the sidecar and perform no Provider business call.
+This availability gate is independent of
 Content Space verification profiles and the optional supplier overlay. The
 isolated `resources/domain-deployments/**` namespace means a sidecar-only build
 does not manufacture the separate `resources/opencontent/**` supplier overlay.
@@ -110,6 +112,9 @@ member-role or ownership-transfer operation. `updateSpace`,
 `expectedRevision`, return no Administration revision, and declare
 `concurrency.revision: "none"`. OpenContent's typed Team supplier surface has no
 atomic expected-state field, so observation and reconciliation are not CAS.
+The ordinary root Broker resource fixes the target but is not standing
+administration approval: those five Agent mutations each require fresh Human
+confirmation before Provider dispatch.
 Content Space binds every one of the ten Administration outputs to the exact
 request and Broker authority, including page progress and unique identities.
 Read mismatches are `provider_unavailable`; write/destructive mismatches are
@@ -196,9 +201,10 @@ a Connector-owned supplier subprocess), the Provider passes the expectation thro
 canonical Connector boundary. The Connector revalidates the Principal,
 reauthenticates the actual current session, observes the current external
 account, recomputes the opaque values, and requires an exact match. Unbind,
-rebind, credential replacement, account change, or binding-revision drift fails
-before business dispatch; a prior admission is never reused as account
-authority.
+rebind, credential replacement, stable external-subject identity change, or
+binding-revision drift fails before business dispatch; mutable account and
+display labels are not identity keys, and a prior admission is never reused as
+account authority.
 
 ## Operation matrix
 

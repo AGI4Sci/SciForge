@@ -37,7 +37,7 @@ afterEach(() => {
 })
 
 describe('OpenContent deployment runtime availability', () => {
-  it('registers discovery, capabilities, and facade without configuration but gates every legal call', async () => {
+  it('registers discovery, capabilities, and facade without configuration but gates every Provider call', async () => {
     const root = mkdtempSync(join(tmpdir(), 'sciforge-opencontent-unconfigured-'))
     tempRoots.push(root)
     const fetch = vi.fn()

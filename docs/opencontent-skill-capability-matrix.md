@@ -82,9 +82,10 @@ Content Space obtains it only from the pinned Provider and matches it against th
 It then carries the exact expectation in-process; immediately before business dispatch, the
 Provider passes it through the canonical Connector boundary. The Connector reauthenticates the
 actual current session, observes the current external subject, recomputes both opaque values, and
-requires an exact match. Unbind, rebind, credential replacement, account change, or revision drift
-therefore fails before the Provider business operation. Raw external account identifiers do not
-enter capability input or portable authority.
+requires an exact match. Unbind, rebind, credential replacement, stable external-subject identity
+change, or revision drift therefore fails before the Provider business operation; mutable account
+and display labels are not identity keys. Raw external account identifiers do not enter capability
+input or portable authority.
 
 Without an attestation, only zero-transfer `list-containers` bootstrap and zero-transfer reads on
 an exact Broker-authoritative content root are profile-safe. The matched upload/download maxima
@@ -111,7 +112,7 @@ Host/Broker capabilities are therefore recorded explicitly before the command ma
 | Personal/shared root selection | `content-space.list-agent-root-candidates` / `content-space.authorize-agent-root` | implemented | Candidate labels are non-authorizing; authorization re-enumerates live state and issues one exact Broker root resource. |
 | Personal-library file loop | `content-space.agent-list-entries` / `content-space.agent-create-folder` / `content-space.agent-upload-new` / `content-space.agent-download` | implemented | Uses the Provider-resolved personal root, bounded pages, no magic numeric folder ID, and no implicit overwrite. |
 | Shared Content Container / OpenContent Team file loop | `content-space.agent-list-entries` / `content-space.agent-create-folder` / `content-space.agent-upload-new` / `content-space.agent-download` | implemented | Uses the Team's real Content Container root reference; Team identity and root folder identity remain distinct. |
-| Shared-root / Team administration | `content-space.authorize-provider-administration` plus `content-space.agent-admin-*` | implemented | All ten operations are PoC-only. The Host issues one scoped Broker resource and gates each exact operation. Agent shared-root creation accepts no owner; the Broker current Principal supplies it and the Provider checks it against the authenticated external session. Every required Team or Team-user enumeration must prove complete, stable pagination before a remote write. Membership values contain only `member`; no role/ownership delegate exists. All outputs are exactly request-bound, and the five root/member mutations declare `concurrency.revision: "none"`. Team deletion is absent. |
+| Shared-root / Team administration | `content-space.authorize-provider-administration` plus `content-space.agent-admin-*` | implemented | All ten operations are PoC-only. The Host issues scoped Broker resources and gates each exact operation; an ordinary root is not standing administration approval, so update, pin, unpin, add-member, and remove-member each require fresh confirmation. Agent shared-root creation accepts no owner; the Broker current Principal supplies it and the Provider checks it against the authenticated external session. Every required Team or Team-user enumeration must prove complete, stable pagination before a remote write. Membership values contain only `member`; no role/ownership delegate exists. All outputs are exactly request-bound, and the five root/member mutations declare `concurrency.revision: "none"`. Team deletion is absent. |
 | Project Content Directory provisioning | — | absent | Content Space and the OpenContent Provider expose no capability, operation, intent/report schema, or Provider port. A future Project-owning integration requires a separately reviewed authoritative binding and identity contract. Ordinary Agents cannot author owner or membership intent. |
 | Cloud Task handoff | — | deferred | No Task-specific Content Space port exists. Cloud Collaboration must first own the Project Content Space Binding, typed Task file intents, and exact Task-turn resource injection and retirement. |
 | Immutable artifact proof | `content-space.observe-immutable-version` | blocked_by_contract | OpenContent does not prove immutable retention plus version-specific retrieval. A file identity, version number, or digest cannot by itself authorize an `ArtifactReference`. |

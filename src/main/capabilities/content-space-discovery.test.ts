@@ -134,7 +134,7 @@ describe('Content Space Agent discovery integration', () => {
     }
   })
 
-  it('uses one approved Provider administration resource for observe, list, and create', async () => {
+  it('uses one approved Provider administration resource and requires fresh root-mutation confirmation', async () => {
     const createdRoot = toPortableContentContainerReference({
       providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF,
       containerId: 'mock_root'
@@ -149,6 +149,14 @@ describe('Content Space Agent discovery integration', () => {
       contentOwnerUserId: input.contentOwnerUserId,
       pinned: false
     }))
+    const removeMember = vi.fn(async (input: Readonly<{
+      root: typeof createdRoot
+      member: Readonly<{
+        providerInstanceRef: string
+        kind: 'user'
+        principalId: string
+      }>
+    }>) => Object.freeze({ ...input, removed: true as const }))
     const unusedAdministrationOperation = vi.fn(async () => {
       throw new Error('Unexpected Provider administration operation.')
     })
@@ -163,7 +171,7 @@ describe('Content Space Agent discovery integration', () => {
       openRoot: unusedAdministrationOperation,
       listMembers: unusedAdministrationOperation,
       addMember: unusedAdministrationOperation,
-      removeMember: unusedAdministrationOperation
+      removeMember
     })
     const bind = vi.fn(async () => Object.freeze({ administration }))
     const providerEntry = createMockProviderFixtureEntry((provider) =>
@@ -364,6 +372,46 @@ describe('Content Space Agent discovery integration', () => {
         label: 'Agent Research Team',
         contentOwnerUserId: principal.subject
       })
+
+      const ordinaryAuthorizationId = 'content_space_authorize_ordinary_root_0003'
+      const ordinaryRoot = await broker.invoke({
+        ...caller,
+        approvals: [{
+          actionId: CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
+          invocationId: ordinaryAuthorizationId,
+          mode: 'confirmation' as const
+        }]
+      }, {
+        actionId: CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
+        invocationId: ordinaryAuthorizationId,
+        input: {
+          providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF,
+          scope: 'personal',
+          label: 'Local Content Space'
+        }
+      })
+      const ordinaryResource = successValue<{
+        resource: NonNullable<typeof ordinaryRoot.resource>
+      }>(ordinaryRoot.output).resource
+      const member = Object.freeze({
+        providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF,
+        kind: 'user' as const,
+        principalId: 'provider-user-b'
+      })
+      const removalInvocationId = 'content_space_remove_member_0004'
+      const removalRequest = Object.freeze({
+        actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember,
+        invocationId: removalInvocationId,
+        resource: ordinaryResource,
+        input: { member }
+      })
+      const bindCallsBeforeRemoval = bind.mock.calls.length
+
+      await expect(broker.invoke(caller, removalRequest, {
+        signal: new AbortController().signal
+      })).rejects.toMatchObject({ code: 'approval_denied' })
+      expect(bind).toHaveBeenCalledTimes(bindCallsBeforeRemoval)
+      expect(removeMember).not.toHaveBeenCalled()
     } finally {
       await application.dispose()
     }

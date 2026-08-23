@@ -70,7 +70,9 @@ reference with exact root/result fields; no public member-role or
 ownership-transfer operation exists. `updateSpace`, `pinSpace`, `unpinSpace`,
 `addMember`, and `removeMember` accept no `expectedRevision`, return no
 Administration revision, and declare `concurrency.revision: "none"`; this is an
-explicit absence of optimistic-concurrency/CAS semantics.
+explicit absence of optimistic-concurrency/CAS semantics. An ordinary root
+resource is not standing administration approval: each of these five Agent
+mutations requires fresh Human confirmation before Provider dispatch.
 
 All ten Administration outputs are strictly bound to the exact request and
 Broker authority. Pages must be bounded, unique, and progressing, and an empty

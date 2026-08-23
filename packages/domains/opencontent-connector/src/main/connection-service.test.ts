@@ -83,6 +83,41 @@ describe('OpenContent connection service', () => {
     expect(read).not.toHaveBeenCalled()
   })
 
+  it('clears the local connection when deployment runtime is unavailable', async () => {
+    const settings = inMemorySettings()
+    const credentials = inMemoryCredentials()
+    let runtime: Readonly<{ client: OpenContentClient }> | undefined = Object.freeze({
+      client: stubClient()
+    })
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings,
+      credentials,
+      getRuntime: () => runtime,
+      createConnectionId: () => 'connection-current'
+    })
+    await service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+    expect(credentials.values.size).toBe(1)
+
+    runtime = undefined
+    await expect(service.unbind({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })).resolves.toEqual({ state: 'disconnected', remoteRevocation: 'unsupported' })
+
+    expect(credentials.values).toEqual(new Map())
+    await expect(settings.read()).resolves.toMatchObject({
+      value: { version: 2, connections: [], retiredConnections: [] }
+    })
+  })
+
   it('rejects a second same-kind Instance before credentials or Provider network access', async () => {
     const settings = inMemorySettings()
     const credentials = inMemoryCredentials()
@@ -787,22 +822,78 @@ describe('OpenContent connection service', () => {
     }
   })
 
-  it('rejects a valid Token whose provider-authenticated account no longer matches the binding', async () => {
+  it('keeps a valid binding when only Provider display fields change', async () => {
+    let observedAccount: Awaited<ReturnType<
+      OpenContentClient['observeCurrentExternalAccount']
+    >> = fixtureExternalAccount('external-user-a')
     const observeCurrentExternalAccount = vi.fn<
       OpenContentClient['observeCurrentExternalAccount']
-    >().mockResolvedValue({
-      id: 'external-user-a',
-      identityId: 9000041,
-      account: 'fixture-user-a',
-      name: 'Changed Provider Name',
-      topPersonalFolderId: '1001'
-    })
-    const operation = vi.fn(async () => 'must not run')
+    >(async () => observedAccount)
+    const operation = vi.fn(async (session) => session.bindingAttestation)
     const service = createOpenContentConnectionService({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings: inMemorySettings(),
       credentials: inMemoryCredentials(),
       getRuntime: configuredRuntime(stubClient({ observeCurrentExternalAccount })),
+      createConnectionId: () => 'connection-current'
+    })
+    await service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+    const attestation = await service.attestExternalBinding({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })
+    observedAccount = Object.freeze({
+      ...observedAccount,
+      account: 'renamed-fixture-user-a',
+      name: 'Changed Provider Name'
+    })
+
+    await expect(service.useCurrentSession({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedBindingAttestation: attestation,
+      assertPrincipalCurrent: () => undefined
+    }, operation)).resolves.toEqual(attestation)
+
+    expect(observeCurrentExternalAccount).toHaveBeenCalledTimes(2)
+    expect(operation).toHaveBeenCalledOnce()
+    await expect(service.status({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })).resolves.toMatchObject({ state: 'connected' })
+  })
+
+  it.each([{
+    field: 'id',
+    observedAccount: Object.freeze({
+      ...fixtureExternalAccount('external-user-a'),
+      id: 'external-user-other'
+    })
+  }, {
+    field: 'identityId',
+    observedAccount: Object.freeze({
+      ...fixtureExternalAccount('external-user-a'),
+      identityId: 9000099
+    })
+  }])('requires reauthentication when stable external account $field changes', async ({
+    observedAccount
+  }) => {
+    const operation = vi.fn(async () => 'must not run')
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings: inMemorySettings(),
+      credentials: inMemoryCredentials(),
+      getRuntime: configuredRuntime(stubClient({
+        observeCurrentExternalAccount: async () => observedAccount
+      })),
       createConnectionId: () => 'connection-current'
     })
     await service.bindExistingAccount({
@@ -818,8 +909,6 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
     }, operation)).rejects.toMatchObject({ code: 'reauthentication_required' })
-
-    expect(observeCurrentExternalAccount).toHaveBeenCalledTimes(1)
     expect(operation).not.toHaveBeenCalled()
     await expect(service.status({
       principal,

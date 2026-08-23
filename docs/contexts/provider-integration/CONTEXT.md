@@ -53,7 +53,7 @@ A package-declared, deployment-owned private binding between one fixed Provider 
 _Avoid_: compiled demo endpoint, environment override, caller-selected URL, package setting, fallback Provider
 
 **Provider Binding Attestation**:
-Token-free evidence binding one Provider Instance and complete current Principal to an opaque external subject and opaque Connection revision. It is re-attested against the actual current session before business dispatch and is neither a credential nor portable authority.
+Token-free evidence binding one Provider Instance and complete current Principal to an opaque stable external subject and opaque Connection revision. It is re-attested against the actual current session before business dispatch and is neither a credential nor portable authority. Provider account and display-name metadata may refresh without changing that stable subject; they never participate in identity continuity.
 _Avoid_: Host assurance, raw external account ID, cached login claim, portable Connection
 
 **Provider Connection Retirement**:

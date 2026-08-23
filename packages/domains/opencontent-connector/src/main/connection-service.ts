@@ -412,7 +412,6 @@ export function createOpenContentConnectionService(options: Readonly<{
     useCurrentSession,
     unbind: async (input) => {
       requireOpenContentProviderInstance(input.providerInstanceRef)
-      requireOpenContentDeploymentRuntime(options.getRuntime)
       return serialize(async () => {
         await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
         await retryPendingCredentialCleanup(input.principal, input.assertPrincipalCurrent)
@@ -689,9 +688,7 @@ function sameExternalAccount(
   }>
 ): boolean {
   return stored.id === observed.id &&
-    stored.identityId === observed.identityId &&
-    stored.account === observed.account &&
-    stored.name === observed.name
+    stored.identityId === observed.identityId
 }
 
 const EXTERNAL_SUBJECT_DIGEST_DOMAIN =

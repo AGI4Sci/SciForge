@@ -356,6 +356,11 @@ describe('Content Space main composition', () => {
       CONTENT_SPACE_CAPABILITY_IDS.download,
       CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
       CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminUpdateSpace,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminPinSpace,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminUnpinSpace,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember,
       CONTENT_SPACE_CAPABILITY_IDS.openPortalTarget
     ])
     const autonomousResourceWriteIds = new Set<string>([
@@ -365,12 +370,7 @@ describe('Content Space main composition', () => {
       CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentDestructive,
       CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite,
       CONTENT_SPACE_CAPABILITY_IDS.agentExtendedDestructive,
-      CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace,
-      CONTENT_SPACE_CAPABILITY_IDS.agentAdminUpdateSpace,
-      CONTENT_SPACE_CAPABILITY_IDS.agentAdminPinSpace,
-      CONTENT_SPACE_CAPABILITY_IDS.agentAdminUnpinSpace,
-      CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
-      CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace
     ])
     const workspaceWriteIds = new Set<string>([
       CONTENT_SPACE_CAPABILITY_IDS.agentDownload,
@@ -379,10 +379,10 @@ describe('Content Space main composition', () => {
     for (const capability of definitions) {
       if (confirmedWriteIds.has(capability.id)) {
         expect(capability).toMatchObject({
-          effect: 'external-write',
           approval: 'confirmation',
           concurrency: { idempotency: 'required' }
         })
+        expect(['external-write', 'destructive']).toContain(capability.effect)
       } else if (autonomousResourceWriteIds.has(capability.id)) {
         expect(capability).toMatchObject({
           audiences: ['agent'],
