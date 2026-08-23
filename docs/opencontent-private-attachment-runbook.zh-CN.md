@@ -6,7 +6,7 @@
 
 - SciForge 公开代码：OpenContent Connector（供应商协议与受限进程传输）和 Content Space Provider（语义适配器）。
 - 私有附件发布：使用团队内部发布记录指定、且与当前 installer/receipt schema 匹配的版本。
-- 当前开发分支：`codex/opencontent-mdoc-runtime-upgrade`。
+- 代码基线：公开仓库 `<PUBLIC_REPOSITORY_URL>` 中经过评审的 `<REVIEW_BRANCH>`；按下文说明替换占位符。
 - Node.js：`>= 22.12.0`。
 - 本文命令以 macOS/Linux 终端为例。
 
@@ -22,7 +22,7 @@
 | Team Administration | 10 项 PoC，默认不可执行 | 10 项 PoC，默认不可执行 |
 | Project Content Directory provisioning | 不存在 capability、operation、intent/report schema 或 Provider port | 同左 |
 | native-document | 不注册 | 20 项候选：9 项 PoC；含 `edit` 在内的 10 项 hash-bound mutation 与缺少 source/content postcondition 的 `import` 共 11 项阻断 |
-| extended operations | 仅 session-backed `getCurrentPrincipal` 1 项 PoC；其余 51 项因缺附件阻断 | 52 项候选：47 项 PoC；`updateFileVersion` 与 4 项目录搜索阻断 |
+| extended operations | 仅 session-backed `getCurrentPrincipal` 1 项 PoC；其余 49 项因缺附件阻断 | 50 项候选：40 项 PoC；`resolveInternalLink`、`listMetadataChoices`、`updateFileVersion`、4 项目录搜索、`resolveCollaborationInvitation`、`listKnowledgeCollections`、`searchKnowledgeCollections` 共 10 项阻断 |
 | `ArtifactReference` | `observeImmutableVersion` 阻断 | `observeImmutableVersion` 阻断 |
 | Team 删除 | 不存在 | 不存在 |
 
@@ -36,23 +36,33 @@ PoC 操作只有在经过单独评审的静态 profile 精确匹配 Provider Ins
 
 ### 3.1 获取公开代码
 
-使用团队 fork 中经过评审的功能分支：
+使用公开仓库中经过评审的功能分支。执行前，将 `<PUBLIC_REPOSITORY_URL>`
+替换为本次评审提供的公开仓库 HTTPS clone URL，将 `<REVIEW_BRANCH>`
+替换为评审分支名：
 
 ```bash
-git clone https://github.com/SCU-areszhang/SciForge_Loop.git
-cd SciForge_Loop
-git switch codex/opencontent-mdoc-runtime-upgrade
+SCIFORGE_PUBLIC_REPOSITORY_URL='<PUBLIC_REPOSITORY_URL>'
+SCIFORGE_REVIEW_BRANCH='<REVIEW_BRANCH>'
+
+git clone --branch "${SCIFORGE_REVIEW_BRANCH}" --single-branch \
+  "${SCIFORGE_PUBLIC_REPOSITORY_URL}" SciForge
+cd SciForge
 npm ci
 ```
 
 已有仓库的成员可以执行：
 
 ```bash
-git fetch origin
-git switch codex/opencontent-mdoc-runtime-upgrade
-git pull --ff-only
+SCIFORGE_PUBLIC_REPOSITORY_URL='<PUBLIC_REPOSITORY_URL>'
+SCIFORGE_REVIEW_BRANCH='<REVIEW_BRANCH>'
+
+git fetch "${SCIFORGE_PUBLIC_REPOSITORY_URL}" "${SCIFORGE_REVIEW_BRANCH}"
+git switch --detach FETCH_HEAD
 npm ci
 ```
+
+第二组命令使用 detached HEAD 固定到本次获取的评审提交，不修改已有仓库的
+remote 或本地分支。需要开发时，再按团队工作流从该提交创建本地分支。
 
 > 公开根 workspace 与 `package-lock.json` 不包含 `internal/**`。建议先完成公开依赖安装，再安装私有 overlay；安装后不要为了创建私有 workspace link 再运行根 `npm install`。overlay 的存在不得改变公开 lockfile。
 
@@ -140,13 +150,28 @@ start electron app
 附件只提供供应商运行资产，不包含任何成员的 Token、API Key、Cookie 或登录状态。每位成员必须使用自己的 OpenContent 账号完成连接。
 
 1. 打开 SciForge。
-2. 通过应用内 OpenContent 连接流程配置自己的账号；Provider Instance 对应的站点由 Connector 的可信静态配置固定，不接受调用方 endpoint。
-3. 确认 Provider Instance `opencontent-edoc2-demo` 可发现。
-4. 若提示重新认证，先完成认证，再执行能力发现或文件操作。
+2. 在源码模式的私有部署中，由部署负责人在固定路径
+   `.sciforge/private/deployments/opencontent-connector.json` 提供以下严格 JSON；打包后只允许
+   `resources/domain-deployments/opencontent-connector.json`：
+
+   ```json
+   {"contractVersion":1,"providerInstanceRef":"opencontent-edoc2-demo","origin":"https://tenant.example"}
+   ```
+
+   `origin` 必须是无 userinfo、path、query、fragment 的绝对 HTTPS origin；文件不得超过
+   4096 字节、不得是符号链接，也不得包含额外字段。源码/打包路径互不回退，环境变量、argv、
+   Renderer、调用方和 package settings 均不能提供 endpoint。打包路径位于独立的
+   `resources/domain-deployments/**` 命名空间，不代表 `resources/opencontent/**` 供应商附件已安装。
+3. 通过应用内 OpenContent 连接流程配置自己的账号。
+4. 确认 Provider Instance `opencontent-edoc2-demo` 可发现。
+5. 若提示重新认证，先完成认证，再执行能力发现或文件操作。
 
 禁止在群内附件、代码提交、Issue 或聊天记录中共享真实 Token 和 API Key。
 
-Connector 内置的 `edoc2-test1-verification` 只是把测试 Provider Instance 固定到受审查 endpoint 的 compile-time endpoint profile，不是 Content Space operation verification policy。可发现或选中该 Instance 不会把任何操作提升为 PoC 可执行或生产就绪。
+deployment sidecar 只建立固定 Provider Instance 的运行时 origin，不是 Content Space
+operation verification policy。缺失或非法时 Instance/descriptor/capability 仍可发现，但 bind、
+status、普通文件、Team 与 supplier 调用都会在 settings、credential、network、process 之前返回
+`provider_unavailable`。配置有效也不会把任何操作提升为 PoC 可执行或生产就绪。
 
 ## 7. 安装后的静态与发现验收
 
@@ -157,9 +182,15 @@ Connector 内置的 `edoc2-test1-verification` 只是把测试 Provider Instance
 3. 核对普通文件 6 项和 Team Administration 10 项均为
    `poc_only / verification_profile_required`；
 4. 已安装附件时，核对 native-document 共 20 项，其中 9 项 PoC、含 `edit` 在内
-   10 项 hash-bound mutation 与 `import` 共 11 项阻断；extended operations 共 52 项，其中 47 项 PoC、
-   `updateFileVersion` 与 `searchUsers` / `searchDepartments` / `searchPositions` / `searchGroups` 共 5 项阻断；
-5. 核对 Connector 静态合同为 86 项 supplier inventory、56 项 admitted adapter union；inventory 本身不是可调用性或 live 证据；
+   10 项 hash-bound mutation 与 `import` 共 11 项阻断；extended operations 共 50 项，其中 40 项 PoC，
+   按 catalog 顺序 `resolveInternalLink` / `listMetadataChoices` / `updateFileVersion` /
+   `searchUsers` / `searchDepartments` / `searchPositions` / `searchGroups` /
+   `resolveCollaborationInvitation` / `listKnowledgeCollections` /
+   `searchKnowledgeCollections` 共 10 项阻断；
+5. 核对 Connector 静态合同为 86 项 supplier inventory、50 项 admitted adapter union；`download`、
+   `file-list`、`kbox-list`、`file-internal-link`、`meta-modeldata`、`collab-link` 仅在 inventory 中，
+   不得进入 admitted union；普通 `listEntries` 和 download 继续走 typed Connector path，PDF 导出继续走
+   `native-document:export`；inventory 本身不是可调用性或 live 证据；
 6. 核对 `observeImmutableVersion` 阻断、无 `ArtifactReference`；
 7. 核对不存在成员 role/owner transfer、Team 删除或任何 Project provisioning capability、operation、intent/report schema、Provider port。
 
@@ -243,7 +274,7 @@ npm run verify:internal-runtimes
 
 ### 9.5 上传返回 `source_unavailable`
 
-- 确认使用的是本手册指定的 fork commit/branch。
+- 确认使用的是本手册指定的公开仓库评审分支及其目标 commit。
 - 确认源文件位于当前 SciForge Workspace 中。
 - 只传 Workspace 相对路径，不传绝对路径、`..` 或 Host transfer handle。
 - 先用正式 Workspace 预览能力确认文件存在，再重新发起新的上传调用。
@@ -289,6 +320,7 @@ npm run verify:internal-runtimes
 - `package-lock.json` 不包含私有 asset package 记录；
 - 公开 tarball、Electron 包和生成物不包含供应商附件；
 - 官方公开 release entrypoint 在 internal runtime composition 非空时会于签名、上传或发布前 fail closed；
+- 官方公开 release entrypoint 在存在 `publicRelease: forbidden` deployment sidecar 时同样 fail closed；
 - 公开 Release 从不含私有 overlay 的 clean checkout 重新构建；
 - 本机已有的 ignored `dist/` 可能包含私有附件，禁止直接作为公开 Release 上传。
 
@@ -309,7 +341,8 @@ OpenContent Connector、Provider、SDK 文档和能力矩阵属于允许公开�
 - [ ] `npm run verify:internal-runtimes` 通过，且没有执行 overlay 自带脚本。
 - [ ] `npm run dev` 正常启动 Electron。
 - [ ] 已使用个人账号配置 OpenContent 连接。
-- [ ] 静态/发现验收分别显示 readiness 与 admission，并确认 0 项 `production_ready`；仅能力矩阵 exact ledger 中的 operation/scope 具有 `live_verified` 证据；普通/Admin 为 PoC、native 9 PoC + 11 blocked、extended 47 PoC + 5 blocked、supplier inventory/admitted 为 86/56、无 Team 删除。
+- [ ] 私有 deployment sidecar 位于当前模式的唯一固定路径，严格 JSON/HTTPS origin/大小/非 symlink 校验通过；公开构建中该文件不存在。
+- [ ] 静态/发现验收分别显示 readiness 与 admission，并确认 0 项 `production_ready`；仅能力矩阵 exact ledger 中的 operation/scope 具有 `live_verified` 证据；普通/Admin 为 PoC、native 9 PoC + 11 blocked、extended 40 PoC + 10 blocked、supplier inventory/admitted 为 86/50、无 Team 删除。
 - [ ] 受控 mutation/Admin/non-zero transfer 使用 v2 opaque binding attestation，且 Connector 在业务 dispatch 前重新核对；证据中没有原始账号、credential 或敏感 root。
 - [ ] Agent 创建共享 root 的输入不含 owner；owner 仅由 Broker current Principal 注入并由 Provider 对当前 session 验证。
 - [ ] `edit`、`import`、`updateFileVersion`、immutable observation 和 `ArtifactReference` 均保持阻断。

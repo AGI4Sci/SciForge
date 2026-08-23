@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-opencontent-content-space-provider",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -17,13 +17,13 @@
   },
   "dependencies": {
     "@sciforge/domain-content-space": "3.0.0",
-    "@sciforge/domain-opencontent-connector": "2.0.1",
+    "@sciforge/domain-opencontent-connector": "2.0.2",
     "@sciforge/domain-sdk": "^0.2.1",
     "react": "^19.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@sciforge/internal-runtime-integrity": "0.1.0",
+    "@sciforge/internal-runtime-integrity": "0.1.1",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.10",
     "typescript": "^5.8.2",

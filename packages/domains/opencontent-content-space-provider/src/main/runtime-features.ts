@@ -43,11 +43,19 @@ import type {
 import { toOpenContentExpectedBinding } from './external-binding.js'
 
 const SESSION_BACKED_OPERATION_KEYS = new Set(['getCurrentPrincipal'])
-const CONTRACT_BLOCKED_DIRECTORY_OPERATIONS = new Set([
+const CONTRACT_BLOCKED_EXTENDED_OPERATIONS = new Set<
+  keyof typeof CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS
+>([
+  'updateFileVersion',
+  'listMetadataChoices',
+  'resolveInternalLink',
   'searchUsers',
   'searchDepartments',
   'searchPositions',
-  'searchGroups'
+  'searchGroups',
+  'resolveCollaborationInvitation',
+  'listKnowledgeCollections',
+  'searchKnowledgeCollections'
 ])
 const MAX_NATIVE_PARENT_POSTCONDITION_PAGES = 10_000
 const NATIVE_PARENT_POSTCONDITION_PAGE_SIZE = 100
@@ -98,7 +106,6 @@ const OPENCONTENT_EXTENDED_OPERATIONS = Object.freeze([
   'updateEntryProperties',
   'listSecurityLevels',
   'updateFileVersion',
-  'exportFileAsPdf',
   'listAttachments',
   'addAttachment',
   'removeAttachment',
@@ -130,12 +137,11 @@ const OPENCONTENT_EXTENDED_OPERATIONS = Object.freeze([
   'searchCollaborationEntries',
   'resolveCollaborationInvitation',
   'listKnowledgeCollections',
-  'searchKnowledgeCollections',
-  'browseKnowledgeCollection'
+  'searchKnowledgeCollections'
 ] as const satisfies readonly (keyof typeof CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS)[])
 const EXTENDED_OPERATION_STATES = Object.freeze(
   OPENCONTENT_EXTENDED_OPERATIONS.map((operation) => (
-    operation === 'updateFileVersion' || CONTRACT_BLOCKED_DIRECTORY_OPERATIONS.has(operation)
+    CONTRACT_BLOCKED_EXTENDED_OPERATIONS.has(operation)
   )
     ? Object.freeze({
         operation,
@@ -271,11 +277,12 @@ export function createOpenContentRuntimeFeatures(input: Readonly<{
           invocationId: session.invocationId,
           operation: execution.operation,
           request: execution.request,
-          ...(execution.source ? { source: execution.source } : {}),
-          ...(execution.destination ? { destination: execution.destination } : {})
+          ...(execution.source ? { source: execution.source } : {})
       })
       try {
-        return SESSION_BACKED_OPERATION_KEYS.has(execution.operation) || !useSupplierTransport
+        return SESSION_BACKED_OPERATION_KEYS.has(execution.operation) ||
+          CONTRACT_BLOCKED_EXTENDED_OPERATIONS.has(execution.operation) ||
+          !useSupplierTransport
           ? await execute()
           : await useSupplierTransport(session, execute)
       } catch (error) {

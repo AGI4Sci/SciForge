@@ -13,6 +13,8 @@ describe('Content Space extended operations contract', () => {
     expect(operations.map(({ family }) => family)).not.toContain('team-governance')
     expect(contract.CONTENT_SPACE_EXTENDED_OPERATIONS).not.toHaveProperty('updateTeamMemberRole')
     expect(contract.CONTENT_SPACE_EXTENDED_OPERATIONS).not.toHaveProperty('transferTeamOwnership')
+    expect(contract.CONTENT_SPACE_EXTENDED_OPERATIONS).not.toHaveProperty('exportFileAsPdf')
+    expect(contract.CONTENT_SPACE_EXTENDED_OPERATIONS).not.toHaveProperty('browseKnowledgeCollection')
     expect(JSON.stringify(operations)).not.toMatch(/opencontent|raw|team/iu)
   })
 
@@ -161,7 +163,7 @@ describe('Content Space extended operations contract', () => {
     })).toThrow()
   })
 
-  it('keeps new-version updates and PDF export explicit and typed', () => {
+  it('keeps new-version updates explicit and typed', () => {
     expect(contract.contentSpaceUpdateFileVersionRequestSchema.parse({
       reference: { providerInstanceRef: 'provider-instance-a', fileId: 'file_a' },
       sourceHandle: `xfer_${'s'.repeat(32)}`,
@@ -175,10 +177,6 @@ describe('Content Space extended operations contract', () => {
       byteLength: 128,
       digest: { algorithm: 'sha256', value: 'a'.repeat(64) }
     })).toMatchObject({ versionId: 'version_b', byteLength: 128 })
-    expect(contract.contentSpaceExportFileAsPdfRequestSchema.parse({
-      reference: { providerInstanceRef: 'provider-instance-a', fileId: 'file_a' },
-      destinationHandle: `xfer_${'d'.repeat(32)}`
-    }).reference.fileId).toBe('file_a')
     expect(() => contract.contentSpaceUpdateFileVersionRequestSchema.parse({
       reference: { providerInstanceRef: 'provider-instance-a', fileId: 'file_a' },
       sourceHandle: '/tmp/new-version.pdf',
@@ -195,14 +193,11 @@ describe('Content Space extended operations contract', () => {
       strategy: 'replace-latest',
       expectedVersionId: 'version_a'
     })).toThrow()
-    expect(contract.CONTENT_SPACE_EXTENDED_OPERATIONS.exportFileAsPdf.effect)
-      .toBe('workspace-write')
   })
 
   it('uses Workspace-relative paths for Agent extended transfers', () => {
     const reference = { providerInstanceRef: 'provider-instance-a', fileId: 'file_a' }
     const sourceHandle = `xfer_${'s'.repeat(32)}`
-    const destinationHandle = `xfer_${'d'.repeat(32)}`
 
     expect(contract.contentSpaceAgentExtendedRequestSchema('updateFileVersion').parse({
       reference,
@@ -215,20 +210,11 @@ describe('Content Space extended operations contract', () => {
       name: 'evidence.csv',
       workspaceRelativePath: 'attachments/evidence.csv'
     })).toMatchObject({ workspaceRelativePath: 'attachments/evidence.csv' })
-    expect(contract.contentSpaceAgentExtendedRequestSchema('exportFileAsPdf').parse({
-      reference,
-      workspaceRelativePath: 'exports/file.pdf'
-    })).toMatchObject({ workspaceRelativePath: 'exports/file.pdf' })
-
     expect(() => contract.contentSpaceAgentExtendedRequestSchema('updateFileVersion').parse({
       reference,
       sourceHandle,
       strategy: 'major',
       expectedVersionId: 'version_a'
-    })).toThrow()
-    expect(() => contract.contentSpaceAgentExtendedRequestSchema('exportFileAsPdf').parse({
-      reference,
-      destinationHandle
     })).toThrow()
     expect(() => contract.contentSpaceAgentExtendedRequestSchema('addAttachment').parse({
       master: reference,

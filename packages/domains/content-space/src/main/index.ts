@@ -1250,7 +1250,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
           )
         }
       })),
-      ...CONTENT_SPACE_PROVIDER_FEATURE_EFFECTS.map((effect) => define({
+      ...CONTENT_SPACE_EXTENDED_FEATURE_EFFECTS.map((effect) => define({
         id: EXTENDED_CAPABILITY_ID_BY_EFFECT[effect],
         ...(effect === 'read' || effect === 'external-write'
           ? { version: '2.0.0' as const }
@@ -1843,6 +1843,12 @@ const CONTENT_SPACE_PROVIDER_FEATURE_EFFECTS = Object.freeze([
   'destructive'
 ] as const satisfies readonly ContentSpaceProviderFeatureEffect[])
 
+const CONTENT_SPACE_EXTENDED_FEATURE_EFFECTS = Object.freeze([
+  'read',
+  'external-write',
+  'destructive'
+] as const satisfies readonly ContentSpaceProviderFeatureEffect[])
+
 const MAX_AGENT_RESOURCE_RECORDS = 2_048
 const AGENT_FEATURE_SELECTION_TTL_MS = 2 * 60_000
 const EXTENDED_OPERATION_KEYS = Object.freeze(
@@ -1931,11 +1937,10 @@ const NATIVE_DOCUMENT_CAPABILITY_ID_BY_EFFECT = Object.freeze({
 
 const EXTENDED_CAPABILITY_ID_BY_EFFECT = Object.freeze({
   read: CONTENT_SPACE_CAPABILITY_IDS.agentExtendedRead,
-  'workspace-write': CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWorkspaceWrite,
   'external-write': CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite,
   destructive: CONTENT_SPACE_CAPABILITY_IDS.agentExtendedDestructive
 } satisfies Readonly<Record<
-  ContentSpaceProviderFeatureEffect,
+  (typeof CONTENT_SPACE_EXTENDED_FEATURE_EFFECTS)[number],
   string
 >>)
 
@@ -1978,7 +1983,6 @@ function agentExtendedOperationsInputSchema(
 
 const AGENT_EXTENDED_INPUT_SCHEMA_BY_EFFECT = Object.freeze({
   read: agentExtendedInputSchema('read'),
-  'workspace-write': agentExtendedInputSchema('workspace-write'),
   'external-write': agentExtendedInputSchema('external-write'),
   destructive: agentExtendedInputSchema('destructive')
 })

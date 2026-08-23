@@ -11,7 +11,6 @@ import {
   openContentIdentityIdSchema
 } from '@sciforge/domain-opencontent-connector/team-administration-contract'
 import {
-  OPENCONTENT_EXTENDED_OPERATION_MAPPINGS,
   createOpenContentExtendedOperationAdapter
 } from './extended-operation-adapter.js'
 
@@ -33,9 +32,7 @@ function success(invocation: OpenContentExtendedCommandInvocation, json: unknown
     command: invocation.command,
     attemptCount: 1,
     outcome: 'succeeded',
-    json,
-    structuredDeliveryItems: [],
-    managedDataFiles: []
+    json
   })
 }
 
@@ -59,29 +56,6 @@ function failureCode(value: unknown): unknown {
 }
 
 describe('OpenContent extended-operation adapter', () => {
-  it('exhaustively maps every public operation without vendor Team routing', () => {
-    const publicKeys = Object.keys(CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS).sort()
-    expect(publicKeys).toHaveLength(52)
-    expect(Object.keys(OPENCONTENT_EXTENDED_OPERATION_MAPPINGS).sort()).toEqual(publicKeys)
-
-    for (const key of publicKeys) {
-      const operation = key as keyof typeof OPENCONTENT_EXTENDED_OPERATION_MAPPINGS
-      const mapping = OPENCONTENT_EXTENDED_OPERATION_MAPPINGS[operation]
-      expect(mapping.operation).toBe(operation)
-      expect(() => CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS[operation].resultSchema.parse({
-        ok: false,
-        error: {
-          code: 'provider_contract_violation',
-          message: 'Strict normalization stopped.',
-          retry: 'never'
-        }
-      })).not.toThrow()
-    }
-    expect(JSON.stringify(OPENCONTENT_EXTENDED_OPERATION_MAPPINGS)).not.toMatch(
-      /raw|argv|environment|team/iu
-    )
-  })
-
   it('rejects Provider authority drift before transport and validates request schemas', async () => {
     const { adapter, invoke } = adapterWith(() => {
       throw new Error('must not run')
@@ -106,12 +80,12 @@ describe('OpenContent extended-operation adapter', () => {
     const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
       success: true,
       data: {
-        fileGuid: 'file-guid-a',
+        fileGuid: FILE.fileId,
         fileName: 'Report.pdf',
         folderGuid: 'folder-guid-a',
         fileSize: 1024,
         fileModifyTime: '2026-08-20T00:00:00.000Z',
-        fileVerId: 'version-a'
+        fileLastVerId: 'version-a'
       }
     }))
     const result = await adapter.execute({
@@ -123,7 +97,7 @@ describe('OpenContent extended-operation adapter', () => {
       ok: true,
       value: {
         kind: 'file',
-        reference: { providerInstanceRef: PROVIDER, fileId: 'file-guid-a' },
+        reference: FILE,
         name: 'Report.pdf',
         parent: { providerInstanceRef: PROVIDER, containerId: 'folder-guid-a' },
         size: 1024,
@@ -155,35 +129,320 @@ describe('OpenContent extended-operation adapter', () => {
     expect(invoke).toHaveBeenCalledOnce()
   })
 
-  it('keeps malformed workspace-write transport receipts as provider contract violations', async () => {
-    const { adapter, invoke } = adapterWith(() => ({}))
-    const write = vi.fn(async () => undefined)
-    const result = await adapter.execute({
+  it('rejects a bare supplier payload instead of guessing a success envelope', async () => {
+    const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+      fileGuid: FILE.fileId,
+      fileName: 'Report.pdf',
+      folderGuid: FOLDER.containerId,
+      fileSize: 1024
+    }))
+
+    await expect(adapter.execute({
       invocationId: INVOCATION,
-      operation: 'exportFileAsPdf',
-      request: { reference: FILE },
-      destination: { write }
-    })
-    expect(result).toEqual({
+      operation: 'getEntryInfo',
+      request: { reference: FILE }
+    })).resolves.toMatchObject({
       ok: false,
-      error: {
-        code: 'provider_contract_violation',
-        message: 'OpenContent returned data outside the declared Provider contract.',
-        retry: 'never'
-      }
+      error: { code: 'provider_contract_violation', retry: 'never' }
     })
     expect(invoke).toHaveBeenCalledOnce()
-    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('rejects a response alias even when it repeats the canonical identity', async () => {
+    const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+      success: true,
+      data: {
+        fileGuid: FILE.fileId,
+        fileId: FILE.fileId,
+        fileName: 'Report.pdf',
+        folderGuid: FOLDER.containerId,
+        fileSize: 1024
+      }
+    }))
+
+    await expect(adapter.execute({
+      invocationId: INVOCATION,
+      operation: 'getEntryInfo',
+      request: { reference: FILE }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it('rejects an alias-only response instead of minting a resource identity', async () => {
+    const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+      success: true,
+      data: {
+        fileId: FILE.fileId,
+        fileName: 'Report.pdf',
+        folderGuid: FOLDER.containerId,
+        fileSize: 1024
+      }
+    }))
+
+    await expect(adapter.execute({
+      invocationId: INVOCATION,
+      operation: 'getEntryInfo',
+      request: { reference: FILE }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['a non-string required field', { fileName: 42 }],
+    ['an empty present optional string', { fileLastVerId: '' }],
+    ['a string-coerced required number', { fileSize: '1024' }],
+    ['an invalid present timestamp', { fileModifyTime: 'not-a-time' }],
+    ['a whitespace-normalized canonical identity', { fileGuid: ` ${FILE.fileId} ` }]
+  ] as const)('rejects %s in a canonical file receipt', async (_label, drift) => {
+    const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+      success: true,
+      data: {
+        fileGuid: FILE.fileId,
+        fileName: 'Report.pdf',
+        folderGuid: FOLDER.containerId,
+        fileSize: 1024,
+        ...drift
+      }
+    }))
+
+    await expect(adapter.execute({
+      invocationId: INVOCATION,
+      operation: 'getEntryInfo',
+      request: { reference: FILE }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it.each([null, ''] as const)(
+    'rejects a present malformed optional page total %p',
+    async (total) => {
+      const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+        success: true,
+        data: { items: [], total }
+      }))
+
+      await expect(adapter.execute({
+        invocationId: INVOCATION,
+        operation: 'listAttachments',
+        request: { master: FILE, page: { limit: 10 } }
+      })).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'provider_contract_violation', retry: 'never' }
+      })
+      expect(invoke).toHaveBeenCalledOnce()
+    }
+  )
+
+  it('rejects a missing canonical result list instead of normalizing it to empty', async () => {
+    const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+      success: true,
+      data: {}
+    }))
+
+    await expect(adapter.execute({
+      invocationId: INVOCATION,
+      operation: 'listMetadataTypes',
+      request: { providerInstanceRef: PROVIDER, page: { limit: 10 } }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it.each(['unknown', 0] as const)(
+    'rejects a malformed completeness boolean %p instead of coercing it',
+    async (truncated) => {
+      const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+        success: true,
+        data: {
+          executable: true,
+          fileScope: { fileGuids: [], total: 0, truncated }
+        }
+      }))
+
+      await expect(adapter.execute({
+        invocationId: INVOCATION,
+        operation: 'buildFileScope',
+        request: {
+          scope: { kind: 'provider-scope', providerInstanceRef: PROVIDER, scope: 'personal' },
+          query: 'report'
+        }
+      })).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'provider_contract_violation', retry: 'never' }
+      })
+      expect(invoke).toHaveBeenCalledOnce()
+    }
+  )
+
+  it('rejects a missing file-scope identity array instead of minting an empty scope', async () => {
+    const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+      success: true,
+      data: {
+        executable: true,
+        fileScope: { total: 0, truncated: false }
+      }
+    }))
+
+    await expect(adapter.execute({
+      invocationId: INVOCATION,
+      operation: 'buildFileScope',
+      request: {
+        scope: { kind: 'provider-scope', providerInstanceRef: PROVIDER, scope: 'personal' },
+        query: 'report'
+      }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it.each(['unknown', '1 KB'] as const)(
+    'rejects a malformed attachment size %p instead of coercing it',
+    async (size) => {
+      const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+        success: true,
+        data: {
+          items: [{ fileId: FILE_B.fileId, fileName: 'Evidence.csv', size }],
+          total: 1
+        }
+      }))
+
+      await expect(adapter.execute({
+        invocationId: INVOCATION,
+        operation: 'listAttachments',
+        request: { master: FILE, page: { limit: 10 } }
+      })).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'provider_contract_violation', retry: 'never' }
+      })
+      expect(invoke).toHaveBeenCalledOnce()
+    }
+  )
+
+  it('rejects a paged response without an exact completeness count', async () => {
+    const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+      success: true,
+      data: { items: [] }
+    }))
+
+    await expect(adapter.execute({
+      invocationId: INVOCATION,
+      operation: 'listAttachments',
+      request: { master: FILE, page: { limit: 10 } }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it('rejects contradictory metadata multiplicity instead of overriding the supplier receipt', async () => {
+    const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+      success: true,
+      data: {
+        typeName: 'Research',
+        attrs: [{
+          attrId: 'field-a',
+          attrName: 'Choice',
+          controlType: 'edoc2DynamicList',
+          required: false,
+          multiple: false,
+          readOnly: false
+        }]
+      }
+    }))
+
+    await expect(adapter.execute({
+      invocationId: INVOCATION,
+      operation: 'listMetadataFields',
+      request: {
+        type: { providerInstanceRef: PROVIDER, metadataTypeId: 'meta-a' }
+      }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it('requires an exact search-result kind instead of defaulting a missing kind to file', async () => {
+    const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+      success: true,
+      data: { items: [{ id: FILE.fileId }], total: 1 }
+    }))
+
+    await expect(adapter.execute({
+      invocationId: INVOCATION,
+      operation: 'searchEntries',
+      request: {
+        scope: { kind: 'provider-scope', providerInstanceRef: PROVIDER, scope: 'personal' },
+        query: 'report',
+        page: { limit: 10 }
+      }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it('requires exact numeric authority kinds in permission receipts', async () => {
+    const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+      success: true,
+      data: [{ memberType: 'user', memberId: 'user-a', permCateId: 'edit-a', state: 0 }]
+    }))
+
+    await expect(adapter.execute({
+      invocationId: INVOCATION,
+      operation: 'listPermissions',
+      request: { target: FILE, targetKind: 'file' }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it('requires an exact favorite entry kind instead of defaulting a missing kind to file', async () => {
+    const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+      success: true,
+      data: { files: [{ fileId: FILE.fileId, fvId: 'favorite-a' }], totalCount: 1 }
+    }))
+
+    await expect(adapter.execute({
+      invocationId: INVOCATION,
+      operation: 'listAlbumEntries',
+      request: {
+        album: { providerInstanceRef: PROVIDER, albumId: 'album-a' },
+        page: { limit: 10 }
+      }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_contract_violation', retry: 'never' }
+    })
+    expect(invoke).toHaveBeenCalledOnce()
   })
 
   it('normalizes one representative read from every non-transfer CLI family', async () => {
     const fixtures: Record<string, unknown> = {
       'meta-types': { success: true, data: [{ TypeId: 'meta-a', TypeName: 'Research' }] },
-      'attach-list': { success: true, data: { items: [{ fileId: 'attachment-a', fileName: 'data.csv', size: 12 }] } },
-      'relation-list': { success: true, data: { items: [{ fileId: 'file-b', mainRelate: true }] } },
+      'attach-list': { success: true, data: { items: [{ fileId: 'attachment-a', fileName: 'data.csv', size: 12 }], total: 1 } },
+      'relation-list': { success: true, data: { items: [{ fileId: 'file-b', mainRelate: true }], total: 1 } },
       'file-tag-list': { success: true, data: { items: [{ tagId: 'tag-a', tagName: 'reviewed' }] } },
-      'my-publish-list': { success: true, data: { items: [{ Publish_Code: 'Apublication', Publish_Name: 'Release' }] } },
-      albums: { success: true, data: { albums: [{ fsId: 'album-a', name: 'Default', fileCount: 2, folderCount: 1, isDefault: true }] } },
+      'my-publish-list': { success: true, data: { items: [{ Publish_Code: 'Apublication', Publish_Name: 'Release' }], totalCount: 1 } },
+      albums: { success: true, data: { albums: [{ fsId: 'album-a', name: 'Default', fileCount: 2, folderCount: 1, isDefault: true }], totalCount: 1 } },
       'perm-cates': { success: true, data: [{ cateId: 'edit-a', name: 'Edit' }] },
       'collab-list': {
         success: true,
@@ -196,12 +455,9 @@ describe('OpenContent extended-operation adapter', () => {
             DocflowFileCreateUserName: 'Ada',
             DocflowRead: 1,
             isDeleted: false
-          }]
+          }],
+          allCount: 1
         }
-      },
-      'kbox-list': {
-        success: true,
-        data: { items: [{ boxId: 'box-a', boxName: 'Research', folderId: 'folder-a', boxStatus: 'online' }] }
       }
     }
     const { adapter } = adapterWith((invocation) => success(invocation, fixtures[invocation.command]))
@@ -213,12 +469,11 @@ describe('OpenContent extended-operation adapter', () => {
       ['listPublications', { providerInstanceRef: PROVIDER, page: { limit: 10 } }],
       ['listAlbums', { providerInstanceRef: PROVIDER, page: { limit: 10 } }],
       ['listPermissionCategories', { providerInstanceRef: PROVIDER, targetKind: 'file' }],
-      ['listCollaborationEntries', { providerInstanceRef: PROVIDER, filter: 'all', page: { limit: 10 } }],
-      ['listKnowledgeCollections', { providerInstanceRef: PROVIDER, page: { limit: 10 } }]
+      ['listCollaborationEntries', { providerInstanceRef: PROVIDER, filter: 'all', page: { limit: 10 } }]
     ] as const
     for (const [operation, request] of cases) {
       const result = await adapter.execute({ invocationId: INVOCATION, operation, request })
-      expect(result).toMatchObject({ ok: true })
+      expect(result, `${operation}: ${JSON.stringify(result)}`).toMatchObject({ ok: true })
       expect(() => CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS[operation].resultSchema.parse(result))
         .not.toThrow()
     }
@@ -250,9 +505,6 @@ describe('OpenContent extended-operation adapter', () => {
         displayName: 'Current OpenContent user'
       }
     })
-    expect(OPENCONTENT_EXTENDED_OPERATION_MAPPINGS.getCurrentPrincipal.commands).toEqual([])
-    expect(OPENCONTENT_EXTENDED_OPERATION_MAPPINGS.getCurrentPrincipal.route)
-      .toBe('current-principal')
     expect(currentIdentityId).toHaveBeenCalledOnce()
     expect(invoke).not.toHaveBeenCalled()
   })
@@ -323,6 +575,74 @@ describe('OpenContent extended-operation adapter', () => {
     expect(invoke).not.toHaveBeenCalled()
   })
 
+  it('blocks unpinned knowledge-root receipts before supplier dispatch', async () => {
+    const { adapter, invoke } = adapterWith(() => {
+      throw new Error('Supplier transport must not run.')
+    })
+
+    for (const operation of [
+      'listKnowledgeCollections',
+      'searchKnowledgeCollections'
+    ] as const) {
+      await expect(adapter.execute({
+        invocationId: INVOCATION,
+        operation,
+        request: {
+          providerInstanceRef: PROVIDER,
+          ...(operation === 'searchKnowledgeCollections' ? { query: 'Research' } : {}),
+          page: { limit: 10 }
+        }
+      })).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'blocked_by_contract', retry: 'never' }
+      })
+    }
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('blocks unpinned link receipts before supplier dispatch', async () => {
+    const { adapter, invoke } = adapterWith(() => {
+      throw new Error('Supplier transport must not run.')
+    })
+
+    for (const [operation, request] of [
+      ['resolveInternalLink', { reference: FILE }],
+      ['resolveCollaborationInvitation', { file: FILE }]
+    ] as const) {
+      await expect(adapter.execute({
+        invocationId: INVOCATION,
+        operation,
+        request
+      })).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'blocked_by_contract', retry: 'never' }
+      })
+    }
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('blocks metadata-choice pagination without a supplier completeness receipt', async () => {
+    const { adapter, invoke } = adapterWith(() => {
+      throw new Error('Supplier transport must not run.')
+    })
+
+    await expect(adapter.execute({
+      invocationId: INVOCATION,
+      operation: 'listMetadataChoices',
+      request: {
+        field: {
+          type: { providerInstanceRef: PROVIDER, metadataTypeId: 'meta-a' },
+          fieldId: 'field-a'
+        },
+        page: { limit: 10 }
+      }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'blocked_by_contract', retry: 'never' }
+    })
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
   it('executes one mutation attempt and never replays an unknown write outcome', async () => {
     const { adapter, invoke } = adapterWith(async () => {
       const error = new Error('Socket closed after the write started.') as Error & { code: string }
@@ -370,6 +690,27 @@ describe('OpenContent extended-operation adapter', () => {
     const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
       success: true,
       data: {}
+    }))
+    const result = await adapter.execute({
+      invocationId: INVOCATION,
+      operation: 'renameEntry',
+      request: { target: FILE, name: 'Renamed.pdf' }
+    })
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: 'outcome_unknown',
+        message: 'OpenContent rename receipt does not prove the requested target and name.',
+        retry: 'never'
+      }
+    })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it('does not claim a rename when the receipt identifies a different target', async () => {
+    const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+      success: true,
+      data: { id: 'different-file', type: 'file', newName: 'Renamed.pdf' }
     }))
     const result = await adapter.execute({
       invocationId: INVOCATION,
@@ -453,6 +794,24 @@ describe('OpenContent extended-operation adapter', () => {
     expect(invoke).toHaveBeenCalledOnce()
   })
 
+  it('treats a dual success envelope as an unknown mutation outcome', async () => {
+    const { adapter, invoke } = adapterWith((invocation) => success(invocation, {
+      success: true,
+      data: { id: FILE.fileId, type: 'file', newName: 'Renamed.pdf' },
+      result: 0
+    }))
+
+    await expect(adapter.execute({
+      invocationId: INVOCATION,
+      operation: 'renameEntry',
+      request: { target: FILE, name: 'Renamed.pdf' }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'outcome_unknown', retry: 'never' }
+    })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
   it.each([
     [409, 'conflict'],
     [403, 'unauthorized']
@@ -478,9 +837,9 @@ describe('OpenContent extended-operation adapter', () => {
     const { adapter } = adapterWith((invocation) => success(invocation, {
       success: true,
       data: invocation.command === 'rename'
-        ? { id: 'resolved-file-a', type: 'file', newName: 'Renamed.pdf' }
+        ? { id: FILE.fileId, type: 'file', newName: 'Renamed.pdf' }
         : invocation.command === 'copy'
-          ? { items: [{ newId: 'copied-file-a' }] }
+          ? { items: [{ resultId: 'copied-file-a' }] }
           : { operationCount: 1, successCount: 1 }
     }))
 
@@ -515,22 +874,15 @@ describe('OpenContent extended-operation adapter', () => {
     })).resolves.toEqual({ ok: true, value: { deleted: [FILE], failed: [] } })
   })
 
-  it('passes managed source and destination streams without handles, paths, or size downgrades', async () => {
-    const writes: Uint8Array[] = []
+  it('passes managed source streams without handles, paths, or size downgrades', async () => {
     const sourceRead = vi.fn(async () => new Uint8Array([1, 2, 3]))
-    const destinationWrite = vi.fn(async (chunk: Uint8Array) => { writes.push(chunk) })
     const seen: OpenContentExtendedCommandInvocation[] = []
     const { adapter } = adapterWith(async (invocation) => {
       seen.push(invocation)
-      if (invocation.command === 'upload') {
-        return success(invocation, {
-          success: true,
-          data: { fileId: 'attachment-a', createTime: '2026-08-20T00:00:00.000Z' }
-        })
-      }
-      const destination = invocation.dataFiles[0]
-      if (destination?.role === 'destination') await destination.write(new Uint8Array([4, 5]))
-      return success(invocation, { success: true, data: { bytesWritten: 2 } })
+      return success(invocation, {
+        success: true,
+        data: { fileId: 'attachment-a', createTime: '2026-08-20T00:00:00.000Z' }
+      })
     })
     const attachment = await adapter.execute({
       invocationId: 'invocation_extended_0004',
@@ -554,15 +906,6 @@ describe('OpenContent extended-operation adapter', () => {
       size: 3
     })
     expect(JSON.stringify(upload?.args)).not.toMatch(/xfer_|filePaths|\/tmp\//u)
-
-    const exported = await adapter.execute({
-      invocationId: 'invocation_extended_0002',
-      operation: 'exportFileAsPdf',
-      request: { reference: FILE },
-      destination: { write: destinationWrite }
-    })
-    expect(exported).toMatchObject({ ok: true, value: { bytesWritten: 2, format: 'pdf' } })
-    expect(writes).toEqual([new Uint8Array([4, 5])])
   })
 
   it('blocks same-file version updates until OpenContent exposes atomic CAS', async () => {

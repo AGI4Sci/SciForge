@@ -7,11 +7,19 @@ import {
   S3Client
 } from '@aws-sdk/client-s3'
 import { createHash } from 'node:crypto'
-import { createReadStream } from 'node:fs'
 import { readFileSync, existsSync } from 'node:fs'
-import { readdir, readFile, stat } from 'node:fs/promises'
-import { basename, join, resolve } from 'node:path'
+import { createRequire } from 'node:module'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+const require = createRequire(import.meta.url)
+const { runPublicReleaseGuard } = require('./public-release-guard.cjs')
+const {
+  discoverPublicReleaseArtifactReceiptPlatforms,
+  publicReleaseArtifactReceiptFileName,
+  readSourceCommit,
+  verifyPublicReleaseArtifactReceipt
+} = require('./public-release-artifact-receipt.cjs')
 
 const PRODUCT_NAME = 'SciForge'
 const DEFAULT_RELEASE_PREFIX = 'sciforge'
@@ -21,27 +29,12 @@ const RELEASE_CHANNELS = ['frontier', 'stable']
 const SCRIPT_DIR = fileURLToPath(new URL('.', import.meta.url))
 const ROOT = resolve(SCRIPT_DIR, '..')
 
-const PLATFORM_SPECS = {
-  mac: {
-    updateFile: 'latest-mac.yml',
-    assetPattern: /^SciForge-.+-mac-(arm64|x64)\.(dmg|zip)(\.blockmap)?$/
-  },
-  win: {
-    updateFile: 'latest.yml',
-    assetPattern: /^SciForge-.+-win-x64\.exe(\.blockmap)?$/
-  },
-  linux: {
-    updateFile: 'latest-linux.yml',
-    assetPattern: /^SciForge-.+-linux-x86_64\.AppImage(\.blockmap)?$/
-  }
-}
-
 function usage() {
   console.log(`Usage:
-  node scripts/publish-r2.mjs upload --platform mac|win|linux --tag vX.Y.Z [--channel frontier|stable] [--dry-run]
-  node scripts/publish-r2.mjs promote --tag vX.Y.Z [--channel frontier|stable] [--platforms mac,win,linux] [--dry-run]
+  node scripts/publish-r2.mjs upload --platform mac|win|linux --tag vX.Y.Z [--dist dist] [--channel frontier|stable] [--dry-run]
+  node scripts/publish-r2.mjs promote --tag vX.Y.Z [--dist dist] [--channel frontier|stable] [--platforms mac,win,linux] [--dry-run]
 
-If --platforms is omitted, promote uses the platform manifests already uploaded for that tag.
+If --platforms is omitted, promote uses the build-issued receipts found in --dist.
 If --channel is omitted, the default channel is frontier.
 
 Environment:
@@ -257,47 +250,6 @@ function readConfig({ dryRun = false } = {}) {
   return { bucket, publicBaseUrl: normalizeBaseUrl(publicBaseUrl), prefix, client }
 }
 
-function quoteScalar(value) {
-  const trimmed = value.trim()
-  return trimmed.replace(/^['"]|['"]$/g, '')
-}
-
-function parseUpdateYml(source) {
-  const version = quoteScalar(source.match(/^version:\s*(.+)$/m)?.[1] ?? '')
-  const releaseDate = quoteScalar(source.match(/^releaseDate:\s*(.+)$/m)?.[1] ?? '')
-  const files = []
-  let current = null
-
-  for (const line of source.split(/\r?\n/)) {
-    const url = line.match(/^\s*-\s+url:\s*(.+)$/)
-    if (url) {
-      current = { url: quoteScalar(url[1]), sha512: '', size: 0 }
-      files.push(current)
-      continue
-    }
-    if (!current) continue
-    const prop = line.match(/^\s+(sha512|size|blockMapSize):\s*(.+)$/)
-    if (!prop) continue
-    const [, key, value] = prop
-    current[key] = key === 'sha512' ? quoteScalar(value) : Number.parseInt(value, 10) || 0
-  }
-
-  if (!version) throw new Error('Update metadata is missing version.')
-  if (!files.length) throw new Error('Update metadata is missing files.')
-  return { version, releaseDate, files }
-}
-
-async function hashFile(path, algorithm, encoding) {
-  const hash = createHash(algorithm)
-  await new Promise((resolvePromise, reject) => {
-    createReadStream(path)
-      .on('data', (chunk) => hash.update(chunk))
-      .on('error', reject)
-      .on('end', resolvePromise)
-  })
-  return hash.digest(encoding)
-}
-
 function contentType(fileName) {
   if (fileName.endsWith('.yml') || fileName.endsWith('.yaml')) return 'text/yaml; charset=utf-8'
   if (fileName.endsWith('.json')) return 'application/json; charset=utf-8'
@@ -305,16 +257,6 @@ function contentType(fileName) {
   if (fileName.endsWith('.dmg')) return 'application/x-apple-diskimage'
   if (fileName.endsWith('.exe')) return 'application/vnd.microsoft.portable-executable'
   return 'application/octet-stream'
-}
-
-function cacheControlFor(key) {
-  if (/\/latest\/latest(?:-[\w]+)?\.(?:json|yml)$/.test(key)) {
-    return 'public, max-age=60, must-revalidate'
-  }
-  if (/\/latest\/.+\.(?:dmg|zip|exe|AppImage|blockmap)$/.test(key)) {
-    return 'public, max-age=31536000, immutable'
-  }
-  return 'public, max-age=31536000, immutable'
 }
 
 function classifyDownload(fileName, platform) {
@@ -327,14 +269,15 @@ function classifyDownload(fileName, platform) {
         : fileName.endsWith('.exe')
           ? 'exe'
           : 'bin'
-
   if (platform === 'mac') {
     const arch = fileName.includes('-arm64.') ? 'arm64' : 'x64'
     return {
       platform,
       arch,
       format: extension,
-      label: arch === 'arm64' ? `macOS Apple Silicon ${extension.toUpperCase()}` : `macOS Intel ${extension.toUpperCase()}`
+      label: arch === 'arm64'
+        ? `macOS Apple Silicon ${extension.toUpperCase()}`
+        : `macOS Intel ${extension.toUpperCase()}`
     }
   }
   if (platform === 'win') {
@@ -343,88 +286,14 @@ function classifyDownload(fileName, platform) {
   return { platform, arch: 'x64', format: extension, label: 'Linux x64 AppImage' }
 }
 
-async function collectPlatformRelease({ distDir, platform, tag, channel, config }) {
-  const spec = PLATFORM_SPECS[platform]
-  if (!spec) throw new Error(`Unsupported platform: ${platform}`)
-
-  const entries = await readdir(distDir)
-  const updatePath = join(distDir, spec.updateFile)
-  const updateText = await readFile(updatePath, 'utf8')
-  const updateMetadata = parseUpdateYml(updateText)
-  const tagVersion = tag.slice(1)
-  if (updateMetadata.version !== tagVersion) {
-    throw new Error(
-      `${spec.updateFile} version ${updateMetadata.version} does not match ${tag}. Rebuild with SCIFORGE_APP_VERSION=${tagVersion}.`
-    )
+function cacheControlFor(key) {
+  if (/\/latest\/latest(?:-[\w]+)?\.(?:json|yml)$/.test(key)) {
+    return 'public, max-age=60, must-revalidate'
   }
-
-  const referenced = new Set(updateMetadata.files.map((file) => basename(file.url)))
-  const assets = entries.filter((name) => spec.assetPattern.test(name))
-  for (const name of referenced) {
-    if (!entries.includes(name)) {
-      throw new Error(`${spec.updateFile} references ${name}, but it was not found in ${distDir}`)
-    }
+  if (/\/latest\/.+\.(?:dmg|zip|exe|AppImage|blockmap)$/.test(key)) {
+    return 'public, max-age=31536000, immutable'
   }
-
-  const fileNames = Array.from(new Set([spec.updateFile, ...assets, ...referenced])).sort()
-  const files = []
-  const downloadByName = new Map(updateMetadata.files.map((file) => [basename(file.url), file]))
-
-  for (const fileName of fileNames) {
-    const path = join(distDir, fileName)
-    const info = await stat(path)
-    if (!info.isFile()) continue
-    const basePath = channelBasePath(config.prefix, channel)
-    const archiveKey = `${basePath}/releases/${tag}/${fileName}`
-    const sha256 = await hashFile(path, 'sha256', 'hex')
-    const sha512 = await hashFile(path, 'sha512', 'base64')
-    files.push({
-      fileName,
-      path,
-      key: archiveKey,
-      size: info.size,
-      sha256,
-      sha512,
-      contentType: contentType(fileName),
-      updateMetadata: fileName === spec.updateFile,
-      downloadable: downloadByName.has(fileName)
-    })
-  }
-
-  const filesByName = new Map(files.map((file) => [file.fileName, file]))
-  const downloads = updateMetadata.files.map((file) => {
-    const fileName = basename(file.url)
-    const local = filesByName.get(fileName)
-    if (!local) throw new Error(`Missing collected file: ${fileName}`)
-    return {
-      ...classifyDownload(fileName, platform),
-      fileName,
-      size: local.size,
-      sha256: local.sha256,
-      sha512: file.sha512 || local.sha512,
-      blockMapSize: file.blockMapSize,
-      archiveUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'releases', tag, fileName),
-      latestUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'latest', fileName)
-    }
-  })
-
-  return {
-    schemaVersion: 1,
-    productName: PRODUCT_NAME,
-    tag,
-    channel,
-    platform,
-    version: updateMetadata.version,
-    releaseDate: updateMetadata.releaseDate,
-    generatedAt: new Date().toISOString(),
-    updateMetadata: {
-      fileName: spec.updateFile,
-      archiveUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'releases', tag, spec.updateFile),
-      latestUrl: joinUrl(config.publicBaseUrl, config.prefix, 'channels', channel, 'latest', spec.updateFile)
-    },
-    files,
-    downloads
-  }
+  return 'public, max-age=31536000, immutable'
 }
 
 async function putObject({ config, key, body, contentType: type, cacheControl, contentLength, dryRun }) {
@@ -443,20 +312,35 @@ async function putObject({ config, key, body, contentType: type, cacheControl, c
   await config.client.send(new PutObjectCommand(input))
 }
 
-async function copyObject({ config, fromKey, toKey, type, dryRun }) {
+async function copyObject({
+  config,
+  fromKey,
+  sourceEtag,
+  sourceVersionId,
+  toKey,
+  type,
+  dryRun
+}) {
   if (dryRun) {
     console.log(`[dry-run] copy s3://${config.bucket}/${fromKey} -> s3://${config.bucket}/${toKey}`)
     return
   }
-  const copySource = `${config.bucket}/${fromKey}`
+  if (typeof sourceEtag !== 'string' || !sourceEtag.trim()) {
+    throw new Error('[public-release] Conditional copy requires the verified source ETag.')
+  }
+  const encodedCopySource = `${config.bucket}/${fromKey}`
     .split('/')
     .map((part) => encodeURIComponent(part))
     .join('/')
+  const copySource = sourceVersionId
+    ? `${encodedCopySource}?versionId=${encodeURIComponent(sourceVersionId)}`
+    : encodedCopySource
   await config.client.send(
     new CopyObjectCommand({
       Bucket: config.bucket,
       Key: toKey,
       CopySource: copySource,
+      CopySourceIfMatch: sourceEtag,
       ContentType: type,
       CacheControl: cacheControlFor(toKey),
       MetadataDirective: 'REPLACE'
@@ -464,16 +348,24 @@ async function copyObject({ config, fromKey, toKey, type, dryRun }) {
   )
 }
 
-async function uploadPlatform({ flags, dryRun }) {
+export async function uploadPlatform({ flags, dryRun, artifactReceipt }, dependencies = {}) {
   const platform = requireFlag(flags, 'platform')
   if (!PLATFORMS.includes(platform)) {
     throw new Error(`--platform must be one of: ${PLATFORMS.join(', ')}`)
   }
   const tag = normalizeTag(requireFlag(flags, 'tag'))
   const channel = readChannel(flags)
-  const distDir = resolve(flags.get('dist') || 'dist')
-  const config = readConfig({ dryRun })
-  const release = await collectPlatformRelease({ distDir, platform, tag, channel, config })
+  const getConfig = dependencies.readConfig || readConfig
+  const put = dependencies.putObject || putObject
+  artifactReceipt.assertUnchanged()
+  const config = getConfig({ dryRun })
+  const release = artifactReceipt.receipt
+  const basePath = channelBasePath(config.prefix, channel)
+  const files = release.files.map((file) => ({
+    ...file,
+    key: `${basePath}/releases/${tag}/${file.fileName}`,
+    contentType: contentType(file.fileName)
+  }))
 
   console.log(
     `Uploading ${PRODUCT_NAME} ${release.version} ${platform} assets to R2 ${channel} archive ${tag}`
@@ -483,37 +375,82 @@ async function uploadPlatform({ flags, dryRun }) {
     4
   )
   console.log(`Using R2 upload concurrency: ${uploadConcurrency}`)
-  await runConcurrently(release.files, uploadConcurrency, async (file) => {
-    await putObject({
+  artifactReceipt.assertUnchanged()
+  await runConcurrently(files, uploadConcurrency, async (file) => {
+    await put({
       config,
       key: file.key,
-      body: createReadStream(file.path),
+      body: dryRun ? undefined : artifactReceipt.openReadStream(file.fileName),
       contentType: file.contentType,
       cacheControl: cacheControlFor(file.key),
       contentLength: file.size,
       dryRun
     })
+    artifactReceipt.assertUnchanged()
     console.log(`  ${file.fileName}`)
   })
 
-  const manifestKey = `${channelBasePath(config.prefix, channel)}/releases/${tag}/release-${platform}.json`
-  const manifest = JSON.stringify(
-    {
-      ...release,
-      files: release.files.map(({ path: _path, ...file }) => file)
-    },
-    null,
-    2
-  )
-  await putObject({
+  artifactReceipt.assertUnchanged()
+  const receiptFileName = publicReleaseArtifactReceiptFileName(platform)
+  const manifestKey = `${channelBasePath(config.prefix, channel)}/releases/${tag}/${receiptFileName}`
+  await put({
     config,
     key: manifestKey,
-    body: manifest,
+    body: artifactReceipt.bytes,
     contentType: 'application/json; charset=utf-8',
     cacheControl: 'public, max-age=31536000, immutable',
     dryRun
   })
-  console.log(`  release-${platform}.json`)
+  console.log(`  ${receiptFileName}`)
+}
+
+function readPromotionPlatforms(flags, distDir) {
+  const requestedPlatforms = String(flags.get('platforms') || '')
+    .split(',')
+    .map((platform) => platform.trim())
+    .filter(Boolean)
+  const platforms = flags.has('platforms')
+    ? requestedPlatforms
+    : discoverPublicReleaseArtifactReceiptPlatforms(distDir)
+  if (platforms.length === 0) {
+    throw new Error(
+      'No local public release artifact receipts found. Pass --dist with build-issued receipts.'
+    )
+  }
+  if (new Set(platforms).size !== platforms.length) {
+    throw new Error('Duplicate platform in --platforms.')
+  }
+  for (const platform of platforms) {
+    if (!PLATFORMS.includes(platform)) {
+      throw new Error(`Unsupported platform in --platforms: ${platform}`)
+    }
+  }
+  return platforms
+}
+
+function verifyPromotionArtifactReceipts({ flags, tag, channel, sourceCommit }) {
+  const distDir = resolve(flags.get('dist') || 'dist')
+  const platforms = readPromotionPlatforms(flags, distDir)
+  const artifactReceipts = []
+  try {
+    for (const platform of platforms) {
+      artifactReceipts.push(verifyPublicReleaseArtifactReceipt({
+        distDir,
+        platform,
+        tag,
+        channel,
+        sourceCommit
+      }))
+    }
+    const versions = new Set(artifactReceipts.map(({ receipt }) => receipt.version))
+    if (versions.size !== 1) {
+      throw new Error(`Cannot promote mixed versions: ${Array.from(versions).join(', ')}`)
+    }
+    return artifactReceipts
+  } catch (error) {
+    for (const artifactReceipt of artifactReceipts) artifactReceipt.close()
+    throw error
+  }
 }
 
 async function listReleaseKeys(config, tag, channel) {
@@ -536,54 +473,105 @@ async function listReleaseKeys(config, tag, channel) {
   return keys
 }
 
-async function getJson(config, key) {
+async function getObjectSnapshot(config, key, { includeBytes = false } = {}) {
   const res = await config.client.send(new GetObjectCommand({ Bucket: config.bucket, Key: key }))
-  const text = await res.Body.transformToString()
-  return JSON.parse(text)
+  if (!res.Body || !res.Body[Symbol.asyncIterator]) {
+    throw new Error(`[public-release] Archived object body is not readable: ${key}`)
+  }
+  const sha256 = createHash('sha256')
+  const sha512 = createHash('sha512')
+  const chunks = includeBytes ? [] : null
+  let size = 0
+  for await (const rawChunk of res.Body) {
+    const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk)
+    size += chunk.length
+    sha256.update(chunk)
+    sha512.update(chunk)
+    if (chunks) chunks.push(chunk)
+  }
+  if (Number.isSafeInteger(res.ContentLength) && res.ContentLength !== size) {
+    throw new Error(`[public-release] Archived object length changed while reading: ${key}`)
+  }
+  return Object.freeze({
+    bytes: chunks ? Buffer.concat(chunks, size) : undefined,
+    etag: typeof res.ETag === 'string' ? res.ETag : '',
+    versionId: typeof res.VersionId === 'string' ? res.VersionId : '',
+    size,
+    sha256: sha256.digest('hex'),
+    sha512: sha512.digest('base64')
+  })
 }
 
-async function promoteRelease({ flags, dryRun }) {
+async function promoteRelease({ flags, dryRun, artifactReceipts }, dependencies = {}) {
   const tag = normalizeTag(requireFlag(flags, 'tag'))
   const channel = readChannel(flags)
-  const requestedPlatforms = flags.has('platforms')
-  const platforms = String(flags.get('platforms') || '')
-    .split(',')
-    .map((p) => p.trim())
-    .filter(Boolean)
-  for (const platform of platforms) {
-    if (!PLATFORMS.includes(platform)) throw new Error(`Unsupported platform in --platforms: ${platform}`)
+  const platforms = artifactReceipts.map(({ receipt }) => receipt.platform)
+  if (dryRun) {
+    console.log(
+      `[dry-run] validated local public release receipts for ${tag}: ${platforms.join(', ')}`
+    )
+    return
   }
 
-  const config = readConfig({ dryRun: false })
-  const releaseKeys = await listReleaseKeys(config, tag, channel)
+  const getConfig = dependencies.readConfig || readConfig
+  const listKeys = dependencies.listReleaseKeys || listReleaseKeys
+  const readObjectSnapshot = dependencies.getObjectSnapshot || getObjectSnapshot
+  const copy = dependencies.copyObject || copyObject
+  const put = dependencies.putObject || putObject
+  const config = getConfig({ dryRun: false })
+  const releaseKeys = await listKeys(config, tag, channel)
   if (!releaseKeys.length) throw new Error(`No archived R2 objects found for ${tag}`)
 
-  if (!requestedPlatforms) {
-    for (const platform of PLATFORMS) {
-      const key = `${channelBasePath(config.prefix, channel)}/releases/${tag}/release-${platform}.json`
-      if (releaseKeys.includes(key)) platforms.push(platform)
-    }
-  }
-  if (!platforms.length) {
-    throw new Error(
-      `No platform manifests found for ${tag}. Run upload for at least one platform before promoting.`
-    )
-  }
-
   const platformManifests = []
-  for (const platform of platforms) {
-    const key = `${channelBasePath(config.prefix, channel)}/releases/${tag}/release-${platform}.json`
+  for (const artifactReceipt of artifactReceipts) {
+    const platform = artifactReceipt.receipt.platform
+    const receiptFileName = publicReleaseArtifactReceiptFileName(platform)
+    const key = `${channelBasePath(config.prefix, channel)}/releases/${tag}/${receiptFileName}`
     if (!releaseKeys.includes(key)) {
       throw new Error(`Missing ${key}. Run upload for ${platform} before promoting.`)
     }
-    platformManifests.push(await getJson(config, key))
+    const remoteReceipt = await readObjectSnapshot(config, key, { includeBytes: true })
+    if (!Buffer.isBuffer(remoteReceipt.bytes) ||
+      !remoteReceipt.bytes.equals(artifactReceipt.bytes) || !remoteReceipt.etag) {
+      throw new Error(
+        `[public-release] Archived receipt does not match local build receipt for ${platform}.`
+      )
+    }
+    platformManifests.push(artifactReceipt.receipt)
   }
 
   const allFiles = new Map()
   for (const manifest of platformManifests) {
     for (const file of manifest.files) {
-      allFiles.set(file.fileName, file)
+      if (allFiles.has(file.fileName)) {
+        throw new Error(`Cannot promote duplicate artifact file name: ${file.fileName}`)
+      }
+      allFiles.set(file.fileName, {
+        ...file,
+        key: `${channelBasePath(config.prefix, channel)}/releases/${tag}/${file.fileName}`,
+        contentType: contentType(file.fileName)
+      })
     }
+  }
+  for (const file of allFiles.values()) {
+    if (!releaseKeys.includes(file.key)) {
+      throw new Error(`[public-release] Archived release artifact is missing: ${file.fileName}`)
+    }
+  }
+
+  for (const [fileName, file] of allFiles) {
+    const remoteObject = await readObjectSnapshot(config, file.key)
+    if (!remoteObject.etag || remoteObject.size !== file.size ||
+      remoteObject.sha256 !== file.sha256 || remoteObject.sha512 !== file.sha512) {
+      throw new Error(
+        `[public-release] Archived release artifact integrity does not match: ${fileName}`
+      )
+    }
+    allFiles.set(fileName, {
+      ...file,
+      sourceEtag: remoteObject.etag,
+      sourceVersionId: remoteObject.versionId
+    })
   }
 
   const latestTargets = [{ basePath: channelBasePath(config.prefix, channel), label: `${channel} latest` }]
@@ -591,42 +579,36 @@ async function promoteRelease({ flags, dryRun }) {
     latestTargets.push({ basePath: config.prefix, label: 'legacy stable latest' })
   }
 
-  console.log(`Promoting ${PRODUCT_NAME} ${tag} to R2 ${channel} latest (${platforms.join(', ')})`)
-  for (const target of latestTargets) {
-    console.log(`Target: ${target.label}`)
-    for (const file of allFiles.values()) {
-      const toKey = `${target.basePath}/latest/${file.fileName}`
-      await copyObject({
-        config,
-        fromKey: file.key,
-        toKey,
-        type: file.contentType,
-        dryRun
-      })
-      console.log(`  ${file.fileName}`)
-    }
-  }
-
-  const versions = new Set(platformManifests.map((manifest) => manifest.version))
-  if (versions.size > 1) {
-    throw new Error(`Cannot promote mixed versions: ${Array.from(versions).join(', ')}`)
-  }
   const version = platformManifests[0].version
   const releaseDates = platformManifests
     .map((manifest) => manifest.releaseDate)
     .filter(Boolean)
     .sort()
   const releaseDate = releaseDates[releaseDates.length - 1] ?? new Date().toISOString()
-
-  for (const target of latestTargets) {
+  const orderedFiles = [...allFiles.values()].sort((left, right) => {
+    const leftMetadata = left.role === 'update-metadata' ? 1 : 0
+    const rightMetadata = right.role === 'update-metadata' ? 1 : 0
+    return leftMetadata - rightMetadata || left.fileName.localeCompare(right.fileName)
+  })
+  const copyPlan = orderedFiles.flatMap((file) => latestTargets.map((target) => ({
+    file,
+    target,
+    toKey: `${target.basePath}/latest/${file.fileName}`
+  })))
+  const latestManifestPlan = latestTargets.map((target) => {
     const downloads = platformManifests.flatMap((manifest) =>
-      manifest.downloads.map((download) => ({
-        ...download,
-        url: joinUrl(config.publicBaseUrl, target.basePath, 'latest', download.fileName)
-      }))
-    )
+      manifest.files
+        .filter((file) => file.role === 'update-package')
+        .map((file) => ({
+          ...classifyDownload(file.fileName, manifest.platform),
+          fileName: file.fileName,
+          size: file.size,
+          sha256: file.sha256,
+          sha512: file.sha512,
+          url: joinUrl(config.publicBaseUrl, target.basePath, 'latest', file.fileName)
+        })))
 
-    const latestManifest = {
+    const body = JSON.stringify({
       schemaVersion: 1,
       productName: PRODUCT_NAME,
       channel,
@@ -640,48 +622,96 @@ async function promoteRelease({ flags, dryRun }) {
         platformManifests.map((manifest) => [
           manifest.platform,
           {
-            fileName: manifest.updateMetadata.fileName,
-            url: joinUrl(config.publicBaseUrl, target.basePath, 'latest', manifest.updateMetadata.fileName)
+            fileName: manifest.updateMetadataFileName,
+            url: joinUrl(config.publicBaseUrl, target.basePath, 'latest', manifest.updateMetadataFileName)
           }
         ])
       ),
       downloads
+    }, null, 2)
+    return {
+      body,
+      key: `${target.basePath}/latest/latest.json`,
+      target
     }
+  })
 
-    const latestKey = `${target.basePath}/latest/latest.json`
-    await putObject({
+  console.log(`Promoting ${PRODUCT_NAME} ${tag} to R2 ${channel} latest (${platforms.join(', ')})`)
+  for (const item of copyPlan) {
+    await copy({
       config,
-      key: latestKey,
-      body: JSON.stringify(latestManifest, null, 2),
+      fromKey: item.file.key,
+      sourceEtag: item.file.sourceEtag,
+      sourceVersionId: item.file.sourceVersionId,
+      toKey: item.toKey,
+      type: item.file.contentType,
+      dryRun
+    })
+    console.log(`  ${item.target.label}: ${item.file.fileName}`)
+  }
+  for (const item of latestManifestPlan) {
+    await put({
+      config,
+      key: item.key,
+      body: item.body,
       contentType: 'application/json; charset=utf-8',
       cacheControl: 'public, max-age=60, must-revalidate',
       dryRun
     })
-    console.log(`  ${target.label}/latest.json`)
-    console.log(`Latest manifest: ${joinUrl(config.publicBaseUrl, target.basePath, 'latest', 'latest.json')}`)
+    console.log(`  ${item.target.label}/latest.json`)
+    console.log(
+      `Latest manifest: ${joinUrl(config.publicBaseUrl, item.target.basePath, 'latest', 'latest.json')}`
+    )
   }
 }
 
-async function main() {
-  const { command, flags } = readArgs(process.argv.slice(2))
+export async function runPublishR2Command(argv, dependencies = {}) {
+  const { command, flags } = readArgs(argv)
   if (flags.has('help') || flags.has('h') || !command) {
     usage()
     return
   }
   const dryRun = flags.has('dry-run')
+  const upload = dependencies.uploadPlatform || uploadPlatform
+  const promote = dependencies.promoteRelease || promoteRelease
+
+  if (!dryRun) await runPublicReleaseGuard([])
 
   if (command === 'upload') {
-    await uploadPlatform({ flags, dryRun })
+    const artifactReceipt = verifyPublicReleaseArtifactReceipt({
+      distDir: resolve(flags.get('dist') || 'dist'),
+      platform: requireFlag(flags, 'platform'),
+      tag: normalizeTag(requireFlag(flags, 'tag')),
+      channel: readChannel(flags),
+      sourceCommit: readSourceCommit(ROOT)
+    })
+    try {
+      await upload({ flags, dryRun, artifactReceipt }, dependencies)
+    } finally {
+      artifactReceipt.close()
+    }
     return
   }
   if (command === 'promote') {
-    await promoteRelease({ flags, dryRun })
+    const artifactReceipts = verifyPromotionArtifactReceipts({
+      flags,
+      tag: normalizeTag(requireFlag(flags, 'tag')),
+      channel: readChannel(flags),
+      sourceCommit: readSourceCommit(ROOT)
+    })
+    try {
+      await promote({ flags, dryRun, artifactReceipts }, dependencies)
+    } finally {
+      for (const artifactReceipt of artifactReceipts) artifactReceipt.close()
+    }
     return
   }
   throw new Error(`Unknown command: ${command}`)
 }
 
-main().catch((error) => {
-  console.error(`[publish-r2] ${error instanceof Error ? error.message : String(error)}`)
-  process.exitCode = 1
-})
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  runPublishR2Command(process.argv.slice(2)).catch((error) => {
+    console.error(`[publish-r2] ${error instanceof Error ? error.message : String(error)}`)
+    process.exitCode = 1
+  })
+}

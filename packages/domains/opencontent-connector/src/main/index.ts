@@ -36,14 +36,13 @@ import {
   resolveOpenContentSkillRuntimeAssets
 } from './skill-runtime.js'
 import { createOpenContentContentSpaceFacade } from './facade.js'
+import { resolveOpenContentDeploymentConfiguration } from './deployment-config.js'
+import type {
+  OpenContentDeploymentRuntime,
+  OpenContentDeploymentRuntimeGetter
+} from './runtime.js'
 
 const OPENCONTENT_ADAPTER_MODULE_ID = 'sciforge.opencontent-content-space-provider'
-
-const OPENCONTENT_CONNECTION_PROFILE = Object.freeze({
-  providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-  displayName: 'OpenContent' as const,
-  origin: 'https://test1.edoc2.com' as const
-})
 
 const internalServiceDescriptor = defineDomainMainInternalServiceDescriptor({
   location: 'main.internal-service-descriptor',
@@ -54,9 +53,9 @@ const internalServiceDescriptor = defineDomainMainInternalServiceDescriptor({
 
 const instance = defineProviderInstanceDirectoryEntry({
   contractVersion: PROVIDER_FACTORY_CONTRACT_VERSION,
-  providerInstanceRef: OPENCONTENT_CONNECTION_PROFILE.providerInstanceRef,
+  providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
   providerKind: OPENCONTENT_PROVIDER_KIND,
-  displayName: OPENCONTENT_CONNECTION_PROFILE.displayName
+  displayName: 'OpenContent'
 })
 
 type OpenContentMainContribution =
@@ -73,56 +72,62 @@ export function createDomainMainEntry(
   if (!host.internalServices) {
     throw new Error('OpenContent Connector requires Host internal-service mediation.')
   }
-  const client = createOpenContentClient({
-    baseUrl: OPENCONTENT_CONNECTION_PROFILE.origin
-  })
+  let runtime: OpenContentDeploymentRuntime | undefined
+  const getRuntime: OpenContentDeploymentRuntimeGetter = () => runtime
   const connections = createOpenContentConnectionService({
-    providerInstanceRef: OPENCONTENT_CONNECTION_PROFILE.providerInstanceRef,
+    providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
     settings: host.packageSettings,
     credentials: host.packageSecrets.providerCredentials,
-    client
+    getRuntime
   })
-  const teamAdministration = createOpenContentTeamAdministration({
-    baseUrl: OPENCONTENT_CONNECTION_PROFILE.origin
-  })
-  const skillAssets = resolveOpenContentSkillRuntimeAssets(host)
-  const skillAssetPaths = skillAssets === undefined
-    ? undefined
-    : assertOpenContentSkillBundledAssetsPresent(skillAssets)
-  const executablePath = skillAssets === undefined
-    ? undefined
-    : host.getExecutablePath?.()
-  if (skillAssets !== undefined && executablePath === undefined) {
-    throw new Error('OpenContent Connector requires the Host executable.')
-  }
-  const assertSkillAssetsCurrent = skillAssets === undefined
-    ? undefined
-    : () => {
-        const currentAssets = resolveOpenContentSkillRuntimeAssets(host)
-        if (currentAssets === undefined || !sameSkillAssetLocation(skillAssets, currentAssets)) {
-          throw new TypeError('Bundled OpenContent assets are unavailable or invalid.')
+  const deployment = resolveOpenContentDeploymentConfiguration(host)
+  if (deployment) {
+    const client = createOpenContentClient({ baseUrl: deployment.origin })
+    const teamAdministration = createOpenContentTeamAdministration({
+      baseUrl: deployment.origin
+    })
+    const skillAssets = resolveOpenContentSkillRuntimeAssets(host)
+    const skillAssetPaths = skillAssets === undefined
+      ? undefined
+      : assertOpenContentSkillBundledAssetsPresent(skillAssets)
+    const executablePath = skillAssets === undefined
+      ? undefined
+      : host.getExecutablePath?.()
+    if (skillAssets !== undefined && executablePath === undefined) {
+      throw new Error('OpenContent Connector requires the Host executable.')
+    }
+    const assertSkillAssetsCurrent = skillAssets === undefined
+      ? undefined
+      : () => {
+          const currentAssets = resolveOpenContentSkillRuntimeAssets(host)
+          if (currentAssets === undefined || !sameSkillAssetLocation(skillAssets, currentAssets)) {
+            throw new TypeError('Bundled OpenContent assets are unavailable or invalid.')
+          }
+          assertOpenContentSkillBundledAssetsPresent(currentAssets)
         }
-        assertOpenContentSkillBundledAssetsPresent(currentAssets)
-      }
-  const skillRuntime = skillAssets === undefined || skillAssetPaths === undefined ||
-    executablePath === undefined
-    ? undefined
-    : createOpenContentSkillRuntimeSession({
-        connections,
-        processPort: createNodeOpenContentCliProcessPort({
-          trustedEntrypoint: skillAssetPaths.cliEntrypoint,
-          executablePath,
-          electronRunAsNode: true
-        }),
-        assets: skillAssets,
-        site: OPENCONTENT_CONNECTION_PROFILE.origin,
-        assertAssetsCurrent: assertSkillAssetsCurrent
-      })
+    const skillRuntime = skillAssets === undefined || skillAssetPaths === undefined ||
+      executablePath === undefined
+      ? undefined
+      : createOpenContentSkillRuntimeSession({
+          connections,
+          processPort: createNodeOpenContentCliProcessPort({
+            trustedEntrypoint: skillAssetPaths.cliEntrypoint,
+            executablePath,
+            electronRunAsNode: true
+          }),
+          assets: skillAssets,
+          site: deployment.origin,
+          assertAssetsCurrent: assertSkillAssetsCurrent
+        })
+    runtime = Object.freeze({
+      client,
+      teamAdministration,
+      ...(skillRuntime ? { skillRuntime } : {})
+    })
+  }
   const facade = createOpenContentContentSpaceFacade({
-    client,
     connections,
-    teamAdministration,
-    ...(skillRuntime ? { skillRuntime } : {})
+    getRuntime
   })
   host.internalServices.register({
     serviceId: OPENCONTENT_CONTENT_SPACE_SERVICE_ID,

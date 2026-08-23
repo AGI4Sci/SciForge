@@ -26,7 +26,6 @@ export const installedMainSourcePackageNames = Object.freeze([
   '@sciforge/domain-sdk',
   '@sciforge/domain-visual-review',
   '@sciforge/image-generation',
-  '@sciforge/internal-runtime-integrity',
   '@sciforge/paper-radar',
   '@sciforge/scientific-plotting',
   '@sciforge/workspace-bioimaging',

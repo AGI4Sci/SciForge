@@ -9,11 +9,11 @@ import {
 import { contentSpaceInvocationIdSchema } from '@sciforge/domain-content-space/contract'
 
 import {
+  isOpenContentSupplierMutationCommand,
   openContentExtendedCommandInvocationSchema,
   openContentExtendedCommandSuccessSchema,
   type OpenContentExtendedCommandTransport,
   type OpenContentExtendedDataFile,
-  type OpenContentExtendedDownloadDestination,
   type OpenContentExtendedOperationCommand,
   type OpenContentExtendedUploadSource
 } from '@sciforge/domain-opencontent-connector/main-contract'
@@ -25,106 +25,6 @@ import {
 export interface OpenContentCurrentPrincipalPort {
   currentIdentityId(): Promise<OpenContentIdentityId>
 }
-
-type MappingRoute = 'cli' | 'current-principal'
-
-export type OpenContentExtendedOperationMapping = Readonly<{
-  operation: ContentSpaceExtendedOperationKey
-  route: MappingRoute
-  commands: readonly OpenContentExtendedOperationCommand[]
-  mutationCommands: readonly OpenContentExtendedOperationCommand[]
-}>
-
-function cliMapping(
-  operation: ContentSpaceExtendedOperationKey,
-  commands: readonly OpenContentExtendedOperationCommand[],
-  mutationCommands: OpenContentExtendedOperationCommand | readonly OpenContentExtendedOperationCommand[] = []
-): OpenContentExtendedOperationMapping {
-  return Object.freeze({
-    operation,
-    route: 'cli',
-    commands,
-    mutationCommands: Object.freeze(Array.isArray(mutationCommands)
-      ? [...mutationCommands]
-      : [mutationCommands])
-  })
-}
-
-function currentPrincipalMapping(): OpenContentExtendedOperationMapping {
-  return Object.freeze({
-    operation: 'getCurrentPrincipal',
-    route: 'current-principal',
-    commands: [],
-    mutationCommands: []
-  })
-}
-
-/**
- * Exhaustive public-operation to package-private execution route and command
- * map. Some CLI mappings are bounded compositions; at most one of the
- * enumerated mutation alternatives may execute in a composition.
- */
-export const OPENCONTENT_EXTENDED_OPERATION_MAPPINGS = Object.freeze({
-  searchEntries: cliMapping('searchEntries', ['file-search', 'file-info', 'folder-info']),
-  listRecentEntries: cliMapping('listRecentEntries', ['recent-files', 'file-info']),
-  getEntryInfo: cliMapping('getEntryInfo', ['file-info', 'folder-info']),
-  resolveInternalLink: cliMapping('resolveInternalLink', ['file-internal-link']),
-  buildFileScope: cliMapping('buildFileScope', ['file-rag-scope']),
-  listMetadataTypes: cliMapping('listMetadataTypes', ['meta-types']),
-  listMetadataFields: cliMapping('listMetadataFields', ['meta-attrs']),
-  listMetadataChoices: cliMapping('listMetadataChoices', ['meta-attrs', 'meta-modeldata']),
-  readEntryMetadata: cliMapping('readEntryMetadata', ['meta-info']),
-  editEntryMetadata: cliMapping('editEntryMetadata', ['meta-attrs', 'meta-edit'], 'meta-edit'),
-  renameEntry: cliMapping('renameEntry', ['rename'], 'rename'),
-  copyEntries: cliMapping('copyEntries', ['copy'], 'copy'),
-  moveEntries: cliMapping('moveEntries', ['move'], 'move'),
-  deleteEntries: cliMapping('deleteEntries', ['delete'], 'delete'),
-  createShortcut: cliMapping('createShortcut', ['create-shortcut'], 'create-shortcut'),
-  updateEntryProperties: cliMapping(
-    'updateEntryProperties',
-    ['file-edit', 'folder-edit'],
-    ['file-edit', 'folder-edit']
-  ),
-  listSecurityLevels: cliMapping('listSecurityLevels', ['sec-level-list']),
-  updateFileVersion: cliMapping('updateFileVersion', []),
-  exportFileAsPdf: cliMapping('exportFileAsPdf', ['download'], 'download'),
-  listAttachments: cliMapping('listAttachments', ['attach-list']),
-  addAttachment: cliMapping('addAttachment', ['upload'], 'upload'),
-  removeAttachment: cliMapping('removeAttachment', ['attach-remove'], 'attach-remove'),
-  listRelations: cliMapping('listRelations', ['relation-list']),
-  createRelation: cliMapping('createRelation', ['relation-create'], 'relation-create'),
-  removeRelation: cliMapping('removeRelation', ['relation-remove'], 'relation-remove'),
-  listTags: cliMapping('listTags', ['file-tag-list']),
-  setTags: cliMapping('setTags', ['file-tag-set'], 'file-tag-set'),
-  removeTags: cliMapping('removeTags', ['file-tag-delete'], 'file-tag-delete'),
-  createPublication: cliMapping('createPublication', ['publish'], 'publish'),
-  listPublications: cliMapping('listPublications', ['my-publish-list']),
-  cancelPublication: cliMapping('cancelPublication', ['cancel-publish'], 'cancel-publish'),
-  createShare: cliMapping('createShare', ['create-share'], 'create-share'),
-  listShares: cliMapping('listShares', ['my-share-list']),
-  cancelShare: cliMapping('cancelShare', ['cancel-share'], 'cancel-share'),
-  listAlbums: cliMapping('listAlbums', ['albums']),
-  listAlbumEntries: cliMapping('listAlbumEntries', ['album-files', 'file-info', 'folder-info']),
-  addFavorite: cliMapping('addFavorite', ['favorite-add'], 'favorite-add'),
-  removeFavorite: cliMapping('removeFavorite', ['album-files', 'favorite-remove'], 'favorite-remove'),
-  getCurrentPrincipal: currentPrincipalMapping(),
-  searchUsers: cliMapping('searchUsers', []),
-  searchDepartments: cliMapping('searchDepartments', []),
-  searchPositions: cliMapping('searchPositions', []),
-  searchGroups: cliMapping('searchGroups', []),
-  listPermissionCategories: cliMapping('listPermissionCategories', ['perm-cates']),
-  listPermissions: cliMapping('listPermissions', ['perm-list']),
-  changePermissions: cliMapping('changePermissions', ['perm-set'], 'perm-set'),
-  listCollaborationEntries: cliMapping('listCollaborationEntries', ['collab-list']),
-  searchCollaborationEntries: cliMapping('searchCollaborationEntries', ['collab-search']),
-  resolveCollaborationInvitation: cliMapping('resolveCollaborationInvitation', ['collab-link']),
-  listKnowledgeCollections: cliMapping('listKnowledgeCollections', ['kbox-list']),
-  searchKnowledgeCollections: cliMapping('searchKnowledgeCollections', ['kbox-list']),
-  browseKnowledgeCollection: cliMapping(
-    'browseKnowledgeCollection',
-    ['kbox-list', 'file-list', 'file-info', 'folder-info']
-  )
-} satisfies Readonly<Record<ContentSpaceExtendedOperationKey, OpenContentExtendedOperationMapping>>)
 
 const ERROR_RETRY = Object.freeze({
   never: 'never',
@@ -173,12 +73,20 @@ function record(value: unknown, label = 'Provider payload'): Record<string, unkn
   return value
 }
 
-function first(recordValue: Record<string, unknown>, keys: readonly string[]): unknown {
-  for (const key of keys) {
-    const value = recordValue[key]
-    if (value !== undefined && value !== null) return value
+function canonicalResponseField(
+  recordValue: Record<string, unknown>,
+  canonicalKey: string,
+  rejectedKeys: readonly string[] = []
+): unknown {
+  for (const rejectedKey of rejectedKeys) {
+    if (Object.hasOwn(recordValue, rejectedKey)) {
+      throw new ProviderPayloadError(
+        'provider_contract_violation',
+        `OpenContent returned unsupported response field ${rejectedKey}.`
+      )
+    }
   }
-  return undefined
+  return recordValue[canonicalKey]
 }
 
 function requiredString(
@@ -186,22 +94,63 @@ function requiredString(
   keys: readonly string[],
   label: string
 ): string {
-  const value = first(recordValue, keys)
-  if ((typeof value !== 'string' && typeof value !== 'number') || String(value).trim() === '') {
+  const [canonicalKey, ...rejectedKeys] = keys
+  const value = canonicalKey === undefined
+    ? undefined
+    : canonicalResponseField(recordValue, canonicalKey, rejectedKeys)
+  if (typeof value !== 'string' || value === '' || value !== value.trim()) {
     throw new ProviderPayloadError('provider_contract_violation', `${label} is missing.`)
   }
-  return String(value).trim()
+  return value
+}
+
+function responseString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value === '' || value !== value.trim()) {
+    throw new ProviderPayloadError('provider_contract_violation', `${label} is missing or invalid.`)
+  }
+  return value
+}
+
+function supplierNumericOrStringId(value: unknown, label: string): string {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+    return String(value)
+  }
+  return responseString(value, label)
+}
+
+function exactResponseResourceGuid(
+  payload: Record<string, unknown>,
+  requestedResourceGuid: string,
+  canonicalKey: 'fileGuid' | 'folderGuid',
+  rejectedKeys: readonly string[],
+  label: string
+): string {
+  const canonicalResourceGuid = requiredString(payload, [canonicalKey, ...rejectedKeys], label)
+  if (canonicalResourceGuid !== requestedResourceGuid) {
+    throw new ProviderPayloadError(
+      'provider_contract_violation',
+      `${label} does not match the requested resource.`
+    )
+  }
+  return requestedResourceGuid
 }
 
 function optionalString(
   recordValue: Record<string, unknown>,
   keys: readonly string[]
 ): string | undefined {
-  const value = first(recordValue, keys)
-  if (value === undefined || value === '') return undefined
-  return typeof value === 'string' || typeof value === 'number'
-    ? String(value).trim() || undefined
-    : undefined
+  const [canonicalKey, ...rejectedKeys] = keys
+  const value = canonicalKey === undefined
+    ? undefined
+    : canonicalResponseField(recordValue, canonicalKey, rejectedKeys)
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value === '' || value !== value.trim()) {
+    throw new ProviderPayloadError(
+      'provider_contract_violation',
+      `OpenContent response field ${canonicalKey ?? '(missing)'} must be a non-empty string.`
+    )
+  }
+  return value
 }
 
 function requiredNumber(
@@ -209,79 +158,116 @@ function requiredNumber(
   keys: readonly string[],
   label: string
 ): number {
-  const value = first(recordValue, keys)
-  const parsed = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  const [canonicalKey, ...rejectedKeys] = keys
+  const value = canonicalKey === undefined
+    ? undefined
+    : canonicalResponseField(recordValue, canonicalKey, rejectedKeys)
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new ProviderPayloadError('provider_contract_violation', `${label} is missing or invalid.`)
   }
-  return parsed
+  return value
 }
 
 function optionalNumber(
   recordValue: Record<string, unknown>,
   keys: readonly string[]
 ): number | undefined {
-  const value = first(recordValue, keys)
-  if (value === undefined || value === null || value === '') return undefined
-  const parsed = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
+  const [canonicalKey, ...rejectedKeys] = keys
+  const value = canonicalKey === undefined
+    ? undefined
+    : canonicalResponseField(recordValue, canonicalKey, rejectedKeys)
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new ProviderPayloadError(
+      'provider_contract_violation',
+      `OpenContent response field ${canonicalKey ?? '(missing)'} must be a non-negative integer.`
+    )
+  }
+  return value
 }
 
-function booleanValue(value: unknown, fallback = false): boolean {
+function booleanValue(value: unknown): boolean {
   if (typeof value === 'boolean') return value
-  if (value === 1 || value === '1' || value === 'true') return true
-  if (value === 0 || value === '0' || value === 'false') return false
-  return fallback
+  throw new ProviderPayloadError(
+    'provider_contract_violation',
+    'OpenContent returned an invalid boolean value.'
+  )
 }
 
-function arrayValue(value: unknown): readonly unknown[] {
+function numericBooleanValue(value: unknown): boolean {
+  if (value === 1) return true
+  if (value === 0) return false
+  throw new ProviderPayloadError(
+    'provider_contract_violation',
+    'OpenContent returned an invalid boolean value.'
+  )
+}
+
+// Content Space validates these request collections before they reach this adapter.
+function parsedRequestArray(value: unknown): readonly unknown[] {
   return Array.isArray(value) ? value : []
 }
 
-function providerArray(value: unknown, keys: readonly string[]): readonly unknown[] {
-  if (Array.isArray(value)) return value
-  const object = record(value)
-  for (const key of keys) {
-    if (Array.isArray(object[key])) return object[key]
+function directResponseArray(value: unknown, label: string): readonly unknown[] {
+  if (!Array.isArray(value)) {
+    throw new ProviderPayloadError(
+      'provider_contract_violation',
+      `${label} must be an array.`
+    )
   }
-  return []
+  return value
+}
+
+function canonicalObjectArray(
+  value: unknown,
+  canonicalKey: string,
+  rejectedKeys: readonly string[],
+  label: string
+): readonly unknown[] {
+  const object = record(value, label)
+  return directResponseArray(
+    canonicalResponseField(object, canonicalKey, rejectedKeys),
+    `${label} field ${canonicalKey}`
+  )
 }
 
 function normalizeTimestamp(value: unknown): string | undefined {
-  if (typeof value !== 'string' || value.trim() === '') return undefined
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new ProviderPayloadError(
+      'provider_contract_violation',
+      'OpenContent returned an invalid timestamp.'
+    )
+  }
   const trimmed = value.trim()
   const withZone = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?$/u.test(trimmed)
     ? `${trimmed.replace(' ', 'T')}+08:00`
     : trimmed
   const epoch = Date.parse(withZone)
-  return Number.isFinite(epoch) ? new Date(epoch).toISOString() : undefined
+  if (!Number.isFinite(epoch)) {
+    throw new ProviderPayloadError(
+      'provider_contract_violation',
+      'OpenContent returned an invalid timestamp.'
+    )
+  }
+  return new Date(epoch).toISOString()
 }
 
 function parseByteSize(value: unknown): number {
-  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return Math.trunc(value)
-  if (typeof value !== 'string') return 0
-  const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB)?$/iu)
-  if (!match) return 0
-  const magnitude = Number(match[1])
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const power = units.indexOf((match[2] ?? 'B').toUpperCase())
-  return Math.round(magnitude * (1024 ** Math.max(power, 0)))
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return value
+  throw new ProviderPayloadError(
+    'provider_contract_violation',
+    'OpenContent returned an invalid byte size.'
+  )
 }
 
-function unwrapCliJson(value: unknown): unknown {
-  if (!isRecord(value)) return value
-  if (value.success === false) {
-    const message = optionalString(value, ['error', 'message', 'msg']) ?? 'OpenContent rejected the operation.'
-    throw new ProviderPayloadError(mapProviderBusinessCode(first(value, ['code', 'result'])), message)
+function unwrapCliJson(
+  envelope: ReturnType<typeof openContentExtendedCommandSuccessSchema.parse>['json']
+): unknown {
+  if (!envelope.success) {
+    throw new ProviderPayloadError(mapProviderBusinessCode(envelope.code), envelope.error)
   }
-  const numericResult = optionalNumber(value, ['result'])
-  if (numericResult !== undefined && numericResult !== 0) {
-    throw new ProviderPayloadError(
-      mapProviderBusinessCode(numericResult),
-      optionalString(value, ['msg', 'message', 'error']) ?? `OpenContent result ${numericResult}.`
-    )
-  }
-  return value.success === true && value.data !== undefined ? value.data : value
+  return envelope.data
 }
 
 function mapProviderBusinessCode(value: unknown): string {
@@ -393,12 +379,39 @@ function pageNumber(page: Record<string, unknown>): number {
   return Number(cursor.slice('ocpage_'.length))
 }
 
-function nextCursor(total: number | undefined, page: number, limit: number): string | undefined {
-  return total !== undefined && total > page * limit ? `ocpage_${page + 1}` : undefined
+function verifiedNextCursor(
+  total: number,
+  page: number,
+  limit: number,
+  itemCount: number,
+  label: string
+): string | undefined {
+  const offset = (page - 1) * limit
+  const observedEnd = offset + itemCount
+  if (
+    itemCount > limit ||
+    total < observedEnd ||
+    (itemCount < limit && total !== observedEnd)
+  ) {
+    throw new ProviderPayloadError(
+      'provider_contract_violation',
+      `${label} does not prove a complete ordered page.`
+    )
+  }
+  return total > observedEnd ? `ocpage_${page + 1}` : undefined
 }
 
 function providerKindForEntry(reference: Record<string, unknown>): 'file' | 'folder' {
   return 'fileId' in reference ? 'file' : 'folder'
+}
+
+function providerEntryKind(value: unknown): 'container' | 'file' {
+  if (value === 1) return 'container'
+  if (value === 2) return 'file'
+  throw new ProviderPayloadError(
+    'provider_contract_violation',
+    'OpenContent returned an invalid entry kind.'
+  )
 }
 
 function entryId(reference: Record<string, unknown>): string {
@@ -451,6 +464,13 @@ function metadataField(
   const control = requiredString(item, ['controlType', 'ControlType'], 'Metadata control type')
   const kind = metadataControlKinds[control as keyof typeof metadataControlKinds]
   if (!kind) throw new ProviderPayloadError('unsupported', `Unsupported OpenContent metadata control ${control}.`)
+  const multiple = booleanValue(canonicalResponseField(item, 'multiple', ['isMultiple', 'IsMultiple']))
+  if (multiple !== (kind === 'multiple-choice')) {
+    throw new ProviderPayloadError(
+      'provider_contract_violation',
+      'OpenContent returned contradictory metadata multiplicity.'
+    )
+  }
   return Object.freeze({
     reference: Object.freeze({
       type: Object.freeze({ providerInstanceRef, metadataTypeId: typeId }),
@@ -458,9 +478,9 @@ function metadataField(
     }),
     name: requiredString(item, ['attrName', 'AttrName', 'name', 'Name'], 'Metadata field name'),
     kind,
-    required: booleanValue(first(item, ['required', 'isRequired', 'IsRequired'])),
-    multiple: booleanValue(first(item, ['multiple', 'isMultiple', 'IsMultiple'])) || kind === 'multiple-choice',
-    readOnly: booleanValue(first(item, ['readOnly', 'isReadOnly', 'IsReadOnly']))
+    required: booleanValue(canonicalResponseField(item, 'required', ['isRequired', 'IsRequired'])),
+    multiple,
+    readOnly: booleanValue(canonicalResponseField(item, 'readOnly', ['isReadOnly', 'IsReadOnly']))
   })
 }
 
@@ -478,13 +498,13 @@ function metadataFilterValue(predicate: Record<string, unknown>): unknown {
         ])
         : typeof predicate.value === 'string' ? asDateOnly(predicate.value) : predicate.value
     case 'choices':
-      return arrayValue(predicate.choiceIds).map((value) => String(value))
+      return parsedRequestArray(predicate.choiceIds).map((value) => String(value))
     case 'directory-principals':
-      return arrayValue(predicate.principals).map((value) => requiredString(record(value), ['principalId'], 'Principal identity'))
+      return parsedRequestArray(predicate.principals).map((value) => requiredString(record(value), ['principalId'], 'Principal identity'))
     case 'files':
-      return arrayValue(predicate.files).map((value) => requiredString(record(value), ['fileId'], 'File identity'))
+      return parsedRequestArray(predicate.files).map((value) => requiredString(record(value), ['fileId'], 'File identity'))
     case 'containers':
-      return arrayValue(predicate.containers).map((value) => requiredString(record(value), ['containerId'], 'Container identity'))
+      return parsedRequestArray(predicate.containers).map((value) => requiredString(record(value), ['containerId'], 'Container identity'))
     default:
       throw new ProviderPayloadError('unsupported', 'Unsupported metadata search predicate.')
   }
@@ -525,7 +545,7 @@ function searchArgs(request: Record<string, unknown>, scopeKey = 'scope'): Recor
     if (typeof request.modified.to === 'string') args.modifyTimeEnd = asDateOnly(request.modified.to)
   }
   if (isRecord(request.tags)) {
-    args.tags = arrayValue(request.tags.names)
+    args.tags = parsedRequestArray(request.tags.names)
     args.tagOperator = request.tags.match === 'any' ? 'or' : 'and'
   }
   if (Array.isArray(request.metadata)) {
@@ -558,13 +578,12 @@ function metadataControlType(kind: unknown): string {
   }
 }
 
-export type OpenContentExtendedOperationAdapter = Readonly<{
+type OpenContentExtendedOperationAdapter = Readonly<{
   execute(input: Readonly<{
     invocationId: string
     operation: ContentSpaceExtendedOperationKey
     request: unknown
     source?: OpenContentExtendedUploadSource
-    destination?: OpenContentExtendedDownloadDestination
   }>): Promise<unknown>
 }>
 
@@ -609,13 +628,11 @@ export function createOpenContentExtendedOperationAdapter(input: Readonly<{
     async execute(execution): Promise<unknown> {
       const contract = CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS[execution.operation]
       if (!contract) return failure('unsupported', 'Unknown Content Space extended operation.')
-      const mapping = OPENCONTENT_EXTENDED_OPERATION_MAPPINGS[execution.operation]
       let mutationTransportReturned = false
       const parsedRequest = contract.requestSchema.safeParse(rehydrateTransferHandle(
         execution.operation,
         execution.request,
-        execution.source,
-        execution.destination
+        execution.source
       ))
       if (!parsedRequest.success) {
         return contract.resultSchema.parse(failure('invalid_input', 'The extended-operation request is invalid.'))
@@ -630,13 +647,12 @@ export function createOpenContentExtendedOperationAdapter(input: Readonly<{
           request: record(parsedRequest.data, 'Extended-operation request'),
           invoke: async (invocationId, command, args, dataFiles) => {
             return invoke(invocationId, command, args, dataFiles, () => {
-              if (mapping.mutationCommands.includes(command)) mutationTransportReturned = true
+              if (isOpenContentSupplierMutationCommand(command)) mutationTransportReturned = true
             })
           },
           currentPrincipal,
           now,
-          source: execution.source,
-          destination: execution.destination
+          source: execution.source
         })
         return contract.resultSchema.parse(Object.freeze({ ok: true, value }))
       } catch (error) {
@@ -663,16 +679,12 @@ export function createOpenContentExtendedOperationAdapter(input: Readonly<{
 function rehydrateTransferHandle(
   operation: ContentSpaceExtendedOperationKey,
   request: unknown,
-  source: OpenContentExtendedUploadSource | undefined,
-  destination: OpenContentExtendedDownloadDestination | undefined
+  source: OpenContentExtendedUploadSource | undefined
 ): unknown {
   if (!isRecord(request)) return request
   const internalHandle = `xfer_${'i'.repeat(32)}`
   if (operation === 'updateFileVersion' || operation === 'addAttachment') {
     return source ? Object.freeze({ ...request, sourceHandle: internalHandle }) : request
-  }
-  if (operation === 'exportFileAsPdf') {
-    return destination ? Object.freeze({ ...request, destinationHandle: internalHandle }) : request
   }
   return request
 }
@@ -691,7 +703,6 @@ type ExecuteContext = Readonly<{
   currentPrincipal?: OpenContentCurrentPrincipalPort
   now(): Date
   source?: OpenContentExtendedUploadSource
-  destination?: OpenContentExtendedDownloadDestination
 }>
 
 function compositionInvocationId(invocationId: string, index: number): string {
@@ -705,11 +716,19 @@ async function executeOperation(context: ExecuteContext): Promise<unknown> {
     case 'searchEntries': return executeSearchEntries(context)
     case 'listRecentEntries': return executeRecentEntries(context)
     case 'getEntryInfo': return executeGetEntryInfo(context)
-    case 'resolveInternalLink': return executeInternalLink(context)
+    case 'resolveInternalLink':
+      throw new ProviderPayloadError(
+        'blocked_by_contract',
+        'The pinned supplier contract does not define an exact internal-link receipt schema.'
+      )
     case 'buildFileScope': return executeBuildScope(context)
     case 'listMetadataTypes': return executeListMetadataTypes(context)
     case 'listMetadataFields': return executeListMetadataFields(context)
-    case 'listMetadataChoices': return executeListMetadataChoices(context)
+    case 'listMetadataChoices':
+      throw new ProviderPayloadError(
+        'blocked_by_contract',
+        'The pinned supplier contract does not prove metadata-choice pagination completeness.'
+      )
     case 'readEntryMetadata': return executeReadMetadata(context)
     case 'editEntryMetadata': return executeEditMetadata(context)
     case 'renameEntry': return executeRename(context)
@@ -720,7 +739,6 @@ async function executeOperation(context: ExecuteContext): Promise<unknown> {
     case 'updateEntryProperties': return executeUpdateProperties(context)
     case 'listSecurityLevels': return executeSecurityLevels(context)
     case 'updateFileVersion': return executeUpdateVersion(context)
-    case 'exportFileAsPdf': return executeExportPdf(context)
     case 'listAttachments': return executeListAttachments(context)
     case 'addAttachment': return executeAddAttachment(context)
     case 'removeAttachment': return executeRemoveAttachment(context)
@@ -754,10 +772,17 @@ async function executeOperation(context: ExecuteContext): Promise<unknown> {
     case 'changePermissions': return executeChangePermissions(context)
     case 'listCollaborationEntries': return executeCollaborationList(context, false)
     case 'searchCollaborationEntries': return executeCollaborationList(context, true)
-    case 'resolveCollaborationInvitation': return executeCollaborationLink(context)
-    case 'listKnowledgeCollections': return executeKnowledgeCollections(context, false)
-    case 'searchKnowledgeCollections': return executeKnowledgeCollections(context, true)
-    case 'browseKnowledgeCollection': return executeBrowseKnowledge(context)
+    case 'resolveCollaborationInvitation':
+      throw new ProviderPayloadError(
+        'blocked_by_contract',
+        'The pinned supplier contract does not define an exact collaboration-link receipt schema.'
+      )
+    case 'listKnowledgeCollections':
+    case 'searchKnowledgeCollections':
+      throw new ProviderPayloadError(
+        'blocked_by_contract',
+        'The pinned supplier contract does not define an exact knowledge-collection receipt schema.'
+      )
   }
   return unreachableOperation(operation)
 }
@@ -776,7 +801,7 @@ async function executeSearchEntries(context: ExecuteContext): Promise<unknown> {
   if (limit > 100) {
     throw new ProviderPayloadError('bounds_exceeded', 'OpenContent search pages are limited to 100 entries.')
   }
-  const entryKinds = arrayValue(context.request.entryKinds)
+  const entryKinds = parsedRequestArray(context.request.entryKinds)
   if (entryKinds.length > 1) {
     throw new ProviderPayloadError(
       'unsupported',
@@ -798,12 +823,19 @@ async function executeSearchEntries(context: ExecuteContext): Promise<unknown> {
   }
   const raw = await context.invoke(context.invocationId, 'file-search', args)
   const payload = record(raw)
-  const items = providerArray(first(payload, ['items', 'data']), ['items'])
-  const total = optionalNumber(payload, ['total', 'totalCount', 'matchedCount'])
+  const items = canonicalObjectArray(payload, 'items', ['data'], 'Search result page')
+  const total = requiredNumber(payload, ['total', 'totalCount', 'matchedCount'], 'Search result count')
   const normalized: unknown[] = []
   for (const [index, item] of items.entries()) {
     const summary = record(item, 'Search item')
-    const kind = optionalString(summary, ['type', 'kind']) === 'folder' ? 'container' : 'file'
+    const providerKind = requiredString(summary, ['type', 'kind'], 'Search result kind')
+    if (providerKind !== 'file' && providerKind !== 'folder') {
+      throw new ProviderPayloadError(
+        'provider_contract_violation',
+        'OpenContent returned an invalid search result kind.'
+      )
+    }
+    const kind = providerKind === 'folder' ? 'container' : 'file'
     const id = requiredString(summary, ['id', 'fileId', 'folderId'], 'Search result identity')
     normalized.push(await observeEntryInfo(
       context,
@@ -813,10 +845,11 @@ async function executeSearchEntries(context: ExecuteContext): Promise<unknown> {
       index + 1
     ))
   }
+  const cursor = verifiedNextCursor(total, pageIndex, limit, items.length, 'Search result page')
   return Object.freeze({
     items: Object.freeze(normalized),
-    ...(nextCursor(total, pageIndex, limit) ? { nextCursor: nextCursor(total, pageIndex, limit) } : {}),
-    ...(total === undefined ? {} : { matchedCount: total })
+    ...(cursor ? { nextCursor: cursor } : {}),
+    matchedCount: total
   })
 }
 
@@ -825,7 +858,7 @@ async function executeRecentEntries(context: ExecuteContext): Promise<unknown> {
   const pageIndex = pageNumber(page)
   const limit = requiredNumber(page, ['limit'], 'Recent page limit')
   if (limit > 100) throw new ProviderPayloadError('bounds_exceeded', 'OpenContent recent pages are limited to 100 entries.')
-  if (arrayValue(context.request.entryKinds).includes('container')) {
+  if (parsedRequestArray(context.request.entryKinds).includes('container')) {
     throw new ProviderPayloadError('unsupported', 'OpenContent recent history exposes files only.')
   }
   const raw = await context.invoke(context.invocationId, 'recent-files', {
@@ -833,8 +866,13 @@ async function executeRecentEntries(context: ExecuteContext): Promise<unknown> {
     pageSize: limit
   })
   const payload = record(raw)
-  const items = providerArray(first(payload, ['items', 'data', 'files']), ['items', 'files'])
-  const total = optionalNumber(payload, ['total', 'totalCount', 'allCount'])
+  const items = canonicalObjectArray(
+    payload,
+    'items',
+    ['data', 'files'],
+    'Recent-file page'
+  )
+  const total = requiredNumber(payload, ['total', 'totalCount', 'allCount'], 'Recent result count')
   const normalized: unknown[] = []
   for (const [index, item] of items.entries()) {
     const summary = record(item, 'Recent file')
@@ -845,10 +883,11 @@ async function executeRecentEntries(context: ExecuteContext): Promise<unknown> {
       index + 1
     ))
   }
+  const cursor = verifiedNextCursor(total, pageIndex, limit, items.length, 'Recent-file page')
   return Object.freeze({
     items: Object.freeze(normalized),
-    ...(nextCursor(total, pageIndex, limit) ? { nextCursor: nextCursor(total, pageIndex, limit) } : {}),
-    ...(total === undefined ? {} : { matchedCount: total })
+    ...(cursor ? { nextCursor: cursor } : {}),
+    matchedCount: total
   })
 }
 
@@ -862,13 +901,20 @@ async function observeEntryInfo(
   compositionIndex: number
 ): Promise<unknown> {
   if ('fileId' in reference) {
+    const requestedFileId = requiredString(reference, ['fileId'], 'File identity')
     const raw = await context.invoke(
       compositionIndex === 0 ? context.invocationId : compositionInvocationId(context.invocationId, compositionIndex),
       'file-info',
-      { fileId: requiredString(reference, ['fileId'], 'File identity') }
+      { fileId: requestedFileId }
     )
     const payload = record(raw, 'File information')
-    const fileId = requiredString(payload, ['fileGuid', 'fileId', 'id'], 'File identity')
+    const fileId = exactResponseResourceGuid(
+      payload,
+      requestedFileId,
+      'fileGuid',
+      ['fileId', 'id'],
+      'File identity'
+    )
     const parentId = requiredString(payload, ['folderGuid', 'folderId', 'parentFolderId'], 'Parent folder identity')
     const modifiedById = optionalString(payload, ['editorId', 'modifierId'])
     const modifiedByName = optionalString(payload, ['editorName', 'modifierName'])
@@ -878,11 +924,11 @@ async function observeEntryInfo(
       name: requiredString(payload, ['fileName', 'name'], 'File name'),
       parent: containerReference(context.providerInstanceRef, parentId),
       size: requiredNumber(payload, ['fileSize', 'size'], 'File size'),
-      ...(normalizeTimestamp(first(payload, ['fileCreateTime', 'createTime']))
-        ? { createdAt: normalizeTimestamp(first(payload, ['fileCreateTime', 'createTime'])) }
+      ...(normalizeTimestamp(canonicalResponseField(payload, 'fileCreateTime', ['createTime']))
+        ? { createdAt: normalizeTimestamp(canonicalResponseField(payload, 'fileCreateTime', ['createTime'])) }
         : {}),
-      ...(normalizeTimestamp(first(payload, ['fileModifyTime', 'modifyTime']))
-        ? { modifiedAt: normalizeTimestamp(first(payload, ['fileModifyTime', 'modifyTime'])) }
+      ...(normalizeTimestamp(canonicalResponseField(payload, 'fileModifyTime', ['modifyTime']))
+        ? { modifiedAt: normalizeTimestamp(canonicalResponseField(payload, 'fileModifyTime', ['modifyTime'])) }
         : {}),
       ...(modifiedById && modifiedByName
         ? { modifiedBy: directoryPrincipal(context.providerInstanceRef, 'user', modifiedById, modifiedByName) }
@@ -894,41 +940,35 @@ async function observeEntryInfo(
       ...(optionalString(payload, ['fileRemark', 'remark']) ? { remark: optionalString(payload, ['fileRemark', 'remark']) } : {})
     })
   }
+  const requestedFolderId = requiredString(reference, ['containerId'], 'Folder identity')
   const raw = await context.invoke(
     compositionIndex === 0 ? context.invocationId : compositionInvocationId(context.invocationId, compositionIndex),
     'folder-info',
-    { folderId: requiredString(reference, ['containerId'], 'Folder identity') }
+    { folderId: requestedFolderId }
   )
   const payload = record(raw, 'Folder information')
-  const folderId = requiredString(payload, ['folderGuid', 'folderId', 'id'], 'Folder identity')
+  const folderId = exactResponseResourceGuid(
+    payload,
+    requestedFolderId,
+    'folderGuid',
+    ['folderId', 'id'],
+    'Folder identity'
+  )
   const parentId = optionalString(payload, ['parentFolderGuid', 'parentFolderId'])
   return Object.freeze({
     kind: 'container',
     reference: containerReference(context.providerInstanceRef, folderId),
     name: requiredString(payload, ['folderName', 'name'], 'Folder name'),
     ...(parentId ? { parent: containerReference(context.providerInstanceRef, parentId) } : {}),
-    ...(normalizeTimestamp(first(payload, ['createTime', 'folderCreateTime']))
-      ? { createdAt: normalizeTimestamp(first(payload, ['createTime', 'folderCreateTime'])) }
+    ...(normalizeTimestamp(canonicalResponseField(payload, 'createTime', ['folderCreateTime']))
+      ? { createdAt: normalizeTimestamp(canonicalResponseField(payload, 'createTime', ['folderCreateTime'])) }
       : {}),
-    ...(normalizeTimestamp(first(payload, ['modifyTime', 'folderModifyTime']))
-      ? { modifiedAt: normalizeTimestamp(first(payload, ['modifyTime', 'folderModifyTime'])) }
+    ...(normalizeTimestamp(canonicalResponseField(payload, 'modifyTime', ['folderModifyTime']))
+      ? { modifiedAt: normalizeTimestamp(canonicalResponseField(payload, 'modifyTime', ['folderModifyTime'])) }
       : {}),
     ...(optionalString(payload, ['code']) ? { code: optionalString(payload, ['code']) } : {}),
     ...(optionalString(payload, ['remark']) ? { remark: optionalString(payload, ['remark']) } : {})
   })
-}
-
-async function executeInternalLink(context: ExecuteContext): Promise<unknown> {
-  const reference = record(context.request.reference, 'Entry reference')
-  if (!('fileId' in reference)) {
-    throw new ProviderPayloadError('unsupported', 'The attachment CLI exposes internal links for files only.')
-  }
-  const raw = record(await context.invoke(context.invocationId, 'file-internal-link', {
-    fileId: requiredString(reference, ['fileId'], 'File identity')
-  }))
-  const url = requiredString(raw, ['url', 'link'], 'Internal link')
-  const expiresAt = new Date(context.now().getTime() + 5 * 60_000).toISOString()
-  return Object.freeze({ reference, target: Object.freeze({ url, expiresAt }) })
 }
 
 async function executeBuildScope(context: ExecuteContext): Promise<unknown> {
@@ -947,8 +987,11 @@ async function executeBuildScope(context: ExecuteContext): Promise<unknown> {
     throw new ProviderPayloadError('provider_contract_violation', 'OpenContent did not produce an executable file scope.')
   }
   const scope = raw.fileScope
-  const files = arrayValue(scope.fileGuids).map((value) => {
-    if (typeof value !== 'string' || value.trim() === '') {
+  const files = directResponseArray(
+    canonicalResponseField(scope, 'fileGuids'),
+    'File-scope identities'
+  ).map((value) => {
+    if (typeof value !== 'string' || value === '' || value !== value.trim()) {
       throw new ProviderPayloadError('provider_contract_violation', 'The file scope contains an invalid identity.')
     }
     return fileReference(context.providerInstanceRef, value)
@@ -966,7 +1009,7 @@ async function executeListMetadataTypes(context: ExecuteContext): Promise<unknow
   const index = pageNumber(page)
   const limit = requiredNumber(page, ['limit'], 'Metadata page limit')
   const raw = await context.invoke(context.invocationId, 'meta-types', {})
-  const all = providerArray(raw, ['items', 'types', 'data'])
+  const all = directResponseArray(raw, 'Metadata-type result')
   const start = (index - 1) * limit
   const items = all.slice(start, start + limit).map((value) => {
     const item = record(value, 'Metadata type')
@@ -992,8 +1035,13 @@ async function metadataAttributes(context: ExecuteContext, typeId: string): Prom
   const raw = await context.invoke(compositionInvocationId(context.invocationId, 1), 'meta-attrs', { typeId })
   const payload = record(raw, 'Metadata attributes')
   return Object.freeze({
-    name: optionalString(payload, ['typeName', 'TypeName', 'name']) ?? typeId,
-    items: providerArray(first(payload, ['attrs', 'attributes', 'items', 'data']), ['attrs', 'attributes', 'items'])
+    name: requiredString(payload, ['typeName', 'TypeName', 'name'], 'Metadata type name'),
+    items: canonicalObjectArray(
+      payload,
+      'attrs',
+      ['attributes', 'items', 'data'],
+      'Metadata attributes'
+    )
       .map((value) => record(value, 'Metadata attribute'))
   })
 }
@@ -1008,65 +1056,29 @@ async function executeListMetadataFields(context: ExecuteContext): Promise<unkno
   })
 }
 
-async function executeListMetadataChoices(context: ExecuteContext): Promise<unknown> {
-  const field = record(context.request.field, 'Metadata field reference')
-  const type = record(field.type, 'Metadata type reference')
-  const typeId = requiredString(type, ['metadataTypeId'], 'Metadata type identity')
-  const fieldId = requiredString(field, ['fieldId'], 'Metadata field identity')
-  const attrs = await metadataAttributes(context, typeId)
-  const attribute = attrs.items.find((item) => optionalString(item, ['attrId', 'AttrId']) === fieldId)
-  if (!attribute) throw new ProviderPayloadError('invalid_reference', 'The metadata field is unavailable.')
-  const control = requiredString(attribute, ['controlType', 'ControlType'], 'Metadata control type')
-  const page = record(context.request.page, 'Choice page')
-  const index = pageNumber(page)
-  const limit = requiredNumber(page, ['limit'], 'Choice page limit')
-  let choices: readonly unknown[]
-  if (control === 'edoc2DynamicList') {
-    const raw = await context.invoke(compositionInvocationId(context.invocationId, 2), 'meta-modeldata', {
-      typeId,
-      attrId: fieldId,
-      ...(context.request.query ? { keyword: context.request.query } : {}),
-      pageIndex: index,
-      pageSize: Math.min(limit, 100)
-    })
-    choices = providerArray(raw, ['items', 'data'])
-  } else {
-    const setting = isRecord(attribute.setting) ? attribute.setting : {}
-    choices = providerArray(first(setting, ['datasource', 'dataSource', 'items']), ['items'])
-      .filter((value) => {
-        const query = context.request.query
-        if (typeof query !== 'string') return true
-        const item = record(value, 'Metadata choice')
-        return (optionalString(item, ['text', 'label', 'name']) ?? '').toLowerCase().includes(query.toLowerCase())
-      })
-      .slice((index - 1) * limit, index * limit)
-  }
-  const items = choices.map((value) => {
-    const item = record(value, 'Metadata choice')
-    const choiceId = requiredString(item, ['value', 'id', 'Id'], 'Metadata choice identity')
-    return Object.freeze({
-      reference: Object.freeze({ field, choiceId }),
-      label: requiredString(item, ['text', 'label', 'name', 'Name'], 'Metadata choice label')
-    })
-  })
-  return Object.freeze({ field, items: Object.freeze(items) })
-}
-
 function metadataValue(
   providerInstanceRef: string,
   control: string,
   value: unknown,
   fieldReference: Record<string, unknown>
 ): unknown {
-  if (value === undefined || value === null || value === '') return undefined
+  if (value === undefined) return undefined
   switch (control) {
     case 'edoc2Textbox':
-    case 'edoc2TextArea':
-      return Object.freeze({ kind: 'text', value: String(value) })
+    case 'edoc2TextArea': {
+      if (typeof value !== 'string') {
+        throw new ProviderPayloadError(
+          'provider_contract_violation',
+          'OpenContent returned an invalid metadata text value.'
+        )
+      }
+      return Object.freeze({ kind: 'text', value })
+    }
     case 'edoc2Number': {
-      const parsed = Number(value)
-      if (!Number.isFinite(parsed)) throw new ProviderPayloadError('provider_contract_violation', 'Metadata number is invalid.')
-      return Object.freeze({ kind: 'number', value: parsed })
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw new ProviderPayloadError('provider_contract_violation', 'Metadata number is invalid.')
+      }
+      return Object.freeze({ kind: 'number', value })
     }
     case 'edoc2Date': {
       const timestamp = normalizeTimestamp(value)
@@ -1079,40 +1091,43 @@ function metadataValue(
     case 'edoc2DynamicList':
       return Object.freeze({
         kind: 'choices',
-        values: Object.freeze(arrayValue(Array.isArray(value) ? value : [value]).map((candidate) => Object.freeze({
+        values: Object.freeze(directResponseArray(value, 'Metadata choice values').map((candidate) => Object.freeze({
           field: fieldReference,
-          choiceId: typeof candidate === 'object' && candidate !== null
-            ? requiredString(record(candidate), ['value', 'id'], 'Metadata choice identity')
-            : String(candidate)
+          choiceId: requiredString(record(candidate), ['value', 'id'], 'Metadata choice identity')
         })))
       })
     case 'edoc2SelectMember':
       return Object.freeze({
         kind: 'directory-principals',
-        values: Object.freeze(arrayValue(Array.isArray(value) ? value : [value]).map((candidate) => {
+        values: Object.freeze(directResponseArray(value, 'Metadata member values').map((candidate) => {
           const item = record(candidate, 'Metadata member')
           return Object.freeze({
             providerInstanceRef,
-            kind: memberKind(first(item, ['memberType', 'type'])),
-            principalId: requiredString(item, ['identityId', 'id'], 'Metadata member identity')
+            kind: memberKind(canonicalResponseField(item, 'memberType', ['type'])),
+            principalId: supplierNumericOrStringId(
+              canonicalResponseField(item, 'identityId', ['id']),
+              'Metadata member identity'
+            )
           })
         }))
       })
     case 'edoc2SelectFile':
       return Object.freeze({
         kind: 'files',
-        values: Object.freeze(arrayValue(Array.isArray(value) ? value : [value]).map((candidate) =>
-          fileReference(providerInstanceRef, typeof candidate === 'object' && candidate !== null
-            ? requiredString(record(candidate), ['fileId', 'id', 'value'], 'Metadata file identity')
-            : String(candidate))))
+        values: Object.freeze(directResponseArray(value, 'Metadata file values').map((candidate) =>
+          fileReference(providerInstanceRef, supplierNumericOrStringId(
+            canonicalResponseField(record(candidate), 'fileId', ['id', 'value']),
+            'Metadata file identity'
+          ))))
       })
     case 'edoc2SelectFolder':
       return Object.freeze({
         kind: 'containers',
-        values: Object.freeze(arrayValue(Array.isArray(value) ? value : [value]).map((candidate) =>
-          containerReference(providerInstanceRef, typeof candidate === 'object' && candidate !== null
-            ? requiredString(record(candidate), ['folderId', 'id', 'value'], 'Metadata folder identity')
-            : String(candidate))))
+        values: Object.freeze(directResponseArray(value, 'Metadata folder values').map((candidate) =>
+          containerReference(providerInstanceRef, supplierNumericOrStringId(
+            canonicalResponseField(record(candidate), 'folderId', ['id', 'value']),
+            'Metadata folder identity'
+          ))))
       })
     default:
       throw new ProviderPayloadError('unsupported', `Unsupported OpenContent metadata control ${control}.`)
@@ -1120,11 +1135,14 @@ function metadataValue(
 }
 
 function memberKind(value: unknown): 'user' | 'department' | 'position' | 'group' {
-  const normalized = String(value ?? '').toLowerCase()
-  if (normalized === '2' || normalized === 'department') return 'department'
-  if (normalized === '4' || normalized === 'position') return 'position'
-  if (normalized === '8' || normalized === 'group') return 'group'
-  return 'user'
+  if (value === 1) return 'user'
+  if (value === 2) return 'department'
+  if (value === 4) return 'position'
+  if (value === 8) return 'group'
+  throw new ProviderPayloadError(
+    'provider_contract_violation',
+    'OpenContent returned an invalid directory-principal kind.'
+  )
 }
 
 async function executeReadMetadata(context: ExecuteContext): Promise<unknown> {
@@ -1135,14 +1153,23 @@ async function executeReadMetadata(context: ExecuteContext): Promise<unknown> {
     fileType: providerKindForEntry(target)
   })
   const payload = record(raw, 'Metadata information')
-  const candidates = providerArray(first(payload, ['records', 'metaRecords', 'items']), ['records', 'items'])
-  const records = candidates.length > 0 ? candidates : [payload]
+  const records = canonicalObjectArray(
+    payload,
+    'records',
+    ['metaRecords', 'items'],
+    'Metadata information'
+  )
   const normalized = records.map((candidate) => {
     const item = record(candidate, 'Metadata record')
     const typeId = requiredString(item, ['metaTypeId', 'typeId', 'TypeId'], 'Metadata type identity')
     if (requestedType && requestedType.metadataTypeId !== typeId) return undefined
     const typeReference = Object.freeze({ providerInstanceRef: context.providerInstanceRef, metadataTypeId: typeId })
-    const attributes = providerArray(first(item, ['attrs', 'attributes', 'values']), ['attrs', 'attributes', 'values'])
+    const attributes = canonicalObjectArray(
+      item,
+      'attrs',
+      ['attributes', 'values'],
+      'Metadata record attributes'
+    )
     return Object.freeze({
       target,
       type: Object.freeze({
@@ -1155,7 +1182,7 @@ async function executeReadMetadata(context: ExecuteContext): Promise<unknown> {
         const value = metadataValue(
           context.providerInstanceRef,
           requiredString(attribute, ['controlType', 'ControlType'], 'Metadata control type'),
-          first(attribute, ['attrValue', 'columnValue', 'value', 'Value']),
+          canonicalResponseField(attribute, 'attrValue', ['columnValue', 'value', 'Value']),
           definition.reference
         )
         return Object.freeze({ field: definition, ...(value === undefined ? {} : { value }) })
@@ -1173,14 +1200,14 @@ function metadataEditValue(value: unknown): unknown {
     case 'number':
     case 'boolean': return typed.value
     case 'date': return typeof typed.value === 'string' ? asDateOnly(typed.value) : typed.value
-    case 'choices': return arrayValue(typed.values).map((candidate) => requiredString(record(candidate), ['choiceId'], 'Metadata choice identity'))
-    case 'directory-principals': return arrayValue(typed.values).map((candidate) => {
+    case 'choices': return parsedRequestArray(typed.values).map((candidate) => requiredString(record(candidate), ['choiceId'], 'Metadata choice identity'))
+    case 'directory-principals': return parsedRequestArray(typed.values).map((candidate) => {
       const principal = record(candidate, 'Directory principal')
       const id = requiredString(principal, ['principalId'], 'Directory principal identity')
       return { id, identityId: id, guid: id, text: id, memberType: principalMemberType(principal.kind) }
     })
-    case 'files': return arrayValue(typed.values).map((candidate) => requiredString(record(candidate), ['fileId'], 'Metadata file identity'))
-    case 'containers': return arrayValue(typed.values).map((candidate) => requiredString(record(candidate), ['containerId'], 'Metadata folder identity'))
+    case 'files': return parsedRequestArray(typed.values).map((candidate) => requiredString(record(candidate), ['fileId'], 'Metadata file identity'))
+    case 'containers': return parsedRequestArray(typed.values).map((candidate) => requiredString(record(candidate), ['containerId'], 'Metadata folder identity'))
     default: throw new ProviderPayloadError('unsupported', 'Unsupported metadata edit value.')
   }
 }
@@ -1197,7 +1224,7 @@ async function executeEditMetadata(context: ExecuteContext): Promise<unknown> {
   const type = record(context.request.type, 'Metadata type reference')
   const typeId = requiredString(type, ['metadataTypeId'], 'Metadata type identity')
   const attrs = await metadataAttributes(context, typeId)
-  const changes = arrayValue(context.request.changes)
+  const changes = parsedRequestArray(context.request.changes)
   const changeColumns = changes.map((candidate) => {
     const change = record(candidate, 'Metadata change')
     const field = record(change.field, 'Metadata field reference')
@@ -1234,7 +1261,7 @@ async function executeRename(context: ExecuteContext): Promise<unknown> {
   const provedTargetType = optionalString(raw, ['type'])
   const provedName = optionalString(raw, ['newName'])
   if (
-    provedTargetId === undefined ||
+    provedTargetId !== entryId(target) ||
     provedTargetType !== providerKindForEntry(target) ||
     provedName !== context.request.name
   ) {
@@ -1258,7 +1285,7 @@ async function executeCopyOrMove(
   context: ExecuteContext,
   command: 'copy' | 'move'
 ): Promise<unknown> {
-  const entries = arrayValue(context.request.entries)
+  const entries = parsedRequestArray(context.request.entries)
   const destination = record(context.request.destination, 'Destination folder')
   const ids = mutationIds(entries)
   const raw = assertMutationSettled(await context.invoke(context.invocationId, command, {
@@ -1266,10 +1293,10 @@ async function executeCopyOrMove(
     ...(ids.folderIds.length ? { folderIds: ids.folderIds.join(',') } : {}),
     targetFolderId: requiredString(destination, ['containerId'], 'Destination folder identity')
   }))
-  const returnedItemPayload = first(raw, ['items', 'results'])
+  const returnedItemPayload = canonicalResponseField(raw, 'items', ['results'])
   const returnedItems = returnedItemPayload === undefined
     ? []
-    : providerArray(returnedItemPayload, ['items', 'results'])
+    : directResponseArray(returnedItemPayload, 'Copied-entry results')
   if (
     command === 'move' &&
     (
@@ -1302,7 +1329,7 @@ async function executeCopyOrMove(
 }
 
 async function executeDelete(context: ExecuteContext): Promise<unknown> {
-  const entries = arrayValue(context.request.entries)
+  const entries = parsedRequestArray(context.request.entries)
   const ids = mutationIds(entries)
   const raw = assertMutationSettled(await context.invoke(context.invocationId, 'delete', {
     ...(ids.fileIds.length ? { fileIds: ids.fileIds.join(',') } : {}),
@@ -1371,7 +1398,7 @@ async function executeSecurityLevels(context: ExecuteContext): Promise<unknown> 
   const index = pageNumber(page)
   const limit = requiredNumber(page, ['limit'], 'Security-level page limit')
   const raw = await context.invoke(context.invocationId, 'sec-level-list', {})
-  const all = providerArray(raw, ['items', 'levels', 'data'])
+  const all = directResponseArray(raw, 'Security-level result')
   const start = (index - 1) * limit
   const items = all.slice(start, start + limit).map((candidate) => {
     const item = record(candidate, 'Security level')
@@ -1397,31 +1424,6 @@ function executeUpdateVersion(_context: ExecuteContext): never {
   )
 }
 
-async function executeExportPdf(context: ExecuteContext): Promise<unknown> {
-  if (!context.destination) throw new ProviderPayloadError('destination_unavailable', 'The managed PDF destination is unavailable.')
-  const reference = record(context.request.reference, 'PDF source')
-  const fileId = requiredString(reference, ['fileId'], 'PDF source identity')
-  const raw = record(await context.invoke(context.invocationId, 'download', {
-    ...(context.request.versionId ? { ver_id: context.request.versionId } : { fileIds: fileId }),
-    ispdfdownload: true
-  }, [Object.freeze({
-    role: 'destination',
-    encoding: 'managed-stream',
-    name: `${fileId}.pdf`,
-    write: context.destination.write
-  })]), 'PDF export receipt')
-  const bytesWritten = requiredNumber(raw, ['bytesWritten', 'size'], 'Exported byte count')
-  const digest = optionalString(raw, ['sha256', 'digest'])
-  return Object.freeze({
-    reference,
-    format: 'pdf',
-    bytesWritten,
-    ...(digest && /^[a-f0-9]{64}$/u.test(digest)
-      ? { digest: Object.freeze({ algorithm: 'sha256', value: digest }) }
-      : {})
-  })
-}
-
 async function executeListAttachments(context: ExecuteContext): Promise<unknown> {
   const master = record(context.request.master, 'Master file')
   const page = record(context.request.page, 'Attachment page')
@@ -1433,7 +1435,12 @@ async function executeListAttachments(context: ExecuteContext): Promise<unknown>
     pageNum: index,
     pageSize: limit
   }))
-  const items = providerArray(first(raw, ['items', 'attachments', 'data']), ['items', 'attachments']).map((candidate) => {
+  const items = canonicalObjectArray(
+    raw,
+    'items',
+    ['attachments', 'data'],
+    'Attachment page'
+  ).map((candidate) => {
     const item = record(candidate, 'Attachment')
     return Object.freeze({
       master,
@@ -1442,17 +1449,18 @@ async function executeListAttachments(context: ExecuteContext): Promise<unknown>
         requiredString(item, ['fileId', 'id'], 'Attachment identity')
       ),
       name: requiredString(item, ['fileName', 'name'], 'Attachment name'),
-      size: parseByteSize(first(item, ['size', 'fileSize'])),
-      ...(normalizeTimestamp(first(item, ['createTime', 'addedAt']))
-        ? { addedAt: normalizeTimestamp(first(item, ['createTime', 'addedAt'])) }
+      size: parseByteSize(canonicalResponseField(item, 'size', ['fileSize'])),
+      ...(normalizeTimestamp(canonicalResponseField(item, 'createTime', ['addedAt']))
+        ? { addedAt: normalizeTimestamp(canonicalResponseField(item, 'createTime', ['addedAt'])) }
         : {})
     })
   })
-  const total = optionalNumber(raw, ['total', 'totalCount'])
+  const total = requiredNumber(raw, ['total', 'totalCount'], 'Attachment result count')
+  const cursor = verifiedNextCursor(total, index, limit, items.length, 'Attachment page')
   return Object.freeze({
     master,
     items: Object.freeze(items),
-    ...(nextCursor(total, index, limit) ? { nextCursor: nextCursor(total, index, limit) } : {})
+    ...(cursor ? { nextCursor: cursor } : {})
   })
 }
 
@@ -1475,8 +1483,8 @@ async function executeAddAttachment(context: ExecuteContext): Promise<unknown> {
     attachment: fileReference(context.providerInstanceRef, attachmentId),
     name,
     size: context.source.size,
-    ...(normalizeTimestamp(first(raw, ['createTime', 'addedAt']))
-      ? { addedAt: normalizeTimestamp(first(raw, ['createTime', 'addedAt'])) }
+    ...(normalizeTimestamp(canonicalResponseField(raw, 'createTime', ['addedAt']))
+      ? { addedAt: normalizeTimestamp(canonicalResponseField(raw, 'createTime', ['addedAt'])) }
       : {})
   })
 }
@@ -1510,10 +1518,15 @@ async function executeListRelations(context: ExecuteContext): Promise<unknown> {
     pageNum: index,
     pageSize: limit
   }))
-  const items = providerArray(first(raw, ['items', 'relations', 'data']), ['items', 'relations']).map((candidate) => {
+  const items = canonicalObjectArray(
+    raw,
+    'items',
+    ['relations', 'data'],
+    'Relation page'
+  ).map((candidate) => {
     const item = record(candidate, 'Relation')
     const relatedId = requiredString(item, ['fileId', 'relatedFileId', 'id'], 'Related file identity')
-    const main = booleanValue(first(item, ['mainRelate', 'isMain']), true)
+    const main = booleanValue(canonicalResponseField(item, 'mainRelate', ['isMain']))
     const source = main ? target : fileReference(context.providerInstanceRef, relatedId)
     const related = main ? fileReference(context.providerInstanceRef, relatedId) : target
     return Object.freeze({
@@ -1529,11 +1542,12 @@ async function executeListRelations(context: ExecuteContext): Promise<unknown> {
       kind: 'related'
     })
   })
-  const total = optionalNumber(raw, ['total', 'totalCount'])
+  const total = requiredNumber(raw, ['total', 'totalCount'], 'Relation result count')
+  const cursor = verifiedNextCursor(total, index, limit, items.length, 'Relation page')
   return Object.freeze({
     target,
     items: Object.freeze(items),
-    ...(nextCursor(total, index, limit) ? { nextCursor: nextCursor(total, index, limit) } : {})
+    ...(cursor ? { nextCursor: cursor } : {})
   })
 }
 
@@ -1582,7 +1596,7 @@ async function executeListTags(context: ExecuteContext): Promise<unknown> {
   const raw = record(await context.invoke(context.invocationId, 'file-tag-list', {
     fileId: requiredString(target, ['fileId'], 'Tag target identity')
   }))
-  const all = providerArray(first(raw, ['items', 'tags', 'data']), ['items', 'tags'])
+  const all = canonicalObjectArray(raw, 'items', ['tags', 'data'], 'Tag result')
   const start = (index - 1) * limit
   const items = all.slice(start, start + limit).map((candidate) => {
     const item = record(candidate, 'File tag')
@@ -1602,8 +1616,8 @@ async function executeListTags(context: ExecuteContext): Promise<unknown> {
 }
 
 async function executeSetTags(context: ExecuteContext): Promise<unknown> {
-  const targets = arrayValue(context.request.targets).map((candidate) => record(candidate, 'Tag target'))
-  const names = arrayValue(context.request.names).map((candidate) => String(candidate))
+  const targets = parsedRequestArray(context.request.targets).map((candidate) => record(candidate, 'Tag target'))
+  const names = parsedRequestArray(context.request.names).map((candidate) => String(candidate))
   await context.invoke(context.invocationId, 'file-tag-set', {
     fileIds: targets.map((target) => requiredString(target, ['fileId'], 'Tag target identity')).join(','),
     tags: names.join(',')
@@ -1612,14 +1626,14 @@ async function executeSetTags(context: ExecuteContext): Promise<unknown> {
 }
 
 async function executeRemoveTags(context: ExecuteContext): Promise<unknown> {
-  const targets = arrayValue(context.request.targets).map((candidate) => record(candidate, 'Tag target'))
+  const targets = parsedRequestArray(context.request.targets).map((candidate) => record(candidate, 'Tag target'))
   if (targets.length !== 1) {
     throw new ProviderPayloadError(
       'bounds_exceeded',
       'OpenContent removes tag identities from exactly one file per atomic write.'
     )
   }
-  const tags = arrayValue(context.request.tags).map((candidate) => record(candidate, 'Tag reference'))
+  const tags = parsedRequestArray(context.request.tags).map((candidate) => record(candidate, 'Tag reference'))
   await context.invoke(context.invocationId, 'file-tag-delete', {
     fileId: requiredString(targets[0] ?? {}, ['fileId'], 'Tag target identity'),
     tagIds: tags.map((tag) => requiredString(tag, ['tagId'], 'Tag identity')).join(',')
@@ -1639,14 +1653,14 @@ function publicationDays(expiry: Record<string, unknown>, now: Date): number {
 }
 
 async function executeCreatePublication(context: ExecuteContext): Promise<unknown> {
-  const permissions = arrayValue(context.request.permissions)
+  const permissions = parsedRequestArray(context.request.permissions)
   if (!permissions.includes('preview') || permissions.includes('print')) {
     throw new ProviderPayloadError(
       'unsupported',
       'OpenContent publication exposes preview and optional download; print cannot be controlled independently.'
     )
   }
-  const targets = arrayValue(context.request.targets).map((candidate) => record(candidate, 'Publication target'))
+  const targets = parsedRequestArray(context.request.targets).map((candidate) => record(candidate, 'Publication target'))
   const ids = mutationIds(targets)
   if (ids.fileIds.length > 0 && ids.folderIds.length > 0) {
     throw new ProviderPayloadError('unsupported', 'OpenContent cannot publish mixed file and folder targets atomically.')
@@ -1660,7 +1674,9 @@ async function executeCreatePublication(context: ExecuteContext): Promise<unknow
   }), 'Publication receipt')
   const publicationId = requiredString(raw, ['code', 'Publish_Code', 'publicationId'], 'Publication identity')
   const link = optionalString(raw, ['link', 'url'])
-  const observedExpiry = normalizeTimestamp(first(raw, ['endDate', 'Publish_EndTime']))
+  const observedExpiry = normalizeTimestamp(
+    canonicalResponseField(raw, 'endDate', ['Publish_EndTime'])
+  )
   if (!observedExpiry) {
     throw new ProviderPayloadError(
       'provider_contract_violation',
@@ -1690,9 +1706,16 @@ async function executeListPublications(context: ExecuteContext): Promise<unknown
     pageSize: limit,
     ...(context.request.query ? { keyWord: context.request.query } : {})
   }))
-  const items = providerArray(first(raw, ['items', 'publishList', 'data']), ['items', 'publishList']).map((candidate) => {
+  const items = canonicalObjectArray(
+    raw,
+    'items',
+    ['publishList', 'data'],
+    'Publication page'
+  ).map((candidate) => {
     const item = record(candidate, 'Publication')
-    const end = normalizeTimestamp(first(item, ['Publish_EndTime', 'endDate']))
+    const end = normalizeTimestamp(
+      canonicalResponseField(item, 'Publish_EndTime', ['endDate'])
+    )
     return Object.freeze({
       observation: 'partial',
       reference: Object.freeze({
@@ -1703,15 +1726,16 @@ async function executeListPublications(context: ExecuteContext): Promise<unknown
       ...(end ? { expiry: Object.freeze({ kind: 'expires-at', expiresAt: end }) } : {})
     })
   })
-  const total = optionalNumber(raw, ['totalCount', 'total'])
+  const total = requiredNumber(raw, ['totalCount', 'total'], 'Publication result count')
+  const cursor = verifiedNextCursor(total, index, limit, items.length, 'Publication page')
   return Object.freeze({
     items: Object.freeze(items),
-    ...(nextCursor(total, index, limit) ? { nextCursor: nextCursor(total, index, limit) } : {})
+    ...(cursor ? { nextCursor: cursor } : {})
   })
 }
 
 async function executeCancelPublications(context: ExecuteContext): Promise<unknown> {
-  const publications = arrayValue(context.request.publications).map((candidate) => record(candidate, 'Publication reference'))
+  const publications = parsedRequestArray(context.request.publications).map((candidate) => record(candidate, 'Publication reference'))
   await context.invoke(context.invocationId, 'cancel-publish', {
     codes: publications.map((item) => requiredString(item, ['publicationId'], 'Publication identity')).join('|')
   })
@@ -1736,11 +1760,11 @@ function shareMemberType(kind: unknown): number {
 }
 
 async function executeCreateShare(context: ExecuteContext): Promise<unknown> {
-  const targets = arrayValue(context.request.targets).map((candidate) => record(candidate, 'Share target'))
-  const recipients = arrayValue(context.request.recipients).map((candidate) => record(candidate, 'Share recipient'))
+  const targets = parsedRequestArray(context.request.targets).map((candidate) => record(candidate, 'Share target'))
+  const recipients = parsedRequestArray(context.request.recipients).map((candidate) => record(candidate, 'Share recipient'))
   const kinds = new Set(targets.map(providerKindForEntry))
   if (kinds.size !== 1) throw new ProviderPayloadError('unsupported', 'OpenContent cannot share mixed files and folders atomically.')
-  const permissions = arrayValue(context.request.permissions)
+  const permissions = parsedRequestArray(context.request.permissions)
   const expiry = record(context.request.expiry, 'Share expiry')
   const args: Record<string, unknown> = {
     entrys: targets.map((target) => `${entryId(target)},${providerKindForEntry(target) === 'file' ? 2 : 1}`).join(';'),
@@ -1776,7 +1800,12 @@ async function executeListShares(context: ExecuteContext): Promise<unknown> {
     pageSize: limit,
     ...(context.request.query ? { keyWord: context.request.query } : {})
   }))
-  const items = providerArray(first(raw, ['items', 'shareList', 'data']), ['items', 'shareList']).map((candidate) => {
+  const items = canonicalObjectArray(
+    raw,
+    'items',
+    ['shareList', 'data'],
+    'Share page'
+  ).map((candidate) => {
     const item = record(candidate, 'Share')
     return Object.freeze({
       observation: 'partial',
@@ -1787,15 +1816,16 @@ async function executeListShares(context: ExecuteContext): Promise<unknown> {
       ...(optionalString(item, ['shareName', 'name']) ? { name: optionalString(item, ['shareName', 'name']) } : {})
     })
   })
-  const total = optionalNumber(raw, ['totalCount', 'total'])
+  const total = requiredNumber(raw, ['totalCount', 'total'], 'Share result count')
+  const cursor = verifiedNextCursor(total, index, limit, items.length, 'Share page')
   return Object.freeze({
     items: Object.freeze(items),
-    ...(nextCursor(total, index, limit) ? { nextCursor: nextCursor(total, index, limit) } : {})
+    ...(cursor ? { nextCursor: cursor } : {})
   })
 }
 
 async function executeCancelShares(context: ExecuteContext): Promise<unknown> {
-  const shares = arrayValue(context.request.shares).map((candidate) => record(candidate, 'Share reference'))
+  const shares = parsedRequestArray(context.request.shares).map((candidate) => record(candidate, 'Share reference'))
   await context.invoke(context.invocationId, 'cancel-share', {
     shareIds: shares.map((item) => requiredString(item, ['shareId'], 'Share identity')).join(',')
   })
@@ -1812,7 +1842,12 @@ async function executeListAlbums(context: ExecuteContext): Promise<unknown> {
     pageSize: limit,
     ...(context.request.query ? { keyword: context.request.query } : {})
   }))
-  const items = providerArray(first(raw, ['albums', 'items', 'data']), ['albums', 'items']).map((candidate) => {
+  const items = canonicalObjectArray(
+    raw,
+    'albums',
+    ['items', 'data'],
+    'Album page'
+  ).map((candidate) => {
     const item = record(candidate, 'Album')
     return Object.freeze({
       reference: Object.freeze({
@@ -1820,14 +1855,16 @@ async function executeListAlbums(context: ExecuteContext): Promise<unknown> {
         albumId: requiredString(item, ['fsId', 'albumId', 'id'], 'Album identity')
       }),
       name: requiredString(item, ['name', 'albumName'], 'Album name'),
-      entryCount: (optionalNumber(item, ['fileCount']) ?? 0) + (optionalNumber(item, ['folderCount']) ?? 0),
-      isDefault: booleanValue(first(item, ['isDefault', 'default']))
+      entryCount: requiredNumber(item, ['fileCount'], 'Album file count') +
+        requiredNumber(item, ['folderCount'], 'Album folder count'),
+      isDefault: booleanValue(canonicalResponseField(item, 'isDefault', ['default']))
     })
   })
-  const total = optionalNumber(raw, ['totalCount', 'total'])
+  const total = requiredNumber(raw, ['totalCount', 'total'], 'Album result count')
+  const cursor = verifiedNextCursor(total, index, limit, items.length, 'Album page')
   return Object.freeze({
     items: Object.freeze(items),
-    ...(nextCursor(total, index, limit) ? { nextCursor: nextCursor(total, index, limit) } : {})
+    ...(cursor ? { nextCursor: cursor } : {})
   })
 }
 
@@ -1845,7 +1882,7 @@ async function albumFiles(
   ))
   return Object.freeze({
     raw,
-    items: providerArray(first(raw, ['files', 'items', 'data']), ['files', 'items'])
+    items: canonicalObjectArray(raw, 'files', ['items', 'data'], 'Album-entry page')
   })
 }
 
@@ -1861,7 +1898,7 @@ async function executeListAlbumEntries(context: ExecuteContext): Promise<unknown
   for (const [itemIndex, candidate] of response.items.entries()) {
     const item = record(candidate, 'Favorite entry')
     const id = requiredString(item, ['fileId', 'id'], 'Favorite entry identity')
-    const kind = String(first(item, ['type', 'entryType']) ?? '2') === '1' ? 'container' : 'file'
+    const kind = providerEntryKind(canonicalResponseField(item, 'type', ['entryType']))
     const info = await observeEntryInfo(
       context,
       kind === 'file'
@@ -1874,17 +1911,18 @@ async function executeListAlbumEntries(context: ExecuteContext): Promise<unknown
       entry: info
     }))
   }
-  const total = optionalNumber(response.raw, ['totalCount', 'total'])
+  const total = requiredNumber(response.raw, ['totalCount', 'total'], 'Album-entry result count')
+  const cursor = verifiedNextCursor(total, index, limit, response.items.length, 'Album-entry page')
   return Object.freeze({
     album,
     items: Object.freeze(items),
-    ...(nextCursor(total, index, limit) ? { nextCursor: nextCursor(total, index, limit) } : {})
+    ...(cursor ? { nextCursor: cursor } : {})
   })
 }
 
 async function executeAddFavorite(context: ExecuteContext): Promise<unknown> {
   const album = record(context.request.album, 'Album reference')
-  const entries = arrayValue(context.request.entries).map((candidate) => record(candidate, 'Favorite entry'))
+  const entries = parsedRequestArray(context.request.entries).map((candidate) => record(candidate, 'Favorite entry'))
   const kinds = new Set(entries.map(providerKindForEntry))
   if (kinds.size !== 1) throw new ProviderPayloadError('unsupported', 'OpenContent favorites must contain one entry kind per write.')
   await context.invoke(context.invocationId, 'favorite-add', {
@@ -1902,7 +1940,7 @@ async function executeRemoveFavorite(context: ExecuteContext): Promise<unknown> 
   let favoriteId: string
   let entry: Record<string, unknown>
   if (context.request.by === 'favorite') {
-    const ids = arrayValue(context.request.favoriteIds)
+    const ids = parsedRequestArray(context.request.favoriteIds)
     if (ids.length !== 1) {
       throw new ProviderPayloadError('bounds_exceeded', 'OpenContent removes exactly one favorite per atomic write.')
     }
@@ -1912,11 +1950,11 @@ async function executeRemoveFavorite(context: ExecuteContext): Promise<unknown> 
     )
     if (!found) throw new ProviderPayloadError('invalid_reference', 'The favorite is not present in the selected album page.')
     const fileId = requiredString(found, ['fileId', 'id'], 'Favorite entry identity')
-    entry = String(first(found, ['type', 'entryType']) ?? '2') === '1'
+    entry = providerEntryKind(canonicalResponseField(found, 'type', ['entryType'])) === 'container'
       ? containerReference(context.providerInstanceRef, fileId)
       : fileReference(context.providerInstanceRef, fileId)
   } else {
-    const entries = arrayValue(context.request.entries).map((candidate) => record(candidate, 'Favorite entry'))
+    const entries = parsedRequestArray(context.request.entries).map((candidate) => record(candidate, 'Favorite entry'))
     if (entries.length !== 1) {
       throw new ProviderPayloadError('bounds_exceeded', 'OpenContent removes exactly one favorite per atomic write.')
     }
@@ -1956,7 +1994,7 @@ async function executePermissionCategories(context: ExecuteContext): Promise<unk
   const raw = await context.invoke(context.invocationId, 'perm-cates', {
     type: targetKind(targetKindValue)
   })
-  const items = providerArray(raw, ['items', 'categories', 'data']).map((candidate) => {
+  const items = directResponseArray(raw, 'Permission-category result').map((candidate) => {
     const item = record(candidate, 'Permission category')
     return Object.freeze({
       reference: Object.freeze({
@@ -1972,11 +2010,14 @@ async function executePermissionCategories(context: ExecuteContext): Promise<unk
 }
 
 function permissionSource(value: unknown): 'direct' | 'inherited' | 'self' | 'administrator' {
-  const state = Number(value)
-  if (state === 1) return 'inherited'
-  if (state === 3) return 'self'
-  if (state === 4) return 'administrator'
-  return 'direct'
+  if (value === 0) return 'direct'
+  if (value === 1) return 'inherited'
+  if (value === 3) return 'self'
+  if (value === 4) return 'administrator'
+  throw new ProviderPayloadError(
+    'provider_contract_violation',
+    'OpenContent returned an invalid permission source.'
+  )
 }
 
 async function executeListPermissions(context: ExecuteContext): Promise<unknown> {
@@ -1986,9 +2027,9 @@ async function executeListPermissions(context: ExecuteContext): Promise<unknown>
     id: entryId(target),
     type: targetKind(kind)
   })
-  const items = providerArray(raw, ['items', 'permissions', 'data']).map((candidate) => {
+  const items = directResponseArray(raw, 'Permission result').map((candidate) => {
     const item = record(candidate, 'Permission assignment')
-    const principalKind = memberKind(first(item, ['memberType']))
+    const principalKind = memberKind(canonicalResponseField(item, 'memberType'))
     return Object.freeze({
       target,
       principal: Object.freeze({
@@ -2001,9 +2042,13 @@ async function executeListPermissions(context: ExecuteContext): Promise<unknown>
         targetKind: kind,
         categoryId: requiredString(item, ['permCateId'], 'Permission category identity')
       }),
-      source: permissionSource(first(item, ['state'])),
-      ...(normalizeTimestamp(first(item, ['startTime'])) ? { startsAt: normalizeTimestamp(first(item, ['startTime'])) } : {}),
-      ...(normalizeTimestamp(first(item, ['expiredTime'])) ? { expiresAt: normalizeTimestamp(first(item, ['expiredTime'])) } : {})
+      source: permissionSource(canonicalResponseField(item, 'state')),
+      ...(normalizeTimestamp(canonicalResponseField(item, 'startTime'))
+        ? { startsAt: normalizeTimestamp(canonicalResponseField(item, 'startTime')) }
+        : {}),
+      ...(normalizeTimestamp(canonicalResponseField(item, 'expiredTime'))
+        ? { expiresAt: normalizeTimestamp(canonicalResponseField(item, 'expiredTime')) }
+        : {})
     })
   })
   return Object.freeze({ target, items: Object.freeze(items) })
@@ -2012,7 +2057,7 @@ async function executeListPermissions(context: ExecuteContext): Promise<unknown>
 async function executeChangePermissions(context: ExecuteContext): Promise<unknown> {
   const target = record(context.request.target, 'Permission target')
   const kind = context.request.targetKind
-  const changes = arrayValue(context.request.changes).map((candidate) => record(candidate, 'Permission change'))
+  const changes = parsedRequestArray(context.request.changes).map((candidate) => record(candidate, 'Permission change'))
   const args: Record<string, unknown> = { id: entryId(target), type: targetKind(kind) }
   const buckets: Record<string, unknown[]> = {
     newPermissions: [],
@@ -2061,123 +2106,28 @@ async function executeCollaborationList(context: ExecuteContext, search: boolean
     pageNum: index,
     pageSize: limit
   }))
-  const items = providerArray(first(raw, ['data', 'items']), ['items']).map((candidate) => {
+  const items = canonicalObjectArray(raw, 'data', ['items'], 'Collaboration page')
+    .map((candidate) => {
     const item = record(candidate, 'Collaboration entry')
     const ownerId = requiredString(item, ['DocflowFileCreateUserId', 'creatorId', 'ownerId'], 'Collaboration owner identity')
     const ownerName = requiredString(item, ['DocflowFileCreateUserName', 'creatorName', 'ownerName'], 'Collaboration owner name')
-    const createdAt = normalizeTimestamp(first(item, ['DocflowCreateTime', 'createTime']))
+    const createdAt = normalizeTimestamp(
+      canonicalResponseField(item, 'DocflowCreateTime', ['createTime'])
+    )
     if (!createdAt) throw new ProviderPayloadError('provider_contract_violation', 'Collaboration creation time is invalid.')
     return Object.freeze({
       file: fileReference(context.providerInstanceRef, requiredString(item, ['FileId', 'fileId'], 'Collaboration file identity')),
       name: requiredString(item, ['DocflowFileName', 'fileName'], 'Collaboration file name'),
       createdAt,
       owner: directoryPrincipal(context.providerInstanceRef, 'user', ownerId, ownerName),
-      read: booleanValue(first(item, ['DocflowRead', 'read'])),
-      deleted: booleanValue(first(item, ['isDeleted', 'deleted']))
+      read: numericBooleanValue(canonicalResponseField(item, 'DocflowRead', ['read'])),
+      deleted: booleanValue(canonicalResponseField(item, 'isDeleted', ['deleted']))
     })
   })
-  const total = optionalNumber(raw, ['allCount', 'totalCount', 'total'])
+  const total = requiredNumber(raw, ['allCount', 'totalCount', 'total'], 'Collaboration result count')
+  const cursor = verifiedNextCursor(total, index, limit, items.length, 'Collaboration page')
   return Object.freeze({
     items: Object.freeze(items),
-    ...(nextCursor(total, index, limit) ? { nextCursor: nextCursor(total, index, limit) } : {})
-  })
-}
-
-async function executeCollaborationLink(context: ExecuteContext): Promise<unknown> {
-  const file = record(context.request.file, 'Collaboration file')
-  const raw = await context.invoke(context.invocationId, 'collab-link', {
-    fileId: requiredString(file, ['fileId'], 'Collaboration file identity')
-  })
-  const text = typeof raw === 'string'
-    ? raw
-    : requiredString(record(raw), ['url', 'link', 'invitation'], 'Collaboration link')
-  const url = text.match(/https:\/\/[^\s]+/u)?.[0]
-  if (!url) throw new ProviderPayloadError('provider_contract_violation', 'OpenContent did not return an HTTPS collaboration link.')
-  return Object.freeze({
-    file,
-    target: Object.freeze({
-      url,
-      expiresAt: new Date(context.now().getTime() + 5 * 60_000).toISOString()
-    })
-  })
-}
-
-async function executeKnowledgeCollections(context: ExecuteContext, search: boolean): Promise<unknown> {
-  const page = record(context.request.page, 'Knowledge page')
-  const index = pageNumber(page)
-  const limit = requiredNumber(page, ['limit'], 'Knowledge page limit')
-  if (limit > 100) throw new ProviderPayloadError('bounds_exceeded', 'OpenContent knowledge pages are limited to 100 items.')
-  const raw = record(await context.invoke(context.invocationId, 'kbox-list', {
-    ...(search ? { keyword: context.request.query } : {}),
-    pageNumber: index,
-    pageSize: limit
-  }))
-  const items = providerArray(first(raw, ['items', 'boxes', 'data']), ['items', 'boxes']).map((candidate) => {
-    const item = record(candidate, 'Knowledge collection')
-    return Object.freeze({
-      reference: Object.freeze({
-        providerInstanceRef: context.providerInstanceRef,
-        collectionId: requiredString(item, ['boxId', 'id'], 'Knowledge collection identity')
-      }),
-      name: requiredString(item, ['boxName', 'name'], 'Knowledge collection name'),
-      ...(optionalString(item, ['boxDescription', 'description']) ? { description: optionalString(item, ['boxDescription', 'description']) } : {}),
-      root: containerReference(context.providerInstanceRef, requiredString(item, ['folderId'], 'Knowledge root identity')),
-      status: String(first(item, ['boxStatus', 'status']) ?? '').toLowerCase() === 'online' ? 'active' : 'inactive'
-    })
-  })
-  const total = optionalNumber(raw, ['totalCount', 'total'])
-  return Object.freeze({
-    items: Object.freeze(items),
-    ...(nextCursor(total, index, limit) ? { nextCursor: nextCursor(total, index, limit) } : {})
-  })
-}
-
-async function executeBrowseKnowledge(context: ExecuteContext): Promise<unknown> {
-  const collection = record(context.request.collection, 'Knowledge collection')
-  let parent: Record<string, unknown>
-  if (isRecord(context.request.parent)) {
-    parent = context.request.parent
-  } else {
-    const collectionId = requiredString(collection, ['collectionId'], 'Knowledge collection identity')
-    const observed = record(await context.invoke(
-      compositionInvocationId(context.invocationId, 1),
-      'kbox-list',
-      { pageNumber: 1, pageSize: 100 }
-    ), 'Knowledge collections')
-    const match = providerArray(first(observed, ['items', 'boxes', 'data']), ['items', 'boxes'])
-      .map((candidate) => record(candidate, 'Knowledge collection'))
-      .find((candidate) => optionalString(candidate, ['boxId', 'id']) === collectionId)
-    if (!match) throw new ProviderPayloadError('invalid_reference', 'The knowledge collection root is unavailable.')
-    parent = containerReference(
-      context.providerInstanceRef,
-      requiredString(match, ['folderId'], 'Knowledge root identity')
-    )
-  }
-  const page = record(context.request.page, 'Knowledge browse page')
-  const index = pageNumber(page)
-  const limit = requiredNumber(page, ['limit'], 'Knowledge browse page limit')
-  if (limit > 100) throw new ProviderPayloadError('bounds_exceeded', 'OpenContent folder pages are limited to 100 items.')
-  const raw = record(await context.invoke(context.invocationId, 'file-list', {
-    folderId: requiredString(parent, ['containerId'], 'Knowledge folder identity'),
-    pageNum: index,
-    pageSize: limit
-  }))
-  const candidates = providerArray(first(raw, ['items', 'data']), ['items'])
-  const items: unknown[] = []
-  for (const [itemIndex, candidate] of candidates.entries()) {
-    const item = record(candidate, 'Knowledge entry')
-    const id = requiredString(item, ['id', 'fileId', 'folderId'], 'Knowledge entry identity')
-    items.push(await observeEntryInfo(
-      context,
-      optionalString(item, ['type', 'kind']) === 'folder'
-        ? containerReference(context.providerInstanceRef, id)
-        : fileReference(context.providerInstanceRef, id),
-      itemIndex + 1
-    ))
-  }
-  const total = optionalNumber(raw, ['totalCount', 'total'])
-  return Object.freeze({
-    items: Object.freeze(items),
-    ...(nextCursor(total, index, limit) ? { nextCursor: nextCursor(total, index, limit) } : {})
+    ...(cursor ? { nextCursor: cursor } : {})
   })
 }

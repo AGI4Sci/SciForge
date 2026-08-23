@@ -48,6 +48,10 @@ _Avoid_: Provider Instance, mandatory first-party login, portable credential, sh
 A provider-specific main-process boundary that owns trusted endpoint and tenant policy, enrollment, credentials, Connection/session state, transport, and Provider schema validation. It exposes only narrow token-free facades to Provider Integrations and owns no business-domain semantics.
 _Avoid_: Provider Contract, Agent tool, renderer client, Host routing switch
 
+**Provider Deployment Configuration**:
+A package-declared, deployment-owned private binding between one fixed Provider Instance Reference and the HTTPS origin required to construct its Connector runtime. Its absence or invalidity leaves discovery installed but makes Provider calls unavailable before Connection storage, credentials, network, or supplier execution.
+_Avoid_: compiled demo endpoint, environment override, caller-selected URL, package setting, fallback Provider
+
 **Provider Binding Attestation**:
 Token-free evidence binding one Provider Instance and complete current Principal to an opaque external subject and opaque Connection revision. It is re-attested against the actual current session before business dispatch and is neither a credential nor portable authority.
 _Avoid_: Host assurance, raw external account ID, cached login claim, portable Connection

@@ -4,7 +4,7 @@
 >
 > 更新时间：2026-08-17（Asia/Shanghai）
 > 用途：帮助后续 Agent 分别判断 OpenContent 能否支持 SciForge 的 Shared Documents 与 Content Space，并了解已经验证的能力、尚未满足的合同和安全边界。
-> 测试环境：`https://test1.edoc2.com`
+> 测试环境：由私有部署配置提供的隔离租户 origin
 > 证据等级：本文严格区分“真实 API 调用已验证”“SDK 候选合同”和“厂商口头说明”。2026-08-13 会议内容仅是待书面确认、待交付物验证的线索，不能单独关闭 production Gate。
 
 ## 1. 当前结论

@@ -3,6 +3,7 @@ const { chmodSync, existsSync, readdirSync, rmSync } = require('node:fs')
 const { join } = require('node:path')
 const { pathToFileURL } = require('node:url')
 const internalRuntimePackaging = require('./internal-runtime-packaging.cjs')
+const deploymentConfigurationPackaging = require('./domain-package-deployment-config.cjs')
 const publicReleaseGuard = require('./public-release-guard.cjs')
 const releaseWorkerManifest = require('./release-worker-manifest.cjs')
 const nativeRuntimeDependencies = require('./native-runtime-dependencies.cjs')
@@ -110,11 +111,26 @@ function verifyPackagedInternalRuntimes(context) {
   )
 }
 
-async function verifyOfficialPublicReleaseComposition(options = {}) {
+function verifyPackagedDeploymentConfigurations(
+  context,
+  deploymentConfigurationComposition
+) {
+  deploymentConfigurationPackaging.verifyPackagedDomainDeploymentConfigurations(
+    packedResourcesDir(context),
+    deploymentConfigurationComposition
+  )
+}
+
+async function verifyOfficialPublicReleaseComposition(
+  deploymentConfigurationComposition,
+  options = {}
+) {
   await publicReleaseGuard.runConfiguredPublicReleaseGuard({
     ...options,
     createComposition: () =>
-      internalRuntimePackaging.internalRuntimeComposition
+      internalRuntimePackaging.internalRuntimeComposition,
+    createDeploymentConfigurationComposition: () =>
+      deploymentConfigurationComposition
   })
 }
 
@@ -160,16 +176,26 @@ function ensureNodePtyHelpersExecutable(context) {
   }
 }
 
-async function afterPack(context) {
-  await verifyOfficialPublicReleaseComposition()
-  validateBundledReleaseRuntimes(context)
-  pruneUnrelatedNativeRuntimeDependencies(context)
-  validateNativeRuntimeDependencies(context)
-  verifyBundledMultiAgentContract(context)
-  validatePackagedExecutableNodeEntries(context)
-  verifyPackagedInternalRuntimes(context)
-  ensureNodePtyHelpersExecutable(context)
-  maybeAdhocSignMacApp(context)
+function createAfterPackHook(options) {
+  if (!options || !options.deploymentConfigurationComposition ||
+    typeof options.deploymentConfigurationComposition !== 'object') {
+    throw new TypeError(
+      '[after-pack] Captured deployment configuration composition is required.'
+    )
+  }
+  const deploymentConfigurationComposition = options.deploymentConfigurationComposition
+  return async function afterPack(context) {
+    await verifyOfficialPublicReleaseComposition(deploymentConfigurationComposition)
+    validateBundledReleaseRuntimes(context)
+    pruneUnrelatedNativeRuntimeDependencies(context)
+    validateNativeRuntimeDependencies(context)
+    verifyBundledMultiAgentContract(context)
+    validatePackagedExecutableNodeEntries(context)
+    verifyPackagedDeploymentConfigurations(context, deploymentConfigurationComposition)
+    verifyPackagedInternalRuntimes(context)
+    ensureNodePtyHelpersExecutable(context)
+    maybeAdhocSignMacApp(context)
+  }
 }
 
 for (const [exportName, requiredPaths] of Object.entries(
@@ -181,6 +207,7 @@ exports.PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS =
   PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS
 exports.INTERNAL_RUNTIME_COMPOSITION =
   internalRuntimePackaging.internalRuntimeComposition
+exports.createAfterPackHook = createAfterPackHook
 exports._internals = {
   appBundlePath,
   packedResourcesDir,
@@ -192,7 +219,7 @@ exports._internals = {
   verifyBundledMultiAgentContract,
   validatePackagedExecutableNodeEntries,
   verifyOfficialPublicReleaseComposition,
+  verifyPackagedDeploymentConfigurations,
   verifyPackagedInternalRuntimes,
   ensureNodePtyHelpersExecutable
 }
-exports.default = afterPack

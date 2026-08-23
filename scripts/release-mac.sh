@@ -86,11 +86,8 @@ build_mac_arch() {
   mkdir -p "${output_dir}" "$(dirname "${log_file}")"
   cyan "  ${arch}: building dmg + zip -> ${output_dir}"
   SCIFORGE_DIST_DIR="${output_dir}" \
-    npx --yes electron-builder@26.8.1 --config electron-builder.config.cjs --publish never --mac dmg "--${arch}" \
+    npx --yes electron-builder@26.8.1 --config electron-builder.config.cjs --publish never --mac dmg zip "--${arch}" \
     >"${log_file}" 2>&1
-  SCIFORGE_DIST_DIR="${output_dir}" \
-    node "${ROOT}/scripts/zip-mac-app.cjs" "${arch}" \
-    >>"${log_file}" 2>&1
 }
 
 copy_mac_arch_artifacts() {
@@ -104,6 +101,9 @@ copy_mac_arch_artifacts() {
 
   [[ ${#files[@]} -gt 0 ]] || die "No macOS ${arch} artifacts found in ${output_dir}"
   cp -p "${files[@]}" "${ROOT}/dist/"
+  node "${ROOT}/scripts/public-release-artifact-receipt.cjs" import-evidence \
+    --platform mac --from "${output_dir}" --dist "${ROOT}/dist" \
+    || die "No valid public build evidence found for macOS ${arch}"
 }
 
 build_macos_parallel() {
@@ -191,9 +191,13 @@ release_export_app_version
 release_ensure_tag_available
 release_prepare_builder_cache
 release_clean_dist_artifacts
+node "${ROOT}/scripts/public-release-artifact-receipt.cjs" clear --platform mac --dist "${ROOT}/dist"
 
 cyan "Building macOS..."
 build_macos
+
+node "${ROOT}/scripts/public-release-artifact-receipt.cjs" seal --platform mac --dist "${ROOT}/dist" \
+  || die "Failed to seal the public macOS release artifact receipt."
 
 release_write_meta_file
 
@@ -256,6 +260,7 @@ collect "macOS x64 dmg" "dist/SciForge-*-mac-x64.dmg"
 collect "macOS arm64 zip" "dist/SciForge-*-mac-arm64.zip"
 collect "macOS x64 zip" "dist/SciForge-*-mac-x64.zip"
 collect_optional "macOS blockmap" "dist/SciForge-*-mac-*.zip.blockmap"
+collect "public release receipt" "dist/release-mac.json"
 
 upload_github_assets() {
   local tag="$1"
@@ -339,13 +344,13 @@ upload_github_assets "${TAG_NAME}" "${ASSETS[@]}"
 
 if [[ "${R2_UPLOAD}" == "true" ]]; then
   cyan "Uploading macOS asset metadata to R2 (${TAG_NAME})..."
-  node "${ROOT}/scripts/publish-r2.mjs" upload --platform mac --tag "${TAG_NAME}" --channel "${RELEASE_CHANNEL}" \
+  node "${ROOT}/scripts/publish-r2.mjs" upload --platform mac --dist "${ROOT}/dist" --tag "${TAG_NAME}" --channel "${RELEASE_CHANNEL}" \
     || die "R2 upload failed for macOS assets"
 fi
 
 if [[ "${R2_PROMOTE}" == "true" ]]; then
   cyan "Promoting ${TAG_NAME} as R2 latest..."
-  node "${ROOT}/scripts/publish-r2.mjs" promote --tag "${TAG_NAME}" --channel "${RELEASE_CHANNEL}" \
+  node "${ROOT}/scripts/publish-r2.mjs" promote --tag "${TAG_NAME}" --dist "${ROOT}/dist" --channel "${RELEASE_CHANNEL}" --platforms mac \
     || die "R2 promote failed"
 fi
 

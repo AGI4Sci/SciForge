@@ -31,7 +31,7 @@ CLI argument strings, and arbitrary request payloads are adapter-private transla
 
 ## Current dispatch readiness
 
-The public contracts enumerate exactly **20 native-document operations** and **52 extended
+The public contracts enumerate exactly **20 native-document operations** and **50 extended
 operations**. OpenContent currently has **zero** `production_ready` operations. The exact-operation
 ledger below records the limited packaged canonical live evidence; every `live_verified` operation
 still declares `poc_only` / `verification_profile_required`. Runtime availability is intentionally
@@ -42,8 +42,11 @@ An admitted verification invocation remains `poc_only`.
 
 | Installation | `poc_only` / `verification_profile_required` | Blocked or omitted |
 |---|---|---|
-| Public checkout, without the private attachment | The six ordinary file operations (`list-containers`, `list-entries`, `observe-entry`, `create-folder`, `upload-new`, `download`); all ten Team Administration operations; session-backed `getCurrentPrincipal` | The native-document feature is not registered. The other 51 extended operations are `blocked_by_contract` / `provider_contract_missing`. Portal targets and immutable-version observation remain blocked. Project provisioning is absent from the Content Space and Provider contracts. |
-| Valid private attachment installed | The same public PoC candidates; nine safely contract-shaped native-document operations; 47 of 52 extended operations | Eleven native-document operations are `blocked_by_contract`: ten hash-bound mutations including `edit`, plus `import` without a verifiable source/content postcondition. `updateFileVersion` and four directory searches without pinned item schemas/kind evidence are the blocked extended operations. Portal targets and immutable-version observation remain blocked. Project provisioning remains absent. |
+| Public checkout, without the private attachment | The six ordinary file operations (`list-containers`, `list-entries`, `observe-entry`, `create-folder`, `upload-new`, `download`); all ten Team Administration operations; session-backed `getCurrentPrincipal` | The native-document feature is not registered. The other 49 extended operations are `blocked_by_contract` / `provider_contract_missing`. Portal targets and immutable-version observation remain blocked. Project provisioning is absent from the Content Space and Provider contracts. |
+| Valid private attachment installed | The same public PoC candidates; nine safely contract-shaped native-document operations; 40 of 50 extended operations | Eleven native-document operations are `blocked_by_contract`: ten hash-bound mutations including `edit`, plus `import` without a verifiable source/content postcondition. Ten extended operations are blocked: `resolveInternalLink`, `listMetadataChoices`, `updateFileVersion`, `searchUsers`, `searchDepartments`, `searchPositions`, `searchGroups`, `resolveCollaborationInvitation`, `listKnowledgeCollections`, and `searchKnowledgeCollections`. Portal targets and immutable-version observation remain blocked. Project provisioning remains absent. |
+
+PDF export remains a format of `native-document:export`, and directory
+enumeration remains the ordinary `listEntries` operation.
 
 The ten blocked hash-bound native-document mutations are `update`, `insert`, `edit`, `undo`,
 `redo`, `comment-create`, `comment-reply`, `comment-solve`, `comment-reopen`, and
@@ -124,10 +127,10 @@ Provider only a managed byte stream.
 | `file-search` | `content-space.search-entries` | implemented | Structured scope, metadata and tag predicates; no query-language passthrough. |
 | `file-rag-scope` | `content-space.build-file-scope` | implemented | Bounded file-reference selection, maximum 100. |
 | `file-info` | `content-space.observe-entry` / `content-space.get-entry-info` | implemented | The ordinary observation and separately typed richer information contracts remain distinct. |
-| `file-internal-link` | `content-space.resolve-internal-link` | implemented | Adapter returns a bounded HTTPS Provider target; Content Space core owns Host target issuance. |
+| `file-internal-link` | `content-space.resolve-internal-link` | blocked_by_contract | Inventory only and absent from the admitted adapter union; no Provider target is issued. |
 | `file-edit` | `content-space.update-entry-properties` | implemented | Typed code, remark and security-level patch. |
 | `sec-level-list` | `content-space.list-security-levels` | implemented | Provider security levels become opaque typed references. |
-| `file-list` | `content-space.list-entries` | implemented | Existing bounded canonical directory listing. |
+| `file-list` | — | intentionally_excluded | Inventory only and absent from the admitted adapter union. Canonical ordinary directory enumeration remains `ContentSpaceProvider.listEntries` through the typed Connector facade. |
 | `folder-info` | `content-space.observe-entry` / `content-space.get-entry-info` | implemented | Uses a Content Container reference, not numeric folder identity. |
 | `create-folder` | `content-space.create-folder` | implemented | Existing V1 write path; current audit does not promote it to live_verified. |
 | `folder-edit` | `content-space.update-entry-properties` | implemented | Folder code and remark use the same typed property contract. |
@@ -135,8 +138,7 @@ Provider only a managed byte stream.
 | `upload` (`fileModel=UPDATE`) | `content-space.update-file-version` | blocked_by_contract | The pinned CLI accepts update bytes but `file-info` exposes only `fileLastVerNumStr`, and `upload` has no atomic expected-version precondition. A preflight followed by upload would be TOCTOU, so no same-file update is advertised until the Provider freezes a real CAS/version contract. `replace-latest` also remains excluded because it overwrites the current version. |
 | `upload` (`masterFileId`) | `content-space.add-attachment` | implemented | Attachment is distinct; Agent supplies a Workspace-relative source and Provider receives only the managed stream. |
 | `upload` (`collab=true`) | — | intentionally_excluded | Collaboration capability is browsing/invitation only; no alternate collaboration writer. |
-| `download` (ordinary) | `content-space.download` | implemented | Agent supplies a new Workspace-relative destination; Host owns the no-overwrite destination stream. |
-| `download` (`ispdfdownload=true`) | `content-space.export-file-as-pdf` | implemented | Agent supplies a new Workspace-relative destination; PDF bytes use the Host-owned stream and remain a Workspace write. |
+| `download` (supplier CLI) | — | intentionally_excluded | Inventory only and absent from the admitted adapter union. Ordinary `content-space.download` remains implemented through the typed Connector facade; Agent supplies a new Workspace-relative destination and Host owns the no-overwrite destination stream. |
 | `attach-list` | `content-space.list-attachments` | implemented | Typed master/attachment file references. |
 | `attach-remove` | `content-space.remove-attachment` | implemented | Destructive, exact attachment target. |
 | `relation-create` | `content-space.create-relation` | implemented | Closed relation kinds; no arbitrary relation object. |
@@ -156,7 +158,7 @@ Provider only a managed byte stream.
 | `meta-info` | `content-space.read-entry-metadata` | implemented | Closed typed metadata record values. |
 | `meta-types` | `content-space.list-metadata-types` | implemented | Opaque type references and labels. |
 | `meta-attrs` | `content-space.list-metadata-fields` | implemented | Provider controls map to closed field kinds. |
-| `meta-modeldata` | `content-space.list-metadata-choices` | implemented | Dynamic values become typed choice references. |
+| `meta-modeldata` | `content-space.list-metadata-choices` | blocked_by_contract | Inventory only and absent from the admitted adapter union; dynamic choice receipts are not contract-pinned. |
 | `meta-edit` | `content-space.edit-entry-metadata` | implemented | Discriminated values; no column-name or arbitrary-value passthrough. |
 | `file-tag-list` | `content-space.list-tags` | implemented | Bounded typed tag page. |
 | `file-tag-set` | `content-space.set-tags` | implemented | Assignment accepts bounded tag names because the Provider CLI assigns names, not tag IDs. |
@@ -212,16 +214,15 @@ outputs to the exact request and authority, rejects empty pages that carry `next
 unique progressing page identities. Binding drift on a read is `provider_unavailable`; drift after a
 write or destructive operation is `outcome_unknown`, with no automatic retry.
 
-## Collaboration and knowledge browsing
+## Collaboration and knowledge collections
 
 | Supplier command | Provider-neutral SciForge operation | Status | Notes |
 |---|---|---|---|
 | `collab-list` | `content-space.list-collaboration-entries` | implemented | Browsing only; deleted records remain typed state. |
 | `collab-search` | `content-space.search-collaboration-entries` | implemented | Bounded name search. |
-| `collab-link` | `content-space.resolve-collaboration-invitation` | implemented | Adapter returns a bounded HTTPS Provider target; Content Space core owns Host issuance. |
-| `kbox-list` (list) | `content-space.list-knowledge-collections` | implemented | Typed collection and root references. |
-| `kbox-list` (keyword search) | `content-space.search-knowledge-collections` | implemented | Bounded collection search. |
-| `file-list` on a knowledge root | `content-space.browse-knowledge-collection` | implemented | Explicit collection/root authority; no numeric folder handoff. |
+| `collab-link` | `content-space.resolve-collaboration-invitation` | blocked_by_contract | Inventory only and absent from the admitted adapter union; no Provider invitation target is issued. |
+| `kbox-list` (list) | `content-space.list-knowledge-collections` | blocked_by_contract | Inventory only and absent from the admitted adapter union; collection receipts are not contract-pinned. |
+| `kbox-list` (keyword search) | `content-space.search-knowledge-collections` | blocked_by_contract | Inventory only and absent from the admitted adapter union; search receipts are not contract-pinned. |
 
 ## Native collaborative documents
 
@@ -285,10 +286,14 @@ OpenContent business operation. OpenContent still has **zero** `production_ready
 ### Supplier inventory and canonical packaged callability
 
 The Connector-owned static contract freezes attachment CLI version `1.0.0`, exactly 86 supplier
-inventory commands, and a reviewed 56-command admitted adapter union. The four unpinned directory
-searches remain Provider-inventory-only: they have no Provider operation mapping and cannot be
-dispatched through the canonical Content Space path. `user-info` likewise has no current Provider
-mapping. A packaged application proves callability only through the
+inventory commands, and a reviewed 50-command admitted adapter union. The supplier `download`,
+`file-list`, `kbox-list`, `file-internal-link`, `meta-modeldata`, and `collab-link` commands are
+inventory-only and cannot reach the process transport. Ordinary `listEntries` and download remain
+on the typed Connector path, and native export—including PDF—remains
+`native-document:export`. The four unpinned directory searches retain Provider operation mappings
+only to expose deterministic `blocked_by_contract`; their supplier commands are absent from the
+Connector admitted union, so calls fail before supplier transport. `user-info` has no current
+Provider mapping. A packaged application proves callability only through the
 canonical Electron/Broker → Content Space → Provider → Connector smoke, never through a second
 direct-CLI acceptance path. This is not `live_verified` evidence for any Provider operation and
 does not admit a supplier command outside that union.

@@ -2,13 +2,32 @@
 
 Owns existing-account enrollment, Principal-bound connection state, secure Token use, pinned OpenContent schemas, and main-process transport. It exposes no Content Space or Shared Documents business semantics.
 
-The connector ships the reviewed `edoc2-test1-verification` profile as a
-compile-time package asset. That profile permanently binds Provider Instance
-`opencontent-edoc2-demo` to `https://test1.edoc2.com`; callers can select the
-Instance but cannot inject or override its endpoint at runtime. This is a
-development endpoint profile, not Content Space operation admission. It does
-not make any operation `production_ready`, install a trusted Content Space
-verification policy, or allow a caller to enable `poc_only` operations.
+The package manifest declares one private deployment-configuration contract:
+contract version `1`, source path
+`.sciforge/private/deployments/opencontent-connector.json`, packaged Resources
+path `domain-deployments/opencontent-connector.json`, a `4096`-byte ceiling,
+and `publicRelease: forbidden`. The sidecar is strict JSON containing only
+`contractVersion`, the fixed `opencontent-edoc2-demo` Provider Instance, and an
+absolute HTTPS `origin`. Activation requests no-follow semantics where the
+platform exposes them and always binds the opened descriptor to the pre-open
+regular-file identity. It checks that descriptor before and after a
+`4097`-byte-bounded read, rejects identity, size, modification-time,
+change-time, or birth-time drift, closes it, and freezes the parsed value.
+Missing, oversized, malformed, non-canonical, non-HTTPS, or
+symlinked configuration makes the Provider unavailable before package settings,
+credentials, network, or supplier-process access; Provider discovery,
+capability definitions, and the internal service descriptor remain registered.
+There is no environment, argv, caller, renderer, package-setting,
+alternate-path, or fallback endpoint channel.
+
+Local and packaged-private builds use one generic domain-package deployment
+composition that preserves every manifest declaration and activates a copy only
+when its source exists. Electron Builder captures that immutable composition
+once; after packing it requires each active target to match the captured size
+and SHA-256 receipt and each inactive target to be absent. Official public
+releases reject every active deployment configuration marked `forbidden`. The
+sidecar is outside the package's npm `files` allowlist and its isolated packaged
+namespace does not create a supplier overlay.
 
 The Connector owns the SciForge-authored supplier wire contract, asset
 verification, isolated process transport, and runtime snapshot mechanism. Its
@@ -28,16 +47,20 @@ invalid, changed, extra, unreceipted, or wrong-version assets fail closed before
 supplier dispatch.
 
 The pinned CLI characterization freezes 86 inventory commands and the exact
-56-command admitted adapter union. Inventory is not an execution allowlist or
-packaged-live claim. Separately, the token-free typed Team Administration facade
+50-command admitted adapter union. Inventory is not an execution allowlist or
+packaged-live claim. The supplier `download`, `file-list`, `kbox-list`,
+`file-internal-link`, `meta-modeldata`, and `collab-link` commands remain
+inventory-only and cannot reach the process transport; ordinary download and
+directory listing use the typed Connector facade, while native PDF export uses
+`native-document:export`. Separately, the token-free typed Team Administration facade
 exposes no public member-role/ownership operation and no revision/CAS field; the
 supplier Team surface provides no atomic expected-state input for SciForge to
 promote into an Administration concurrency promise.
 
-The removed `opencontent-default` Instance is retired rather than aliased or
-migrated. Its Token is never used for `opencontent-edoc2-demo`; the connector
-retains cleanup metadata until the owning current Principal can delete the old
-credential from secure storage.
+Connection records and credentials are bound to their exact Provider Instance.
+The Connector never reuses a Token across Provider Instance identities and
+retains bounded cleanup metadata until the owning current Principal can delete
+an obsolete credential from secure storage.
 
 ## Provider binding attestation
 

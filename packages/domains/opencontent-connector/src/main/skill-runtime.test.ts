@@ -38,6 +38,7 @@ import type {
 } from '../main-contract.js'
 import type { OpenContentConnectionService } from './connection-service.js'
 import { createDomainMainEntry } from './index.js'
+import { OPENCONTENT_DEPLOYMENT_CONFIGURATION_DESCRIPTOR } from './deployment-config.js'
 import {
   createOpenContentSkillRuntimeSession,
   resolveOpenContentSkillRuntimeAssets
@@ -525,6 +526,18 @@ function mainEntryFixture(appRoot: string, isPackaged = false): Readonly<{
   host: DomainMainHost
   registeredService(): OpenContentContentSpaceFacade | undefined
 }> {
+  const deploymentPath = resolve(
+    isPackaged ? dirname(appRoot) : appRoot,
+    isPackaged
+      ? OPENCONTENT_DEPLOYMENT_CONFIGURATION_DESCRIPTOR.packagedResourcesRelativePath
+      : OPENCONTENT_DEPLOYMENT_CONFIGURATION_DESCRIPTOR.sourceRelativePath
+  )
+  mkdirSync(dirname(deploymentPath), { recursive: true })
+  writeFileSync(deploymentPath, JSON.stringify({
+    contractVersion: 1,
+    providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+    origin: 'https://tenant.example'
+  }), 'utf8')
   let registeredService: OpenContentContentSpaceFacade | undefined
   const host: DomainMainHost = Object.freeze({
     getUserDataDir: () => resolve(appRoot, '.sciforge-test'),

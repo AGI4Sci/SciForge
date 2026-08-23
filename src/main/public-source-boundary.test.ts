@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { basename, dirname, extname, join, posix, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
@@ -12,6 +12,12 @@ type BoundaryViolation = Readonly<{
 }>
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+const { isPrivatePayloadPath, loadTrackedPrivatePayloadPaths } = createRequire(import.meta.url)(
+  join(repositoryRoot, 'scripts/private-payload-boundary.cjs')
+) as {
+  isPrivatePayloadPath(path: string): boolean
+  loadTrackedPrivatePayloadPaths(projectRoot: string): readonly string[]
+}
 const rootPackagePath = join(repositoryRoot, 'package.json')
 const packageLockPath = join(repositoryRoot, 'package-lock.json')
 const privatePackagePrefix = ['@sciforge', 'internal'].join('-') + '/'
@@ -58,8 +64,7 @@ function publicFiles(root: string): string[] {
     .flatMap((entry) => {
       const path = join(root, entry.name)
       if (entry.isDirectory()) {
-        const privateOverlayRoot = root === repositoryRoot && entry.name === 'internal'
-        return privateOverlayRoot || excludedDirectoryNames.has(entry.name)
+        return isPrivatePayloadPath(repositoryPath(path)) || excludedDirectoryNames.has(entry.name)
           ? []
           : publicFiles(path)
       }
@@ -252,25 +257,6 @@ function formatViolations(violations: readonly BoundaryViolation[]): string {
     .join('\n')
 }
 
-function trackedInternalPayloadPaths(): readonly string[] {
-  return execFileSync(
-    'git',
-    [
-      'ls-files', '-z', '--',
-      'internal/**',
-      '.sciforge/internal-overlays/**',
-      '.sciforge/private/**'
-    ],
-    {
-      cwd: repositoryRoot,
-      encoding: 'utf8'
-    }
-  )
-    .split('\0')
-    .filter(Boolean)
-    .sort()
-}
-
 describe('public source boundary', () => {
   it('normalizes portable workspace paths before enforcing the internal boundary', () => {
     const internalVariants = [
@@ -308,7 +294,7 @@ describe('public source boundary', () => {
     expect(packageLock.packages?.['']?.workspaces).toEqual(rootManifest.workspaces)
   })
 
-  it('keeps internal payloads out of the Git-tracked public source', () => {
-    expect(trackedInternalPayloadPaths().join('\n')).toBe('')
+  it('keeps private payloads out of the Git-tracked public source', () => {
+    expect(loadTrackedPrivatePayloadPaths(repositoryRoot).join('\n')).toBe('')
   })
 })

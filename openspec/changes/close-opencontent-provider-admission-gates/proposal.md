@@ -14,6 +14,7 @@ At the start of this change, the OpenContent integration treated implemented ada
 - Remove private packages from the public root workspace, resolve source assets only from the Host-injected repository root, and replace executable attachment builds with manifest-discovered SciForge-owned static validation outside the public npm graph.
 - Restore package ownership so the Connector owns supplier wire/transport/process isolation and the Provider owns receipt-to-Content-Space semantic adapters; remove the standalone OpenContent runtime package rather than adding a third integration owner.
 - Add fail-closed public-release and packaged-resource integrity checks so optional supplier assets cannot be published accidentally or executed during install/packaging outside the canonical Connector transport.
+- Remove the compiled OpenContent demonstration origin and replace it with one strict package-declared private deployment sidecar; preserve Provider discovery while gating every legal runtime call before storage, credentials, network, or process work when configuration is unavailable.
 - Reject disposable Content Space verification-profile packages from official public releases while allowing isolated local packaged acceptance through the canonical production path.
 - Align ADRs, capability evidence, runbooks, tests, and generated capability documentation with the final design.
 
@@ -26,8 +27,8 @@ At the start of this change, the OpenContent integration treated implemented ada
 ### Modified Capabilities
 
 - `content-space`: Adds the trusted verification-profile admission gate and removes the unused Project provisioning surface instead of retaining a second external-write path without an installed owner.
-- `opencontent-connector`: Owns the single typed supplier execution transport, restricts optional supplier-asset resolution to one source path and one packaged path, and exposes only a token-free main contract to the Provider.
-- `opencontent-content-space-provider`: Owns supplier receipt semantics, blocks four directory searches whose exact success receipts are not frozen, removes the unused Project provisioning implementation, and corrects atomic mutation and immutable artifact requirements.
+- `opencontent-connector`: Owns the single typed supplier execution transport, restricts optional supplier-asset resolution to one source path and one packaged path, freezes the 86-command inventory separately from the 50-command admitted union, and exposes only a token-free main contract to the Provider.
+- `opencontent-content-space-provider`: Owns supplier receipt semantics, declares the exact 50-operation extended catalog with a 40 PoC / 10 blocked overlay split and a 1 PoC / 49 blocked no-overlay split, removes the unused Project provisioning implementation, and corrects atomic mutation and immutable artifact requirements.
 
 ## Impact
 

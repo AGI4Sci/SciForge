@@ -11,24 +11,44 @@ import {
   assertOpenContentPrincipalCurrent,
   type OpenContentConnectionService
 } from './connection-service.js'
-import type { OpenContentClient } from './opencontent-client.js'
 import {
   bindOpenContentTeamAdministration,
-  type OpenContentTeamAdministration
 } from './team-administration.js'
-import type { OpenContentSkillRuntimeSession } from './skill-runtime.js'
+import {
+  requireOpenContentDeploymentRuntime,
+  requireOpenContentProviderInstance,
+  type OpenContentDeploymentRuntimeGetter
+} from './runtime.js'
 
 type OpenContentRootFolder = Awaited<ReturnType<
   OpenContentContentSpaceFacade['listRootFolders']
 >>['roots'][number]
 
 export function createOpenContentContentSpaceFacade(options: Readonly<{
-  client: OpenContentClient
   connections: OpenContentConnectionService
-  teamAdministration: OpenContentTeamAdministration
-  skillRuntime?: OpenContentSkillRuntimeSession
+  getRuntime: OpenContentDeploymentRuntimeGetter
 }>): OpenContentContentSpaceFacade {
-  const useBoundTeamSession = <T>(
+  const requireRuntime = (providerInstanceRef: string) => {
+    requireOpenContentProviderInstance(providerInstanceRef)
+    return requireOpenContentDeploymentRuntime(options.getRuntime)
+  }
+  const useRuntimeSession = async <T>(
+    input: Parameters<OpenContentContentSpaceFacade['useTeamAdministration']>[0],
+    operation: (
+      runtime: NonNullable<ReturnType<OpenContentDeploymentRuntimeGetter>>,
+      token: string
+    ) => T | Promise<T>
+  ): Promise<T> => {
+    const runtime = requireRuntime(input.providerInstanceRef)
+    return options.connections.useCurrentSession({
+      principal: input.principal,
+      providerInstanceRef: input.providerInstanceRef,
+      expectedBindingAttestation: input.expectedBindingAttestation,
+      assertPrincipalCurrent: input.assertPrincipalCurrent,
+      signal: input.signal
+    }, ({ token }) => operation(runtime, token))
+  }
+  const useBoundTeamSession = async <T>(
     input: Parameters<OpenContentContentSpaceFacade['useTeamAdministration']>[0],
     operation: (session: Readonly<{
       token: string
@@ -37,6 +57,7 @@ export function createOpenContentContentSpaceFacade(options: Readonly<{
       assertSessionCurrent(): Promise<void>
     }>) => T | Promise<T>
   ): Promise<T> => {
+    const runtime = requireRuntime(input.providerInstanceRef)
     const assertPrincipalCurrent = () =>
       assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
     return options.connections.useCurrentSession({
@@ -64,7 +85,7 @@ export function createOpenContentContentSpaceFacade(options: Readonly<{
         await assertPrincipalCurrent()
       }
       const administration = bindOpenContentTeamAdministration(
-        options.teamAdministration,
+        runtime.teamAdministration,
         token,
         assertSessionCurrent
       )
@@ -81,15 +102,19 @@ export function createOpenContentContentSpaceFacade(options: Readonly<{
     })
   }
 
+  const supplierRuntime = options.getRuntime()?.skillRuntime
   return Object.freeze({
-    attestExternalBinding: (input) => options.connections.attestExternalBinding({
-      principal: input.principal,
-      providerInstanceRef: input.providerInstanceRef,
-      signal: input.signal,
-      assertPrincipalCurrent: input.assertPrincipalCurrent
-    }),
-    ...(options.skillRuntime
-      ? { useSupplierTransport: options.skillRuntime.useSupplierTransport }
+    attestExternalBinding: async (input) => {
+      requireRuntime(input.providerInstanceRef)
+      return options.connections.attestExternalBinding({
+        principal: input.principal,
+        providerInstanceRef: input.providerInstanceRef,
+        signal: input.signal,
+        assertPrincipalCurrent: input.assertPrincipalCurrent
+      })
+    },
+    ...(supplierRuntime
+      ? { useSupplierTransport: supplierRuntime.useSupplierTransport }
       : {}),
     useTeamAdministration: (input, operation) => useBoundTeamSession(
       input,
@@ -106,7 +131,7 @@ export function createOpenContentContentSpaceFacade(options: Readonly<{
       const [personalRoot, teamPage] = await Promise.all([
         input.includePersonal === false
           ? Promise.resolve(undefined)
-          : options.client.listPersonalRootFolder({
+          : requireRuntime(input.providerInstanceRef).client.listPersonalRootFolder({
               token,
               signal: input.signal,
               assertPrincipalCurrent: assertSessionCurrent
@@ -142,73 +167,48 @@ export function createOpenContentContentSpaceFacade(options: Readonly<{
           : { nextTeamPage: teamPage.nextPage })
       })
     }),
-    listFolderEntries: (input) => options.connections.useCurrentSession({
-      principal: input.principal,
-      providerInstanceRef: input.providerInstanceRef,
-      expectedBindingAttestation: input.expectedBindingAttestation,
-      assertPrincipalCurrent: input.assertPrincipalCurrent,
-      signal: input.signal
-    }, ({ token }) => options.client.listFolderEntries({
-      token,
-      parentFolderGuid: input.parentFolderGuid,
-      page: input.page,
-      pageSize: input.pageSize,
-      signal: input.signal,
-      assertPrincipalCurrent: input.assertPrincipalCurrent
-    })),
-    observeEntry: (input) => options.connections.useCurrentSession({
-      principal: input.principal,
-      providerInstanceRef: input.providerInstanceRef,
-      expectedBindingAttestation: input.expectedBindingAttestation,
-      assertPrincipalCurrent: input.assertPrincipalCurrent,
-      signal: input.signal
-    }, ({ token }) => options.client.observeEntry({
-      token,
-      kind: input.kind,
-      resourceGuid: input.resourceGuid,
-      signal: input.signal,
-      assertPrincipalCurrent: input.assertPrincipalCurrent
-    })),
-    createFolder: (input) => options.connections.useCurrentSession({
-      principal: input.principal,
-      providerInstanceRef: input.providerInstanceRef,
-      expectedBindingAttestation: input.expectedBindingAttestation,
-      assertPrincipalCurrent: input.assertPrincipalCurrent,
-      signal: input.signal
-    }, ({ token }) => options.client.createFolder({
-      token,
-      parentFolderGuid: input.parentFolderGuid,
-      name: input.name,
-      signal: input.signal,
-      assertPrincipalCurrent: input.assertPrincipalCurrent
-    })),
-    uploadNewFile: (input) => options.connections.useCurrentSession({
-      principal: input.principal,
-      providerInstanceRef: input.providerInstanceRef,
-      expectedBindingAttestation: input.expectedBindingAttestation,
-      assertPrincipalCurrent: input.assertPrincipalCurrent,
-      signal: input.signal
-    }, ({ token }) => options.client.uploadNewFile({
-      token,
-      parentFolderGuid: input.parentFolderGuid,
-      name: input.name,
-      size: input.size,
-      read: input.read,
-      signal: input.signal,
-      assertPrincipalCurrent: input.assertPrincipalCurrent
-    })),
-    downloadFile: (input) => options.connections.useCurrentSession({
-      principal: input.principal,
-      providerInstanceRef: input.providerInstanceRef,
-      expectedBindingAttestation: input.expectedBindingAttestation,
-      assertPrincipalCurrent: input.assertPrincipalCurrent,
-      signal: input.signal
-    }, ({ token }) => options.client.downloadFile({
-      token,
-      fileGuid: input.fileGuid,
-      write: input.write,
-      signal: input.signal,
-      assertPrincipalCurrent: input.assertPrincipalCurrent
-    }))
+    listFolderEntries: (input) => useRuntimeSession(input, (runtime, token) =>
+      runtime.client.listFolderEntries({
+        token,
+        parentFolderGuid: input.parentFolderGuid,
+        page: input.page,
+        pageSize: input.pageSize,
+        signal: input.signal,
+        assertPrincipalCurrent: input.assertPrincipalCurrent
+      })),
+    observeEntry: (input) => useRuntimeSession(input, (runtime, token) =>
+      runtime.client.observeEntry({
+        token,
+        kind: input.kind,
+        resourceGuid: input.resourceGuid,
+        signal: input.signal,
+        assertPrincipalCurrent: input.assertPrincipalCurrent
+      })),
+    createFolder: (input) => useRuntimeSession(input, (runtime, token) =>
+      runtime.client.createFolder({
+        token,
+        parentFolderGuid: input.parentFolderGuid,
+        name: input.name,
+        signal: input.signal,
+        assertPrincipalCurrent: input.assertPrincipalCurrent
+      })),
+    uploadNewFile: (input) => useRuntimeSession(input, (runtime, token) =>
+      runtime.client.uploadNewFile({
+        token,
+        parentFolderGuid: input.parentFolderGuid,
+        name: input.name,
+        size: input.size,
+        read: input.read,
+        signal: input.signal,
+        assertPrincipalCurrent: input.assertPrincipalCurrent
+      })),
+    downloadFile: (input) => useRuntimeSession(input, (runtime, token) =>
+      runtime.client.downloadFile({
+        token,
+        fileGuid: input.fileGuid,
+        write: input.write,
+        signal: input.signal,
+        assertPrincipalCurrent: input.assertPrincipalCurrent
+      }))
   })
 }

@@ -6,13 +6,13 @@ import {
 import {
   contentSpaceExtendedOperationStateListSchema,
   contentSpaceNativeDocumentOperationStateListSchema,
-  contentSpaceProviderFeaturesSchema,
   contentSpaceProviderNativeDocumentReceiptSchema,
   extendedOperationAuthority,
   extendedOperationEffect,
   nativeDocumentOperationEffect,
   nativeDocumentRequestTarget
 } from './provider-features.js'
+import { contentSpaceProviderFeaturesSchema } from './provider-features-schema.js'
 
 const PROVIDER_INSTANCE_REF = 'provider-instance-alpha'
 const CONTAINER = Object.freeze({
@@ -175,6 +175,33 @@ describe('Content Space provider feature ports', () => {
       expect(extendedOperationEffect(
         operation as keyof typeof CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS
       )).toBe(contract.effect)
+    }
+  })
+
+  it('derives extended effects from the canonical operation contract', async () => {
+    vi.resetModules()
+    vi.doMock('./extended-operations-contract.js', async (importOriginal) => {
+      const actual = await importOriginal<
+        typeof import('./extended-operations-contract.js')
+      >()
+      return {
+        ...actual,
+        CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS: Object.freeze({
+          ...actual.CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS,
+          searchEntries: Object.freeze({
+            ...actual.CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS.searchEntries,
+            effect: 'destructive' as const
+          })
+        })
+      }
+    })
+
+    try {
+      const providerFeatures = await import('./provider-features.js')
+      expect(providerFeatures.extendedOperationEffect('searchEntries')).toBe('destructive')
+    } finally {
+      vi.doUnmock('./extended-operations-contract.js')
+      vi.resetModules()
     }
   })
 

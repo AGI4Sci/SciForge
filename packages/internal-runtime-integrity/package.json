@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/internal-runtime-integrity",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "license": "MIT",
   "type": "module",
@@ -8,20 +8,22 @@
     "node": ">=22.12.0"
   },
   "description": "SciForge-owned static integrity verification for optional internal runtime overlays.",
+  "main": "./index.cjs",
+  "types": "./index.d.cts",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "import": "./src/index.ts",
+      "types": "./index.d.cts",
+      "import": "./index.cjs",
       "require": "./index.cjs"
     }
   },
   "files": [
     "index.cjs",
     "index.d.cts",
-    "src",
     "README.md"
   ],
   "scripts": {
+    "test": "node --test ./package-tarball.test.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {

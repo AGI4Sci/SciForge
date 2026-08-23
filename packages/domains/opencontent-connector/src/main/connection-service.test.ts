@@ -35,7 +35,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials: inMemoryCredentials(),
-      client: stubClient()
+      getRuntime: configuredRuntime(stubClient())
     })
 
     await expect(service.status({
@@ -52,7 +52,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings: inMemorySettings(),
       credentials: inMemoryCredentials(),
-      client: stubClient({ authenticateExistingAccount })
+      getRuntime: configuredRuntime(stubClient({ authenticateExistingAccount }))
     })
 
     await expect(service.bindExistingAccount({
@@ -72,7 +72,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials: inMemoryCredentials(),
-      client: stubClient()
+      getRuntime: configuredRuntime(stubClient())
     })
 
     await expect(service.unbind({
@@ -93,7 +93,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: stubClient({ isTokenValid })
+      getRuntime: configuredRuntime(stubClient({ isTokenValid }))
     })
 
     await expect(service.useCurrentSession({
@@ -115,7 +115,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: stubClient({ isTokenValid })
+      getRuntime: configuredRuntime(stubClient({ isTokenValid }))
     })
 
     await expect(service.status({
@@ -144,7 +144,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: stubClient()
+      getRuntime: configuredRuntime(stubClient())
     })
 
     await expect(service.status({
@@ -189,7 +189,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: stubClient()
+      getRuntime: configuredRuntime(stubClient())
     })
     const otherPrincipal = Object.freeze({ ...principal, subject: 'local-account-b' })
 
@@ -261,7 +261,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: stubClient()
+      getRuntime: configuredRuntime(stubClient())
     })
     const assertPrincipalCurrent = () => {
       if (currentSubject !== principal.subject) throw new Error('Principal changed during cleanup.')
@@ -316,7 +316,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: {
+      getRuntime: configuredRuntime({
         authenticateExistingAccount,
         isTokenValid: async () => true,
         observeCurrentExternalAccount: async () => fixtureExternalAccount('external-user-b'),
@@ -335,7 +335,7 @@ describe('OpenContent connection service', () => {
         createFolder: async () => ({ folderGuid: 'created-folder-guid' }),
         uploadNewFile: async () => ({ fileGuid: 'uploaded-file-guid' }),
         downloadFile: async () => ({ bytesWritten: 0 })
-      },
+      }),
       createConnectionId: () => `connection-${++sequence}`,
       now: () => new Date('2026-08-17T06:00:00.000Z')
     })
@@ -412,7 +412,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client
+      getRuntime: configuredRuntime(client)
     })
 
     const error = await service.bindExistingAccount({
@@ -447,7 +447,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: stubClient({ authenticateExistingAccount }),
+      getRuntime: configuredRuntime(stubClient({ authenticateExistingAccount })),
       createConnectionId: () => `connection-${++sequence}`
     })
 
@@ -516,7 +516,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings: inMemorySettings(),
       credentials: inMemoryCredentials(),
-      client: stubClient({ isTokenValid }),
+      getRuntime: configuredRuntime(stubClient({ isTokenValid })),
       createConnectionId: () => 'connection-current'
     })
     await service.bindExistingAccount({
@@ -547,7 +547,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: {
+      getRuntime: configuredRuntime({
         authenticateExistingAccount: async () => ({
           token: 'bound-opaque-token',
           account: {
@@ -575,7 +575,7 @@ describe('OpenContent connection service', () => {
         createFolder: async () => ({ folderGuid: 'created-folder-guid' }),
         uploadNewFile: async () => ({ fileGuid: 'uploaded-file-guid' }),
         downloadFile: async () => ({ bytesWritten: 0 })
-      },
+      }),
       createConnectionId: () => 'connection-current'
     })
     await service.bindExistingAccount({
@@ -629,7 +629,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings: inMemorySettings(),
       credentials: inMemoryCredentials(),
-      client: stubClient(),
+      getRuntime: configuredRuntime(stubClient()),
       createConnectionId: () => 'connection-current'
     })
     await service.bindExistingAccount({
@@ -670,7 +670,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings: inMemorySettings(),
       credentials: inMemoryCredentials(),
-      client: stubClient({ authenticateExistingAccount }),
+      getRuntime: configuredRuntime(stubClient({ authenticateExistingAccount })),
       createConnectionId: () => `connection-${++sequence}`
     })
     const bind = () => service.bindExistingAccount({
@@ -714,7 +714,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings: inMemorySettings(),
       credentials: inMemoryCredentials(),
-      client: stubClient(),
+      getRuntime: configuredRuntime(stubClient()),
       createConnectionId: () => `connection-${++sequence}`
     })
     const bind = () => service.bindExistingAccount({
@@ -753,7 +753,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings: inMemorySettings(),
       credentials: inMemoryCredentials(),
-      client: stubClient(),
+      getRuntime: configuredRuntime(stubClient()),
       createConnectionId: () => 'connection-current'
     })
     await service.bindExistingAccount({
@@ -802,7 +802,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings: inMemorySettings(),
       credentials: inMemoryCredentials(),
-      client: stubClient({ observeCurrentExternalAccount }),
+      getRuntime: configuredRuntime(stubClient({ observeCurrentExternalAccount })),
       createConnectionId: () => 'connection-current'
     })
     await service.bindExistingAccount({
@@ -837,7 +837,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings: inMemorySettings(),
       credentials: inMemoryCredentials(),
-      client: stubClient({ authenticateExistingAccount }),
+      getRuntime: configuredRuntime(stubClient({ authenticateExistingAccount })),
       createConnectionId: () => `connection-${++connectionSequence}`
     })
     await service.bindExistingAccount({
@@ -893,7 +893,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: {
+      getRuntime: configuredRuntime({
         authenticateExistingAccount: async () => ({
           token: 'bound-opaque-token',
           account: {
@@ -921,7 +921,7 @@ describe('OpenContent connection service', () => {
         createFolder: async () => ({ folderGuid: 'created-folder-guid' }),
         uploadNewFile: async () => ({ fileGuid: 'uploaded-file-guid' }),
         downloadFile: async () => ({ bytesWritten: 0 })
-      },
+      }),
       createConnectionId: () => 'connection-current'
     })
     await service.bindExistingAccount({
@@ -954,7 +954,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: {
+      getRuntime: configuredRuntime({
         authenticateExistingAccount: async () => ({
           token: 'bound-opaque-token',
           account: {
@@ -985,7 +985,7 @@ describe('OpenContent connection service', () => {
         createFolder: async () => ({ folderGuid: 'created-folder-guid' }),
         uploadNewFile: async () => ({ fileGuid: 'uploaded-file-guid' }),
         downloadFile: async () => ({ bytesWritten: 0 })
-      },
+      }),
       createConnectionId: () => 'connection-current'
     })
     await service.bindExistingAccount({
@@ -1030,7 +1030,7 @@ describe('OpenContent connection service', () => {
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       settings,
       credentials,
-      client: stubClient(),
+      getRuntime: configuredRuntime(stubClient()),
       createConnectionId: () => 'connection-principal-expired'
     })
 
@@ -1130,6 +1130,11 @@ function stubClient(
     downloadFile: async () => ({ bytesWritten: 0 }),
     ...overrides
   }
+}
+
+function configuredRuntime(client: OpenContentClient) {
+  const runtime = Object.freeze({ client })
+  return () => runtime
 }
 
 function authenticatedSession(id: string, account: string) {

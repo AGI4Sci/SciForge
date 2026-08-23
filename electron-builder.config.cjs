@@ -1,5 +1,12 @@
 const { existsSync, readFileSync } = require('node:fs')
 const { join } = require('node:path')
+const deploymentConfigurationPackaging = require(
+  './scripts/domain-package-deployment-config.cjs'
+)
+const afterPackPackaging = require('./scripts/after-pack.cjs')
+const publicReleaseArtifactReceipt = require(
+  './scripts/public-release-artifact-receipt.cjs'
+)
 const { internalRuntimeComposition } = require('./scripts/internal-runtime-packaging.cjs')
 const releaseWorkerManifest = require('./scripts/release-worker-manifest.cjs')
 
@@ -32,6 +39,20 @@ function loadLocalReleaseEnv() {
 }
 
 loadLocalReleaseEnv()
+
+const deploymentConfigurationComposition =
+  deploymentConfigurationPackaging.createDomainPackageDeploymentConfigurationComposition(
+    __dirname
+  )
+const publicReleaseArtifactHooks =
+  publicReleaseArtifactReceipt.createPublicReleaseArtifactHooks({
+    afterPack: afterPackPackaging.createAfterPackHook({
+      deploymentConfigurationComposition
+    }),
+    projectRoot: __dirname,
+    internalRuntimeComposition,
+    deploymentConfigurationComposition
+  })
 
 const hasExplicitMacSigningIdentity = Boolean(
   process.env.CSC_LINK ||
@@ -115,6 +136,7 @@ module.exports = {
   ],
   extraResources: [
     ...internalRuntimeComposition.extraResources,
+    ...deploymentConfigurationComposition.extraResources,
     { from: 'LICENSE', to: 'compliance/LICENSE' },
     { from: 'THIRD_PARTY_NOTICES.md', to: 'compliance/THIRD_PARTY_NOTICES.md' },
     { from: 'src/asset/img/README.md', to: 'compliance/ASSET_PROVENANCE.md' },
@@ -136,7 +158,8 @@ module.exports = {
       url: genericUpdateUrl
     }
   ],
-  afterPack: './scripts/after-pack.cjs',
+  afterPack: publicReleaseArtifactHooks.afterPack,
+  afterAllArtifactBuild: publicReleaseArtifactHooks.afterAllArtifactBuild,
   afterSign: './scripts/mac-notarize.cjs',
   mac: {
     category: 'public.app-category.developer-tools',

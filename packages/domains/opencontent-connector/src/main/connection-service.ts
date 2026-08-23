@@ -22,6 +22,10 @@ import {
   type OpenContentExternalBindingAttestation
 } from '../contract.js'
 import type { OpenContentClient } from './opencontent-client.js'
+import {
+  requireOpenContentDeploymentRuntime,
+  requireOpenContentProviderInstance
+} from './runtime.js'
 
 const storedPrincipalSchema = z.object({
   authority: principalAuthoritySchema,
@@ -125,7 +129,7 @@ export function createOpenContentConnectionService(options: Readonly<{
   providerInstanceRef: string
   settings: DomainMainPackageSettingsHost
   credentials: DomainMainProviderCredentialStoreHost
-  client: OpenContentClient
+  getRuntime(): Readonly<{ client: OpenContentClient }> | undefined
   createConnectionId?: () => string
   now?: () => Date
 }>): OpenContentConnectionService {
@@ -245,7 +249,8 @@ export function createOpenContentConnectionService(options: Readonly<{
     signal?: AbortSignal
     assertPrincipalCurrent(): void | Promise<void>
   }>): Promise<OpenContentConnectionStatus> => {
-    requireProviderInstanceRef(input.providerInstanceRef, providerInstanceRef)
+    requireOpenContentProviderInstance(input.providerInstanceRef)
+    const { client } = requireOpenContentDeploymentRuntime(options.getRuntime)
     await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
     await retryPendingCredentialCleanup(input.principal, input.assertPrincipalCurrent)
     await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
@@ -273,7 +278,7 @@ export function createOpenContentConnectionService(options: Readonly<{
         credentialAccess(providerInstanceRef, connection.connectionId),
         async (token) => {
           await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
-          const result = await options.client.isTokenValid({
+          const result = await client.isTokenValid({
             token,
             signal: input.signal,
             assertPrincipalCurrent: input.assertPrincipalCurrent
@@ -326,10 +331,11 @@ export function createOpenContentConnectionService(options: Readonly<{
     input,
     operation
   ) => {
+    requireOpenContentProviderInstance(input.providerInstanceRef)
+    const { client } = requireOpenContentDeploymentRuntime(options.getRuntime)
     let connectionId: string | undefined
     try {
       return await serialize(async () => {
-        requireProviderInstanceRef(input.providerInstanceRef, providerInstanceRef)
         await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
         const snapshot = await readSettings(options.settings, providerInstanceRef)
         await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
@@ -341,14 +347,14 @@ export function createOpenContentConnectionService(options: Readonly<{
           connection.connectionId
         ), async (token) => {
           await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
-          const valid = await options.client.isTokenValid({
+          const valid = await client.isTokenValid({
             token,
             signal: input.signal,
             assertPrincipalCurrent: input.assertPrincipalCurrent
           })
           await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
           if (!valid) throw reauthenticationRequired()
-          const observedAccount = await options.client.observeCurrentExternalAccount({
+          const observedAccount = await client.observeCurrentExternalAccount({
             token,
             signal: input.signal,
             assertPrincipalCurrent: input.assertPrincipalCurrent
@@ -404,105 +410,118 @@ export function createOpenContentConnectionService(options: Readonly<{
     status,
     attestExternalBinding,
     useCurrentSession,
-    unbind: (input) => serialize(async () => {
-      requireProviderInstanceRef(input.providerInstanceRef, providerInstanceRef)
-      await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
-      await retryPendingCredentialCleanup(input.principal, input.assertPrincipalCurrent)
-      await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
-      const snapshot = await readSettings(options.settings, providerInstanceRef)
-      await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
-      const connection = findConnection(snapshot.connections, input.principal, providerInstanceRef)
-      const retiredConnectionPending = snapshot.retiredConnections.some((retired) =>
-        samePrincipalOwner(retired.principal, input.principal))
-      if (!connection) {
-        if (retiredConnectionPending) throw retiredCredentialCleanupFailed()
-        return Object.freeze({ state: 'disconnected' as const, remoteRevocation: 'unsupported' as const })
-      }
-      if (connection.retiredCredentialIds?.length || retiredConnectionPending) {
-        throw retiredCredentialCleanupFailed()
-      }
-      await options.credentials.remove(credentialAccess(
-        providerInstanceRef,
-        connection.connectionId
-      ))
-      await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
-      const next = connectionSettingsSchema.parse({
-        version: 2,
-        connections: snapshot.connections.filter((candidate) => candidate !== connection),
-        retiredConnections: snapshot.retiredConnections
-      })
-      await options.settings.write(next, snapshot.revision)
-      await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
-      return Object.freeze({
-        state: 'disconnected' as const,
-        remoteRevocation: 'unsupported' as const
-      })
-    }),
-    bindExistingAccount: (input) => serialize(async () => {
-      requireProviderInstanceRef(input.providerInstanceRef, providerInstanceRef)
-      await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
-      await retryPendingCredentialCleanup(input.principal, input.assertPrincipalCurrent)
-      const session = await options.client.authenticateExistingAccount({
-        username: input.username,
-        password: input.password,
-        signal: input.signal,
-        assertPrincipalCurrent: input.assertPrincipalCurrent
-      })
-      await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
-      const connectionId = z.string().trim().min(1).max(256).parse(createConnectionId())
-      const snapshot = await readSettings(options.settings, providerInstanceRef)
-      await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
-      const prior = findConnection(snapshot.connections, input.principal, providerInstanceRef)
-      assertConnectionIdAvailable(
-        connectionId,
-        input.principal,
-        providerInstanceRef,
-        snapshot.connections
-      )
-      const access = credentialAccess(providerInstanceRef, connectionId)
-      const nextConnection = connectionRecordSchema.parse({
-        principal: stablePrincipal(input.principal),
-        providerInstanceRef,
-        connectionId,
-        ...(prior ? {
-          retiredCredentialIds: appendRetiredCredentialId(
-            prior.retiredCredentialIds ?? [],
-            prior.connectionId
-          )
-        } : {}),
-        externalAccount: {
-          id: session.account.id,
-          identityId: session.account.identityId,
-          account: session.account.account,
-          name: session.account.name
-        },
-        state: 'connected',
-        updatedAt: now().toISOString()
-      })
-      await options.credentials.replace(access, session.token)
-      try {
+    unbind: async (input) => {
+      requireOpenContentProviderInstance(input.providerInstanceRef)
+      requireOpenContentDeploymentRuntime(options.getRuntime)
+      return serialize(async () => {
+        await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
+        await retryPendingCredentialCleanup(input.principal, input.assertPrincipalCurrent)
+        await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
+        const snapshot = await readSettings(options.settings, providerInstanceRef)
+        await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
+        const connection = findConnection(
+          snapshot.connections,
+          input.principal,
+          providerInstanceRef
+        )
+        const retiredConnectionPending = snapshot.retiredConnections.some((retired) =>
+          samePrincipalOwner(retired.principal, input.principal))
+        if (!connection) {
+          if (retiredConnectionPending) throw retiredCredentialCleanupFailed()
+          return Object.freeze({
+            state: 'disconnected' as const,
+            remoteRevocation: 'unsupported' as const
+          })
+        }
+        if (connection.retiredCredentialIds?.length || retiredConnectionPending) {
+          throw retiredCredentialCleanupFailed()
+        }
+        await options.credentials.remove(credentialAccess(
+          providerInstanceRef,
+          connection.connectionId
+        ))
         await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
         const next = connectionSettingsSchema.parse({
           version: 2,
-          connections: [
-            ...snapshot.connections.filter((connection) => !sameConnectionOwner(
-              connection,
-              input.principal,
-              providerInstanceRef
-            )),
-            nextConnection
-          ],
+          connections: snapshot.connections.filter((candidate) => candidate !== connection),
           retiredConnections: snapshot.retiredConnections
         })
-        await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
         await options.settings.write(next, snapshot.revision)
-      } catch (error) {
-        await options.credentials.remove(access).catch(() => undefined)
-        throw error
-      }
-      await retryPendingCredentialCleanup(input.principal, input.assertPrincipalCurrent)
-      return connectionStatus(nextConnection, 'connected')
-    })
+        await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
+        return Object.freeze({
+          state: 'disconnected' as const,
+          remoteRevocation: 'unsupported' as const
+        })
+      })
+    },
+    bindExistingAccount: async (input) => {
+      requireOpenContentProviderInstance(input.providerInstanceRef)
+      const { client } = requireOpenContentDeploymentRuntime(options.getRuntime)
+      return serialize(async () => {
+        await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
+        await retryPendingCredentialCleanup(input.principal, input.assertPrincipalCurrent)
+        const session = await client.authenticateExistingAccount({
+          username: input.username,
+          password: input.password,
+          signal: input.signal,
+          assertPrincipalCurrent: input.assertPrincipalCurrent
+        })
+        await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
+        const connectionId = z.string().trim().min(1).max(256).parse(createConnectionId())
+        const snapshot = await readSettings(options.settings, providerInstanceRef)
+        await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
+        const prior = findConnection(snapshot.connections, input.principal, providerInstanceRef)
+        assertConnectionIdAvailable(
+          connectionId,
+          input.principal,
+          providerInstanceRef,
+          snapshot.connections
+        )
+        const access = credentialAccess(providerInstanceRef, connectionId)
+        const nextConnection = connectionRecordSchema.parse({
+          principal: stablePrincipal(input.principal),
+          providerInstanceRef,
+          connectionId,
+          ...(prior ? {
+            retiredCredentialIds: appendRetiredCredentialId(
+              prior.retiredCredentialIds ?? [],
+              prior.connectionId
+            )
+          } : {}),
+          externalAccount: {
+            id: session.account.id,
+            identityId: session.account.identityId,
+            account: session.account.account,
+            name: session.account.name
+          },
+          state: 'connected',
+          updatedAt: now().toISOString()
+        })
+        await options.credentials.replace(access, session.token)
+        try {
+          await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
+          const next = connectionSettingsSchema.parse({
+            version: 2,
+            connections: [
+              ...snapshot.connections.filter((connection) => !sameConnectionOwner(
+                connection,
+                input.principal,
+                providerInstanceRef
+              )),
+              nextConnection
+            ],
+            retiredConnections: snapshot.retiredConnections
+          })
+          await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
+          await options.settings.write(next, snapshot.revision)
+        } catch (error) {
+          await options.credentials.remove(access).catch(() => undefined)
+          throw error
+        }
+        await retryPendingCredentialCleanup(input.principal, input.assertPrincipalCurrent)
+        return connectionStatus(nextConnection, 'connected')
+      })
+    }
   })
 }
 
@@ -778,13 +797,4 @@ function invalidStoredProviderInstance(): OpenContentConnectorError {
     'provider_contract_violation',
     'Stored OpenContent connection metadata names an unsupported Provider Instance.'
   )
-}
-
-function requireProviderInstanceRef(selected: string, expected: string): void {
-  if (selected !== expected) {
-    throw new OpenContentConnectorError(
-      'invalid_input',
-      'The selected OpenContent Provider Instance is not installed.'
-    )
-  }
 }

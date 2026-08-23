@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 import * as mainContract from './main-contract.js'
 import {
   docflowCommandInvocationSchema,
+  isOpenContentSupplierMutationCommand,
   openContentExtendedCommandInvocationSchema,
   type OpenContentExtendedOperationCommand,
   type OpenContentSupplierCommandTransport
@@ -24,6 +25,13 @@ import type { OpenContentExtendedCommandInvocation } from './main-contract.js'
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 describe('OpenContent Connector main contract', () => {
+  it('classifies supplier write uncertainty through one shared contract boundary', () => {
+    expect(isOpenContentSupplierMutationCommand('rename')).toBe(true)
+    expect(isOpenContentSupplierMutationCommand('docflow-create')).toBe(true)
+    expect(isOpenContentSupplierMutationCommand('file-info')).toBe(false)
+    expect(isOpenContentSupplierMutationCommand('docflow-read')).toBe(false)
+  })
+
   it('rejects the retired user-info supplier command at the public typed schema', () => {
     // @ts-expect-error Current-principal resolution is session-backed, not a supplier command.
     const retiredCommand: OpenContentExtendedOperationCommand = 'user-info'
@@ -56,6 +64,7 @@ describe('OpenContent Connector main contract', () => {
       'docflowNativeDocumentSuccessReceiptSchema',
       'docflowTransportErrorSchema',
       'docflowTransportResultSchema',
+      'isOpenContentSupplierMutationCommand',
       'openContentExtendedCommandInvocationSchema',
       'openContentExtendedCommandSuccessSchema'
     ].sort())

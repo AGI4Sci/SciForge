@@ -1,29 +1,49 @@
 const assert = require('node:assert/strict')
+const { execFileSync } = require('node:child_process')
+const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('node:fs')
 const { readFile } = require('node:fs/promises')
-const { resolve } = require('node:path')
+const { tmpdir } = require('node:os')
+const { dirname, join, resolve } = require('node:path')
 const test = require('node:test')
 
 const {
-  assertNoTrackedInternalPayloadPaths,
+  assertNoTrackedPrivatePayloadPaths,
+  assertPublicReleaseDeploymentConfigurationsSafe,
   assertPublicReleaseDomainContributionsSafe,
   assertPublicReleaseCompositionSafe,
   runConfiguredPublicReleaseGuard,
   runPublicReleaseGuard
 } = require('./public-release-guard.cjs')
+const deploymentConfigurationPackaging = require('./domain-package-deployment-config.cjs')
 
 function loadAfterPack(options = {}) {
-  if (!options.internalRuntimePackaging) return require('./after-pack.cjs')
+  if (!options.internalRuntimePackaging && !options.deploymentConfigurationPackaging) {
+    return require('./after-pack.cjs')
+  }
 
   const afterPackPath = require.resolve('./after-pack.cjs')
   const internalRuntimePackagingPath = require.resolve('./internal-runtime-packaging.cjs')
+  const deploymentConfigurationPackagingPath = require.resolve(
+    './domain-package-deployment-config.cjs'
+  )
   const previousAfterPack = require.cache[afterPackPath]
   const previousInternalRuntimePackaging = require.cache[internalRuntimePackagingPath]
+  const previousDeploymentConfigurationPackaging =
+    require.cache[deploymentConfigurationPackagingPath]
   delete require.cache[afterPackPath]
   require.cache[internalRuntimePackagingPath] = {
     id: internalRuntimePackagingPath,
     filename: internalRuntimePackagingPath,
     loaded: true,
     exports: options.internalRuntimePackaging,
+    children: [],
+    paths: []
+  }
+  require.cache[deploymentConfigurationPackagingPath] = {
+    id: deploymentConfigurationPackagingPath,
+    filename: deploymentConfigurationPackagingPath,
+    loaded: true,
+    exports: options.deploymentConfigurationPackaging,
     children: [],
     paths: []
   }
@@ -37,6 +57,12 @@ function loadAfterPack(options = {}) {
     } else {
       delete require.cache[internalRuntimePackagingPath]
     }
+    if (previousDeploymentConfigurationPackaging) {
+      require.cache[deploymentConfigurationPackagingPath] =
+        previousDeploymentConfigurationPackaging
+    } else {
+      delete require.cache[deploymentConfigurationPackagingPath]
+    }
   }
 }
 
@@ -45,8 +71,46 @@ function loadAfterPackWithoutInternalRuntimes() {
     internalRuntimePackaging: {
       internalRuntimeComposition: { extraResources: [], packagedRuntimes: [] },
       verifyPackagedInternalRuntimes() {}
+    },
+    deploymentConfigurationPackaging: {
+      createDomainPackageDeploymentConfigurationComposition: emptyDeploymentComposition,
+      verifyPackagedDomainDeploymentConfigurations() {}
     }
   })
+}
+
+function emptyDeploymentComposition() {
+  return {
+    extraResources: [],
+    deploymentConfigurationDeclarations: [],
+    activeDeploymentConfigurationReceipts: []
+  }
+}
+
+function deploymentComposition(publicRelease = 'forbidden') {
+  return {
+    extraResources: [{
+      from: '.private/fixture.json',
+      to: 'fixture/deployment.json'
+    }],
+    deploymentConfigurationDeclarations: [{
+      contractVersion: 1,
+      packageName: '@fixture/private-deployment',
+      sourceRelativePath: '.private/fixture.json',
+      packagedResourcesRelativePath: 'fixture/deployment.json',
+      maxBytes: 4096,
+      publicRelease
+    }],
+    activeDeploymentConfigurationReceipts: [{
+      packageName: '@fixture/private-deployment',
+      sourceRelativePath: '.private/fixture.json',
+      packagedResourcesRelativePath: 'fixture/deployment.json',
+      maxBytes: 4096,
+      publicRelease,
+      size: 12,
+      sha256: '0'.repeat(64)
+    }]
+  }
 }
 
 test('public release guard accepts only an empty internal runtime composition', () => {
@@ -95,13 +159,50 @@ test('public release guard fails closed for malformed internal composition shape
   }
 })
 
-test('public release guard rejects Git-tracked internal payloads before loading composition', async () => {
-  assert.deepEqual(assertNoTrackedInternalPayloadPaths([]), {
-    trackedInternalPayloadCount: 0
+test('public release guard requires every forbidden deployment configuration to be absent', () => {
+  assert.deepEqual(
+    assertPublicReleaseDeploymentConfigurationsSafe(emptyDeploymentComposition()),
+    { publicReleaseForbiddenDeploymentConfigurationCount: 0 }
+  )
+  assert.throws(
+    () => assertPublicReleaseDeploymentConfigurationsSafe(deploymentComposition()),
+    /@fixture\/private-deployment/u
+  )
+  assert.deepEqual(
+    assertPublicReleaseDeploymentConfigurationsSafe(deploymentComposition('allowed')),
+    { publicReleaseForbiddenDeploymentConfigurationCount: 0 }
+  )
+})
+
+test('public release guard fails closed for malformed deployment configuration composition', () => {
+  for (const composition of [
+    undefined,
+    { extraResources: [] },
+    {
+      extraResources: {},
+      deploymentConfigurationDeclarations: [],
+      activeDeploymentConfigurationReceipts: []
+    },
+    {
+      extraResources: [],
+      deploymentConfigurationDeclarations: [],
+      activeDeploymentConfigurationReceipts: [{}]
+    }
+  ]) {
+    assert.throws(
+      () => assertPublicReleaseDeploymentConfigurationsSafe(composition),
+      /deployment configuration composition|deployment configuration entry/u
+    )
+  }
+})
+
+test('public release guard rejects Git-tracked private payloads before loading composition', async () => {
+  assert.deepEqual(assertNoTrackedPrivatePayloadPaths([]), {
+    trackedPrivatePayloadCount: 0
   })
   assert.throws(
-    () => assertNoTrackedInternalPayloadPaths(['internal/fixture/private.txt']),
-    /internal payloads are Git-tracked/u
+    () => assertNoTrackedPrivatePayloadPaths(['internal/fixture/private.txt']),
+    /private payloads are Git-tracked/u
   )
   let compositionLoads = 0
   await assert.rejects(
@@ -110,12 +211,77 @@ test('public release guard rejects Git-tracked internal payloads before loading 
         compositionLoads += 1
         return { extraResources: [], packagedRuntimes: [] }
       },
-      loadTrackedInternalPayloadPaths: () => ['internal/fixture/private.txt'],
+      loadTrackedPrivatePayloadPaths: () => ['internal/fixture/private.txt'],
       projectRoot: '/trusted/repository'
     }),
-    /internal payloads are Git-tracked/u
+    /private payloads are Git-tracked/u
   )
   assert.equal(compositionLoads, 0)
+})
+
+test('public release guard rejects Git-tracked meeting records through the canonical Git index', async () => {
+  const repository = mkdtempSync(join(tmpdir(), 'sciforge-public-release-'))
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repository })
+    const objectId = execFileSync('git', ['hash-object', '-w', '--stdin'], {
+      cwd: repository,
+      encoding: 'utf8',
+      input: 'private fixture'
+    }).trim()
+    execFileSync(
+      'git',
+      [
+        'update-index',
+        '--add',
+        '--cacheinfo',
+        '100644',
+        objectId,
+        'meeting_records/fixture/private.txt'
+      ],
+      { cwd: repository }
+    )
+
+    await assert.rejects(
+      runPublicReleaseGuard([], {
+        createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
+        createDeploymentConfigurationComposition: emptyDeploymentComposition,
+        discoverDomainPackages: async () => [],
+        projectRoot: repository
+      }),
+      /meeting_records\/fixture\/private\.txt/u
+    )
+  } finally {
+    rmSync(repository, { recursive: true, force: true })
+  }
+})
+
+test('public release guard rejects a Git-tracked private payload at the exact protected root', async () => {
+  const repository = mkdtempSync(join(tmpdir(), 'sciforge-public-release-root-'))
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repository })
+    const objectId = execFileSync('git', ['hash-object', '-w', '--stdin'], {
+      cwd: repository,
+      encoding: 'utf8',
+      input: 'private fixture'
+    }).trim()
+    execFileSync(
+      'git',
+      ['update-index', '--add', '--cacheinfo', '100644', objectId, 'meeting_records'],
+      { cwd: repository }
+    )
+
+    await assert.rejects(
+      runPublicReleaseGuard([], {
+        createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
+        createDeploymentConfigurationComposition: emptyDeploymentComposition,
+        discoverDomainPackages: async () => [],
+        projectRoot: repository
+      }),
+      /meeting_records/u
+    )
+  } finally {
+    rmSync(repository, { recursive: true, force: true })
+  }
 })
 
 test('public release guard accepts canonical empty internal composition', async () => {
@@ -125,27 +291,33 @@ test('public release guard accepts canonical empty internal composition', async 
       discoveredRoot = root
       return { extraResources: [], packagedRuntimes: [] }
     },
+    createDeploymentConfigurationComposition: emptyDeploymentComposition,
     discoverDomainPackages: async () => [],
-    loadTrackedInternalPayloadPaths: () => [],
+    loadTrackedPrivatePayloadPaths: () => [],
     projectRoot: '/trusted/repository'
   })
   assert.equal(discoveredRoot, '/trusted/repository')
   assert.deepEqual(result, {
     internalRuntimeCount: 0,
-    publicReleaseForbiddenContributionCount: 0
+    publicReleaseForbiddenDeploymentConfigurationCount: 0,
+    publicReleaseForbiddenContributionCount: 0,
+    trackedPrivatePayloadCount: 0
   })
 })
 
 test('public release guard reads installed manifests through canonical domain discovery', async () => {
   const result = await runPublicReleaseGuard([], {
     createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
-    loadTrackedInternalPayloadPaths: () => [],
+    createDeploymentConfigurationComposition: emptyDeploymentComposition,
+    loadTrackedPrivatePayloadPaths: () => [],
     projectRoot: resolve('.')
   })
 
   assert.deepEqual(result, {
     internalRuntimeCount: 0,
-    publicReleaseForbiddenContributionCount: 0
+    publicReleaseForbiddenDeploymentConfigurationCount: 0,
+    publicReleaseForbiddenContributionCount: 0,
+    trackedPrivatePayloadCount: 0
   })
 })
 
@@ -153,7 +325,8 @@ test('public release guard rejects arguments that could weaken the official poli
   await assert.rejects(
     runPublicReleaseGuard(['--allow-internal'], {
       createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
-      loadTrackedInternalPayloadPaths: () => [],
+      createDeploymentConfigurationComposition: emptyDeploymentComposition,
+      loadTrackedPrivatePayloadPaths: () => [],
       projectRoot: '/trusted/repository'
     }),
     /does not accept arguments/
@@ -171,7 +344,7 @@ test('configured guard preserves local internal acceptance unless public release
         packagedRuntimes: [{ packageName: '@fixture/internal-runtime' }]
       }
     },
-    loadTrackedInternalPayloadPaths: () => {
+    loadTrackedPrivatePayloadPaths: () => {
       compositionLoads += 1
       return ['internal/fixture/private.txt']
     },
@@ -187,7 +360,7 @@ test('configured guard fails closed for malformed and enabled public release mod
     runConfiguredPublicReleaseGuard({
       environment: { SCIFORGE_PUBLIC_RELEASE: 'true' },
       createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
-      loadTrackedInternalPayloadPaths: () => [],
+      loadTrackedPrivatePayloadPaths: () => [],
       projectRoot: '/trusted/repository'
     }),
     /must be exactly 1/u
@@ -196,11 +369,17 @@ test('configured guard fails closed for malformed and enabled public release mod
     await runConfiguredPublicReleaseGuard({
       environment: { SCIFORGE_PUBLIC_RELEASE: '1' },
       createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
+      createDeploymentConfigurationComposition: emptyDeploymentComposition,
       discoverDomainPackages: async () => [],
-      loadTrackedInternalPayloadPaths: () => [],
+      loadTrackedPrivatePayloadPaths: () => [],
       projectRoot: '/trusted/repository'
     }),
-    { internalRuntimeCount: 0, publicReleaseForbiddenContributionCount: 0 }
+    {
+      internalRuntimeCount: 0,
+      publicReleaseForbiddenDeploymentConfigurationCount: 0,
+      publicReleaseForbiddenContributionCount: 0,
+      trackedPrivatePayloadCount: 0
+    }
   )
 })
 
@@ -209,11 +388,12 @@ test('configured prebuild guard rejects any active contribution forbidden by its
     runConfiguredPublicReleaseGuard({
       environment: { SCIFORGE_PUBLIC_RELEASE: '1' },
       createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
+      createDeploymentConfigurationComposition: emptyDeploymentComposition,
       discoverDomainPackages: async () => [domainPackageCandidate({
         contributionId: 'fixture.local-acceptance',
         publicRelease: 'forbidden'
       })],
-      loadTrackedInternalPayloadPaths: () => [],
+      loadTrackedPrivatePayloadPaths: () => [],
       projectRoot: '/trusted/repository'
     }),
     /@fixture\/release-policy:fixture\.local-acceptance/u
@@ -224,6 +404,7 @@ test('configured prebuild guard allows ordinary and inactive domain contribution
   const result = await runConfiguredPublicReleaseGuard({
     environment: { SCIFORGE_PUBLIC_RELEASE: '1' },
     createComposition: () => ({ extraResources: [], packagedRuntimes: [] }),
+    createDeploymentConfigurationComposition: emptyDeploymentComposition,
     discoverDomainPackages: async () => [
       domainPackageCandidate({
         packageName: '@fixture/release-policy-default',
@@ -241,13 +422,15 @@ test('configured prebuild guard allows ordinary and inactive domain contribution
         publicRelease: 'forbidden'
       })
     ],
-    loadTrackedInternalPayloadPaths: () => [],
+    loadTrackedPrivatePayloadPaths: () => [],
     projectRoot: '/trusted/repository'
   })
 
   assert.deepEqual(result, {
     internalRuntimeCount: 0,
-    publicReleaseForbiddenContributionCount: 0
+    publicReleaseForbiddenDeploymentConfigurationCount: 0,
+    publicReleaseForbiddenContributionCount: 0,
+    trackedPrivatePayloadCount: 0
   })
 })
 
@@ -335,46 +518,176 @@ test('official Mac and Windows release entrypoints guard before build, signing, 
 
 test('after-pack rechecks public release composition immediately before packaged validation', async () => {
   const source = await readFile(resolve('scripts/after-pack.cjs'), 'utf8')
+  const builderSource = await readFile(resolve('electron-builder.config.cjs'), 'utf8')
   const afterPackStart = source.indexOf('async function afterPack(context)')
   const afterPackBody = source.slice(afterPackStart, source.indexOf('\n}', afterPackStart))
-  const publicCheck = afterPackBody.indexOf('verifyOfficialPublicReleaseComposition()')
+  const publicCheck = afterPackBody.indexOf(
+    'verifyOfficialPublicReleaseComposition(deploymentConfigurationComposition)'
+  )
+  const deploymentValidation = afterPackBody.indexOf(
+    'verifyPackagedDeploymentConfigurations(context, deploymentConfigurationComposition)'
+  )
   const internalValidation = afterPackBody.indexOf('verifyPackagedInternalRuntimes(context)')
   assert.notEqual(publicCheck, -1)
+  assert.notEqual(deploymentValidation, -1)
   assert.notEqual(internalValidation, -1)
+  assert.ok(publicCheck < deploymentValidation)
   assert.ok(publicCheck < internalValidation)
   assert.match(afterPackBody, /await verifyOfficialPublicReleaseComposition/u)
   assert.match(source, /await publicReleaseGuard\.runConfiguredPublicReleaseGuard/u)
   assert.match(source, /createComposition:\s*\(\)\s*=>\s*\n?\s*internalRuntimePackaging\.internalRuntimeComposition/u)
+  assert.doesNotMatch(source, /createDomainPackageDeploymentConfigurationComposition/u)
+  assert.match(builderSource, /createAfterPackHook\(\{\s*deploymentConfigurationComposition\s*\}\)/u)
+  assert.doesNotMatch(builderSource, /afterPack:\s*['"]\.\/scripts\/after-pack\.cjs/u)
+})
+
+test('after-pack verifies the same generic deployment composition in packaged resources', () => {
+  const composition = emptyDeploymentComposition()
+  let verified
+  const afterPack = loadAfterPack({
+    internalRuntimePackaging: {
+      internalRuntimeComposition: { extraResources: [], packagedRuntimes: [] },
+      verifyPackagedInternalRuntimes() {}
+    },
+    deploymentConfigurationPackaging: {
+      verifyPackagedDomainDeploymentConfigurations(resourcesRoot, received) {
+        verified = { resourcesRoot, composition: received }
+      }
+    }
+  })
+
+  afterPack._internals.verifyPackagedDeploymentConfigurations({
+    appOutDir: '/packaged/application',
+    electronPlatformName: 'linux'
+  }, composition)
+
+  assert.deepEqual(verified, {
+    resourcesRoot: '/packaged/application/resources',
+    composition
+  })
+})
+
+test('after-pack never recomputes an active receipt after its source is removed', () => {
+  const repository = mkdtempSync(join(tmpdir(), 'sciforge-after-pack-deployment-'))
+  const appOutDir = join(repository, 'packaged')
+  const resourcesRoot = join(appOutDir, 'resources')
+  const sourcePath = join(repository, '.private/deployment.json')
+  try {
+    writeJson(join(repository, 'packages/domains/fixture/package.json'), {
+      name: '@fixture/domain',
+      version: '1.0.0',
+      sciforgeDeploymentConfiguration: {
+        contractVersion: 1,
+        sourceRelativePath: '.private/deployment.json',
+        packagedResourcesRelativePath: 'domain-deployments/fixture.json',
+        maxBytes: 4096,
+        publicRelease: 'forbidden'
+      }
+    })
+    writeJson(join(repository, 'packages/domains/fixture/sciforge.domain.json'), {
+      packageName: '@fixture/domain'
+    })
+    writeJson(sourcePath, {
+      contractVersion: 1,
+      providerInstanceRef: 'fixture',
+      origin: 'https://tenant.example'
+    })
+    const captured = deploymentConfigurationPackaging
+      .createDomainPackageDeploymentConfigurationComposition(repository)
+    rmSync(sourcePath)
+    mkdirSync(resourcesRoot, { recursive: true })
+
+    let recompositions = 0
+    const afterPack = loadAfterPack({
+      internalRuntimePackaging: {
+        internalRuntimeComposition: { extraResources: [], packagedRuntimes: [] },
+        verifyPackagedInternalRuntimes() {}
+      },
+      deploymentConfigurationPackaging: {
+        createDomainPackageDeploymentConfigurationComposition() {
+          recompositions += 1
+          return emptyDeploymentComposition()
+        },
+        verifyPackagedDomainDeploymentConfigurations:
+          deploymentConfigurationPackaging.verifyPackagedDomainDeploymentConfigurations
+      }
+    })
+    const context = { appOutDir, electronPlatformName: 'linux' }
+    assert.throws(
+      () => afterPack._internals.verifyPackagedDeploymentConfigurations(context, captured),
+      /missing/u
+    )
+    writeJson(join(resourcesRoot, 'domain-deployments/fixture.json'), { drift: true })
+    assert.throws(
+      () => afterPack._internals.verifyPackagedDeploymentConfigurations(context, captured),
+      /changed/u
+    )
+    assert.equal(recompositions, 0)
+  } finally {
+    rmSync(repository, { recursive: true, force: true })
+  }
 })
 
 test('after-pack rejects an active contribution forbidden by its generic manifest policy', async () => {
   const afterPack = loadAfterPackWithoutInternalRuntimes()
   await assert.rejects(
-    afterPack._internals.verifyOfficialPublicReleaseComposition({
-      environment: { SCIFORGE_PUBLIC_RELEASE: '1' },
-      discoverDomainPackages: async () => [domainPackageCandidate({
-        contributionId: 'fixture.packaged-local-acceptance',
-        publicRelease: 'forbidden'
-      })],
-      loadTrackedInternalPayloadPaths: () => [],
-      projectRoot: '/trusted/repository'
-    }),
+    afterPack._internals.verifyOfficialPublicReleaseComposition(
+      emptyDeploymentComposition(),
+      {
+        environment: { SCIFORGE_PUBLIC_RELEASE: '1' },
+        discoverDomainPackages: async () => [domainPackageCandidate({
+          contributionId: 'fixture.packaged-local-acceptance',
+          publicRelease: 'forbidden'
+        })],
+        loadTrackedPrivatePayloadPaths: () => [],
+        projectRoot: '/trusted/repository'
+      }
+    ),
     /@fixture\/release-policy:fixture\.packaged-local-acceptance/u
+  )
+})
+
+test('after-pack rejects a package-owned deployment configuration forbidden in public builds', async () => {
+  const afterPack = loadAfterPack({
+    internalRuntimePackaging: {
+      internalRuntimeComposition: { extraResources: [], packagedRuntimes: [] },
+      verifyPackagedInternalRuntimes() {}
+    },
+    deploymentConfigurationPackaging: {
+      createDomainPackageDeploymentConfigurationComposition: () => deploymentComposition(),
+      verifyPackagedDomainDeploymentConfigurations() {}
+    }
+  })
+
+  await assert.rejects(
+    afterPack._internals.verifyOfficialPublicReleaseComposition(
+      deploymentComposition(),
+      {
+        environment: { SCIFORGE_PUBLIC_RELEASE: '1' },
+        discoverDomainPackages: async () => [],
+        loadTrackedPrivatePayloadPaths: () => [],
+        projectRoot: '/trusted/repository'
+      }
+    ),
+    /@fixture\/private-deployment/u
   )
 })
 
 test('after-pack allows active contributions that permit public release', async () => {
   const afterPack = loadAfterPackWithoutInternalRuntimes()
 
-  await afterPack._internals.verifyOfficialPublicReleaseComposition({
-    environment: { SCIFORGE_PUBLIC_RELEASE: '1' },
-    discoverDomainPackages: async () => [domainPackageCandidate({
-      contributionId: 'fixture.packaged-public',
-      publicRelease: 'allowed'
-    })],
-    loadTrackedInternalPayloadPaths: () => [],
-    projectRoot: '/trusted/repository'
-  })
+  await afterPack._internals.verifyOfficialPublicReleaseComposition(
+    emptyDeploymentComposition(),
+    {
+      environment: { SCIFORGE_PUBLIC_RELEASE: '1' },
+      discoverDomainPackages: async () => [domainPackageCandidate({
+        contributionId: 'fixture.packaged-public',
+        publicRelease: 'allowed'
+      })],
+      loadTrackedPrivatePayloadPaths: () => [],
+      projectRoot: '/trusted/repository'
+    }
+  )
 })
 
 test('after-pack rejects malformed public release mode instead of treating it as disabled', async () => {
@@ -383,7 +696,9 @@ test('after-pack rejects malformed public release mode instead of treating it as
   process.env.SCIFORGE_PUBLIC_RELEASE = 'true'
   try {
     await assert.rejects(
-      afterPack._internals.verifyOfficialPublicReleaseComposition(),
+      afterPack._internals.verifyOfficialPublicReleaseComposition(
+        emptyDeploymentComposition()
+      ),
       /must be exactly 1/u
     )
   } finally {
@@ -397,7 +712,9 @@ test('after-pack leaves ordinary local internal acceptance mode unchanged', asyn
   const previous = process.env.SCIFORGE_PUBLIC_RELEASE
   delete process.env.SCIFORGE_PUBLIC_RELEASE
   try {
-    await afterPack._internals.verifyOfficialPublicReleaseComposition()
+    await afterPack._internals.verifyOfficialPublicReleaseComposition(
+      emptyDeploymentComposition()
+    )
   } finally {
     if (previous === undefined) delete process.env.SCIFORGE_PUBLIC_RELEASE
     else process.env.SCIFORGE_PUBLIC_RELEASE = previous
@@ -464,4 +781,9 @@ function domainPackageCandidate({
       }]
     }
   }
+}
+
+function writeJson(path, value) {
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify(value), 'utf8')
 }

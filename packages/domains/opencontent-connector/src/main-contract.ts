@@ -32,7 +32,6 @@ export {
 export type {
   OpenContentExtendedCommandTransport,
   OpenContentExtendedDataFile,
-  OpenContentExtendedDownloadDestination,
   OpenContentExtendedOperationCommand,
   OpenContentExtendedUploadSource
 } from './supplier-extended-operation-protocol.js'
@@ -45,6 +44,42 @@ export type {
 export type OpenContentSupplierInvocation =
   | DocflowCommandInvocation
   | OpenContentExtendedCommandInvocation
+
+const OPENCONTENT_SUPPLIER_MUTATION_COMMANDS = Object.freeze([
+  'file-edit',
+  'folder-edit',
+  'upload',
+  'attach-remove',
+  'relation-create',
+  'relation-remove',
+  'publish',
+  'create-share',
+  'cancel-publish',
+  'cancel-share',
+  'rename',
+  'copy',
+  'move',
+  'delete',
+  'file-tag-set',
+  'file-tag-delete',
+  'create-shortcut',
+  'meta-edit',
+  'favorite-add',
+  'favorite-remove',
+  'perm-set',
+  'docflow-export',
+  'docflow-create',
+  'docflow-image-upload',
+  'docflow-image-download'
+] as const satisfies readonly OpenContentSupplierInvocation['command'][])
+const openContentSupplierMutationCommands = new Set<string>(
+  OPENCONTENT_SUPPLIER_MUTATION_COMMANDS
+)
+
+/** True only when a started supplier command may have changed external state. */
+export function isOpenContentSupplierMutationCommand(command: string): boolean {
+  return openContentSupplierMutationCommands.has(command)
+}
 
 export interface OpenContentSupplierCommandTransport {
   invoke(invocation: OpenContentSupplierInvocation): Promise<unknown>

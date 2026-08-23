@@ -153,56 +153,6 @@ export type ContentSpaceProviderFeatures = Readonly<{
   administration?: ContentSpaceAdministrationFeature
 }>
 
-const nativeDocumentExecuteSchema = z.custom<ContentSpaceNativeDocumentExecutor['execute']>(
-  (value) => typeof value === 'function',
-  'A native-document executor must be a function.'
-)
-const nativeDocumentDescribeSchema = z.custom<
-  ContentSpaceNativeDocumentExecutor['describeOperations']
->(
-  (value) => typeof value === 'function',
-  'A native-document operation descriptor must be a function.'
-)
-const extendedOperationsExecuteSchema = z.custom<ContentSpaceExtendedOperationsExecutor['execute']>(
-  (value) => typeof value === 'function',
-  'An extended-operations executor must be a function.'
-)
-const extendedOperationsDescribeSchema = z.custom<
-  ContentSpaceExtendedOperationsExecutor['describeOperations']
->(
-  (value) => typeof value === 'function',
-  'An extended-operations descriptor must be a function.'
-)
-const administrationBindSchema = z.custom<ContentSpaceAdministrationFeature['bind']>(
-  (value) => typeof value === 'function',
-  'An administration feature binder must be a function.'
-)
-const administrationDescribeSchema = z.custom<
-  ContentSpaceAdministrationFeature['describeOperations']
->(
-  (value) => typeof value === 'function',
-  'An administration operation descriptor must be a function.'
-)
-
-const nativeDocumentExecutorSchema = z.object({
-  describeOperations: nativeDocumentDescribeSchema,
-  execute: nativeDocumentExecuteSchema
-}).strict().readonly()
-const extendedOperationsExecutorSchema = z.object({
-  describeOperations: extendedOperationsDescribeSchema,
-  execute: extendedOperationsExecuteSchema
-}).strict().readonly()
-const administrationFeatureSchema = z.object({
-  describeOperations: administrationDescribeSchema,
-  bind: administrationBindSchema
-}).strict().readonly()
-
-export const contentSpaceProviderFeaturesSchema: z.ZodType<ContentSpaceProviderFeatures> = z.object({
-  nativeDocuments: nativeDocumentExecutorSchema.optional(),
-  extendedOperations: extendedOperationsExecutorSchema.optional(),
-  administration: administrationFeatureSchema.optional()
-}).strict().readonly()
-
 export const contentSpaceNativeDocumentOperationStateSchema = z.object({
   operation: nativeDocumentOperationSchema,
   readiness: contentSpaceReadinessSchema,
@@ -385,64 +335,6 @@ const NATIVE_DOCUMENT_EFFECTS = Object.freeze({
   ContentSpaceProviderFeatureEffect
 >>)
 
-const EXTENDED_OPERATION_EFFECTS = Object.freeze({
-  searchEntries: 'read',
-  listRecentEntries: 'read',
-  getEntryInfo: 'read',
-  resolveInternalLink: 'read',
-  buildFileScope: 'read',
-  listMetadataTypes: 'read',
-  listMetadataFields: 'read',
-  listMetadataChoices: 'read',
-  readEntryMetadata: 'read',
-  editEntryMetadata: 'external-write',
-  renameEntry: 'external-write',
-  copyEntries: 'external-write',
-  moveEntries: 'external-write',
-  deleteEntries: 'destructive',
-  createShortcut: 'external-write',
-  updateEntryProperties: 'external-write',
-  listSecurityLevels: 'read',
-  updateFileVersion: 'external-write',
-  exportFileAsPdf: 'workspace-write',
-  listAttachments: 'read',
-  addAttachment: 'external-write',
-  removeAttachment: 'destructive',
-  listRelations: 'read',
-  createRelation: 'external-write',
-  removeRelation: 'destructive',
-  listTags: 'read',
-  setTags: 'external-write',
-  removeTags: 'destructive',
-  createPublication: 'external-write',
-  listPublications: 'read',
-  cancelPublication: 'destructive',
-  createShare: 'external-write',
-  listShares: 'read',
-  cancelShare: 'destructive',
-  listAlbums: 'read',
-  listAlbumEntries: 'read',
-  addFavorite: 'external-write',
-  removeFavorite: 'destructive',
-  getCurrentPrincipal: 'read',
-  searchUsers: 'read',
-  searchDepartments: 'read',
-  searchPositions: 'read',
-  searchGroups: 'read',
-  listPermissionCategories: 'read',
-  listPermissions: 'read',
-  changePermissions: 'external-write',
-  listCollaborationEntries: 'read',
-  searchCollaborationEntries: 'read',
-  resolveCollaborationInvitation: 'read',
-  listKnowledgeCollections: 'read',
-  searchKnowledgeCollections: 'read',
-  browseKnowledgeCollection: 'read'
-} as const satisfies Readonly<Record<
-  ContentSpaceExtendedOperationKey,
-  ContentSpaceProviderFeatureEffect
->>)
-
 export type ContentSpaceExtendedOperationAuthority =
   | Readonly<{ kind: 'entry'; reference: ContentEntryReference }>
   | Readonly<{ kind: 'provider'; providerInstanceRef: string }>
@@ -481,7 +373,6 @@ const EXTENDED_AUTHORITY_EXTRACTORS = Object.freeze({
   updateEntryProperties: (request) => entryAuthority(request.target),
   listSecurityLevels: (request) => providerAuthority(request.providerInstanceRef),
   updateFileVersion: (request) => entryAuthority(request.reference),
-  exportFileAsPdf: (request) => entryAuthority(request.reference),
   listAttachments: (request) => entryAuthority(request.master),
   addAttachment: (request) => entryAuthority(request.master),
   removeAttachment: (request) => entryAuthority(request.attachment),
@@ -513,10 +404,7 @@ const EXTENDED_AUTHORITY_EXTRACTORS = Object.freeze({
   searchCollaborationEntries: (request) => providerAuthority(request.providerInstanceRef),
   resolveCollaborationInvitation: (request) => entryAuthority(request.file),
   listKnowledgeCollections: (request) => providerAuthority(request.providerInstanceRef),
-  searchKnowledgeCollections: (request) => providerAuthority(request.providerInstanceRef),
-  browseKnowledgeCollection: (request) => request.parent
-    ? entryAuthority(request.parent)
-    : providerAuthority(request.collection.providerInstanceRef)
+  searchKnowledgeCollections: (request) => providerAuthority(request.providerInstanceRef)
 } satisfies Readonly<Record<ContentSpaceExtendedOperationKey, AuthorityExtractor>>)
 
 export function nativeDocumentOperationEffect(
@@ -536,7 +424,7 @@ export function nativeDocumentRequestTarget(
 export function extendedOperationEffect(
   operation: ContentSpaceExtendedOperationKey
 ): ContentSpaceProviderFeatureEffect {
-  return EXTENDED_OPERATION_EFFECTS[operation]
+  return CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS[operation].effect
 }
 
 export function extendedOperationAuthority(

@@ -3,12 +3,10 @@ export const OPENCONTENT_EXTENDED_OPERATION_COMMANDS = Object.freeze([
   'file-search',
   'file-rag-scope',
   'file-info',
-  'file-internal-link',
   'folder-info',
   'recent-files',
   'meta-types',
   'meta-attrs',
-  'meta-modeldata',
   'meta-info',
   'meta-edit',
   'rename',
@@ -20,7 +18,6 @@ export const OPENCONTENT_EXTENDED_OPERATION_COMMANDS = Object.freeze([
   'folder-edit',
   'sec-level-list',
   'upload',
-  'download',
   'attach-list',
   'attach-remove',
   'relation-list',
@@ -43,10 +40,7 @@ export const OPENCONTENT_EXTENDED_OPERATION_COMMANDS = Object.freeze([
   'perm-list',
   'perm-set',
   'collab-list',
-  'collab-search',
-  'collab-link',
-  'kbox-list',
-  'file-list'
+  'collab-search'
 ] as const)
 
 const openContentExtendedOperationCommandSchema = z.enum(
@@ -73,29 +67,16 @@ const transferReadSchema = z.custom<OpenContentExtendedUploadSource['read']>(
   (value) => typeof value === 'function',
   'A managed upload source requires a read function.'
 )
-const transferWriteSchema = z.custom<OpenContentExtendedDownloadDestination['write']>(
-  (value) => typeof value === 'function',
-  'A managed download destination requires a write function.'
-)
-
-const openContentExtendedDataFileSchema = z.discriminatedUnion('role', [
-  z.object({
-    role: z.literal('source'),
-    encoding: z.literal('managed-stream'),
-    name: safeTransferNameSchema,
-    size: z.number().int().nonnegative().max(1_073_741_824),
-    read: transferReadSchema
-  }).strict().readonly(),
-  z.object({
-    role: z.literal('destination'),
-    encoding: z.literal('managed-stream'),
-    name: safeTransferNameSchema,
-    write: transferWriteSchema
-  }).strict().readonly()
-])
+const openContentExtendedDataFileSchema = z.object({
+  role: z.literal('source'),
+  encoding: z.literal('managed-stream'),
+  name: safeTransferNameSchema,
+  size: z.number().int().nonnegative().max(1_073_741_824),
+  read: transferReadSchema
+}).strict().readonly()
 export type OpenContentExtendedDataFile = z.infer<typeof openContentExtendedDataFileSchema>
 
-/** Ordinary attachment commands currently accept no caller supplied files. */
+/** Only attachment upload accepts one runner-managed source. */
 export const openContentExtendedCommandInvocationSchema = z.object({
   invocationId: invocationIdSchema,
   command: openContentExtendedOperationCommandSchema,
@@ -104,8 +85,7 @@ export const openContentExtendedCommandInvocationSchema = z.object({
 }).strict().superRefine((invocation, issue) => {
   const roles = invocation.dataFiles.map((file) => file.role)
   const needsSource = invocation.command === 'upload'
-  const needsDestination = invocation.command === 'download'
-  const expected = needsSource ? ['source'] : needsDestination ? ['destination'] : []
+  const expected = needsSource ? ['source'] : []
   if (roles.length !== expected.length || roles.some((role, index) => role !== expected[index])) {
     issue.addIssue({
       code: 'custom',
@@ -121,6 +101,24 @@ export type OpenContentExtendedCommandInvocation = z.infer<
 
 export const OPENCONTENT_CLI_RESULT_PROTOCOL = 'opencontent-cli-result:v1' as const
 
+const openContentSupplierBusinessCodeSchema = z.union([
+  z.string().trim().min(1).max(128),
+  z.number().int()
+])
+
+/** The one accepted supplier JSON envelope below the Connector receipt. */
+const openContentExtendedSupplierResponseSchema = z.discriminatedUnion('success', [
+  z.object({
+    success: z.literal(true),
+    data: z.json()
+  }).strict(),
+  z.object({
+    success: z.literal(false),
+    code: openContentSupplierBusinessCodeSchema,
+    error: z.string().trim().min(1).max(512)
+  }).strict()
+]).readonly()
+
 /** The success receipt shared with the private CLI runner. */
 export const openContentExtendedCommandSuccessSchema = z.object({
   protocol: z.literal(OPENCONTENT_CLI_RESULT_PROTOCOL),
@@ -128,9 +126,7 @@ export const openContentExtendedCommandSuccessSchema = z.object({
   command: openContentExtendedOperationCommandSchema,
   attemptCount: z.literal(1),
   outcome: z.literal('succeeded'),
-  json: z.json(),
-  structuredDeliveryItems: z.array(z.json()).max(8).readonly(),
-  managedDataFiles: z.array(z.json()).max(8).readonly()
+  json: openContentExtendedSupplierResponseSchema
 }).strict().readonly()
 
 export interface OpenContentExtendedCommandTransport {
@@ -141,8 +137,4 @@ export type OpenContentExtendedUploadSource = Readonly<{
   size: number
   sha256?: string
   read(input: Readonly<{ offset: number; length: number }>): Promise<Uint8Array>
-}>
-
-export type OpenContentExtendedDownloadDestination = Readonly<{
-  write(chunk: Uint8Array): Promise<void>
 }>

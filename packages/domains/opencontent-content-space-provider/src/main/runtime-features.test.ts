@@ -91,6 +91,24 @@ describe('OpenContent optional runtime features', () => {
     })
 
     const states = await features.extendedOperations!.describeOperations(operationContext())
+    expect(states).toHaveLength(50)
+    expect(states.filter(({ readiness }) => readiness === 'poc_only')).toHaveLength(40)
+    expect(states.filter(({ readiness }) => readiness === 'blocked_by_contract')).toHaveLength(10)
+    expect(states
+      .filter(({ readiness }) => readiness === 'blocked_by_contract')
+      .map(({ operation }) => operation))
+      .toEqual([
+        'resolveInternalLink',
+        'listMetadataChoices',
+        'updateFileVersion',
+        'searchUsers',
+        'searchDepartments',
+        'searchPositions',
+        'searchGroups',
+        'resolveCollaborationInvitation',
+        'listKnowledgeCollections',
+        'searchKnowledgeCollections'
+      ])
     expect(states).toContainEqual({
       operation: 'getCurrentPrincipal',
       readiness: 'poc_only',
@@ -121,6 +139,173 @@ describe('OpenContent optional runtime features', () => {
       })
     expect(supplierTransportSessionCount).toBe(0)
     expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('blocks operations without exact supplier receipts before opening a transport session', async () => {
+    const invoke = vi.fn<OpenContentSupplierCommandTransport['invoke']>()
+    let supplierTransportSessionCount = 0
+    const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
+      async (_session, operation) => {
+        supplierTransportSessionCount += 1
+        return operation({ invoke })
+      }
+    const extended = createOpenContentRuntimeFeatures({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: nativeFacadeFixture({ useSupplierTransport, listFolderEntries: vi.fn() })
+    }).extendedOperations!
+
+    const states = await extended.describeOperations(operationContext())
+    const blocked = [
+      {
+        operation: 'listKnowledgeCollections',
+        request: { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF, page: { limit: 10 } }
+      },
+      {
+        operation: 'searchKnowledgeCollections',
+        request: {
+          providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+          query: 'Research',
+          page: { limit: 10 }
+        }
+      },
+      {
+        operation: 'resolveInternalLink',
+        request: { reference: existingDocument.reference }
+      },
+      {
+        operation: 'resolveCollaborationInvitation',
+        request: { file: existingDocument.reference }
+      },
+      {
+        operation: 'listMetadataChoices',
+        request: {
+          field: {
+            type: {
+              providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+              metadataTypeId: 'meta-a'
+            },
+            fieldId: 'field-a'
+          },
+          page: { limit: 10 }
+        }
+      }
+    ] as const
+    for (const [index, { operation, request }] of blocked.entries()) {
+      expect(states).toContainEqual({
+        operation,
+        readiness: 'blocked_by_contract',
+        reasonCode: 'provider_contract_missing'
+      })
+      await expect(extended.execute({
+        effect: 'read',
+        context: {
+          ...operationContext(),
+          invocationId: `invocation_blocked_receipt_${String(index + 1).padStart(4, '0')}`
+        },
+        target: { kind: 'content', root: teamRoot, primary: teamRoot, authorized: [teamRoot] },
+        operation,
+        request
+      })).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'blocked_by_contract', retry: 'never' }
+      })
+    }
+    expect(supplierTransportSessionCount).toBe(0)
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('rejects a file-info response for a different resource at the Provider feature seam', async () => {
+    const requestedFile = Object.freeze({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      fileId: 'requested-document'
+    })
+    const transport: OpenContentSupplierCommandTransport = Object.freeze({
+      invoke: vi.fn(async (invocation) => ({
+        protocol: 'opencontent-cli-result:v1' as const,
+        invocationId: invocation.invocationId,
+        command: 'file-info' as const,
+        attemptCount: 1 as const,
+        outcome: 'succeeded' as const,
+        json: {
+          success: true,
+          data: {
+            fileGuid: 'different-document',
+            fileName: 'Different document.pdf',
+            folderGuid: teamRoot.containerId,
+            fileSize: 128
+          }
+        }
+      }))
+    })
+    const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
+      async (_session, operation) => operation(transport)
+    const extended = createOpenContentRuntimeFeatures({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: nativeFacadeFixture({ useSupplierTransport, listFolderEntries: vi.fn() })
+    }).extendedOperations!
+
+    await expect(extended.execute({
+      effect: 'read',
+      context: {
+        ...operationContext(),
+        invocationId: 'invocation_entry_info_identity_0001'
+      },
+      target: {
+        kind: 'content',
+        root: teamRoot,
+        primary: requestedFile,
+        authorized: [requestedFile]
+      },
+      operation: 'getEntryInfo',
+      request: { reference: requestedFile }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_contract_violation', retry: 'never' }
+    })
+  })
+
+  it('rejects a folder-info response for a different resource at the Provider feature seam', async () => {
+    const transport: OpenContentSupplierCommandTransport = Object.freeze({
+      invoke: vi.fn(async (invocation) => ({
+        protocol: 'opencontent-cli-result:v1' as const,
+        invocationId: invocation.invocationId,
+        command: 'folder-info' as const,
+        attemptCount: 1 as const,
+        outcome: 'succeeded' as const,
+        json: {
+          success: true,
+          data: {
+            folderGuid: 'different-folder',
+            folderName: 'Different folder'
+          }
+        }
+      }))
+    })
+    const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
+      async (_session, operation) => operation(transport)
+    const extended = createOpenContentRuntimeFeatures({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: nativeFacadeFixture({ useSupplierTransport, listFolderEntries: vi.fn() })
+    }).extendedOperations!
+
+    await expect(extended.execute({
+      effect: 'read',
+      context: {
+        ...operationContext(),
+        invocationId: 'invocation_entry_info_identity_0002'
+      },
+      target: {
+        kind: 'content',
+        root: teamRoot,
+        primary: teamRoot,
+        authorized: [teamRoot]
+      },
+      operation: 'getEntryInfo',
+      request: { reference: teamRoot }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_contract_violation', retry: 'never' }
+    })
   })
 
   it('returns native create success only after the created file is listed under the exact authorized parent', async () => {
@@ -505,7 +690,7 @@ describe('OpenContent optional runtime features', () => {
     const extended = features.extendedOperations
     expect(extended).toBeDefined()
     const states = await extended!.describeOperations(operationContext())
-    expect(states).toHaveLength(52)
+    expect(states).toHaveLength(50)
     expect(states.filter(({ readiness }) => readiness === 'poc_only'))
       .toEqual([
         {
@@ -515,7 +700,7 @@ describe('OpenContent optional runtime features', () => {
         }
       ])
     expect(states.filter(({ readiness }) => readiness === 'blocked_by_contract'))
-      .toHaveLength(51)
+      .toHaveLength(49)
 
     await expect(extended!.execute(currentPrincipalInput())).resolves.toEqual({
       ok: true,

@@ -1,6 +1,9 @@
 import { generateKeyPairSync } from 'node:crypto'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   CONTENT_SPACE_CAPABILITY_IDS,
@@ -42,7 +45,7 @@ import {
 
 import { createDomainMainEntry as createAdapterMainEntry } from './index.js'
 
-const TRUSTED_ORIGIN = 'https://test1.edoc2.com'
+const TRUSTED_ORIGIN = 'https://tenant.example'
 const TOKEN_CANARY = 'opaque-integration-token-0001'
 const PASSWORD_CANARY = 'password-canary-do-not-return'
 const LEGACY_PROVIDER_INSTANCE_REF = 'opencontent-default'
@@ -57,6 +60,18 @@ const principal = Object.freeze({
 
 const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+const deploymentRoot = mkdtempSync(join(tmpdir(), 'sciforge-opencontent-composed-'))
+const deploymentPath = join(
+  deploymentRoot,
+  '.sciforge/private/deployments/opencontent-connector.json'
+)
+mkdirSync(dirname(deploymentPath), { recursive: true })
+writeFileSync(deploymentPath, JSON.stringify({
+  contractVersion: 1,
+  providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+  origin: TRUSTED_ORIGIN
+}), 'utf8')
+afterAll(() => rmSync(deploymentRoot, { recursive: true, force: true }))
 afterEach(() => vi.unstubAllGlobals())
 
 type CapabilityDefinition = Readonly<{
@@ -216,6 +231,8 @@ async function composeRuntime(
   })
   const commonHost = Object.freeze({
     getUserDataDir: () => '/private/tmp/sciforge-opencontent-content-space-composed-test',
+    getAppRoot: () => deploymentRoot,
+    isPackaged: () => false,
     defineCapability: (options: unknown) => options,
     internalServices
   })

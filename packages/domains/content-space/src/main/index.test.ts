@@ -374,8 +374,7 @@ describe('Content Space main composition', () => {
     ])
     const workspaceWriteIds = new Set<string>([
       CONTENT_SPACE_CAPABILITY_IDS.agentDownload,
-      CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentWorkspaceWrite,
-      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWorkspaceWrite
+      CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentWorkspaceWrite
     ])
     for (const capability of definitions) {
       if (confirmedWriteIds.has(capability.id)) {
@@ -1329,10 +1328,6 @@ describe('Content Space main composition', () => {
       .toBe('2.0.0')
     expect(definition(
       definitions,
-      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWorkspaceWrite
-    ).version).toBe('1.0.0')
-    expect(definition(
-      definitions,
       CONTENT_SPACE_CAPABILITY_IDS.agentExtendedDestructive
     ).version).toBe('1.0.0')
   })
@@ -1519,10 +1514,6 @@ describe('Content Space main composition', () => {
       definitions,
       CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite
     ).inputSchema
-    const extendedWorkspaceWrite = definition(
-      definitions,
-      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWorkspaceWrite
-    ).inputSchema
 
     expect(nativeWrite.safeParse({ request: {
       operation: 'image-upload',
@@ -1555,14 +1546,6 @@ describe('Content Space main composition', () => {
     expect(extendedWrite.safeParse({
       operation: 'addAttachment',
       request: { master: FILE, name: 'data.csv', sourceHandle }
-    }).success).toBe(false)
-    expect(extendedWorkspaceWrite.safeParse({
-      operation: 'exportFileAsPdf',
-      request: { reference: FILE, workspaceRelativePath: 'exports/file.pdf' }
-    }).success).toBe(true)
-    expect(extendedWorkspaceWrite.safeParse({
-      operation: 'exportFileAsPdf',
-      request: { reference: FILE, destinationHandle }
     }).success).toBe(false)
   })
 

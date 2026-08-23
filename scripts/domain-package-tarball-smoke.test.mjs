@@ -158,7 +158,7 @@ function moduleSpecifiers(source) {
 }
 
 async function assertPackedPackageBoundaries(packageRoot, packageName) {
-  let codeRoot = null
+  let codeRoot = packageRoot
   for (const directory of ['src', 'dist']) {
     const candidate = join(packageRoot, directory)
     try {
@@ -170,7 +170,6 @@ async function assertPackedPackageBoundaries(packageRoot, packageName) {
       if (error?.code !== 'ENOENT') throw error
     }
   }
-  assert.notEqual(codeRoot, null, `${packageName} packed archive must contain src or dist`)
 
   for (const sourceFile of await sourceFiles(codeRoot)) {
     const source = await readFile(sourceFile, 'utf8')
@@ -299,6 +298,26 @@ test('publishable domain packages resolve every public export from independent t
       })
       const packed = JSON.parse(stdout)
       assert.equal(packed.length, 1, `Expected one archive for ${packageJson.name}`)
+      const deploymentConfiguration = packageJson.sciforgeDeploymentConfiguration
+      if (deploymentConfiguration !== undefined) {
+        assert.equal(
+          typeof deploymentConfiguration.sourceRelativePath,
+          'string',
+          `${packageJson.name} deployment source path must be declared`
+        )
+        const packedPaths = new Set(packed[0].files.map(({ path }) => path))
+        assert.equal(
+          packedPaths.has(deploymentConfiguration.sourceRelativePath),
+          false,
+          `${packageJson.name} tarball must exclude its private deployment sidecar`
+        )
+        assert.equal(
+          [...packedPaths].some((path) =>
+            path === '.sciforge' || path.startsWith('.sciforge/')),
+          false,
+          `${packageJson.name} tarball must exclude private deployment directories`
+        )
+      }
       archives.push(join(tarballs, packed[0].filename))
     }
 

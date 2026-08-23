@@ -9,6 +9,12 @@ Content Space.
   provider-neutral `content-space.provider-enrollment-view` slot.
 - The Provider package owns every supplier-receipt-to-Content-Space semantic adapter. It selects by Provider Kind and forwards the exact Provider Instance Ref chosen by
   Content Space. It never receives a token, password, endpoint, or connection ID.
+- The Connector's strict package-owned deployment sidecar is the only origin
+  channel. This adapter never constructs a fallback or parallel client. When
+  configuration is missing or invalid, discovery remains composed and its
+  ordinary, Team, and supplier calls all receive `provider_unavailable` from
+  the same Connector facade before settings, credentials, network, or process
+  work.
 
 The binding remains owned by the Connector and scoped to the current Local Account, this device,
 and the selected Provider Instance. The external OpenContent account is not a SciForge identity.
@@ -24,10 +30,16 @@ remains `poc_only`, no native-document operation has a live-success claim, and
 sibling operation does not imply Agent eligibility.
 
 - The six ordinary file operations, all ten Team Administration operations,
-  nine safely contract-shaped native-document operations, and 47 extended
-  operations are `poc_only` / `verification_profile_required` when their
-  required runtime is installed. The default product composition cannot
-  execute them.
+  nine safely contract-shaped native-document operations, and 40 of the 50
+  extended operations are `poc_only` / `verification_profile_required` when
+  their required runtime is installed. The exact extended blocked set, in
+  catalog order, is `resolveInternalLink`, `listMetadataChoices`,
+  `updateFileVersion`, `searchUsers`, `searchDepartments`, `searchPositions`,
+  `searchGroups`, `resolveCollaborationInvitation`,
+  `listKnowledgeCollections`, and `searchKnowledgeCollections`. Without the
+  overlay, only session-backed `getCurrentPrincipal` is PoC-only and the other
+  49 extended operations are blocked. The default product composition cannot
+  execute PoC-only operations.
 - Provider-declared readiness and current invocation admission remain separate.
   A separately reviewed package-owned Content Space profile can admit only one
   exact PoC invocation matching the Provider Instance, complete Host Principal
@@ -52,9 +64,16 @@ sibling operation does not imply Agent eligibility.
 - `searchUsers`, `searchDepartments`, `searchPositions`, and `searchGroups` are
   `blocked_by_contract`: the pinned SDK and receipt define only collection
   envelopes, not exact item schemas or kind evidence. The Provider never
-  guesses aliases or assigns a requested kind to an unproven item. These four
-  supplier commands have no Provider mapping and cannot be dispatched through
-  Content Space.
+  guesses aliases or assigns a requested kind to an unproven item. Their
+  Provider operation mappings remain only to report deterministic
+  `blocked_by_contract`; the supplier commands are absent from the Connector
+  admitted union, so calls fail before supplier transport.
+- `resolveInternalLink`, `listMetadataChoices`,
+  `resolveCollaborationInvitation`, `listKnowledgeCollections`, and
+  `searchKnowledgeCollections` are also `blocked_by_contract`: their supplier
+  commands remain inventory-only and are absent from the admitted adapter
+  union. Ordinary `listEntries` remains on the typed Connector path, and PDF
+  export remains a format of `native-document:export`.
 - `getCurrentPrincipal` dispatches no supplier command and parses no user DTO.
   A narrow package-private semantic port reuses only the strict canonical
   external identity returned by the Connector-revalidated current Principal
@@ -116,7 +135,7 @@ read as `provider_unavailable` and on a write/destructive operation as
 `outcome_unknown`, without automatic retry.
 
 The Connector-owned static inventory test freezes CLI version `1.0.0`, all 86
-supplier commands, and the exact 56-command admitted adapter union. It does not run a
+supplier commands, and the exact 50-command admitted adapter union. It does not run a
 second packaged acceptance path and is not Provider live evidence. Packaged
 callability is proven only by the canonical Electron/Broker → Content Space →
 Provider → Connector smoke.

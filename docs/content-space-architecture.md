@@ -25,6 +25,7 @@ promotes readiness or changes a sibling operation's evidence.
 | **Shared Content Container Member** | A Provider directory `user` reference associated with one exact shared root. It is separate from Cloud Project membership and carries no Project authority. |
 | **Connection** | A Connector-owned, node-local binding between the current Principal and one Provider Instance, including protected credentials. It is never portable or caller-selected. |
 | **Connector** | The provider-specific main-process boundary that owns endpoint/tenant policy, enrollment, credentials, session validation, transport, and Provider schema validation. It owns no Content Space business semantics. |
+| **Provider Deployment Configuration** | A package-declared private binding from one fixed Provider Instance to its HTTPS origin. It controls Connector runtime availability, not discovery, readiness, admission, Connection selection, or supplier inventory. |
 | **Supplier-backed Connector Transport** | Connector-owned wire protocol, reviewed allowlist, asset verification, and process isolation. Provider-owned receipt-to-Content-Space semantics consume it through the token-free main contract. It is not a separate release unit, supplier payload, or second capability path. |
 | **Private Overlay** | Optional receipt-backed supplier assets under `internal/opencontent/**` in source mode and one fixed resources directory in an internal packaged build. It is runtime data, not a domain package or authorization switch. |
 | **Broker Resource** | A process-local, caller/Principal/audience-bound executable resource issued after selection or portable-reference reauthorization. Raw Provider IDs and portable references are not Broker authority. |
@@ -68,6 +69,19 @@ pass through Connector-owned transport and Provider-owned semantic adapters and,
 when installed, the private overlay. These
 are branches behind the same Provider/Connector boundary, not parallel Agent or
 authorization paths.
+
+The OpenContent Connector reads one strict package-owned deployment sidecar
+exactly once during activation. Source builds use
+`.sciforge/private/deployments/opencontent-connector.json`; packaged builds use
+`resources/domain-deployments/opencontent-connector.json`. No mode falls
+back to the other, and environment, argv, caller, renderer, or package settings
+cannot supply an origin. Missing or invalid configuration leaves the Provider
+Instance, capability factory, and service descriptor composed, but every legal
+Provider call fails `provider_unavailable` before settings, credentials,
+network, or supplier-process work. This availability gate is independent of
+Content Space verification profiles and the optional supplier overlay. The
+isolated `resources/domain-deployments/**` namespace means a sidecar-only build
+does not manufacture the separate `resources/opencontent/**` supplier overlay.
 
 Shared-container membership also has one closed path. `addMember`,
 `listMembers`, and `removeMember` consume or return one authoritative Provider
@@ -198,7 +212,7 @@ authority.
 | Safe native-document operations | Required | Nine operations are `poc_only` | Exact feature/resource authority, profile, binding when required, and bounded transfers |
 | Hash-bound native-document mutations, including `edit` | Required | `blocked_by_contract` | Requires Provider-atomic `baseHash` compare-and-mutate; no profile can bypass it |
 | Native-document import | Required | `blocked_by_contract` | Requires a frozen source-identity/content postcondition; the pinned command remains inventory-only and is blocked before source transfer or subprocess dispatch |
-| Extended operations | Required except session-backed `getCurrentPrincipal` | 47 of 52 are `poc_only` with overlay; `updateFileVersion` and four unpinned directory searches are blocked | Exact typed operation/resource/profile; writes and transfers require binding attestation |
+| Extended operations | Required except session-backed `getCurrentPrincipal` | With overlay, 40 of 50 are `poc_only`; in catalog order, `resolveInternalLink`, `listMetadataChoices`, `updateFileVersion`, `searchUsers`, `searchDepartments`, `searchPositions`, `searchGroups`, `resolveCollaborationInvitation`, `listKnowledgeCollections`, and `searchKnowledgeCollections` are blocked | Exact typed operation/resource/profile; writes and transfers require binding attestation |
 | Same-file version update | Required | `blocked_by_contract` | Requires one frozen exact-version CAS contract and unambiguous `UPDATE` versus `UPGRADE` semantics |
 | Immutable artifact observation | Not required | `blocked_by_contract` | Requires immutable retention and exact version-specific retrieval before issuing `ArtifactReference` |
 | Project Content Directory provisioning | Not applicable | Absent | Requires a future separately reviewed Project-owning contract; no Content Space operation, Provider port, or generic Agent entrypoint exists |
@@ -220,10 +234,11 @@ not depend on a Host identity reverse map.
 ## Behavior without the private overlay
 
 SciForge, Content Space, Provider discovery/enrollment, the public Connector,
-ordinary file candidates, and Team administration remain composed and usable
-according to their own admission state. Native-document support is not
+ordinary file candidates, and Team administration remain composed. They are
+usable according to their own admission state only when the Connector's private
+deployment configuration is valid. Native-document support is not
 registered. Session-backed `getCurrentPrincipal` remains the only extended PoC
-candidate without supplier assets; the other 51 extended operations fail closed as
+candidate without supplier assets; the other 49 extended operations fail closed as
 `provider_contract_missing` before supplier dispatch. Startup, build, and
 packaging do not search private `node_modules` or walk ancestor directories.
 
@@ -242,7 +257,10 @@ without exposing a public role value. Every live-verified operation remains `poc
 operation, root, authority, audience, Principal, or binding, and `production_ready` remains zero.
 
 The Connector-owned static contract freezes CLI version `1.0.0`, 86 supplier commands, and the
-56-command admitted adapter union. Static inventory characterization is not packaged or Provider-live
+50-command admitted adapter union. The supplier `download`, `file-list`, `kbox-list`,
+`file-internal-link`, `meta-modeldata`, and `collab-link` commands are inventory-only and cannot
+reach the process transport. Ordinary `listEntries` and download remain on the typed Connector
+path, while PDF export remains a format of `native-document:export`. Static inventory characterization is not packaged or Provider-live
 callability evidence; any packaged callability claim must traverse the canonical Electron/Broker →
 Content Space → Provider → Connector path. Additional file upload/download and native-document attempts
 did not reach Provider business dispatch because external Agent operation-reference/cursor

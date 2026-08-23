@@ -26,6 +26,7 @@ import {
 import type {
   OpenContentBoundTeamAdministration
 } from '../team-administration-contract.js'
+import type { OpenContentSkillRuntimeSession } from './skill-runtime.js'
 import {
   createOpenContentTeamAdministration,
   type OpenContentTeamAdministration
@@ -245,9 +246,8 @@ describe('OpenContent connection capabilities', () => {
 describe('OpenContent main-only Content Space facade', () => {
   it('keeps SDK and Team operations available when private attachment assets are absent', () => {
     const facade = createOpenContentContentSpaceFacade({
-      client: {} as OpenContentClient,
       connections: connectionService(),
-      teamAdministration: teamAdministration()
+      getRuntime: facadeRuntime({} as OpenContentClient, teamAdministration())
     })
 
     expect(facade.useSupplierTransport).toBeUndefined()
@@ -269,16 +269,14 @@ describe('OpenContent main-only Content Space facade', () => {
       }))
     ))
     const facade = createOpenContentContentSpaceFacade({
-      client: {} as OpenContentClient,
       connections,
-      teamAdministration: rawAdministration,
-      skillRuntime: {
+      getRuntime: facadeRuntime({} as OpenContentClient, rawAdministration, {
         useSupplierTransport: async (_input, operation) => operation({
           invoke: async () => {
             throw new Error('The skill runtime is not used by this test.')
           }
         })
-      }
+      })
     })
 
     let retainedAdministration: OpenContentBoundTeamAdministration | undefined
@@ -315,9 +313,8 @@ describe('OpenContent main-only Content Space facade', () => {
   it('exposes only the token-free external binding attestation from the current session', async () => {
     const connections = connectionService()
     const facade = createOpenContentContentSpaceFacade({
-      client: {} as OpenContentClient,
       connections,
-      teamAdministration: teamAdministration()
+      getRuntime: facadeRuntime({} as OpenContentClient, teamAdministration())
     })
 
     await expect(facade.attestExternalBinding({
@@ -346,9 +343,11 @@ describe('OpenContent main-only Content Space facade', () => {
       return { parentFolderGuid: input.parentFolderGuid, entries: [] }
     })
     const facade = createOpenContentContentSpaceFacade({
-      client: { listFolderEntries } as unknown as OpenContentClient,
       connections,
-      teamAdministration: teamAdministration()
+      getRuntime: facadeRuntime(
+        { listFolderEntries } as unknown as OpenContentClient,
+        teamAdministration()
+      )
     })
     const assertPrincipalCurrent = vi.fn(async () => { await Promise.resolve() })
 
@@ -427,12 +426,14 @@ describe('OpenContent main-only Content Space facade', () => {
       }))
     ))
     const facade = createOpenContentContentSpaceFacade({
-      client: createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch }),
       connections,
-      teamAdministration: createOpenContentTeamAdministration({
-        baseUrl: 'https://opencontent.invalid',
-        fetch
-      })
+      getRuntime: facadeRuntime(
+        createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch }),
+        createOpenContentTeamAdministration({
+          baseUrl: 'https://opencontent.invalid',
+          fetch
+        })
+      )
     })
     const assertPrincipalCurrent = vi.fn(async () => { await Promise.resolve() })
 
@@ -509,4 +510,17 @@ function teamAdministration(): OpenContentTeamAdministration {
     removeTeamUsers: vi.fn(async () => undefined),
     resolveTeamRoot: vi.fn()
   }
+}
+
+function facadeRuntime(
+  client: OpenContentClient,
+  teamAdministration: OpenContentTeamAdministration,
+  skillRuntime?: OpenContentSkillRuntimeSession
+) {
+  const runtime = Object.freeze({
+    client,
+    teamAdministration,
+    ...(skillRuntime ? { skillRuntime } : {})
+  })
+  return () => runtime
 }

@@ -228,6 +228,25 @@ describe('Content Space public contract', () => {
     expect(contract).not.toHaveProperty('issueArtifactReference')
   })
 
+  it('pins schema-parsed feature ports instead of retaining mutable provider aliases', () => {
+    const nativeDocuments = {
+      describeOperations: async () => [],
+      execute: async () => ({})
+    }
+    const mutableFeatures = { nativeDocuments }
+    const mutableProvider = {
+      ...providerFixture(),
+      features: mutableFeatures
+    } as unknown as contract.ContentSpaceProvider
+
+    const defined = contract.defineContentSpaceProvider(mutableProvider)
+
+    expect(defined.features).not.toBe(mutableFeatures)
+    expect(defined.features?.nativeDocuments).not.toBe(nativeDocuments)
+    expect(Object.isFrozen(defined.features)).toBe(true)
+    expect(Object.isFrozen(defined.features?.nativeDocuments)).toBe(true)
+  })
+
   it('accepts only the exact cohesive Provider contract', () => {
     const provider = providerFixture()
     expect(contract.defineContentSpaceProvider(provider)).toBe(provider)
@@ -248,7 +267,13 @@ describe('Content Space public contract', () => {
         }
       }
     } as unknown as contract.ContentSpaceProvider
-    expect(contract.defineContentSpaceProvider(providerWithFeatures)).toBe(providerWithFeatures)
+    const definedProviderWithFeatures = contract.defineContentSpaceProvider(providerWithFeatures)
+    expect(definedProviderWithFeatures).not.toBe(providerWithFeatures)
+    expect(definedProviderWithFeatures).toEqual(providerWithFeatures)
+    expect(Object.isFrozen(definedProviderWithFeatures.features)).toBe(true)
+    expect(Object.isFrozen(definedProviderWithFeatures.features?.nativeDocuments)).toBe(true)
+    expect(Object.isFrozen(definedProviderWithFeatures.features?.extendedOperations)).toBe(true)
+    expect(Object.isFrozen(definedProviderWithFeatures.features?.administration)).toBe(true)
     expect(() => contract.defineContentSpaceProvider({
       ...provider,
       executeNativeDocument: async () => ({})

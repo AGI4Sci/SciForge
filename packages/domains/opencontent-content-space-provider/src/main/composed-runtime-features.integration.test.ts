@@ -39,7 +39,7 @@ import {
 import { createDomainMainEntry as createProviderMainEntry } from './index.js'
 
 const SYSTEM_USER_TOKEN = 'system-user-token-canary-00000001'
-const SITE = 'https://test1.edoc2.com'
+const SITE = 'https://tenant.example'
 const DOCUMENT_HASH = 'a'.repeat(64)
 const EXPECTED_OVERLAY_ARCHIVE_SHA256 =
   '5838c94033e467d7a9e3be6669c7e72390cd9cecfa4b2a7466690734e718b598'
@@ -145,19 +145,26 @@ describe('composed OpenContent runtime features', () => {
       .every((state) => state.reasonCode === 'verification_profile_required')).toBe(true)
 
     const extendedOperations = await extended.describeOperations(operationContext)
-    expect(extendedOperations).toHaveLength(52)
+    expect(extendedOperations).toHaveLength(50)
     expect(extendedOperations.filter((state) => state.readiness === 'blocked_by_contract'))
       .toEqual([
+        'resolveInternalLink',
+        'listMetadataChoices',
         'updateFileVersion',
         'searchUsers',
         'searchDepartments',
         'searchPositions',
-        'searchGroups'
+        'searchGroups',
+        'resolveCollaborationInvitation',
+        'listKnowledgeCollections',
+        'searchKnowledgeCollections'
       ].map((operation) => ({
         operation,
         readiness: 'blocked_by_contract',
         reasonCode: 'provider_contract_missing'
       })))
+    expect(extendedOperations.filter((state) => state.readiness === 'poc_only'))
+      .toHaveLength(40)
     expect(extendedOperations.filter((state) => state.readiness === 'poc_only')
       .every((state) => (
         state.readiness === 'poc_only' &&
@@ -469,6 +476,16 @@ function createAssetFixture() {
     })
   }
   writeOverlayReceipt(repositoryRoot)
+  const deploymentPath = resolve(
+    repositoryRoot,
+    '.sciforge/private/deployments/opencontent-connector.json'
+  )
+  mkdirSync(dirname(deploymentPath), { recursive: true })
+  writeFileSync(deploymentPath, JSON.stringify({
+    contractVersion: 1,
+    providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+    origin: SITE
+  }), 'utf8')
   return {
     repositoryRoot,
     dispose: () => rmSync(root, { recursive: true, force: true })

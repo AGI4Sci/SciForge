@@ -308,7 +308,7 @@ describe('OpenContent Content Space Provider', () => {
       signal: new AbortController().signal,
       assertPrincipalCurrent
     })
-    expect(states).toHaveLength(52)
+    expect(states).toHaveLength(50)
     expect(states.filter(({ readiness }) => readiness === 'poc_only'))
       .toEqual([
         {
@@ -318,10 +318,10 @@ describe('OpenContent Content Space Provider', () => {
         }
       ])
     expect(states.filter(({ readiness }) => readiness === 'blocked_by_contract'))
-      .toHaveLength(51)
+      .toHaveLength(49)
   })
 
-  it('advertises safe runtime operations and keeps non-CAS mutations blocked', async () => {
+  it('advertises the exact extended-operation readiness split with an overlay', async () => {
     const useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']> =
       async () => { throw new Error('Execution is outside this readiness test.') }
     const provider = createOpenContentContentSpaceProvider({
@@ -343,24 +343,29 @@ describe('OpenContent Content Space Provider', () => {
     expect(states.map(({ operation }) => operation).sort()).toEqual(
       Object.keys(CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS).sort()
     )
-    for (const operation of [
-      'updateFileVersion',
-      'searchUsers',
-      'searchDepartments',
-      'searchPositions',
-      'searchGroups'
-    ] as const) {
-      expect(states).toContainEqual({
+    expect(states).toHaveLength(50)
+    expect(states.filter(({ readiness }) => readiness === 'blocked_by_contract'))
+      .toEqual([
+        'resolveInternalLink',
+        'listMetadataChoices',
+        'updateFileVersion',
+        'searchUsers',
+        'searchDepartments',
+        'searchPositions',
+        'searchGroups',
+        'resolveCollaborationInvitation',
+        'listKnowledgeCollections',
+        'searchKnowledgeCollections'
+      ].map((operation) => ({
         operation,
         readiness: 'blocked_by_contract',
         reasonCode: 'provider_contract_missing'
-      })
-    }
+      })))
     expect(states.filter(({ readiness }) => readiness === 'poc_only')
       .every(({ readiness, reasonCode }) =>
         readiness === 'poc_only' && reasonCode === 'verification_profile_required'))
       .toBe(true)
-    expect(states.filter(({ readiness }) => readiness === 'poc_only')).toHaveLength(47)
+    expect(states.filter(({ readiness }) => readiness === 'poc_only')).toHaveLength(40)
 
     const nativeStates = await native!.describeOperations({
       principal,

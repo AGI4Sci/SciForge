@@ -8,7 +8,6 @@ import { providerInstanceRefSchema } from '@sciforge/domain-sdk/provider-composi
 
 import {
   artifactDigestSchema,
-  artifactReferenceSchema,
   contentContainerReferenceSchema,
   contentSpaceDirectoryDepartmentReferenceSchema,
   contentSpaceDirectoryGroupReferenceSchema,
@@ -421,7 +420,6 @@ export const CONTENT_SPACE_EXTENDED_OPERATIONS = Object.freeze({
   listSecurityLevels: operation('listSecurityLevels', 'content-space.list-security-levels', 'entry-management', 'read'),
 
   updateFileVersion: operation('updateFileVersion', 'content-space.update-file-version', 'versioning', 'external-write'),
-  exportFileAsPdf: operation('exportFileAsPdf', 'content-space.export-file-as-pdf', 'versioning', 'workspace-write'),
 
   listAttachments: operation('listAttachments', 'content-space.list-attachments', 'attachments', 'read'),
   addAttachment: operation('addAttachment', 'content-space.add-attachment', 'attachments', 'external-write'),
@@ -462,8 +460,7 @@ export const CONTENT_SPACE_EXTENDED_OPERATIONS = Object.freeze({
   resolveCollaborationInvitation: operation('resolveCollaborationInvitation', 'content-space.resolve-collaboration-invitation', 'collaboration', 'read'),
 
   listKnowledgeCollections: operation('listKnowledgeCollections', 'content-space.list-knowledge-collections', 'knowledge', 'read'),
-  searchKnowledgeCollections: operation('searchKnowledgeCollections', 'content-space.search-knowledge-collections', 'knowledge', 'read'),
-  browseKnowledgeCollection: operation('browseKnowledgeCollection', 'content-space.browse-knowledge-collection', 'knowledge', 'read')
+  searchKnowledgeCollections: operation('searchKnowledgeCollections', 'content-space.search-knowledge-collections', 'knowledge', 'read')
 })
 
 // Metadata
@@ -737,21 +734,6 @@ export const contentSpaceUpdateFileVersionResultSchema = contentSpaceExtendedRes
   contentSpaceUpdateFileVersionReceiptSchema
 )
 
-export const contentSpaceExportFileAsPdfRequestSchema = z.object({
-  reference: z.union([contentFileReferenceSchema, artifactReferenceSchema]),
-  versionId: extendedOpaqueIdSchema.optional(),
-  destinationHandle: domainFileTransferHandleSchema
-}).strict().readonly()
-export const contentSpaceExportFileAsPdfReceiptSchema = z.object({
-  reference: z.union([contentFileReferenceSchema, artifactReferenceSchema]),
-  format: z.literal('pdf'),
-  bytesWritten: z.number().int().nonnegative().max(1_073_741_824_000),
-  digest: artifactDigestSchema.optional()
-}).strict().readonly()
-export const contentSpaceExportFileAsPdfResultSchema = contentSpaceExtendedResultSchema(
-  contentSpaceExportFileAsPdfReceiptSchema
-)
-
 // Attachments, relations, and tags
 
 export const contentSpaceAttachmentSummarySchema = z.object({
@@ -785,12 +767,6 @@ export const contentSpaceAgentUpdateFileVersionRequestSchema = z.object({
   strategy: z.enum(['major', 'minor']),
   expectedVersionId: extendedOpaqueIdSchema,
   changeNote: z.string().trim().max(2_048).optional()
-}).strict().readonly()
-
-export const contentSpaceAgentExportFileAsPdfRequestSchema = z.object({
-  reference: z.union([contentFileReferenceSchema, artifactReferenceSchema]),
-  versionId: extendedOpaqueIdSchema.optional(),
-  workspaceRelativePath: domainWorkspaceRelativePathSchema
 }).strict().readonly()
 
 export const contentSpaceAgentAddAttachmentRequestSchema = z.object({
@@ -1325,14 +1301,6 @@ export const contentSpaceListKnowledgeCollectionsResultSchema = contentSpaceExte
 )
 export const contentSpaceSearchKnowledgeCollectionsResultSchema =
   contentSpaceListKnowledgeCollectionsResultSchema
-export const contentSpaceBrowseKnowledgeCollectionRequestSchema = z.object({
-  collection: contentSpaceKnowledgeCollectionReferenceSchema,
-  parent: contentContainerReferenceSchema.optional(),
-  page: contentSpacePageRequestSchema
-}).strict().readonly()
-export const contentSpaceBrowseKnowledgeCollectionResultSchema = contentSpaceExtendedResultSchema(
-  contentSpaceEntryInfoPageSchema
-)
 
 export type ContentSpaceExtendedOperationContract = ContentSpaceExtendedOperationDescriptor &
 Readonly<{
@@ -1388,8 +1356,6 @@ export const CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS = Object.freeze({
 
   updateFileVersion: operationContract(CONTENT_SPACE_EXTENDED_OPERATIONS.updateFileVersion,
     contentSpaceUpdateFileVersionRequestSchema, contentSpaceUpdateFileVersionResultSchema),
-  exportFileAsPdf: operationContract(CONTENT_SPACE_EXTENDED_OPERATIONS.exportFileAsPdf,
-    contentSpaceExportFileAsPdfRequestSchema, contentSpaceExportFileAsPdfResultSchema),
 
   listAttachments: operationContract(CONTENT_SPACE_EXTENDED_OPERATIONS.listAttachments,
     contentSpaceListAttachmentsRequestSchema, contentSpaceListAttachmentsResultSchema),
@@ -1462,16 +1428,14 @@ export const CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS = Object.freeze({
   listKnowledgeCollections: operationContract(CONTENT_SPACE_EXTENDED_OPERATIONS.listKnowledgeCollections,
     contentSpaceListKnowledgeCollectionsRequestSchema, contentSpaceListKnowledgeCollectionsResultSchema),
   searchKnowledgeCollections: operationContract(CONTENT_SPACE_EXTENDED_OPERATIONS.searchKnowledgeCollections,
-    contentSpaceSearchKnowledgeCollectionsRequestSchema, contentSpaceSearchKnowledgeCollectionsResultSchema),
-  browseKnowledgeCollection: operationContract(CONTENT_SPACE_EXTENDED_OPERATIONS.browseKnowledgeCollection,
-    contentSpaceBrowseKnowledgeCollectionRequestSchema, contentSpaceBrowseKnowledgeCollectionResultSchema)
+    contentSpaceSearchKnowledgeCollectionsRequestSchema, contentSpaceSearchKnowledgeCollectionsResultSchema)
 })
 
 export type ContentSpaceExtendedOperationKey = keyof typeof CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS
 
 /**
  * Returns the canonical Agent input schema for one extended operation. Only the
- * three transfer operations differ: they accept an active Workspace-relative
+ * two transfer operations differ: they accept an active Workspace-relative
  * path and never a Host transfer handle or Provider path.
  */
 export function contentSpaceAgentExtendedRequestSchema(
@@ -1480,8 +1444,6 @@ export function contentSpaceAgentExtendedRequestSchema(
   switch (operation) {
     case 'updateFileVersion':
       return contentSpaceAgentUpdateFileVersionRequestSchema
-    case 'exportFileAsPdf':
-      return contentSpaceAgentExportFileAsPdfRequestSchema
     case 'addAttachment':
       return contentSpaceAgentAddAttachmentRequestSchema
     default:

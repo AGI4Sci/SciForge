@@ -1,4 +1,7 @@
 import { generateKeyPairSync } from 'node:crypto'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 
 import type { DomainMainHost, DomainMainInternalServiceHost } from '@sciforge/domain-sdk/host'
 import type {
@@ -12,7 +15,7 @@ import {
   OPENCONTENT_PROVIDER_INSTANCE_REF
 } from '@sciforge/domain-opencontent-connector/contract'
 import { createDomainMainEntry } from '@sciforge/domain-opencontent-connector/main'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { CapabilityCallerContextInput } from '../../shared/capability-broker'
 import { CapabilityBroker } from './broker'
@@ -22,8 +25,7 @@ import {
   type CapabilityDefinition
 } from './registry'
 
-const LEGACY_ENDPOINT_ENV = 'SCIFORGE_OPENCONTENT_BASE_URL'
-const TRUSTED_ORIGIN = 'https://test1.edoc2.com'
+const TRUSTED_ORIGIN = 'https://tenant.example'
 const PASSWORD_CANARY = 'password-canary-do-not-return'
 const TOKEN_CANARY = 'opaque-token-canary-do-not-return'
 const PROVIDER_MESSAGE_CANARY = 'raw-provider-message-canary-do-not-return'
@@ -44,10 +46,22 @@ const caller: CapabilityCallerContextInput = Object.freeze({
 
 const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+const deploymentRoot = mkdtempSync(join(tmpdir(), 'sciforge-opencontent-host-integration-'))
+const deploymentPath = join(
+  deploymentRoot,
+  '.sciforge/private/deployments/opencontent-connector.json'
+)
+mkdirSync(dirname(deploymentPath), { recursive: true })
+writeFileSync(deploymentPath, JSON.stringify({
+  contractVersion: 1,
+  providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+  origin: TRUSTED_ORIGIN
+}), 'utf8')
+afterAll(() => rmSync(deploymentRoot, { recursive: true, force: true }))
 afterEach(() => vi.unstubAllGlobals())
 
 describe('OpenContent connection through the Host capability Broker', () => {
-  it('binds and reads status through the compile-time trusted profile without endpoint environment', async () => {
+  it('binds and reads status through the package-owned deployment sidecar', async () => {
     const requests: Array<Readonly<{ origin: string; path: string; method: string }>> = []
     const fakeFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = requestUrl(input)
@@ -102,73 +116,65 @@ describe('OpenContent connection through the Host capability Broker', () => {
       }
       throw new Error(`Unexpected OpenContent test request path: ${url.pathname}`)
     })
-    const priorEndpoint = process.env[LEGACY_ENDPOINT_ENV]
-    delete process.env[LEGACY_ENDPOINT_ENV]
+    const harness = createHarness(fakeFetch as typeof fetch)
+    const bound = await harness.broker.invoke(caller, {
+      actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind,
+      invocationId: 'opencontent-bind-success',
+      input: {
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        username: 'fixture-scientist',
+        password: PASSWORD_CANARY
+      }
+    })
 
-    try {
-      const harness = createHarness(fakeFetch as typeof fetch)
-      const bound = await harness.broker.invoke(caller, {
-        actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind,
-        invocationId: 'opencontent-bind-success',
-        input: {
-          providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-          username: 'fixture-scientist',
-          password: PASSWORD_CANARY
+    expect(bound.output).toEqual({
+      outcome: 'success',
+      status: {
+        state: 'connected',
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        externalAccount: {
+          id: 'opencontent-user-guid',
+          identityId: 42,
+          account: 'fixture-scientist',
+          name: 'Fixture Scientist'
         }
-      })
+      }
+    })
+    expectNoSensitiveOutput(bound.output)
 
-      expect(bound.output).toEqual({
-        outcome: 'success',
-        status: {
-          state: 'connected',
-          providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-          externalAccount: {
-            id: 'opencontent-user-guid',
-            identityId: 42,
-            account: 'fixture-scientist',
-            name: 'Fixture Scientist'
-          }
-        }
-      })
-      expectNoSensitiveOutput(bound.output)
-
-      const status = await harness.broker.invoke(caller, {
-        actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
-        input: { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF }
-      })
-      expect(status.output).toEqual(bound.output)
-      expectNoSensitiveOutput(status.output)
-      expect(requests).toEqual([
-        {
-          origin: TRUSTED_ORIGIN,
-          path: '/inbiz/org/api/auth/GetLoginRsaPublicKey',
-          method: 'GET'
-        },
-        {
-          origin: TRUSTED_ORIGIN,
-          path: '/flatsdk/api/services/Auth/UserLogin',
-          method: 'POST'
-        },
-        {
-          origin: TRUSTED_ORIGIN,
-          path: '/flatsdk/api/services/Auth/CheckUserTokenValidity',
-          method: 'POST'
-        },
-        {
-          origin: TRUSTED_ORIGIN,
-          path: '/flatsdk/api/services/User/GetUserInfoByToken',
-          method: 'POST'
-        },
-        {
-          origin: TRUSTED_ORIGIN,
-          path: '/flatsdk/api/services/Auth/CheckUserTokenValidity',
-          method: 'POST'
-        }
-      ])
-    } finally {
-      if (priorEndpoint === undefined) delete process.env[LEGACY_ENDPOINT_ENV]
-      else process.env[LEGACY_ENDPOINT_ENV] = priorEndpoint
-    }
+    const status = await harness.broker.invoke(caller, {
+      actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
+      input: { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF }
+    })
+    expect(status.output).toEqual(bound.output)
+    expectNoSensitiveOutput(status.output)
+    expect(requests).toEqual([
+      {
+        origin: TRUSTED_ORIGIN,
+        path: '/inbiz/org/api/auth/GetLoginRsaPublicKey',
+        method: 'GET'
+      },
+      {
+        origin: TRUSTED_ORIGIN,
+        path: '/flatsdk/api/services/Auth/UserLogin',
+        method: 'POST'
+      },
+      {
+        origin: TRUSTED_ORIGIN,
+        path: '/flatsdk/api/services/Auth/CheckUserTokenValidity',
+        method: 'POST'
+      },
+      {
+        origin: TRUSTED_ORIGIN,
+        path: '/flatsdk/api/services/User/GetUserInfoByToken',
+        method: 'POST'
+      },
+      {
+        origin: TRUSTED_ORIGIN,
+        path: '/flatsdk/api/services/Auth/CheckUserTokenValidity',
+        method: 'POST'
+      }
+    ])
   })
 
   it('resolves Provider authentication failure as a typed result instead of a Broker handler failure', async () => {
@@ -271,6 +277,8 @@ function createHarness(fetchImplementation: typeof fetch) {
   })
   const host: DomainMainHost = Object.freeze({
     getUserDataDir: () => '/opencontent-integration-user-data',
+    getAppRoot: () => deploymentRoot,
+    isPackaged: () => false,
     defineCapability: (options: unknown) => defineCapability(options as never),
     packageSettings: settings,
     packageSecrets,

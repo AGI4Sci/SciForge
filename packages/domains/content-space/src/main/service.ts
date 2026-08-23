@@ -1237,20 +1237,6 @@ export class ContentSpaceService {
         )
       })
     }
-    if (operation === 'exportFileAsPdf') {
-      const providerRequest = withoutTransferLocator(request)
-      const locator: FeatureDownloadLocator = 'workspaceRelativePath' in request
-        ? Object.freeze({ kind: 'workspace', relativePath: request.workspaceRelativePath })
-        : Object.freeze({ kind: 'handle', handle: request.destinationHandle })
-      return Object.freeze({
-        request: Object.freeze(providerRequest),
-        destination: await this.#openFeatureDestination(
-          locator,
-          context,
-          assertPrincipalCurrent
-        )
-      })
-    }
     return Object.freeze({ request })
   }
 
@@ -2756,7 +2742,6 @@ function extendedOperationTransferLimits(
   if (operation === 'updateFileVersion' || operation === 'addAttachment') {
     return UPLOAD_VERIFICATION_LIMITS
   }
-  if (operation === 'exportFileAsPdf') return DOWNLOAD_VERIFICATION_LIMITS
   return NO_VERIFICATION_TRANSFERS
 }
 

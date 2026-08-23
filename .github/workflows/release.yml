@@ -73,6 +73,7 @@ jobs:
     needs: prepare
     env:
       SCIFORGE_APP_VERSION: ${{ needs.prepare.outputs.version }}
+      SCIFORGE_RELEASE_SOURCE_COMMIT: ${{ needs.prepare.outputs.source_sha }}
       SCIFORGE_UPDATE_CHANNEL: stable
       RELEASE_CHANNEL: stable
       CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -151,6 +152,7 @@ jobs:
             dist/${{ env.RELEASE_ARTIFACT_PREFIX }}-*-mac-*.zip
             dist/${{ env.RELEASE_ARTIFACT_PREFIX }}-*-mac-*.blockmap
             dist/latest-mac.yml
+            dist/release-mac.json
 
   build-windows:
     name: Build Windows
@@ -158,6 +160,7 @@ jobs:
     needs: prepare
     env:
       SCIFORGE_APP_VERSION: ${{ needs.prepare.outputs.version }}
+      SCIFORGE_RELEASE_SOURCE_COMMIT: ${{ needs.prepare.outputs.source_sha }}
       SCIFORGE_UPDATE_CHANNEL: stable
       RELEASE_CHANNEL: stable
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -193,6 +196,7 @@ jobs:
             dist/${{ env.RELEASE_ARTIFACT_PREFIX }}-*-win-x64.exe
             dist/${{ env.RELEASE_ARTIFACT_PREFIX }}-*-win-x64.exe.blockmap
             dist/latest.yml
+            dist/release-win.json
 
   build-linux:
     name: Build Linux
@@ -200,6 +204,7 @@ jobs:
     needs: prepare
     env:
       SCIFORGE_APP_VERSION: ${{ needs.prepare.outputs.version }}
+      SCIFORGE_RELEASE_SOURCE_COMMIT: ${{ needs.prepare.outputs.source_sha }}
       SCIFORGE_UPDATE_CHANNEL: stable
       RELEASE_CHANNEL: stable
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -240,6 +245,7 @@ jobs:
             dist/${{ env.RELEASE_ARTIFACT_PREFIX }}-*-linux-x86_64.AppImage
             dist/${{ env.RELEASE_ARTIFACT_PREFIX }}-*-linux-x86_64.AppImage.blockmap
             dist/latest-linux.yml
+            dist/release-linux.json
 
   publish:
     name: Publish GitHub Release and optional R2
@@ -305,6 +311,9 @@ jobs:
             "latest-mac.yml"
             "latest.yml"
             "latest-linux.yml"
+            "release-mac.json"
+            "release-win.json"
+            "release-linux.json"
           )
 
           for pattern in "${required[@]}"; do
@@ -379,7 +388,7 @@ jobs:
           set -euo pipefail
           mapfile -d '' assets < <(
             find release-artifacts -type f \
-              \( -name "${RELEASE_ARTIFACT_PREFIX}-*" -o -name 'latest*.yml' \) \
+              \( -name "${RELEASE_ARTIFACT_PREFIX}-*" -o -name 'latest*.yml' -o -name 'release-*.json' \) \
               -print0
           )
 
@@ -411,6 +420,7 @@ jobs:
         run: >
           node ./scripts/publish-r2.mjs promote
           --tag "${TAG_NAME}"
+          --dist release-artifacts
           --channel "${RELEASE_CHANNEL}"
           --platforms mac,win,linux
 

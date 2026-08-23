@@ -2372,8 +2372,8 @@ describe('ContentSpaceService', () => {
     expect(source.close).toHaveBeenCalledOnce()
   })
 
-  it('bridges extended source and destination handles without exposing them to the Provider', async () => {
-    const bytes = new TextEncoder().encode('extended-pdf')
+  it('bridges extended source handles without exposing them to the Provider', async () => {
+    const bytes = new TextEncoder().encode('extended-source')
     const source = {
       name: 'update.bin',
       size: bytes.byteLength,
@@ -2381,15 +2381,9 @@ describe('ContentSpaceService', () => {
       read: vi.fn(async () => bytes),
       close: vi.fn(async () => undefined)
     }
-    const destination = {
-      label: 'export.pdf',
-      write: vi.fn(async () => undefined),
-      commit: vi.fn(async () => undefined),
-      abort: vi.fn(async () => undefined)
-    }
     const fileTransfers: DomainMainFileTransferHost = {
       openUploadSource: vi.fn(async () => source),
-      openDownloadDestination: vi.fn(async () => destination),
+      openDownloadDestination: vi.fn(async () => { throw new Error('unexpected destination') }),
       openWorkspaceUploadSource: vi.fn(async () => { throw new Error('unexpected path') }),
       openWorkspaceDownloadDestination: vi.fn(async () => { throw new Error('unexpected path') })
     }
@@ -2415,27 +2409,12 @@ describe('ContentSpaceService', () => {
           }
         }
       }
-      expect(input.effect).toBe('workspace-write')
-      expect(input.request).not.toHaveProperty('destinationHandle')
-      await input.destination.write(bytes)
-      return {
-        ok: true,
-        value: {
-          reference: FILE,
-          format: 'pdf',
-          bytesWritten: bytes.byteLength,
-          digest: {
-            algorithm: 'sha256',
-            value: createHash('sha256').update(bytes).digest('hex')
-          }
-        }
-      }
+      throw new Error(`unexpected extended operation ${String(input.operation)}`)
     })
     const service = serviceFor(providerFixture({
       features: { extendedOperations: extendedOperationsFixture(execute) }
     }), { featureFileTransfers: fileTransfers })
     const sourceHandle = 'xfer_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
-    const destinationHandle = 'xfer_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
 
     await expect(service.executeExtendedOperation({
       target: featureTarget(FILE),
@@ -2464,17 +2443,9 @@ describe('ContentSpaceService', () => {
       request: { master: FILE, name: 'attachment.bin', sourceHandle }
     }, writeCall())).resolves.toMatchObject({ ok: true })
     expect(source.close).toHaveBeenCalledTimes(2)
-
-    await expect(service.executeExtendedOperation({
-      target: featureTarget(FILE),
-      operation: 'exportFileAsPdf',
-      request: { reference: FILE, destinationHandle }
-    }, writeCall())).resolves.toMatchObject({ ok: true })
-    expect(destination.commit).toHaveBeenCalledOnce()
-    expect(destination.abort).not.toHaveBeenCalled()
   })
 
-  it('bridges all Agent extended transfers through active Workspace paths', async () => {
+  it('bridges Agent extended uploads through active Workspace paths', async () => {
     const bytes = new TextEncoder().encode('agent extended bytes')
     const source = {
       name: 'payload.bin',
@@ -2483,17 +2454,13 @@ describe('ContentSpaceService', () => {
       read: vi.fn(async () => bytes),
       close: vi.fn(async () => undefined)
     }
-    const destination = {
-      label: 'export.pdf',
-      write: vi.fn(async () => undefined),
-      commit: vi.fn(async () => undefined),
-      abort: vi.fn(async () => undefined)
-    }
     const fileTransfers: DomainMainFileTransferHost = {
       openUploadSource: vi.fn(async () => { throw new Error('raw handle path was used') }),
       openDownloadDestination: vi.fn(async () => { throw new Error('raw handle path was used') }),
       openWorkspaceUploadSource: vi.fn(async () => source),
-      openWorkspaceDownloadDestination: vi.fn(async () => destination)
+      openWorkspaceDownloadDestination: vi.fn(async () => {
+        throw new Error('unexpected destination')
+      })
     }
     const execute = vi.fn(async (input: any) => {
       expect(input.request).not.toHaveProperty('workspaceRelativePath')
@@ -2518,19 +2485,7 @@ describe('ContentSpaceService', () => {
           }
         } as const
       }
-      await input.destination.write(bytes)
-      return {
-        ok: true,
-        value: {
-          reference: FILE,
-          format: 'pdf',
-          bytesWritten: bytes.byteLength,
-          digest: {
-            algorithm: 'sha256',
-            value: createHash('sha256').update(bytes).digest('hex')
-          }
-        }
-      } as const
+      throw new Error(`unexpected extended operation ${String(input.operation)}`)
     })
     const service = serviceFor(providerFixture({
       features: { extendedOperations: extendedOperationsFixture(execute) }
@@ -2570,16 +2525,6 @@ describe('ContentSpaceService', () => {
         workspaceRelativePath: 'attachments/evidence.bin'
       }
     }, call)).resolves.toMatchObject({ ok: true })
-    const exported = await service.executeExtendedOperation({
-      target: featureTarget(FILE),
-      operation: 'exportFileAsPdf',
-      request: {
-        reference: FILE,
-        workspaceRelativePath: 'exports/file.pdf'
-      }
-    }, call)
-    expect(exported).toMatchObject({ ok: true, value: { format: 'pdf' } })
-    expect(JSON.stringify(exported)).not.toContain('xfer_')
 
     expect(fileTransfers.openWorkspaceUploadSource).toHaveBeenNthCalledWith(
       1,
@@ -2595,17 +2540,10 @@ describe('ContentSpaceService', () => {
         maxBytes: CONTENT_SPACE_LIMITS.maxUploadBytes
       })
     )
-    expect(fileTransfers.openWorkspaceDownloadDestination).toHaveBeenCalledWith(
-      expect.objectContaining({
-        relativePath: 'exports/file.pdf',
-        maxBytes: CONTENT_SPACE_LIMITS.maxFileBytes
-      })
-    )
+    expect(fileTransfers.openWorkspaceDownloadDestination).not.toHaveBeenCalled()
     expect(fileTransfers.openUploadSource).not.toHaveBeenCalled()
     expect(fileTransfers.openDownloadDestination).not.toHaveBeenCalled()
     expect(source.close).toHaveBeenCalledTimes(2)
-    expect(destination.commit).toHaveBeenCalledOnce()
-    expect(destination.abort).not.toHaveBeenCalled()
   })
 })
 

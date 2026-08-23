@@ -40,9 +40,13 @@ import {
 } from '../supplier-docflow-protocol.js'
 import {
   OPENCONTENT_CLI_RESULT_PROTOCOL,
+  openContentExtendedCommandSuccessSchema,
   type OpenContentExtendedDataFile
 } from '../supplier-extended-operation-protocol.js'
-import type { OpenContentSupplierInvocation } from '../main-contract.js'
+import {
+  isOpenContentSupplierMutationCommand,
+  type OpenContentSupplierInvocation
+} from '../main-contract.js'
 import {
   OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR,
   type OpenContentSkillRuntimeFileIntegrity,
@@ -89,36 +93,6 @@ type OpenContentCliSourcePatch = z.infer<typeof openContentCliSourcePatchSchema>
 
 const admittedCommands = new Set<string>(OPENCONTENT_CLI_ADMITTED_COMMANDS)
 const nativeDocumentCommands = new Set<string>(DOCFLOW_NATIVE_DOCUMENT_COMMANDS)
-
-/** Commands whose started subprocess may have changed provider or delivered external state. */
-const MUTATION_COMMANDS = new Set<OpenContentCliCommand>([
-  'file-edit',
-  'folder-edit',
-  'upload',
-  'download',
-  'attach-remove',
-  'relation-create',
-  'relation-remove',
-  'publish',
-  'create-share',
-  'cancel-publish',
-  'cancel-share',
-  'rename',
-  'copy',
-  'move',
-  'delete',
-  'file-tag-set',
-  'file-tag-delete',
-  'create-shortcut',
-  'meta-edit',
-  'favorite-add',
-  'favorite-remove',
-  'perm-set',
-  'docflow-export',
-  'docflow-create',
-  'docflow-image-upload',
-  'docflow-image-download',
-])
 
 const FORBIDDEN_CALLER_ARGUMENT_KEY_FRAGMENTS = Object.freeze([
   'accesskey',
@@ -203,7 +177,7 @@ type SourceFile = Extract<
   { role: 'source'; encoding: 'managed-stream' }
 >
 
-export type NodeOpenContentCliProcessPortInternalOptions = Readonly<{
+type NodeOpenContentCliProcessPortInternalOptions = Readonly<{
   /** Fixed, trusted snapshot entrypoint. Packaged apps must inject their resolved resource path. */
   trustedEntrypoint: string
   /** Fixed Host-provided Node-capable executable. Never taken from an invocation. */
@@ -226,7 +200,7 @@ export type NodeOpenContentCliProcessPortInternalOptions = Readonly<{
   now?: () => number
 }>
 
-export interface NodeOpenContentCliProcessPort extends OpenContentCliProcessPort {
+interface NodeOpenContentCliProcessPort extends OpenContentCliProcessPort {
   /** Removes in-memory, unexpired probe/plan material. */
   dispose(): void
 }
@@ -367,6 +341,9 @@ export function createNodeOpenContentCliProcessPortInternal(
         }
 
         const parsed = parseSingleJson(execution.stdout, invocation.command)
+        if (!nativeDocumentCommands.has(invocation.command)) {
+          validateRawExtendedSupplierResponse(invocation, parsed)
+        }
         const captured = await captureOutputs({
           invocation,
           parsed,
@@ -386,7 +363,8 @@ export function createNodeOpenContentCliProcessPortInternal(
       } catch (error) {
         if (principalRevalidationFailed) throw error
         if (error instanceof OpenContentCliProcessError) throw error
-        const mutationOutcomeUnknown = dispatched && MUTATION_COMMANDS.has(invocation.command)
+        const mutationOutcomeUnknown = dispatched &&
+          isOpenContentSupplierMutationCommand(invocation.command)
         throw new OpenContentCliProcessError({
           code: mutationOutcomeUnknown ? 'outcome-unknown' : 'provider-contract-violation',
           message: mutationOutcomeUnknown
@@ -951,7 +929,8 @@ async function removePrivateInvocationRoot(input: Readonly<{
       // Retry only this fixed Host-owned path. Never expose the path or underlying error.
     }
   }
-  const mutationOutcomeUnknown = input.dispatched && MUTATION_COMMANDS.has(input.command)
+  const mutationOutcomeUnknown = input.dispatched &&
+    isOpenContentSupplierMutationCommand(input.command)
   throw new OpenContentCliProcessError({
     code: mutationOutcomeUnknown ? 'outcome-unknown' : 'provider-contract-violation',
     message: mutationOutcomeUnknown
@@ -965,7 +944,7 @@ function uncertainExecutionError(
   command: OpenContentCliCommand,
   execution: ExecutionResult
 ): OpenContentCliProcessError {
-  const mutation = MUTATION_COMMANDS.has(command) && execution.dispatched
+  const mutation = isOpenContentSupplierMutationCommand(command) && execution.dispatched
   const cancelled = execution.termination === 'aborted' || execution.termination === 'deadline'
   return new OpenContentCliProcessError({
     code: mutation ? 'outcome-unknown' : cancelled ? 'cancelled' : 'provider-contract-violation',
@@ -994,7 +973,9 @@ function parseSingleJson(bytes: Uint8Array, command: OpenContentCliCommand): unk
 
 function protocolError(command: OpenContentCliCommand, message: string): OpenContentCliProcessError {
   return new OpenContentCliProcessError({
-    code: MUTATION_COMMANDS.has(command) ? 'outcome-unknown' : 'provider-contract-violation',
+    code: isOpenContentSupplierMutationCommand(command)
+      ? 'outcome-unknown'
+      : 'provider-contract-violation',
     message,
     dispatched: true
   })
@@ -1317,9 +1298,6 @@ function outputMediaType(
     if (reported?.startsWith('image/')) return reported
     throw protocolError(invocation.command, 'DocFlow did not return a verified image media type.')
   }
-  if ((invocation.args as Record<string, unknown>).ispdfdownload === true) {
-    return 'application/pdf'
-  }
   return reported ?? 'application/octet-stream'
 }
 
@@ -1397,15 +1375,27 @@ function buildResult(
       managedDataFiles: captured.managedDataFiles
     })
   }
-  return Object.freeze({
+  return openContentExtendedCommandSuccessSchema.parse({
     protocol: OPENCONTENT_CLI_RESULT_PROTOCOL,
     invocationId: invocation.invocationId,
     command: invocation.command,
     attemptCount: 1 as const,
     outcome: 'succeeded' as const,
-    json: captured.json,
-    structuredDeliveryItems: Object.freeze(structuredDeliveryItems),
-    managedDataFiles: captured.managedDataFiles
+    json: captured.json
+  })
+}
+
+function validateRawExtendedSupplierResponse(
+  invocation: OpenContentSupplierInvocation,
+  rawJson: unknown
+): void {
+  openContentExtendedCommandSuccessSchema.parse({
+    protocol: OPENCONTENT_CLI_RESULT_PROTOCOL,
+    invocationId: invocation.invocationId,
+    command: invocation.command,
+    attemptCount: 1 as const,
+    outcome: 'succeeded' as const,
+    json: rawJson
   })
 }
 
@@ -1451,7 +1441,7 @@ function docflowBusinessFailure(
         ? 'validation'
         : /AUTH|UNAUTHORIZED|NOT_FOUND|PERMISSION/u.test(upperCode)
           ? 'read'
-          : MUTATION_COMMANDS.has(command)
+          : isOpenContentSupplierMutationCommand(command)
             ? 'write'
             : 'read'
   const expectedHash = hashString(record.expectedHash ?? errorRecord?.expectedHash)

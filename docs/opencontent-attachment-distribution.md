@@ -3,8 +3,8 @@
 团队成员的中文安装、启动和故障处理流程见
 [《SciForge OpenContent 私有附件技能安装与运行手册》](./opencontent-private-attachment-runbook.zh-CN.md)。
 
-SciForge's OpenContent integration is public source. The only non-public material is the supplier
-attachment delivered separately to the team. This boundary applies to source archives, npm
+SciForge's OpenContent integration is public source. The non-public deployment inputs are the
+Connector deployment sidecar and the supplier attachment delivered separately to the team. This boundary applies to source archives, npm
 packages, application bundles, CI artifacts, pull requests, and release uploads.
 
 ## Keep public
@@ -27,6 +27,8 @@ There is no separately versioned OpenContent runtime feature package.
 
 Only these items must be excluded from every public distribution:
 
+- `.sciforge/private/deployments/opencontent-connector.json`, which binds the fixed Provider
+  Instance to one private deployment HTTPS origin;
 - the original supplier attachment archive and its byte-for-byte extracted files;
 - the internal asset package, supplier-derived patch data, complete receipt/provenance inventory,
   and group-distribution metadata stored under `internal/opencontent/**`;
@@ -37,12 +39,31 @@ forged or byte-drifted installation: the expected overlay identity and the SHA-2
 executable contract files it can load. These anchors disclose no attachment bytes and are not a
 replacement for the private complete receipt, inventory, archive, or checksum sidecar.
 
-`internal/opencontent/**` is the complete repository-relative hide/delete list. It is ignored by
-Git and is installed or removed as one optional internal overlay. Do not move copies of its payload
+The complete repository-relative private inputs are the declared deployment sidecar and
+`internal/opencontent/**`. They are ignored by Git and managed independently: the sidecar controls
+Connector runtime availability, while the overlay adds supplier runtime inventory. Do not move copies
 into public fixtures, generated documentation, package tarballs, application resources, or release
 artifacts.
 
 ## Runtime behavior with and without the attachment
+
+The Connector manifest declares deployment contract version `1`, source path
+`.sciforge/private/deployments/opencontent-connector.json`, packaged path
+`domain-deployments/opencontent-connector.json`, a `4096`-byte limit, and
+`publicRelease: forbidden`. Generic packaging preserves every declaration,
+captures one immutable composition, and copies only an existing source as an opaque private
+resource with an exact size and SHA-256 receipt. After pack, the same captured composition requires
+each active target to match and every inactive target to be absent; it is never recomputed from a
+possibly changed source tree.
+The Connector then accepts only strict JSON for the fixed Provider Instance and an absolute HTTPS
+origin with no userinfo, path, query, fragment, or extra fields. Missing or invalid configuration
+keeps discovery registered but returns `provider_unavailable` before storage, credentials, network,
+or supplier execution. Resolution requests no-follow semantics where available, binds the opened
+descriptor to the pre-open regular-file identity, performs one bounded read, verifies identity, size,
+modification time, change time, and birth time before and after the read, and closes the descriptor.
+It never falls back to environment, argv, caller, renderer, or package settings. The
+isolated `resources/domain-deployments/**` target does not create the separately verified
+`resources/opencontent/**` supplier overlay.
 
 Installing an attachment changes runtime inventory, not per-operation live evidence, readiness, or
 production admission. The exact packaged outcomes are maintained only in the
@@ -55,7 +76,8 @@ and OpenContent has zero `production_ready` operations:
 - the six ordinary personal/Team-library operations and all ten Team Administration operations are
   `poc_only` / `verification_profile_required`;
 - session-backed `getCurrentPrincipal` is PoC-only and dispatches no supplier command, so it remains
-  available without the attachment;
+  the sole extended PoC candidate without the attachment; the other 49 extended operations remain
+  blocked until their required overlay-backed contract is available;
 - Team Administration membership represents member identity only through the typed `member` reference; no public member-role
   or ownership-transfer delegate exists, and its five root/member mutations declare
   `concurrency.revision: "none"` because the supplier exposes no Administration CAS field;
@@ -65,15 +87,20 @@ and OpenContent has zero `production_ready` operations:
 - no Team deletion operation exists.
 
 Installing a valid internal overlay additionally enables the supplier-backed native-document and
-extended-operation mechanism. Nine safely contract-shaped native-document operations and 47 of 52 extended
-operations remain PoC-only. Native `edit`, the other nine hash-bound native mutations, import
-without a source/content postcondition, `updateFileVersion`, and the four directory searches with
-unpinned item shapes remain `blocked_by_contract`;
+extended-operation mechanism. Nine safely contract-shaped native-document operations and 40 of 50 extended
+operations remain PoC-only. Native `edit`, the other nine hash-bound native mutations, and import
+without a source/content postcondition remain blocked. The exact extended blocked set, in catalog
+order, is `resolveInternalLink`, `listMetadataChoices`, `updateFileVersion`, `searchUsers`,
+`searchDepartments`, `searchPositions`, `searchGroups`, `resolveCollaborationInvitation`,
+`listKnowledgeCollections`, and `searchKnowledgeCollections`;
 attachment presence cannot admit them. Immutable
 version observation is also blocked, so OpenContent cannot issue an `ArtifactReference`.
 
 The Connector-owned static characterization freezes 86 supplier inventory commands and an exact
-56-command admitted adapter union. Inventory presence is not packaged callability or live evidence.
+50-command admitted adapter union. The supplier `download`, `file-list`, `kbox-list`,
+`file-internal-link`, `meta-modeldata`, and `collab-link` commands remain inventory-only; ordinary
+`listEntries` and download use the typed Connector path, while native PDF export remains
+`native-document:export`. Inventory presence is not packaged callability or live evidence.
 
 A PoC invocation requires a separately reviewed package-owned Content Space profile that matches
 the exact Provider Instance, complete Host Principal snapshot and assurance, authority, operation,
@@ -123,11 +150,12 @@ unreceipted bytes and do not execute the supplier CLI. Supplier code runs only t
 Connector-owned main-process transport after normal Broker, Principal, readiness/verification, and
 resource admission.
 
-Official public release entrypoints fail closed when internal runtime composition is non-empty.
+Official public release entrypoints fail closed when internal runtime composition is non-empty or
+when any active deployment configuration declares `publicRelease: forbidden`.
 An explicitly internal/local package may include the verified overlay for acceptance, but merely
 installing an overlay must never change an official public release artifact.
 
 Before publishing, use the official public release entrypoint and verify that
-`internal/opencontent/**` is absent and that no public lockfile, tarball, packaged application, or
+the deployment sidecar and `internal/opencontent/**` are absent and that no public lockfile, tarball, packaged application, or
 generated artifact contains the internal asset package or supplier payload. Do not delete the
 public OpenContent integration or SDK documentation.

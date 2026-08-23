@@ -29,6 +29,7 @@ import {
 } from '@sciforge/domain-sdk/provider-composition'
 
 import type { ContentSpaceProviderFeatures } from './provider-features.js'
+import { contentSpaceProviderFeaturesSchema } from './provider-features-schema.js'
 
 export const CONTENT_SPACE_DOMAIN_MODULE_ID = 'sciforge.content-space' as const
 export const CONTENT_SPACE_PROVIDER_CONTRACT_VERSION = '3.0.0' as const
@@ -109,7 +110,6 @@ export const CONTENT_SPACE_CAPABILITY_IDS = Object.freeze({
   agentNativeDocumentWrite: 'content-space.agent-native-document-write',
   agentNativeDocumentDestructive: 'content-space.agent-native-document-destructive',
   agentExtendedRead: 'content-space.agent-extended-read',
-  agentExtendedWorkspaceWrite: 'content-space.agent-extended-workspace-write',
   agentExtendedWrite: 'content-space.agent-extended-write',
   agentExtendedDestructive: 'content-space.agent-extended-destructive',
   authorizeFeatureSelection: 'content-space.authorize-feature-selection',
@@ -817,11 +817,15 @@ export function defineContentSpaceProvider(input: ContentSpaceProvider): Content
     required.some((key) => !keys.includes(key)) ||
     input.contractVersion !== CONTENT_SPACE_PROVIDER_CONTRACT_VERSION ||
     required.filter((key) => key !== 'contractVersion')
-      .some((key) => typeof input[key as keyof ContentSpaceProvider] !== 'function') ||
-    (input.features !== undefined && !isContentSpaceProviderFeatures(input.features))) {
+      .some((key) => typeof input[key as keyof ContentSpaceProvider] !== 'function')) {
     throw new TypeError('ContentSpaceProvider contract is invalid.')
   }
-  return Object.freeze(input)
+  if (input.features === undefined) return Object.freeze(input)
+  const features = contentSpaceProviderFeaturesSchema.safeParse(input.features)
+  if (!features.success) {
+    throw new TypeError('ContentSpaceProvider contract is invalid.')
+  }
+  return Object.freeze({ ...input, features: features.data })
 }
 
 export const contentContainerReferenceCodec: PortableResourceReferenceCodec<
@@ -944,21 +948,4 @@ function parseOwnedEnvelope<Identity>(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function isContentSpaceProviderFeatures(value: unknown): value is ContentSpaceProviderFeatures {
-  if (!isRecord(value) || Object.keys(value).some((key) => ![
-    'administration',
-    'extendedOperations',
-    'nativeDocuments'
-  ].includes(key))) return false
-  return optionalExactFunctionPorts(value.nativeDocuments, ['describeOperations', 'execute']) &&
-    optionalExactFunctionPorts(value.extendedOperations, ['describeOperations', 'execute']) &&
-    optionalExactFunctionPorts(value.administration, ['bind', 'describeOperations'])
-}
-
-function optionalExactFunctionPorts(value: unknown, methods: readonly string[]): boolean {
-  return value === undefined || (isRecord(value) &&
-    Object.keys(value).sort().join(',') === [...methods].sort().join(',') &&
-    methods.every((method) => typeof value[method] === 'function'))
 }

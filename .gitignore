@@ -60,6 +60,9 @@ TestResults.xml
 ### Internal docs
 docs/R2_RELEASE.md
 
+### Private meeting records
+/meeting_records/
+
 ### Group-distributed provider attachments (never publish)
 /internal/opencontent/
 

@@ -36,9 +36,12 @@ import {
 } from './node-cli-process-port.js'
 import * as publicNodeCliProcessPort from './node-cli-process-port.js'
 import {
-  createNodeOpenContentCliProcessPortInternal,
-  type NodeOpenContentCliProcessPortInternalOptions
+  createNodeOpenContentCliProcessPortInternal
 } from './node-cli-process-port.internal.js'
+
+type NodeOpenContentCliProcessPortInternalOptions = Parameters<
+  typeof createNodeOpenContentCliProcessPortInternal
+>[0]
 
 const roots: string[] = []
 
@@ -109,7 +112,7 @@ describe('Node OpenContent CLI process port', () => {
 
   it('keeps the 86-command snapshot inventory separate from the admitted adapter union', async () => {
     expect(OPENCONTENT_CLI_COMMANDS).toHaveLength(86)
-    expect(OPENCONTENT_CLI_ADMITTED_COMMANDS).toHaveLength(56)
+    expect(OPENCONTENT_CLI_ADMITTED_COMMANDS).toHaveLength(50)
     for (const excluded of [
       'docflow-last-delivery',
       'user-info',
@@ -117,6 +120,9 @@ describe('Node OpenContent CLI process port', () => {
       'search-department',
       'search-position',
       'search-user-group',
+      'file-internal-link',
+      'meta-modeldata',
+      'collab-link',
       'docflow-failure-list',
       'docflow-failure-get',
       'docflow-failure-prune',
@@ -133,7 +139,10 @@ describe('Node OpenContent CLI process port', () => {
       'docflow-comment-reopen',
       'docflow-comment-delete',
       'team-create',
-      'create-folder'
+      'create-folder',
+      'download',
+      'file-list',
+      'kbox-list'
     ]) {
       expect(OPENCONTENT_CLI_ADMITTED_COMMANDS).not.toContain(excluded)
     }
@@ -229,21 +238,24 @@ describe('Node OpenContent CLI process port', () => {
       attemptCount: 1,
       outcome: 'succeeded',
       json: {
-        command: 'file-info',
-        jsonFlag: true,
-        singleJsonArg: true,
-        cwdIsPrivate: true,
-        siteMatches: true,
-        tokenMatches: true,
-        args: { fileId: 'file-a' }
+        success: true,
+        data: {
+          command: 'file-info',
+          jsonFlag: true,
+          singleJsonArg: true,
+          cwdIsPrivate: true,
+          siteMatches: true,
+          tokenMatches: true,
+          args: { fileId: 'file-a' }
+        }
       }
     })
-    expect(result.json.envKeys).toEqual(expect.arrayContaining([
+    expect(result.json.data.envKeys).toEqual(expect.arrayContaining([
       'OPENCONTENT_SITE',
       'SYSTEM_USER_TOKEN'
     ]))
-    expect(result.json.envKeys).not.toEqual(expect.arrayContaining(['HOME', 'PATH']))
-    expect(result.json.envKeys.every((key: string) => [
+    expect(result.json.data.envKeys).not.toEqual(expect.arrayContaining(['HOME', 'PATH']))
+    expect(result.json.data.envKeys.every((key: string) => [
       'OPENCONTENT_SITE',
       'SYSTEM_USER_TOKEN',
       '__CF_USER_TEXT_ENCODING'
@@ -328,7 +340,9 @@ describe('Node OpenContent CLI process port', () => {
       command: 'file-info',
       args,
       dataFiles: []
-    }, fixture.entrypoint))).resolves.toMatchObject({ json: { args } })
+    }, fixture.entrypoint))).resolves.toMatchObject({
+      json: { success: true, data: { args } }
+    })
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
   })
 
@@ -345,11 +359,11 @@ describe('Node OpenContent CLI process port', () => {
       dataFiles: []
     }, fixture.entrypoint)) as Record<string, any>
 
-    expect(result.json.structuralProbeHelper).toEqual({
+    expect(result.json.data.structuralProbeHelper).toEqual({
       exists: true,
       relativePath: 'scripts/docflow-probe-compact.cjs'
     })
-    expect(result.json.runtimeScripts).toEqual(['docflow-probe-compact.cjs'])
+    expect(result.json.data.runtimeScripts).toEqual(['docflow-probe-compact.cjs'])
     expect(JSON.stringify(result)).not.toContain(fixture.root)
     expect(JSON.stringify(result)).not.toContain(fixture.invocationsRoot)
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
@@ -422,8 +436,11 @@ describe('Node OpenContent CLI process port', () => {
     }, fixture.entrypoint)) as Record<string, any>
 
     expect(result.json).toMatchObject({
-      uploaded: 'managed upload body',
-      size: bytes.byteLength
+      success: true,
+      data: {
+        uploaded: 'managed upload body',
+        size: bytes.byteLength
+      }
     })
     expect(JSON.stringify(result)).not.toContain('filePath')
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
@@ -463,36 +480,6 @@ describe('Node OpenContent CLI process port', () => {
 
     await expect(operation).rejects.toBe(safePrincipalError)
     expect(assertPrincipalCurrent).toHaveBeenCalledOnce()
-    expect(await readdir(fixture.invocationsRoot)).toEqual([])
-  })
-
-  it('captures a CLI download and streams it to the managed destination', async () => {
-    const fixture = await createFixture()
-    const port = createNodeOpenContentCliProcessPort({
-      trustedEntrypoint: fixture.entrypoint,
-      temporaryRoot: fixture.invocationsRoot
-    })
-    const chunks: Uint8Array[] = []
-    const result = await port.run(request({
-      invocationId: 'invocation_download_a',
-      command: 'download',
-      args: { fileIds: 'file-a', ispdfdownload: true },
-      dataFiles: [{
-        role: 'destination',
-        encoding: 'managed-stream',
-        name: 'export.pdf',
-        write: async (chunk) => { chunks.push(Uint8Array.from(chunk)) }
-      }]
-    }, fixture.entrypoint)) as Record<string, any>
-
-    expect(Buffer.concat(chunks).toString('utf8')).toBe('downloaded artifact')
-    expect(result.json).toMatchObject({
-      bytesWritten: 19,
-      name: 'export.pdf',
-      mediaType: 'application/pdf'
-    })
-    expect(result.json.sha256).toMatch(/^[a-f0-9]{64}$/u)
-    expect(JSON.stringify(result)).not.toContain('outputPath')
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
   })
 
@@ -1071,6 +1058,66 @@ describe('Node OpenContent CLI process port', () => {
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
   })
 
+  it('rejects a malformed supplier envelope and preserves mutation uncertainty', async () => {
+    const fixture = await createFixture()
+    const port = createNodeOpenContentCliProcessPort({
+      trustedEntrypoint: fixture.entrypoint,
+      temporaryRoot: fixture.invocationsRoot
+    })
+
+    await expect(port.run(request({
+      invocationId: 'invocation_malformed_read_envelope',
+      command: 'file-info',
+      args: { mode: 'malformed-extended-envelope' },
+      dataFiles: []
+    }, fixture.entrypoint))).rejects.toMatchObject({
+      code: 'provider-contract-violation',
+      retry: 'never',
+      attemptCount: 1,
+      dispatched: true
+    })
+
+    await expect(port.run(request({
+      invocationId: 'invocation_malformed_write_envelope',
+      command: 'meta-edit',
+      args: { mode: 'malformed-extended-envelope' },
+      dataFiles: []
+    }, fixture.entrypoint))).rejects.toMatchObject({
+      code: 'outcome-unknown',
+      retry: 'never',
+      attemptCount: 1,
+      dispatched: true
+    })
+    expect(await readdir(fixture.invocationsRoot)).toEqual([])
+  })
+
+  it.each([
+    { command: 'file-info' as const, expectedCode: 'provider-contract-violation' },
+    { command: 'meta-edit' as const, expectedCode: 'outcome-unknown' }
+  ])('validates the raw $command envelope before sanitizing extra fields', async ({
+    command,
+    expectedCode
+  }) => {
+    const fixture = await createFixture()
+    const port = createNodeOpenContentCliProcessPort({
+      trustedEntrypoint: fixture.entrypoint,
+      temporaryRoot: fixture.invocationsRoot
+    })
+
+    await expect(port.run(request({
+      invocationId: `invocation_raw_envelope_${command.replaceAll('-', '_')}`,
+      command,
+      args: { mode: 'extended-envelope-extra-token' },
+      dataFiles: []
+    }, fixture.entrypoint))).rejects.toMatchObject({
+      code: expectedCode,
+      retry: 'never',
+      attemptCount: 1,
+      dispatched: true
+    })
+    expect(await readdir(fixture.invocationsRoot)).toEqual([])
+  })
+
   it('maps a DocFlow business failure without reporting false success', async () => {
     const fixture = await createFixture()
     const port = createNodeOpenContentCliProcessPort({
@@ -1624,7 +1671,17 @@ const path = require('node:path')
 const argv = process.argv.slice(2)
 const command = argv[1]
 const params = JSON.parse(argv[2])
-const send = (value) => process.stdout.write(JSON.stringify(value))
+const send = (value) => {
+  let output = value
+  if (!command.startsWith('docflow-') &&
+      params.mode !== 'malformed-extended-envelope' &&
+      params.mode !== 'extended-envelope-extra-token') {
+    output = value && value.success === false
+      ? { success: false, code: value.code, error: value.error ?? value.message }
+      : { success: true, data: value }
+  }
+  process.stdout.write(JSON.stringify(output))
+}
 
 if (params.mode === 'hang') {
   setTimeout(() => send({ late: true }), 5_000)
@@ -1700,6 +1757,10 @@ if (params.mode === 'hang') {
         params.filePaths
       ].join('|')
   send({ nested: [{ ['child-key:' + sensitiveKey]: 'must fail closed' }] })
+} else if (params.mode === 'malformed-extended-envelope') {
+  send({ payload: 'missing strict success envelope' })
+} else if (params.mode === 'extended-envelope-extra-token') {
+  send({ success: true, data: {}, token: 'must-be-rejected-before-sanitizing' })
 } else if (command === 'file-info') {
   const runtimeRoot = path.resolve(__dirname, '..', '..')
   const scriptsRoot = path.join(runtimeRoot, 'scripts')
@@ -1744,7 +1805,7 @@ if (params.mode === 'hang') {
 } else if (command === 'upload') {
   const content = fs.readFileSync(params.filePaths)
   send({ uploaded: content.toString('utf8'), size: content.byteLength, fileId: 'uploaded-a' })
-} else if (command === 'download' || command === 'docflow-export' || command === 'docflow-image-download') {
+} else if (command === 'docflow-export' || command === 'docflow-image-download') {
   fs.mkdirSync(path.dirname(params.outputPath), { recursive: true })
   fs.writeFileSync(params.outputPath, 'downloaded artifact')
   send({ filePath: params.outputPath, contentType: 'application/octet-stream' })
