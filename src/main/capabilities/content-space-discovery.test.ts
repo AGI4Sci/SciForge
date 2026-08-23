@@ -147,8 +147,7 @@ describe('Content Space Agent discovery integration', () => {
       root: createdRoot,
       label: input.label,
       contentOwnerUserId: input.contentOwnerUserId,
-      pinned: false,
-      revision: 'revision:1'
+      pinned: false
     }))
     const unusedAdministrationOperation = vi.fn(async () => {
       throw new Error('Unexpected Provider administration operation.')
