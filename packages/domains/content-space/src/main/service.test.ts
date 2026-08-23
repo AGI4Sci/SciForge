@@ -1441,7 +1441,10 @@ describe('ContentSpaceService', () => {
         digest: { algorithm: 'sha256' as const, value: digest }
       }
     }) satisfies ContentSpaceProvider['downloadFile']
-    const service = serviceFor(providerFixture({ downloadFile }))
+    const service = serviceFor(providerFixture({
+      observeEntry: async ({ reference }) => observationFor(reference, bytes.byteLength),
+      downloadFile
+    }))
     const pending = service.downloadFile({
       reference: FILE,
       openDestination: async () => destination
@@ -1451,6 +1454,74 @@ describe('ContentSpaceService', () => {
     expect(destination.commit).not.toHaveBeenCalled()
     writeGate.resolve()
     await expect(pending).resolves.toMatchObject({ bytesWritten: 4 })
+    expect(destination.commit).toHaveBeenCalledTimes(1)
+    expect(destination.abort).not.toHaveBeenCalled()
+  })
+
+  it('aborts a self-consistent short download instead of committing partial bytes', async () => {
+    const bytes = new Uint8Array([1, 2, 3])
+    const destination = destinationFixture()
+    const downloadFile = vi.fn(async ({ context, reference, destination: sink }) => {
+      await sink.write(bytes)
+      return {
+        invocationId: context.invocationId,
+        reference,
+        bytesWritten: bytes.byteLength
+      }
+    }) satisfies ContentSpaceProvider['downloadFile']
+    const service = serviceFor(providerFixture({
+      observeEntry: async ({ reference }) => observationFor(reference, bytes.byteLength + 1),
+      downloadFile
+    }))
+
+    await expect(service.downloadFile({
+      reference: FILE,
+      openDestination: async () => destination
+    }, writeCall())).rejects.toMatchObject({
+      detail: { code: 'provider_unavailable' }
+    })
+    expect(destination.commit).not.toHaveBeenCalled()
+    expect(destination.abort).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses an Artifact digest instead of the current live file size', async () => {
+    const bytes = new Uint8Array([1, 2, 3])
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    const artifact = Object.freeze({
+      ...FILE,
+      immutableVersionId: 'immutable-version-1',
+      digest: Object.freeze({ algorithm: 'sha256' as const, value: digest })
+    })
+    const destination = destinationFixture()
+    const downloadFile = vi.fn(async ({ context, reference, destination: sink }) => {
+      await sink.write(bytes)
+      return {
+        invocationId: context.invocationId,
+        reference,
+        bytesWritten: bytes.byteLength,
+        digest: artifact.digest
+      }
+    }) satisfies ContentSpaceProvider['downloadFile']
+    const service = serviceFor(providerFixture({
+      observeEntry: async ({ reference }) => observationFor(reference, bytes.byteLength + 1),
+      observeImmutableVersion: async () => ({
+        proven: true,
+        proof: {
+          reference: FILE,
+          immutableVersionId: artifact.immutableVersionId,
+          immutableIdentity: true,
+          retentionGuaranteed: true,
+          versionSpecificRetrieval: true,
+          digest: artifact.digest
+        }
+      }),
+      downloadFile
+    }))
+
+    await expect(service.downloadFile({
+      reference: artifact,
+      openDestination: async () => destination
+    }, writeCall())).resolves.toMatchObject({ bytesWritten: bytes.byteLength })
     expect(destination.commit).toHaveBeenCalledTimes(1)
     expect(destination.abort).not.toHaveBeenCalled()
   })
@@ -2647,7 +2718,7 @@ function providerFixture(
   return defineContentSpaceProvider(provider)
 }
 
-function observationFor(reference: ContentEntryReference) {
+function observationFor(reference: ContentEntryReference, size = 0) {
   if ('containerId' in reference) {
     return Object.freeze({
       entry: Object.freeze({ kind: 'container' as const, reference, label: 'Container' }),
@@ -2662,7 +2733,7 @@ function observationFor(reference: ContentEntryReference) {
         fileId: reference.fileId
       }),
       label: 'File',
-      size: 0
+      size
     }),
     capabilities: readyCapabilities
   })

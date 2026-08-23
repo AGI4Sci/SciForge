@@ -893,7 +893,7 @@ export class ContentSpaceService {
         call.assertPrincipalCurrent
       )
     }
-    context = await this.#assertResourceReady(
+    const readiness = await this.#resourceReadiness(
       provider,
       context,
       reference,
@@ -901,6 +901,16 @@ export class ContentSpaceService {
       call,
       callVerificationAuthority(call, reference)
     )
+    context = readiness.context
+    if (readiness.observation.entry.kind !== 'file') {
+      fail('provider_unavailable', 'Provider download observation is not a file.')
+    }
+    // An Artifact observation describes the current file entry, so its size is not
+    // a valid oracle for a historical version. Artifact downloads retain their
+    // immutable-version proof and optional digest checks below.
+    const expectedByteLength = 'immutableVersionId' in reference
+      ? undefined
+      : readiness.observation.entry.size
     let destination: Awaited<ReturnType<typeof input.openDestination>>
     try {
       destination = await boundedProviderCall(
@@ -983,6 +993,7 @@ export class ContentSpaceService {
       if (receipt.invocationId !== context.invocationId ||
         !sameDownloadReference(receipt.reference, reference) ||
         receipt.bytesWritten !== byteLength ||
+        (expectedByteLength !== undefined && byteLength !== expectedByteLength) ||
         (receipt.digest && receipt.digest.value !== actualDigest) ||
         ('digest' in reference && reference.digest && reference.digest.value !== actualDigest)) {
         fail('provider_unavailable', 'Provider download output is not bound to written bytes.')
@@ -1507,6 +1518,24 @@ export class ContentSpaceService {
     call: ContentSpaceServiceCallContext,
     authority: ContentSpaceVerificationAuthority
   ): Promise<Context> {
+    return (await this.#resourceReadiness(
+      provider,
+      context,
+      reference,
+      operation,
+      call,
+      authority
+    )).context
+  }
+
+  async #resourceReadiness<Context extends ContentSpaceProviderOperationContext>(
+    provider: ContentSpaceProvider,
+    context: Context,
+    reference: ContentEntryReference,
+    operation: ContentSpaceOperation,
+    call: ContentSpaceServiceCallContext,
+    authority: ContentSpaceVerificationAuthority
+  ) {
     const observation = parseOutput(
       contentSpaceProviderEntryObservationSchema,
       await boundedProviderCall(
@@ -1533,7 +1562,7 @@ export class ContentSpaceService {
     if (!admittedContext) {
       fail('blocked_by_contract', `Content Space resource operation ${operation} is unavailable.`)
     }
-    return admittedContext
+    return Object.freeze({ context: admittedContext, observation })
   }
 
   async #authorizedProvider(
