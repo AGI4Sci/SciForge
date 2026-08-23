@@ -998,6 +998,108 @@ test('public artifact hook refuses build evidence before canonical afterPack suc
   }
 })
 
+test('public dist hook uses canonical builder identity without release caller env', async (t) => {
+  const distDir = mkdtempSync(join(tmpdir(), 'sciforge-public-release-dist-'))
+  const environmentKeys = [
+    'DEEPSEEK_GUI_APP_VERSION',
+    'DEEPSEEK_GUI_UPDATE_CHANNEL',
+    'RELEASE_CHANNEL',
+    'SCIFORGE_APP_VERSION',
+    'SCIFORGE_PUBLIC_RELEASE',
+    'SCIFORGE_RELEASE_SOURCE_COMMIT',
+    'SCIFORGE_UPDATE_CHANNEL'
+  ]
+  const previousEnvironment = new Map(
+    environmentKeys.map((key) => [key, process.env[key]])
+  )
+  const version = '0.1.0'
+  const fileName = `SciForge-${version}-linux-x86_64.AppImage`
+  const artifactPath = join(distDir, fileName)
+  const artifactBytes = Buffer.from('public-dist-directory-artifact')
+  const sha512 = createHash('sha512').update(artifactBytes).digest('base64')
+  const guardResult = await canonicalRunPublicReleaseGuard([], cleanGuardOptions())
+  let guardCalls = 0
+
+  for (const key of environmentKeys) delete process.env[key]
+  process.env.SCIFORGE_PUBLIC_RELEASE = '1'
+  t.mock.method(publicReleaseGuardModule, 'runPublicReleaseGuard', async (argv) => {
+    guardCalls += 1
+    assert.deepEqual(argv, [])
+    return guardResult
+  })
+
+  try {
+    writeFileSync(artifactPath, artifactBytes)
+    writeFileSync(join(distDir, 'latest-linux.yml'), [
+      `version: ${version}`,
+      'files:',
+      `  - url: ${fileName}`,
+      `    sha512: ${sha512}`,
+      `    size: ${artifactBytes.length}`,
+      `path: ${fileName}`,
+      `sha512: ${sha512}`,
+      "releaseDate: '2026-08-23T00:00:00.000Z'",
+      ''
+    ].join('\n'))
+
+    const hooks = createPublicReleaseArtifactHooks({
+      afterPack: async () => {},
+      projectRoot: new URL('..', import.meta.url).pathname,
+      internalRuntimeComposition: { extraResources: [], packagedRuntimes: [] },
+      deploymentConfigurationComposition: safeDeploymentComposition()
+    })
+    await hooks.afterPack({})
+    await hooks.afterAllArtifactBuild({
+      artifactPaths: [artifactPath],
+      outDir: distDir,
+      configuration: {
+        extraMetadata: { updateChannel: 'stable', version }
+      }
+    })
+
+    const sealOptions = (channel) => ({
+      environment: {
+        RELEASE_CHANNEL: channel,
+        SCIFORGE_APP_VERSION: version,
+        SCIFORGE_PUBLIC_RELEASE: '1',
+        SCIFORGE_RELEASE_SOURCE_COMMIT: SOURCE_COMMIT
+      },
+      projectRoot: new URL('..', import.meta.url).pathname,
+      runPublicReleaseGuard: async (argv) => {
+        assert.deepEqual(argv, [])
+        return guardResult
+      },
+      createInternalRuntimeComposition: () => ({
+        extraResources: [],
+        packagedRuntimes: []
+      }),
+      createDeploymentConfigurationComposition: safeDeploymentComposition
+    })
+    await assert.rejects(
+      sealConfiguredPublicReleaseArtifactReceipt(
+        { distDir, platform: 'linux' },
+        sealOptions('frontier')
+      ),
+      /Build-issued evidence does not match release artifact/u
+    )
+    const created = await sealConfiguredPublicReleaseArtifactReceipt(
+      { distDir, platform: 'linux' },
+      sealOptions('stable')
+    )
+    assert.equal(guardCalls, 1)
+    assert.equal(created.receipt.version, version)
+    assert.equal(created.receipt.tag, `v${version}`)
+    assert.equal(created.receipt.channel, 'stable')
+    assert.equal(created.receipt.sourceCommit, SOURCE_COMMIT)
+  } finally {
+    for (const [key, value] of previousEnvironment) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    rmSync(distDir, { recursive: true, force: true })
+  }
+})
+
 test('official packaging and publication paths produce and pass platform receipts', () => {
   const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url)))
   for (const [scriptName, platform] of [
@@ -1020,6 +1122,11 @@ test('official packaging and publication paths produce and pass platform receipt
   )
   assert.match(builderConfig, /createPublicReleaseArtifactHooks/u)
   assert.match(builderConfig, /afterPack: publicReleaseArtifactHooks\.afterPack/u)
+  assert.match(
+    builderConfig,
+    /const applicationVersion = releaseAppVersion \|\| packageAppVersion/u
+  )
+  assert.match(builderConfig, /extraMetadata:\s*\{\s*version: applicationVersion,/u)
 
   const workflow = readFileSync(
     new URL('../.github/workflows/release.yml', import.meta.url),

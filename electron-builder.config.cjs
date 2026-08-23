@@ -82,7 +82,11 @@ const releaseAppVersion = (
   process.env.DEEPSEEK_GUI_APP_VERSION ||
   ''
 ).trim()
-const artifactVersion = releaseAppVersion || '${version}'
+const packageMetadata = JSON.parse(
+  readFileSync(join(__dirname, 'package.json'), 'utf8')
+)
+const packageAppVersion = String(packageMetadata.version || '').trim()
+const applicationVersion = releaseAppVersion || packageAppVersion
 const officialExtensionKeysFile = (
   process.env.SCIFORGE_OFFICIAL_EXTENSION_KEYS_FILE || ''
 ).trim()
@@ -102,6 +106,11 @@ function normalizeUpdateChannel(raw) {
 if (releaseAppVersion && !/^\d+\.\d+\.\d+$/.test(releaseAppVersion)) {
   throw new Error(
     `SCIFORGE_APP_VERSION must be a valid x.y.z semver for electron-updater, got: ${releaseAppVersion}`
+  )
+}
+if (!/^\d+\.\d+\.\d+$/.test(applicationVersion)) {
+  throw new Error(
+    `Electron Builder application version must be a valid x.y.z semver, got: ${applicationVersion}`
   )
 }
 
@@ -151,7 +160,7 @@ module.exports = {
         }]
       : [])
   ],
-  artifactName: `SciForge-${artifactVersion}-\${os}-\${arch}.\${ext}`,
+  artifactName: `SciForge-${applicationVersion}-\${os}-\${arch}.\${ext}`,
   publish: [
     {
       provider: 'generic',
@@ -205,7 +214,7 @@ module.exports = {
     target: [{ target: 'AppImage', arch: ['x64'] }]
   },
   extraMetadata: {
-    ...(releaseAppVersion ? { version: releaseAppVersion } : {}),
+    version: applicationVersion,
     updateChannel,
     buildHints: {
       macSigningEnabled: hasExplicitMacSigningIdentity,

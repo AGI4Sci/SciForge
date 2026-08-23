@@ -976,12 +976,7 @@ function createPublicReleaseArtifactHooks({
         '[public-release] Cannot issue build evidence without a successful public afterPack.'
       )
     }
-    const version = requireString(
-      process.env.SCIFORGE_APP_VERSION,
-      'SCIFORGE_APP_VERSION'
-    )
-    const tag = `v${version}`
-    const channel = configuredReleaseChannel(process.env)
+    const { version, tag, channel } = readBuilderReleaseIdentity(buildResult)
     const sourceCommit = readSourceCommit(absoluteProjectRoot)
     const expectedSourceCommit = String(
       process.env.SCIFORGE_RELEASE_SOURCE_COMMIT || ''
@@ -1020,6 +1015,28 @@ function createPublicReleaseArtifactHooks({
     return []
   }
   return Object.freeze({ afterPack: wrappedAfterPack, afterAllArtifactBuild })
+}
+
+function readBuilderReleaseIdentity(buildResult) {
+  requireRecord(buildResult.configuration, 'Electron Builder configuration')
+  requireRecord(
+    buildResult.configuration.extraMetadata,
+    'Electron Builder extraMetadata'
+  )
+  const version = requireString(
+    buildResult.configuration.extraMetadata.version,
+    'Electron Builder application version'
+  )
+  if (!/^\d+\.\d+\.\d+$/u.test(version)) {
+    throw new Error('[public-release] Electron Builder application version is invalid.')
+  }
+  const channel = String(
+    buildResult.configuration.extraMetadata.updateChannel || ''
+  ).trim()
+  if (channel !== 'frontier' && channel !== 'stable') {
+    throw new Error('[public-release] Electron Builder update channel is invalid.')
+  }
+  return Object.freeze({ channel, tag: `v${version}`, version })
 }
 
 async function sealConfiguredPublicReleaseArtifactReceipt({
