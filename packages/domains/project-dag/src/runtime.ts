@@ -1,8 +1,9 @@
 import {
   EVIDENCE_DAG_CAPABILITY_IDS,
   evidenceDagCommittedSnapshotSchema,
-  evidenceDagViewInputSchema,
-  evidenceDagViewOutputSchema,
+  evidenceDagSnapshotStatusInputSchema,
+  evidenceDagSnapshotStatusOutputSchema,
+  evidenceDagWatermarkCoversValue,
   type EvidenceDagCommittedSnapshot,
   type EvidenceDagSnapshotIdentity
 } from '@sciforge/domain-evidence-dag/contract'
@@ -42,7 +43,6 @@ import {
 } from './contract.js'
 import {
   ProjectDagHandoffOutbox,
-  evidenceWatermarkCovers,
   type ProjectDagHandoffRecord
 } from './handoff-outbox.js'
 import {
@@ -103,6 +103,8 @@ export class ProjectDagRuntime {
   #transition: Promise<void> = Promise.resolve()
   #handoffTimer: ReturnType<typeof setTimeout> | null = null
   #drainingHandoffs: Promise<void> | null = null
+  #handoffRetryNotBefore = 0
+  #disposePromise: Promise<void> | null = null
 
   constructor(options: ProjectDagRuntimeOptions = {}) {
     this.#sidecar = options.sidecar ?? new ProjectDagSidecar({
@@ -120,6 +122,8 @@ export class ProjectDagRuntime {
   async activate(
     context: DomainMainRuntimeLifecycleContext
   ): Promise<DomainMainRuntimeDisposer> {
+    if (this.#disposePromise) await this.#disposePromise
+    this.#disposePromise = null
     if (this.#context && this.#context !== context) {
       throw projectError(
         'internal_error',
@@ -129,6 +133,7 @@ export class ProjectDagRuntime {
     }
     this.#context = context
     this.#disposed = false
+    this.#handoffRetryNotBefore = 0
     await this.#outbox?.load()
     const applyEnablement = (enabled: boolean) => {
       this.#transition = this.#transition
@@ -157,6 +162,13 @@ export class ProjectDagRuntime {
   }
 
   async dispose(): Promise<void> {
+    if (this.#disposePromise) return this.#disposePromise
+    const pending = this.#disposeOnce()
+    this.#disposePromise = pending
+    return pending
+  }
+
+  async #disposeOnce(): Promise<void> {
     if (this.#disposed) return
     this.#disposed = true
     this.#enabled = false
@@ -165,6 +177,7 @@ export class ProjectDagRuntime {
       this.#handoffTimer = null
     }
     await this.#transition.catch(() => undefined)
+    await this.#drainingHandoffs?.catch(() => undefined)
     await this.#sidecar.stop()
     this.#context = null
   }
@@ -173,6 +186,16 @@ export class ProjectDagRuntime {
     const context = this.#context
     if (!context || this.#disposed || !this.#enabled) return
     const scope = domainArtifactEventScope(event)
+    if (
+      event.kind === 'execution-completed' &&
+      isAcknowledgedUnboundPackageExecution(
+        event,
+        scope.runtimeId,
+        scope.threadId
+      )
+    ) {
+      return
+    }
     if (event.kind === 'execution-completed' && !scope.workspaceRoot?.trim()) {
       throw projectError(
         'access_restricted',
@@ -211,6 +234,12 @@ export class ProjectDagRuntime {
     this.#drainingHandoffs = pending
     try {
       await pending
+    } catch (error) {
+      this.#handoffRetryNotBefore = Math.max(
+        this.#handoffRetryNotBefore,
+        Date.now() + retryDelayMs(0)
+      )
+      throw error
     } finally {
       if (this.#drainingHandoffs === pending) this.#drainingHandoffs = null
       if (this.#autoProcessHandoffs) this.#scheduleNextHandoffDrain()
@@ -396,7 +425,6 @@ export class ProjectDagRuntime {
     if (!context) return
     try {
       await this.#sidecar.ensure(context)
-      if (this.#autoProcessHandoffs) this.#scheduleHandoffDrain(0)
     } catch (error) {
       context.log({
         level: 'error',
@@ -404,6 +432,7 @@ export class ProjectDagRuntime {
         detail: error
       })
     }
+    if (this.#autoProcessHandoffs) this.#scheduleHandoffDrain(0)
   }
 
   async #ready(): Promise<{
@@ -478,24 +507,25 @@ export class ProjectDagRuntime {
     const capturedWorkspaceRoot = scope?.workspaceRoot.trim() || (
       await context.agentThreads.read({ runtimeId, threadId })
     ).workspaceRoot
-    const view = await context.capabilities.invoke(
+    const status = await context.capabilities.invoke(
       {
-        actionId: EVIDENCE_DAG_CAPABILITY_IDS.view,
+        actionId: EVIDENCE_DAG_CAPABILITY_IDS.snapshotStatus,
         effect: 'read',
-        inputSchema: evidenceDagViewInputSchema,
-        outputSchema: evidenceDagViewOutputSchema
+        inputSchema: evidenceDagSnapshotStatusInputSchema,
+        outputSchema: evidenceDagSnapshotStatusOutputSchema
       },
       { runtimeId, threadId },
       {
         ...(capturedWorkspaceRoot ? { workspaceId: capturedWorkspaceRoot } : {})
       }
     )
-    const parsed = evidenceDagCommittedSnapshotSchema.safeParse(view.status.committed)
+    const committed = status.committed
+    const parsed = evidenceDagCommittedSnapshotSchema.safeParse(committed)
     if (!parsed.success) {
       throw projectError(
         'evidence_snapshot_unavailable',
         `No committed Evidence Snapshot is available for ${engineThreadId}.`,
-        false
+        scope !== undefined && committed === null
       )
     }
     if (parsed.data.threadId !== engineThreadId) {
@@ -512,9 +542,13 @@ export class ProjectDagRuntime {
     const outbox = this.#outbox
     const context = this.#context
     if (!outbox || !context || this.#disposed || !this.#enabled) return
+    const acceptedInDrain = new Set<string>()
     for (const record of outbox.ready()) {
+      if (acceptedInDrain.has(record.id)) continue
       try {
-        await this.#acceptHandoff(record, context)
+        const acceptedIds = await this.#acceptHandoff(record, context)
+        for (const id of acceptedIds) acceptedInDrain.add(id)
+        this.#handoffRetryNotBefore = 0
       } catch (error) {
         const normalized = normalizeRuntimeError(
           error,
@@ -522,11 +556,17 @@ export class ProjectDagRuntime {
           true
         )
         if (normalized.error.retryable) {
+          const retryAfterMs = retryDelayMs(record.attempts)
+          this.#handoffRetryNotBefore = Date.now() + retryAfterMs
           await outbox.markRetry(
             record.id,
             normalized.error.message,
-            retryDelayMs(record.attempts)
+            retryAfterMs
           )
+          // A transient dependency failure is generally shared by the whole
+          // backlog. Retry one durable record per backoff window instead of
+          // replaying every stale handoff during application startup.
+          break
         } else {
           await outbox.markFailed(record.id, normalized.error.message)
         }
@@ -537,7 +577,7 @@ export class ProjectDagRuntime {
   async #acceptHandoff(
     record: ProjectDagHandoffRecord,
     context: DomainMainRuntimeLifecycleContext
-  ): Promise<void> {
+  ): Promise<readonly string[]> {
     if (record.sourceKind === 'agent-thread') {
       await authoritativeAgentHandoffScope(
         record.runtimeId,
@@ -558,12 +598,23 @@ export class ProjectDagRuntime {
         workspaceRoot: record.workspaceRoot
       }
     )
-    if (!evidenceWatermarkCovers(trigger.inputWatermark, record.targetWatermark)) {
+    if (!evidenceDagWatermarkCoversValue(trigger.inputWatermark, record.targetWatermark)) {
       throw projectError(
         'evidence_snapshot_unavailable',
         `Evidence Snapshot for ${triggerId} has not committed watermark ` +
         `${record.targetWatermark}.`,
         true
+      )
+    }
+    const coveredRecords = this.#outbox!.activeInLaneCoveredBy(
+      record,
+      trigger.inputWatermark
+    )
+    if (!coveredRecords.some(({ id }) => id === record.id)) {
+      throw projectError(
+        'internal_error',
+        `Project handoff ${record.id} disappeared from its active durable lane.`,
+        false
       )
     }
     const threads = await context.agentThreads.list({
@@ -576,6 +627,7 @@ export class ProjectDagRuntime {
     )
     const snapshots = await Promise.all(workspaceThreads.map(async (thread) => {
       const threadId = engineThreadId(thread)
+      if (threadId === trigger.threadId) return trigger
       try {
         return await this.#readEvidenceSnapshotImpl(threadId, context)
       } catch (error) {
@@ -615,7 +667,9 @@ export class ProjectDagRuntime {
         }
       }
     ))
-    await this.#outbox!.markAccepted(record.id, receipt)
+    const acceptedIds = coveredRecords.map(({ id }) => id)
+    await this.#outbox!.markAcceptedBatch(acceptedIds, receipt)
+    return acceptedIds
   }
 
   #scheduleHandoffDrain(delayMs: number): void {
@@ -627,10 +681,18 @@ export class ProjectDagRuntime {
     ) {
       return
     }
+    const retryBarrierMs = Math.max(0, this.#handoffRetryNotBefore - Date.now())
     this.#handoffTimer = setTimeout(() => {
       this.#handoffTimer = null
-      void this.drainHandoffs()
-    }, Math.max(0, delayMs))
+      const context = this.#context
+      void this.drainHandoffs().catch((error) => {
+        context?.log({
+          level: 'error',
+          message: 'Project DAG handoff drain failed.',
+          detail: error
+        })
+      })
+    }, Math.max(0, delayMs, retryBarrierMs))
     this.#handoffTimer.unref?.()
   }
 
@@ -644,7 +706,11 @@ export class ProjectDagRuntime {
         ? Date.now()
         : Date.parse(record.nextAttemptAt ?? '') || Date.now()
     ))
-    this.#scheduleHandoffDrain(Math.max(0, next - Date.now()))
+    this.#scheduleHandoffDrain(Math.max(
+      0,
+      next - Date.now(),
+      this.#handoffRetryNotBefore - Date.now()
+    ))
   }
 }
 
@@ -865,6 +931,55 @@ function packageExecutionHandoffScope(
   hostAcceptanceSequence: number
   hostWorkspaceBinding: 'capability-caller'
 } {
+  const identity = packageExecutionHostIdentity(event, runtimeId, threadId)
+  const binding = event.hostBinding
+  if (
+    binding?.workspaceBinding !== 'capability-caller' ||
+    !binding.workspaceRoot?.trim() ||
+    !event.workspaceRoot?.trim() ||
+    !sameWorkspace(binding.workspaceRoot, event.workspaceRoot) ||
+    !sameWorkspace(binding.workspaceRoot, workspaceRoot)
+  ) {
+    throw projectError(
+      'access_restricted',
+      'Package execution handoff has no valid authoritative Host workspace binding.',
+      false
+    )
+  }
+  return {
+    sourceKind: 'package-execution',
+    ...identity,
+    hostWorkspaceBinding: 'capability-caller'
+  }
+}
+
+function isAcknowledgedUnboundPackageExecution(
+  event: Extract<DomainArtifactEvent, { kind: 'execution-completed' }>,
+  runtimeId: string,
+  threadId: string
+): boolean {
+  const binding = event.hostBinding
+  if (binding?.workspaceBinding !== 'unbound') return false
+  packageExecutionHostIdentity(event, runtimeId, threadId)
+  if (binding.workspaceRoot?.trim() || event.workspaceRoot?.trim()) {
+    throw projectError(
+      'access_restricted',
+      'Unbound package execution handoff cannot claim a workspace binding.',
+      false
+    )
+  }
+  return true
+}
+
+function packageExecutionHostIdentity(
+  event: Extract<DomainArtifactEvent, { kind: 'execution-completed' }>,
+  runtimeId: string,
+  threadId: string
+): {
+  producerModuleId: string
+  executionId: string
+  hostAcceptanceSequence: number
+} {
   const producerModuleId = event.producer.moduleId.trim()
   const executionId = event.executionId.trim()
   const explicitRuntime = event.runtimeId?.trim()
@@ -873,14 +988,9 @@ function packageExecutionHandoffScope(
   const acceptanceSequence = binding?.acceptanceSequence
   if (
     binding?.contractVersion !== 1 ||
-    binding.workspaceBinding !== 'capability-caller' ||
-    !binding.workspaceRoot?.trim() ||
-    !event.workspaceRoot?.trim() ||
-    !sameWorkspace(binding.workspaceRoot, event.workspaceRoot) ||
-    !sameWorkspace(binding.workspaceRoot, workspaceRoot) ||
+    typeof acceptanceSequence !== 'number' ||
     !Number.isSafeInteger(acceptanceSequence) ||
-    (acceptanceSequence ?? 0) <= 0 ||
-    leadingWatermarkSequence(event.targetWatermark) !== acceptanceSequence
+    acceptanceSequence <= 0
   ) {
     throw projectError(
       'access_restricted',
@@ -915,11 +1025,9 @@ function packageExecutionHandoffScope(
     )
   }
   return {
-    sourceKind: 'package-execution',
     producerModuleId,
     executionId,
-    hostAcceptanceSequence: acceptanceSequence,
-    hostWorkspaceBinding: 'capability-caller'
+    hostAcceptanceSequence: acceptanceSequence
   }
 }
 
@@ -931,7 +1039,6 @@ function assertPackageExecutionIdentity(record: ProjectDagHandoffRecord): void {
     record.hostWorkspaceBinding !== 'capability-caller' ||
     !Number.isSafeInteger(record.hostAcceptanceSequence) ||
     (record.hostAcceptanceSequence ?? 0) <= 0 ||
-    leadingWatermarkSequence(record.targetWatermark) !== record.hostAcceptanceSequence ||
     (record.runtimeId !== producer && record.runtimeId !== `domain:${producer}`)
   ) {
     throw projectError(
@@ -940,13 +1047,6 @@ function assertPackageExecutionIdentity(record: ProjectDagHandoffRecord): void {
       false
     )
   }
-}
-
-function leadingWatermarkSequence(value: string): number | null {
-  const match = /^(\d+):/u.exec(value.trim())
-  if (!match) return null
-  const parsed = Number(match[1])
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
 }
 
 function splitEngineThreadId(value: string): { runtimeId: string; threadId: string } {

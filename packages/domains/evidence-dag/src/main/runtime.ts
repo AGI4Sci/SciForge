@@ -23,16 +23,20 @@ import {
   evidenceDagPreviewOutputSchema,
   evidenceDagPriorityInputSchema,
   evidenceDagPriorityOutputSchema,
+  evidenceDagSnapshotStatusInputSchema,
+  evidenceDagSnapshotStatusOutputSchema,
   evidenceDagUpdateInputSchema,
   evidenceDagUpdateOutputSchema,
   evidenceDagViewInputSchema,
   evidenceDagViewOutputSchema,
+  evidenceDagWatermarkCoversValue,
   type EvidenceDagCanonicalStatus,
   type EvidenceDagExportSnapshotProductsInput,
   type EvidenceDagExportSnapshotProductsOutput,
   type EvidenceDagPreviewInput,
   type EvidenceDagPreviewOutput,
   type EvidenceDagPriorityInput,
+  type EvidenceDagSnapshotStatusInput,
   type EvidenceDagUpdateInput,
   type EvidenceDagUpdateOutput,
   type EvidenceDagViewInput,
@@ -67,7 +71,6 @@ import {
   evaluateEvidenceDagHighImpactGate
 } from './gate.js'
 import { EvidenceDagQueue } from './queue.js'
-import { evidenceDagWatermarkCoversValue } from './watermark.js'
 import {
   EvidenceDagSidecar,
   type EvidenceDagSidecarPort
@@ -85,6 +88,7 @@ export type EvidenceDagRuntimePort = Readonly<{
   activate(context: DomainMainRuntimeLifecycleContext): Promise<DomainMainRuntimeDisposer>
   consume(event: DomainArtifactEvent): Promise<void>
   view(input: EvidenceDagViewInput): Promise<EvidenceDagViewOutput>
+  snapshotStatus(input: EvidenceDagSnapshotStatusInput): Promise<EvidenceDagCanonicalStatus>
   update(input: EvidenceDagUpdateInput): Promise<EvidenceDagUpdateOutput>
   priority(input: EvidenceDagPriorityInput): Promise<EvidenceDagCanonicalStatus>
   preview(input: EvidenceDagPreviewInput): Promise<EvidenceDagPreviewOutput>
@@ -99,6 +103,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
   private context: DomainMainRuntimeLifecycleContext | undefined
   private enabled = false
   private closed = false
+  private closePromise: Promise<void> | undefined
   private enablementDisposer: DomainMainRuntimeDisposer | undefined
   private readonly sidecar: EvidenceDagSidecarPort
   private readonly client: EvidenceDagServiceClient
@@ -310,6 +315,37 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     })
   }
 
+  async snapshotStatus(
+    raw: EvidenceDagSnapshotStatusInput
+  ): Promise<EvidenceDagCanonicalStatus> {
+    const input = evidenceDagSnapshotStatusInputSchema.parse(raw)
+    const context = await this.requireEnabled()
+    let authoritativeWorkspaceRoot: string | undefined
+    try {
+      authoritativeWorkspaceRoot = (await context.agentThreads.read({
+        runtimeId: input.runtimeId,
+        threadId: input.threadId
+      })).workspaceRoot
+    } catch (error) {
+      authoritativeWorkspaceRoot = await this.queue.workspaceRoot(
+        input.runtimeId,
+        input.threadId
+      ) ?? undefined
+      if (!authoritativeWorkspaceRoot) throw error
+    }
+    const workspaceRoot = evidenceDagWorkspaceRoot(
+      input.workspaceRoot,
+      authoritativeWorkspaceRoot
+    )
+    return evidenceDagSnapshotStatusOutputSchema.parse(
+      await this.localStatus(
+        input.runtimeId,
+        input.threadId,
+        workspaceRoot
+      )
+    )
+  }
+
   async update(raw: EvidenceDagUpdateInput): Promise<EvidenceDagUpdateOutput> {
     const input = evidenceDagUpdateInputSchema.parse(raw)
     const context = await this.requireEnabled()
@@ -488,7 +524,11 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
   }
 
   async close(): Promise<void> {
-    if (this.closed) return
+    this.closePromise ??= this.closeOnce()
+    await this.closePromise
+  }
+
+  private async closeOnce(): Promise<void> {
     this.closed = true
     await this.enablementDisposer?.()
     this.enablementDisposer = undefined
@@ -500,16 +540,38 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
   }
 
   private async status(runtimeId: string, threadId: string): Promise<EvidenceDagCanonicalStatus> {
-    const [serviceCommitted, localCommitted, queuedPending] = await Promise.all([
+    const [serviceCommitted, local] = await Promise.all([
       this.client.committedSnapshot(evidenceDagThreadId(runtimeId, threadId)).catch(() => null),
-      this.queue.committed(runtimeId, threadId),
-      this.queue.pending(runtimeId, threadId)
+      this.localStatus(runtimeId, threadId)
     ])
-    const committed = serviceCommitted ?? localCommitted
+    const committed = serviceCommitted ?? local.committed
+    const pending = committed && local.pending &&
+      evidenceDagWatermarkCoversValue(committed.inputWatermark, local.pending.targetWatermark)
+      ? null
+      : local.pending
+    return this.canonicalStatus(committed, pending)
+  }
+
+  private async localStatus(
+    runtimeId: string,
+    threadId: string,
+    workspaceRoot?: string
+  ): Promise<EvidenceDagCanonicalStatus> {
+    const [committed, queuedPending] = await Promise.all([
+      this.queue.committed(runtimeId, threadId, workspaceRoot),
+      this.queue.pending(runtimeId, threadId, workspaceRoot)
+    ])
     const pending = committed && queuedPending &&
-      evidenceDagWatermarkCovers(committed.inputWatermark, queuedPending.targetWatermark)
+      evidenceDagWatermarkCoversValue(committed.inputWatermark, queuedPending.targetWatermark)
       ? null
       : queuedPending
+    return this.canonicalStatus(committed, pending)
+  }
+
+  private canonicalStatus(
+    committed: EvidenceDagCanonicalStatus['committed'],
+    pending: EvidenceDagCanonicalStatus['pending']
+  ): EvidenceDagCanonicalStatus {
     const updatedAt = [committed?.createdAt, pending?.updatedAt]
       .filter((value): value is string => Boolean(value))
       .sort()
@@ -662,10 +724,6 @@ export function updateEvidenceDagVisibleSurfaces(
 
 export function parseEvidenceDagActivation(value: unknown) {
   return evidenceDagActivationPayloadSchema.parse(value)
-}
-
-export function evidenceDagWatermarkCovers(committed: string, target: string): boolean {
-  return evidenceDagWatermarkCoversValue(committed, target)
 }
 
 export function evidenceDagWorkspaceRoot(

@@ -1349,7 +1349,8 @@ class WorkflowTests(unittest.TestCase):
         retry_status = self.engine.update_status(self.project)
         self.assertEqual(retry_status["state"], "retry_scheduled")
         self.assertEqual(retry_status["pending"], 1)
-        self.assertIsNone(self.engine.process_updates(self.project))
+        with patch("project_dag.workflow.now_iso", return_value=failed["updated_at"]):
+            self.assertIsNone(self.engine.process_updates(self.project))
         retried = self.engine.retry_update(failed["id"], actor="researcher")
         self.assertEqual(retried["status"], "queued")
         self.assertIsNone(retried["next_attempt_at"])

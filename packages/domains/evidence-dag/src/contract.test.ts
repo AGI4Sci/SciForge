@@ -6,6 +6,7 @@ import {
   evidenceDagCanonicalStatusSchema,
   evidenceDagExportSnapshotProductsInputSchema,
   evidenceDagPreviewOutputSchema,
+  evidenceDagSnapshotStatusInputSchema,
   evidenceDagSnapshotIdentitySchema,
   evidenceDagTypedErrorSchema,
   evidenceDagUpdateInputSchema,
@@ -123,6 +124,11 @@ test('enforces coherent thread scopes and explicit rebuild intent', () => {
     threadId: 'thread-1'
   }).success, true)
   assert.equal(evidenceDagViewInputSchema.safeParse({ threadId: 'thread-1' }).success, false)
+  assert.equal(evidenceDagSnapshotStatusInputSchema.safeParse({
+    runtimeId: 'codex',
+    threadId: 'thread-1'
+  }).success, true)
+  assert.equal(evidenceDagSnapshotStatusInputSchema.safeParse({}).success, false)
   assert.equal(evidenceDagUpdateInputSchema.safeParse({
     runtimeId: 'codex',
     threadId: 'thread-1',

@@ -6,8 +6,9 @@ live below ``staging/`` and are never returned by the committed graph readers.
 """
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -25,23 +26,40 @@ RECENT_ANCHOR_LIMIT = 64
 
 _BATCH_WATERMARK = re.compile(r":batch:(\d+)/(\d+)$")
 _LEADING_WATERMARK = re.compile(r"^(\d+)(?::(.*))?$")
-_TRAILING_WATERMARK = re.compile(r"^(.*?)(\d+)$")
+_TIMESTAMP_WATERMARK = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})"
+    r"(?:\.(\d+))?(Z|([+-])(\d{2}):(\d{2}))$"
+)
 
 
 def compare_watermarks(left: str, right: str) -> Optional[int]:
-    """Compare numeric, composite, timestamp, and batched runtime watermarks."""
-    if str(left) == str(right):
+    """Compare only watermark orders whose Evidence coverage can be proven."""
+    normalized_left = str(left).strip()
+    normalized_right = str(right).strip()
+    if not normalized_left or not normalized_right:
+        return None
+    if normalized_left == normalized_right:
         return 0
-    parsed_left = _parse_watermark(left)
-    parsed_right = _parse_watermark(right)
+    parsed_left = _parse_watermark(normalized_left)
+    parsed_right = _parse_watermark(normalized_right)
     if parsed_left is None or parsed_right is None or parsed_left[0] != parsed_right[0]:
         return None
-    _family, left_sequence, left_discriminator, left_num, left_den = parsed_left
-    _, right_sequence, right_discriminator, right_num, right_den = parsed_right
+    (
+        _family, left_sequence, left_sub_num, left_sub_den,
+        left_discriminator, left_num, left_den,
+    ) = parsed_left
+    (
+        _, right_sequence, right_sub_num, right_sub_den,
+        right_discriminator, right_num, right_den,
+    ) = parsed_right
     if left_sequence != right_sequence:
         return -1 if left_sequence < right_sequence else 1
+    left_subsecond = left_sub_num * right_sub_den
+    right_subsecond = right_sub_num * left_sub_den
+    if left_subsecond != right_subsecond:
+        return -1 if left_subsecond < right_subsecond else 1
     if left_discriminator != right_discriminator:
-        return -1 if left_discriminator < right_discriminator else 1
+        return None
     left_progress = left_num * right_den
     right_progress = right_num * left_den
     return -1 if left_progress < right_progress else 1 if left_progress > right_progress else 0
@@ -51,7 +69,9 @@ def watermark_regresses(current: str, target: str) -> bool:
     return compare_watermarks(str(target).strip(), str(current).strip()) == -1
 
 
-def _parse_watermark(value: Any) -> Optional[tuple[str, int, str, int, int]]:
+def _parse_watermark(
+    value: Any,
+) -> Optional[tuple[str, int, int, int, str, int, int]]:
     text = str(value).strip()
     if not text:
         return None
@@ -61,25 +81,54 @@ def _parse_watermark(value: Any) -> Optional[tuple[str, int, str, int, int]]:
     denominator = int(batch.group(2)) if batch else 1
     if numerator < 1 or denominator < 1 or numerator > denominator:
         return None
+    if ":artifact-lifecycle" in base:
+        return (
+            f"artifact-lifecycle:{base}", 0, 0, 1, "", numerator, denominator,
+        )
     leading = _LEADING_WATERMARK.fullmatch(base)
     if leading:
         return (
-            "leading-sequence", int(leading.group(1)), leading.group(2) or "",
-            numerator, denominator,
+            "leading-sequence", int(leading.group(1)), 0, 1,
+            leading.group(2) or "", numerator, denominator,
         )
-    try:
-        timestamp = datetime.fromisoformat(base[:-1] + "+00:00" if base.endswith("Z") else base)
-    except ValueError:
-        timestamp = None
-    if timestamp is not None:
-        return ("timestamp", int(timestamp.timestamp() * 1000), "", numerator, denominator)
-    trailing = _TRAILING_WATERMARK.fullmatch(base)
-    if trailing and trailing.group(1):
+    timestamp = _parse_timestamp(base)
+    if timestamp:
+        epoch_seconds, subsecond_numerator, subsecond_denominator = timestamp
         return (
-            f"trailing-sequence:{trailing.group(1)}", int(trailing.group(2)), "",
-            numerator, denominator,
+            "timestamp", epoch_seconds, subsecond_numerator,
+            subsecond_denominator, "", numerator, denominator,
         )
-    return None
+    return (f"opaque:{base}", 0, 0, 1, "", numerator, denominator)
+
+
+def _parse_timestamp(value: str) -> Optional[tuple[int, int, int]]:
+    match = _TIMESTAMP_WATERMARK.fullmatch(value)
+    if match is None or len(match.group(7) or "") > 512:
+        return None
+    year, month, day, hour, minute, second = (
+        int(match.group(index)) for index in range(1, 7)
+    )
+    offset_hour = int(match.group(10) or 0)
+    offset_minute = int(match.group(11) or 0)
+    if year < 1 or offset_hour > 23 or offset_minute > 59:
+        return None
+    try:
+        if match.group(8) == "Z":
+            zone = timezone.utc
+        else:
+            direction = -1 if match.group(9) == "-" else 1
+            zone = timezone(direction * timedelta(hours=offset_hour, minutes=offset_minute))
+        instant = datetime(year, month, day, hour, minute, second, tzinfo=zone)
+        utc = instant.astimezone(timezone.utc)
+        epoch_seconds = calendar.timegm(utc.utctimetuple())
+    except (ValueError, OverflowError):
+        return None
+    fraction = match.group(7) or ""
+    return (
+        epoch_seconds,
+        int(fraction) if fraction else 0,
+        10 ** len(fraction) if fraction else 1,
+    )
 
 
 def _canonical_bytes(value: Any) -> bytes:

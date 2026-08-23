@@ -205,7 +205,7 @@ describe('DomainExecutionEventService', () => {
         executionId: 'execution-first',
         runId: 'run-first'
       })
-      await first.replayPending()
+      await first.startDelivery()
       await first.close()
 
       const watermarks: string[] = []
@@ -230,9 +230,234 @@ describe('DomainExecutionEventService', () => {
         runId: 'run-second',
         occurredAt: '1900-01-01T00:00:00.000Z'
       })
-      await restarted.replayPending()
+      await restarted.startDelivery()
       assert.deepEqual(watermarks, ['2:terminal-second'])
       await restarted.close()
+    } finally {
+      await rm(userDataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('holds durable fan-out until the Host startup delivery gate opens', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'domain-execution-outbox-'))
+    try {
+      let traces = 0
+      let deliveries = 0
+      const outbox = new DomainExecutionEventOutbox(userDataDir)
+      const service = new DomainExecutionEventService({
+        trace: {
+          append: async () => {
+            traces += 1
+            return {} as TraceEvent
+          }
+        },
+        consumers: [{ consume: async () => { deliveries += 1 } }],
+        outbox,
+        setTimeout: inertSetTimeout,
+        clearTimeout: inertClearTimeout
+      })
+
+      await service.publish({ moduleId: 'domain.create-loop', moduleVersion: '1.0.0' }, {
+        eventId: 'startup-gated-event',
+        phase: 'run_completed',
+        executionId: 'execution-startup-gated',
+        runId: 'run-startup-gated'
+      })
+      assert.equal(traces, 0)
+      assert.equal(deliveries, 0)
+      assert.equal(outbox.all().length, 1)
+
+      await service.replayPending()
+      assert.equal(traces, 0)
+      assert.equal(deliveries, 0)
+      assert.equal(outbox.all().length, 1)
+
+      await service.startDelivery()
+      await service.startDelivery()
+      assert.equal(traces, 1)
+      assert.equal(deliveries, 1)
+      assert.equal(outbox.all().length, 0)
+      assert.equal(outbox.wasDelivered('startup-gated-event'), true)
+      await service.close()
+    } finally {
+      await rm(userDataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('joins concurrent startup delivery and aborts a load-window replay during close', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'domain-execution-start-close-'))
+    try {
+      let deliveries = 0
+      let releaseConsumer!: () => void
+      const consumerRelease = new Promise<void>((resolve) => { releaseConsumer = resolve })
+      let consumerStarted!: () => void
+      const consumerStart = new Promise<void>((resolve) => { consumerStarted = resolve })
+      const outbox = new DomainExecutionEventOutbox(userDataDir)
+      const service = new DomainExecutionEventService({
+        trace: { append: async () => ({} as TraceEvent) },
+        consumers: [{
+          consume: async () => {
+            deliveries += 1
+            consumerStarted()
+            await consumerRelease
+          }
+        }],
+        outbox,
+        setTimeout: inertSetTimeout,
+        clearTimeout: inertClearTimeout
+      })
+      await service.publish({ moduleId: 'domain.create-loop', moduleVersion: '1.0.0' }, {
+        eventId: 'concurrent-start-event',
+        phase: 'run_completed',
+        executionId: 'concurrent-start-execution',
+        runId: 'concurrent-start-run'
+      })
+
+      const firstStart = service.startDelivery()
+      await consumerStart
+      let secondSettled = false
+      const secondStart = service.startDelivery().then(() => { secondSettled = true })
+      await Promise.resolve()
+      assert.equal(secondSettled, false)
+      releaseConsumer()
+      await Promise.all([firstStart, secondStart])
+      assert.equal(deliveries, 1)
+      await service.close()
+
+      const closingOutbox = new DomainExecutionEventOutbox(userDataDir)
+      const closingService = new DomainExecutionEventService({
+        trace: { append: async () => ({} as TraceEvent) },
+        consumers: [{ consume: async () => { deliveries += 1 } }],
+        outbox: closingOutbox,
+        setTimeout: inertSetTimeout,
+        clearTimeout: inertClearTimeout
+      })
+      await closingService.publish({ moduleId: 'domain.create-loop', moduleVersion: '1.0.0' }, {
+        eventId: 'close-during-load-event',
+        phase: 'run_completed',
+        executionId: 'close-during-load-execution',
+        runId: 'close-during-load-run'
+      })
+      const originalLoad = closingOutbox.load.bind(closingOutbox)
+      let loadStarted!: () => void
+      const loadStart = new Promise<void>((resolve) => { loadStarted = resolve })
+      let releaseLoad!: () => void
+      const loadRelease = new Promise<void>((resolve) => { releaseLoad = resolve })
+      Object.defineProperty(closingOutbox, 'load', {
+        configurable: true,
+        value: async () => {
+          loadStarted()
+          await loadRelease
+          await originalLoad()
+        }
+      })
+
+      const starting = closingService.startDelivery()
+      await loadStart
+      let closeSettled = false
+      const closing = closingService.close().then(() => { closeSettled = true })
+      await Promise.resolve()
+      assert.equal(closeSettled, false)
+      releaseLoad()
+      await Promise.all([starting, closing])
+      assert.equal(deliveries, 1)
+      assert.equal(closingOutbox.all().length, 1)
+    } finally {
+      await rm(userDataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('retries startup delivery after a transient durable outbox load failure', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'domain-execution-start-retry-'))
+    try {
+      const outbox = new DomainExecutionEventOutbox(userDataDir)
+      let delivered!: () => void
+      const delivery = new Promise<void>((resolve) => { delivered = resolve })
+      let retryCallback: (() => void) | undefined
+      const service = new DomainExecutionEventService({
+        trace: { append: async () => ({} as TraceEvent) },
+        consumers: [{ consume: async () => { delivered() } }],
+        outbox,
+        retryBaseMs: 1,
+        setTimeout: ((callback: () => void) => {
+          retryCallback = callback
+          return { unref: () => undefined }
+        }) as unknown as typeof setTimeout,
+        clearTimeout: (() => { retryCallback = undefined }) as unknown as typeof clearTimeout
+      })
+      await service.publish({ moduleId: 'domain.create-loop', moduleVersion: '1.0.0' }, {
+        eventId: 'startup-load-retry-event',
+        phase: 'run_completed',
+        executionId: 'startup-load-retry-execution',
+        runId: 'startup-load-retry-run'
+      })
+      const originalLoad = outbox.load.bind(outbox)
+      let loads = 0
+      Object.defineProperty(outbox, 'load', {
+        configurable: true,
+        value: async () => {
+          loads += 1
+          if (loads === 1) throw new Error('transient startup load failure')
+          await originalLoad()
+        }
+      })
+
+      await assert.rejects(service.startDelivery(), /transient startup load failure/u)
+      assert.equal(typeof retryCallback, 'function')
+      retryCallback!()
+      await delivery
+      assert.ok(loads >= 2)
+      const loadsAfterRetry = loads
+      await service.startDelivery()
+      assert.ok(loads > loadsAfterRetry)
+      assert.equal(outbox.all().length, 0)
+      await service.close()
+    } finally {
+      await rm(userDataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects cross-producer and split execution scopes before durable acceptance', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'domain-execution-scope-forgery-'))
+    try {
+      let traces = 0
+      let deliveries = 0
+      const outbox = new DomainExecutionEventOutbox(userDataDir)
+      const service = new DomainExecutionEventService({
+        trace: { append: async () => { traces += 1; return {} as TraceEvent } },
+        consumers: [{ consume: async () => { deliveries += 1 } }],
+        outbox,
+        resolveCallerWorkspace: () => '/workspace/attacker',
+        setTimeout: inertSetTimeout,
+        clearTimeout: inertClearTimeout
+      })
+      const base = {
+        phase: 'run_completed' as const,
+        executionId: 'forged-execution',
+        runId: 'forged-run',
+        workspaceRoot: '/workspace/attacker'
+      }
+
+      await assert.rejects(
+        service.publish({ moduleId: 'domain.attacker', moduleVersion: '1.0.0' }, {
+          ...base,
+          eventId: 'cross-producer-scope',
+          scope: { runtimeId: 'codex', threadId: 'victim-thread' }
+        }),
+        /not owned by its producer/u
+      )
+      await assert.rejects(
+        service.publish({ moduleId: 'domain.attacker', moduleVersion: '1.0.0' }, {
+          ...base,
+          eventId: 'split-producer-scope',
+          scope: { runtimeId: 'domain.attacker' }
+        }),
+        /bind runtimeId and threadId together/u
+      )
+      assert.equal(outbox.all().length, 0)
+      assert.equal(traces, 0)
+      assert.equal(deliveries, 0)
+      await service.close()
     } finally {
       await rm(userDataDir, { recursive: true, force: true })
     }
@@ -564,7 +789,7 @@ describe('DomainExecutionEventService', () => {
         artifacts: [{ kind: 'sciforge.repro-spec', spec: 'portable' }]
       })
       assert.equal(outbox.all().length, 1)
-      await assert.rejects(failing.replayPending(), AggregateError)
+      await assert.rejects(failing.startDelivery(), AggregateError)
       await failing.close()
 
       const restartedOutbox = new DomainExecutionEventOutbox(userDataDir)
@@ -576,7 +801,7 @@ describe('DomainExecutionEventService', () => {
         consumers: [{ consume: async (event) => { delivered.push(event) } }],
         outbox: restartedOutbox
       })
-      await restarted.replayPending()
+      await restarted.startDelivery()
 
       assert.equal(delivered.length, 1)
       assert.equal(restartedOutbox.all().length, 0)
@@ -670,7 +895,7 @@ describe('DomainExecutionEventService', () => {
         /eventId collision/
       )
 
-      await restarted.replayPending()
+      await restarted.startDelivery()
       assert.equal(traces, 1)
       assert.equal(deliveries, 1)
       assert.equal(restartedOutbox.all().length, 0)
@@ -694,7 +919,7 @@ describe('DomainExecutionEventService', () => {
       assert.equal(repeatedDelivered.producer.moduleVersion, '1.0.0')
       assert.equal(receiptOutbox.all().length, 0)
       assert.equal(receiptOutbox.wasDelivered(eventInput.eventId), true)
-      await afterReceipt.replayPending()
+      await afterReceipt.startDelivery()
       assert.equal(traces, 1)
       assert.equal(deliveries, 1)
       await assert.rejects(
@@ -732,7 +957,7 @@ describe('DomainExecutionEventService', () => {
         outbox
       })
 
-      await service.replayPending()
+      await service.startDelivery()
 
       assert.deepEqual(order, ['trace', 'consumer'])
       assert.equal(outbox.all().length, 0)

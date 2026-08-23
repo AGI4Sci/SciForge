@@ -17,6 +17,8 @@ import {
   evidenceDagPreviewOutputSchema,
   evidenceDagPriorityInputSchema,
   evidenceDagPriorityOutputSchema,
+  evidenceDagSnapshotStatusInputSchema,
+  evidenceDagSnapshotStatusOutputSchema,
   evidenceDagUpdateInputSchema,
   evidenceDagUpdateOutputSchema,
   evidenceDagViewInputSchema,
@@ -253,11 +255,29 @@ export function createEvidenceDagCapabilityFactory<CapabilityDefinition>(
         effect: 'read',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
-        audiences: ['ui', 'agent', 'system'],
+        audiences: ['ui', 'agent'],
         inputSchema: evidenceDagViewInputSchema,
         outputSchema: evidenceDagViewOutputSchema,
         handler: async (input, context) => ({
           output: await options.getRuntime().view({
+            ...input,
+            workspaceRoot: evidenceWorkspaceFromCaller(context)
+          })
+        })
+      }),
+      define({
+        id: EVIDENCE_DAG_CAPABILITY_IDS.snapshotStatus,
+        title: 'Read Evidence snapshot status',
+        description: 'Reads durable Evidence snapshot state without requiring the UI sidecar.',
+        scope: 'workspace',
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        audiences: ['system'],
+        inputSchema: evidenceDagSnapshotStatusInputSchema,
+        outputSchema: evidenceDagSnapshotStatusOutputSchema,
+        handler: async (input, context) => ({
+          output: await options.getRuntime().snapshotStatus({
             ...input,
             workspaceRoot: evidenceWorkspaceFromCaller(context)
           })

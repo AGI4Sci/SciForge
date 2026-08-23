@@ -561,9 +561,28 @@ class Engine:
                 raise ValueError(
                     "targetWatermark must not precede the committed input watermark"
                 )
-            workspace, project, _scope_key = self._workspace_scope(
+            workspace, project, scope_key = self._workspace_scope(
                 workspace_root, project_root,
             )
+            committed_scope = current_graph.meta.get("scope") \
+                if current_graph is not None else None
+            committed_workspace = committed_scope.get("workspaceRoot") \
+                if isinstance(committed_scope, dict) else None
+            committed_scope_key = committed_scope.get("scopeKey") \
+                if isinstance(committed_scope, dict) else None
+            if current_graph is not None and not (
+                isinstance(committed_workspace, str)
+                and committed_workspace.strip()
+                and isinstance(committed_scope_key, str)
+                and committed_scope_key.strip()
+            ):
+                raise ValueError(
+                    "committed Evidence thread has no trusted workspace authority"
+                )
+            if committed_scope_key and committed_scope_key != scope_key:
+                raise ValueError(
+                    "workspaceRoot does not match the committed Evidence thread workspace"
+                )
             staged = self._trace_staging.begin(
                 thread_id=thread_id,
                 target_watermark=str(target_watermark),
@@ -670,6 +689,7 @@ class Engine:
                 graph.meta["scope"] = {
                     "workspaceRoot": workspace,
                     "projectRoot": project,
+                    "scopeKey": scope_key,
                     "accessPolicy": dict(access_policy or {}),
                 }
 

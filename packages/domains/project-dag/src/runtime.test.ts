@@ -170,23 +170,19 @@ test('manual update reads committed Evidence through its public capability and p
       invoke: async <TInput, TOutput>(contract: { actionId: string }) => {
         invoked.push(contract.actionId)
         return {
-          url: 'http://127.0.0.1:3897/',
-          threadId: 'thread-1',
-          status: {
-            committed: {
-              threadId: 'codex:thread-1',
-              version: 3,
-              digest: evidenceDigest,
-              inputWatermark: '186:batch:1/4',
-              schemaVersion: '1',
-              extractorVersion: '1',
-              verifierVersion: '1',
-              artifactDigests: [],
-              createdAt: now
-            },
-            pending: null,
-            updatedAt: now
-          }
+          committed: {
+            threadId: 'codex:thread-1',
+            version: 3,
+            digest: evidenceDigest,
+            inputWatermark: '186:batch:1/4',
+            schemaVersion: '1',
+            extractorVersion: '1',
+            verifierVersion: '1',
+            artifactDigests: [],
+            createdAt: now
+          },
+          pending: null,
+          updatedAt: now
         } as TOutput
       }
     }
@@ -199,7 +195,7 @@ test('manual update reads committed Evidence through its public capability and p
   })
 
   assert.equal(result.receipt.jobId, 'pjob_0123456789ab')
-  assert.deepEqual(invoked, [EVIDENCE_DAG_CAPABILITY_IDS.view])
+  assert.deepEqual(invoked, [EVIDENCE_DAG_CAPABILITY_IDS.snapshotStatus])
   const post = requests.find(({ url, method }) =>
     url.endsWith('/updates') && method === 'POST'
   )
@@ -283,7 +279,7 @@ test('manual update rejects project-only discovery and cross-workspace explicit 
   }
 })
 
-test('artifact handoff rejects forged Agent workspace and unbound package execution scope', async () => {
+test('artifact handoff skips Host-unbound executions and rejects forged scope', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'project-runtime-scope-reject-'))
   const config: ProjectDagSidecarConfig = {
     baseUrl: 'http://127.0.0.1:3898',
@@ -349,7 +345,7 @@ test('artifact handoff rejects forged Agent workspace and unbound package execut
       artifacts: []
     }), (error: unknown) => error instanceof ProjectDagRuntimeError &&
       error.error.code === 'access_restricted')
-    await assert.rejects(runtime.consumeArtifact({
+    await runtime.consumeArtifact({
       contractVersion: 1,
       kind: 'execution-completed',
       hostBinding: {
@@ -360,7 +356,23 @@ test('artifact handoff rejects forged Agent workspace and unbound package execut
       producer: { moduleId: 'sciforge.create-loop', moduleVersion: '1.0.0' },
       executionId: 'execution-host-unbound',
       runId: 'run-host-unbound',
-      targetWatermark: '7:event-host-unbound',
+      targetWatermark: 'opaque:event-host-unbound',
+      occurredAt: now,
+      artifacts: []
+    })
+    assert.equal(outbox.all().length, 0)
+    await assert.rejects(runtime.consumeArtifact({
+      contractVersion: 1,
+      kind: 'execution-completed',
+      hostBinding: {
+        contractVersion: 1,
+        acceptanceSequence: 0,
+        workspaceBinding: 'unbound'
+      },
+      producer: { moduleId: 'sciforge.create-loop', moduleVersion: '1.0.0' },
+      executionId: 'execution-forged-unbound',
+      runId: 'run-forged-unbound',
+      targetWatermark: 'opaque:event-forged-unbound',
       occurredAt: now,
       artifacts: []
     }), (error: unknown) => error instanceof ProjectDagRuntimeError &&
@@ -370,14 +382,14 @@ test('artifact handoff rejects forged Agent workspace and unbound package execut
       kind: 'execution-completed',
       hostBinding: {
         contractVersion: 1,
-        acceptanceSequence: 7,
+        acceptanceSequence: Number.MAX_SAFE_INTEGER + 1,
         workspaceBinding: 'capability-caller',
         workspaceRoot: '/workspace/authoritative'
       },
       producer: { moduleId: 'sciforge.create-loop', moduleVersion: '1.0.0' },
-      executionId: 'execution-sequence-mismatch',
-      runId: 'run-sequence-mismatch',
-      targetWatermark: '6:event-sequence-mismatch',
+      executionId: 'execution-invalid-sequence',
+      runId: 'run-invalid-sequence',
+      targetWatermark: 'opaque:event-invalid-sequence',
       workspaceRoot: '/workspace/authoritative',
       occurredAt: now,
       artifacts: []
@@ -443,6 +455,83 @@ test('artifact handoff rejects forged Agent workspace and unbound package execut
   }
 })
 
+test('missing committed Evidence retries handoff triggers but remains terminal for manual updates', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'project-runtime-missing-evidence-'))
+  const config: ProjectDagSidecarConfig = {
+    baseUrl: 'http://127.0.0.1:3898',
+    runtimeToken: 'project-token',
+    command: 'python',
+    args: ['-m', 'project_dag.server'],
+    cwd: '/app/packages/domains/project-dag',
+    env: {},
+    projectPackageRoot: '/app/packages/domains/project-dag',
+    evidencePackageRoot: '/app/packages/domains/evidence-dag',
+    sessionDir: '/data/evidence',
+    dbPath: '/data/project.db',
+    autoStart: false
+  }
+  const outbox = new ProjectDagHandoffOutbox(userDataDir)
+  let postCount = 0
+  const runtime = new ProjectDagRuntime({
+    sidecar: {
+      ensure: async () => config,
+      stop: async () => undefined
+    } as unknown as ProjectDagSidecar,
+    handoffOutbox: outbox,
+    autoProcessHandoffs: false,
+    fetchImpl: async (_input, init) => {
+      if (init?.method === 'POST') postCount += 1
+      return jsonResponse({
+        projectKey,
+        state: 'empty',
+        committedSnapshot: null,
+        latestReceipt: null,
+        activeReceipt: null,
+        autonomy: { autonomy_mode: 'checkpointed' },
+        attentionCount: 0
+      })
+    }
+  })
+  const context = lifecycleContext({
+    userDataDir,
+    capabilities: {
+      invoke: async <TInput, TOutput>() => ({
+        committed: null,
+        pending: null,
+        updatedAt: now
+      }) as TOutput
+    }
+  })
+  const deactivate = await runtime.activate(context)
+  try {
+    await runtime.consumeArtifact({
+      contractVersion: 1,
+      kind: 'turn-completed',
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-missing-evidence',
+      targetWatermark: '186',
+      workspaceRoot: '/workspace',
+      occurredAt: now,
+      artifacts: []
+    })
+    await runtime.drainHandoffs()
+
+    assert.equal(outbox.all()[0]?.state, 'retry_scheduled')
+    assert.equal(outbox.all()[0]?.attempts, 1)
+    await assert.rejects(
+      runtime.update({ workspaceRoot: '/workspace', scope: 'all' }),
+      (error: unknown) => error instanceof ProjectDagRuntimeError &&
+        error.error.code === 'evidence_snapshot_unavailable' &&
+        error.error.retryable === false
+    )
+    assert.equal(postCount, 0)
+  } finally {
+    await deactivate()
+    await rm(userDataDir, { recursive: true })
+  }
+})
+
 test('artifact handoff survives restart, posts once, and never reposts an accepted receipt', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'project-runtime-handoff-'))
   let postCount = 0
@@ -474,23 +563,19 @@ test('artifact handoff survives restart, posts once, and never reposts an accept
     userDataDir,
     capabilities: {
       invoke: async <TInput, TOutput>() => ({
-        url: 'http://127.0.0.1:3897/',
-        threadId: 'thread-1',
-        status: {
-          committed: {
-            threadId: 'codex:thread-1',
-            version: 3,
-            digest: evidenceDigest,
-            inputWatermark: '186:batch:4/4',
-            schemaVersion: '1',
-            extractorVersion: '1',
-            verifierVersion: '1',
-            artifactDigests: [],
-            createdAt: now
-          },
-          pending: null,
-          updatedAt: now
-        }
+        committed: {
+          threadId: 'codex:thread-1',
+          version: 3,
+          digest: evidenceDigest,
+          inputWatermark: '186:batch:4/4',
+          schemaVersion: '1',
+          extractorVersion: '1',
+          verifierVersion: '1',
+          artifactDigests: [],
+          createdAt: now
+        },
+        pending: null,
+        updatedAt: now
       }) as TOutput
     }
   })
@@ -537,6 +622,144 @@ test('artifact handoff survives restart, posts once, and never reposts an accept
     assert.equal(recoveredOutbox.all()[0]?.state, 'accepted')
     await deactivateRecovered()
   } finally {
+    await rm(userDataDir, { recursive: true })
+  }
+})
+
+test('one committed snapshot accepts every covered handoff in its durable lane', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'project-runtime-covered-lane-'))
+  const outbox = new ProjectDagHandoffOutbox(userDataDir)
+  const config: ProjectDagSidecarConfig = {
+    baseUrl: 'http://127.0.0.1:3898',
+    runtimeToken: 'project-token',
+    command: 'python',
+    args: ['-m', 'project_dag.server'],
+    cwd: '/app/packages/domains/project-dag',
+    env: {},
+    projectPackageRoot: '/app/packages/domains/project-dag',
+    evidencePackageRoot: '/app/packages/domains/evidence-dag',
+    sessionDir: '/data/evidence',
+    dbPath: '/data/project.db',
+    autoStart: false
+  }
+  let postCount = 0
+  let snapshotReads = 0
+  const runtime = new ProjectDagRuntime({
+    sidecar: {
+      ensure: async () => config,
+      stop: async () => undefined
+    } as unknown as ProjectDagSidecar,
+    handoffOutbox: outbox,
+    autoProcessHandoffs: false,
+    readEvidenceSnapshot: async (threadId) => {
+      snapshotReads += 1
+      return {
+        threadId,
+        version: 3,
+        digest: evidenceDigest,
+        inputWatermark: '25',
+        schemaVersion: '1',
+        extractorVersion: '1',
+        verifierVersion: '1',
+        artifactDigests: [],
+        createdAt: now
+      }
+    },
+    fetchImpl: async () => {
+      postCount += 1
+      return jsonResponse(receipt())
+    }
+  })
+  const deactivate = await runtime.activate(lifecycleContext({ userDataDir }))
+  try {
+    for (const targetWatermark of ['10', '20', '30']) {
+      await runtime.consumeArtifact({
+        contractVersion: 1,
+        kind: 'turn-completed',
+        runtimeId: 'codex',
+        threadId: 'thread-1',
+        turnId: `turn-${targetWatermark}`,
+        targetWatermark,
+        workspaceRoot: '/workspace',
+        occurredAt: now,
+        artifacts: []
+      })
+      await new Promise((resolve) => setTimeout(resolve, 2))
+    }
+
+    await runtime.drainHandoffs()
+
+    const byWatermark = new Map(
+      outbox.all().map((record) => [record.targetWatermark, record] as const)
+    )
+    assert.equal(postCount, 1)
+    assert.equal(snapshotReads, 2)
+    assert.equal(byWatermark.get('10')?.state, 'accepted')
+    assert.equal(byWatermark.get('20')?.state, 'accepted')
+    assert.equal(byWatermark.get('30')?.state, 'retry_scheduled')
+    assert.equal(
+      byWatermark.get('10')?.receipt?.desiredFingerprint,
+      byWatermark.get('20')?.receipt?.desiredFingerprint
+    )
+  } finally {
+    await deactivate()
+    await rm(userDataDir, { recursive: true })
+  }
+})
+
+test('shared upstream failure retries only one backlog record per backoff window', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'project-runtime-retry-barrier-'))
+  const outbox = new ProjectDagHandoffOutbox(userDataDir)
+  const config: ProjectDagSidecarConfig = {
+    baseUrl: 'http://127.0.0.1:3898',
+    runtimeToken: 'project-token',
+    command: 'python',
+    args: ['-m', 'project_dag.server'],
+    cwd: '/app/packages/domains/project-dag',
+    env: {},
+    projectPackageRoot: '/app/packages/domains/project-dag',
+    evidencePackageRoot: '/app/packages/domains/evidence-dag',
+    sessionDir: '/data/evidence',
+    dbPath: '/data/project.db',
+    autoStart: false
+  }
+  let snapshotReads = 0
+  const runtime = new ProjectDagRuntime({
+    sidecar: {
+      ensure: async () => config,
+      stop: async () => undefined
+    } as unknown as ProjectDagSidecar,
+    handoffOutbox: outbox,
+    autoProcessHandoffs: false,
+    readEvidenceSnapshot: async () => {
+      snapshotReads += 1
+      throw new Error('Evidence is temporarily unavailable.')
+    }
+  })
+  const deactivate = await runtime.activate(lifecycleContext({ userDataDir }))
+  try {
+    for (const targetWatermark of ['10', '20', '30']) {
+      await runtime.consumeArtifact({
+        contractVersion: 1,
+        kind: 'turn-completed',
+        runtimeId: 'codex',
+        threadId: 'thread-1',
+        turnId: `turn-${targetWatermark}`,
+        targetWatermark,
+        workspaceRoot: '/workspace',
+        occurredAt: now,
+        artifacts: []
+      })
+      await new Promise((resolve) => setTimeout(resolve, 2))
+    }
+
+    await runtime.drainHandoffs()
+
+    assert.equal(snapshotReads, 1)
+    assert.equal(outbox.all().filter(({ state }) => state === 'retry_scheduled').length, 1)
+    assert.equal(outbox.all().filter(({ state }) => state === 'pending').length, 2)
+  } finally {
+    await deactivate()
     await rm(userDataDir, { recursive: true })
   }
 })
@@ -588,23 +811,19 @@ test('execution completion uses a Host-bound synthetic scope through the durable
       ) => {
         invoked.push(input as { runtimeId: string; threadId: string })
         return {
-          url: 'http://127.0.0.1:3897/',
-          threadId: 'execution:execution-9',
-          status: {
-            committed: {
-              threadId: 'domain:sciforge.create-loop:execution:execution-9',
-              version: 1,
-              digest: evidenceDigest,
-              inputWatermark: '9:event-9',
-              schemaVersion: 'evidence.v3',
-              extractorVersion: '1',
-              verifierVersion: '1',
-              artifactDigests: [],
-              createdAt: now
-            },
-            pending: null,
-            updatedAt: now
-          }
+          committed: {
+            threadId: 'domain:sciforge.create-loop:execution:execution-9',
+            version: 1,
+            digest: evidenceDigest,
+            inputWatermark: 'opaque:event-9',
+            schemaVersion: 'evidence.v3',
+            extractorVersion: '1',
+            verifierVersion: '1',
+            artifactDigests: [],
+            createdAt: now
+          },
+          pending: null,
+          updatedAt: now
         } as TOutput
       }
     }
@@ -626,7 +845,7 @@ test('execution completion uses a Host-bound synthetic scope through the durable
       },
       executionId: 'execution-9',
       runId: 'run-9',
-      targetWatermark: '9:event-9',
+      targetWatermark: 'opaque:event-9',
       workspaceRoot: '/workspace',
       occurredAt: now,
       artifacts: []
@@ -733,6 +952,310 @@ test('artifact handoff terminates on 4xx and retries only retryable 5xx failures
     })
   }
 })
+
+test('scheduled handoff drain catches and logs persistence rejection', {
+  timeout: 2_000
+}, async () => {
+  const drainFailure = new Error('handoff retry persistence failed')
+  let hasReadyRecord = true
+  const failingOutbox = {
+    load: async () => undefined,
+    ready: () => {
+      if (!hasReadyRecord) return []
+      hasReadyRecord = false
+      return [{
+        id: 'project-handoff:timer-failure',
+        workspaceRoot: '/workspace',
+        runtimeId: 'codex',
+        threadId: 'thread-1',
+        targetWatermark: '186',
+        sourceKind: 'agent-thread',
+        state: 'pending',
+        attempts: 0,
+        createdAt: now,
+        updatedAt: now
+      }]
+    },
+    active: () => [],
+    markRetry: async () => { throw drainFailure }
+  } as unknown as ProjectDagHandoffOutbox
+  const config: ProjectDagSidecarConfig = {
+    baseUrl: 'http://127.0.0.1:3898',
+    runtimeToken: 'project-token',
+    command: 'python',
+    args: ['-m', 'project_dag.server'],
+    cwd: '/app/packages/domains/project-dag',
+    env: {},
+    projectPackageRoot: '/app/packages/domains/project-dag',
+    evidencePackageRoot: '/app/packages/domains/evidence-dag',
+    sessionDir: '/data/evidence',
+    dbPath: '/data/project.db',
+    autoStart: false
+  }
+  let loggedDetail: unknown
+  let resolveLogged!: () => void
+  const logged = new Promise<void>((resolve) => { resolveLogged = resolve })
+  const runtime = new ProjectDagRuntime({
+    sidecar: {
+      ensure: async () => config,
+      stop: async () => undefined
+    } as unknown as ProjectDagSidecar,
+    handoffOutbox: failingOutbox,
+    readEvidenceSnapshot: async () => {
+      throw new Error('Evidence is temporarily unavailable.')
+    }
+  })
+  const deactivate = await runtime.activate(lifecycleContext({
+    log: (entry) => {
+      if (entry.message !== 'Project DAG handoff drain failed.') return
+      loggedDetail = entry.detail
+      resolveLogged()
+    }
+  }))
+  try {
+    await withTimeout(logged, 'scheduled handoff drain did not report its failure')
+    assert.equal(loggedDetail, drainFailure)
+  } finally {
+    await deactivate()
+  }
+})
+
+test('terminal persistence failure backs off instead of scheduling a zero-delay hot loop', {
+  timeout: 2_000
+}, async () => {
+  const record = {
+    id: 'project-handoff:terminal-persist-failure',
+    workspaceRoot: '/workspace',
+    runtimeId: 'codex',
+    threadId: 'thread-1',
+    targetWatermark: '186',
+    sourceKind: 'agent-thread' as const,
+    state: 'pending' as const,
+    attempts: 0,
+    createdAt: now,
+    updatedAt: now
+  }
+  let failedPersistenceAttempts = 0
+  const persistFailure = new Error('handoff terminal persistence failed')
+  const failingOutbox = {
+    load: async () => undefined,
+    ready: () => [record],
+    active: () => [record],
+    markFailed: async () => {
+      failedPersistenceAttempts += 1
+      throw persistFailure
+    }
+  } as unknown as ProjectDagHandoffOutbox
+  const config: ProjectDagSidecarConfig = {
+    baseUrl: 'http://127.0.0.1:3898',
+    runtimeToken: 'project-token',
+    command: 'python',
+    args: ['-m', 'project_dag.server'],
+    cwd: '/app/packages/domains/project-dag',
+    env: {},
+    projectPackageRoot: '/app/packages/domains/project-dag',
+    evidencePackageRoot: '/app/packages/domains/evidence-dag',
+    sessionDir: '/data/evidence',
+    dbPath: '/data/project.db',
+    autoStart: false
+  }
+  let loggedFailures = 0
+  let resolveLogged!: () => void
+  const logged = new Promise<void>((resolve) => { resolveLogged = resolve })
+  const runtime = new ProjectDagRuntime({
+    sidecar: {
+      ensure: async () => config,
+      stop: async () => undefined
+    } as unknown as ProjectDagSidecar,
+    handoffOutbox: failingOutbox,
+    readEvidenceSnapshot: async () => {
+      throw new ProjectDagRuntimeError({
+        code: 'evidence_snapshot_unavailable',
+        message: 'Evidence identity is terminally invalid.',
+        retryable: false
+      })
+    }
+  })
+  const deactivate = await runtime.activate(lifecycleContext({
+    log: (entry) => {
+      if (entry.message !== 'Project DAG handoff drain failed.') return
+      loggedFailures += 1
+      resolveLogged()
+    }
+  }))
+  try {
+    await withTimeout(logged, 'terminal persistence failure was not logged')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal(failedPersistenceAttempts, 1)
+    assert.equal(loggedFailures, 1)
+  } finally {
+    await deactivate()
+  }
+})
+
+test('activation still schedules handoff recovery when the initial sidecar start fails', {
+  timeout: 2_000
+}, async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'project-runtime-sidecar-recovery-'))
+  const outbox = new ProjectDagHandoffOutbox(userDataDir)
+  await outbox.enqueue({
+    workspaceRoot: '/workspace',
+    runtimeId: 'codex',
+    threadId: 'thread-1',
+    targetWatermark: '186',
+    sourceKind: 'agent-thread'
+  })
+  const config: ProjectDagSidecarConfig = {
+    baseUrl: 'http://127.0.0.1:3898',
+    runtimeToken: 'project-token',
+    command: 'python',
+    args: ['-m', 'project_dag.server'],
+    cwd: '/app/packages/domains/project-dag',
+    env: {},
+    projectPackageRoot: '/app/packages/domains/project-dag',
+    evidencePackageRoot: '/app/packages/domains/evidence-dag',
+    sessionDir: '/data/evidence',
+    dbPath: '/data/project.db',
+    autoStart: false
+  }
+  let ensureAttempts = 0
+  let resolvePosted!: () => void
+  const posted = new Promise<void>((resolve) => { resolvePosted = resolve })
+  const runtime = new ProjectDagRuntime({
+    sidecar: {
+      ensure: async () => {
+        ensureAttempts += 1
+        if (ensureAttempts === 1) throw new Error('initial sidecar start failed')
+        return config
+      },
+      stop: async () => undefined
+    } as unknown as ProjectDagSidecar,
+    handoffOutbox: outbox,
+    readEvidenceSnapshot: async (threadId) => ({
+      threadId,
+      version: 3,
+      digest: evidenceDigest,
+      inputWatermark: '186:batch:4/4',
+      schemaVersion: '1',
+      extractorVersion: '1',
+      verifierVersion: '1',
+      artifactDigests: [],
+      createdAt: now
+    }),
+    fetchImpl: async () => {
+      resolvePosted()
+      return jsonResponse(receipt())
+    }
+  })
+  const deactivate = await runtime.activate(lifecycleContext({ userDataDir }))
+  try {
+    await withTimeout(posted, 'scheduled handoff recovery did not post an update')
+    await runtime.drainHandoffs()
+    assert.equal(outbox.all()[0]?.state, 'accepted')
+    assert.equal(ensureAttempts, 2)
+  } finally {
+    await deactivate()
+    await rm(userDataDir, { recursive: true })
+  }
+})
+
+test('dispose waits for an in-flight handoff before stopping the sidecar', {
+  timeout: 2_000
+}, async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'project-runtime-dispose-drain-'))
+  const outbox = new ProjectDagHandoffOutbox(userDataDir)
+  const config: ProjectDagSidecarConfig = {
+    baseUrl: 'http://127.0.0.1:3898',
+    runtimeToken: 'project-token',
+    command: 'python',
+    args: ['-m', 'project_dag.server'],
+    cwd: '/app/packages/domains/project-dag',
+    env: {},
+    projectPackageRoot: '/app/packages/domains/project-dag',
+    evidencePackageRoot: '/app/packages/domains/evidence-dag',
+    sessionDir: '/data/evidence',
+    dbPath: '/data/project.db',
+    autoStart: false
+  }
+  let stopCount = 0
+  let resolveRequestStarted!: () => void
+  const requestStarted = new Promise<void>((resolve) => { resolveRequestStarted = resolve })
+  let releaseRequest!: () => void
+  const requestRelease = new Promise<void>((resolve) => { releaseRequest = resolve })
+  const runtime = new ProjectDagRuntime({
+    sidecar: {
+      ensure: async () => config,
+      stop: async () => { stopCount += 1 }
+    } as unknown as ProjectDagSidecar,
+    handoffOutbox: outbox,
+    autoProcessHandoffs: false,
+    readEvidenceSnapshot: async (threadId) => ({
+      threadId,
+      version: 3,
+      digest: evidenceDigest,
+      inputWatermark: '186:batch:4/4',
+      schemaVersion: '1',
+      extractorVersion: '1',
+      verifierVersion: '1',
+      artifactDigests: [],
+      createdAt: now
+    }),
+    fetchImpl: async () => {
+      resolveRequestStarted()
+      await requestRelease
+      return jsonResponse(receipt())
+    }
+  })
+  const deactivate = await runtime.activate(lifecycleContext({ userDataDir }))
+  try {
+    await runtime.consumeArtifact({
+      contractVersion: 1,
+      kind: 'turn-completed',
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-dispose',
+      targetWatermark: '186',
+      workspaceRoot: '/workspace',
+      occurredAt: now,
+      artifacts: []
+    })
+    const draining = runtime.drainHandoffs()
+    await withTimeout(requestStarted, 'handoff request did not start')
+    const disposing = runtime.dispose()
+    let concurrentDisposeSettled = false
+    const concurrentDisposing = runtime.dispose().then(() => {
+      concurrentDisposeSettled = true
+    })
+    await Promise.resolve()
+    assert.equal(stopCount, 0)
+    assert.equal(concurrentDisposeSettled, false)
+
+    releaseRequest()
+    await Promise.all([draining, disposing, concurrentDisposing])
+    assert.equal(stopCount, 1)
+    assert.equal(outbox.all()[0]?.state, 'accepted')
+  } finally {
+    releaseRequest()
+    await deactivate()
+    await rm(userDataDir, { recursive: true })
+  }
+})
+
+async function withTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
+  return await new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), 1_000)
+    void promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(timer)
+        reject(error)
+      }
+    )
+  })
+}
 
 function lifecycleContext(
   overrides: Partial<DomainMainRuntimeLifecycleContext> = {}

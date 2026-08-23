@@ -72,6 +72,8 @@ export class DomainExecutionEventService implements DomainMainExecutionEventsRou
   readonly #setTimeout: typeof setTimeout
   readonly #clearTimeout: typeof clearTimeout
   #deliveryQueue: Promise<void> = Promise.resolve()
+  #deliveryStarted: boolean
+  #deliveryStart: Promise<void> | null = null
   #retryTimer: ReturnType<typeof setTimeout> | null = null
   #nextInMemorySequence = 1
   readonly #inMemoryTerminalKeys = new Map<string, string>()
@@ -85,6 +87,7 @@ export class DomainExecutionEventService implements DomainMainExecutionEventsRou
     this.#trace = options.trace
     this.#consumers = Object.freeze([...options.consumers])
     this.#outbox = options.outbox
+    this.#deliveryStarted = !this.#outbox
     this.#now = options.now ?? (() => new Date())
     this.#createEventId = options.createEventId ?? (() => `execution-event-${randomUUID()}`)
     this.#resolveCallerWorkspace = options.resolveCallerWorkspace
@@ -103,6 +106,7 @@ export class DomainExecutionEventService implements DomainMainExecutionEventsRou
     input: DomainExecutionEventInput
   ): Promise<DomainExecutionEventV1> {
     if (this.#closed) throw new Error('Domain execution event service is closed.')
+    assertOwnedExecutionScope(owner.moduleId, input.scope)
     const workspaceBinding = this.#bindWorkspace(input.workspaceRoot)
     const { workspaceRoot: _claimedWorkspaceRoot, ...packageInput } = input
     const occurredAt = input.occurredAt?.trim() || this.#now().toISOString()
@@ -142,11 +146,29 @@ export class DomainExecutionEventService implements DomainMainExecutionEventsRou
     return event
   }
 
+  /** Idempotently opens durable delivery after every artifact consumer is active. */
+  async startDelivery(): Promise<void> {
+    if (this.#closed) return
+    if (this.#deliveryStart) return this.#deliveryStart
+    this.#deliveryStarted = true
+    const pending = this.replayPending()
+    this.#deliveryStart = pending
+    try {
+      await pending
+    } catch (error) {
+      this.#scheduleReplay(this.#retryBaseMs)
+      throw error
+    } finally {
+      if (this.#deliveryStart === pending) this.#deliveryStart = null
+    }
+  }
+
   /** Replays every due terminal event retained after a partial/failed fan-out. */
   async replayPending(): Promise<void> {
-    if (this.#closed || !this.#outbox) return
-    await this.#outbox.load()
+    if (this.#closed || !this.#deliveryStarted || !this.#outbox) return
     await this.#serializeDelivery(async () => {
+      await this.#outbox!.load()
+      if (this.#closed || !this.#deliveryStarted) return
       const failures: unknown[] = []
       for (const record of this.#outbox!.ready()) {
         try {
@@ -168,6 +190,7 @@ export class DomainExecutionEventService implements DomainMainExecutionEventsRou
       this.#clearTimeout(this.#retryTimer)
       this.#retryTimer = null
     }
+    await this.#deliveryStart?.catch(() => undefined)
     await this.#deliveryQueue.catch(() => undefined)
   }
 
@@ -311,9 +334,12 @@ export class DomainExecutionEventService implements DomainMainExecutionEventsRou
     return pending
   }
 
-  #scheduleReplay(): void {
-    if (this.#closed || !this.#outbox) return
-    const nextAttemptAt = this.#outbox.nextAttemptAt()
+  #scheduleReplay(fallbackDelayMs?: number): void {
+    if (this.#closed || !this.#deliveryStarted || !this.#outbox) return
+    if (fallbackDelayMs !== undefined && this.#retryTimer) return
+    const nextAttemptAt = fallbackDelayMs === undefined
+      ? this.#outbox.nextAttemptAt()
+      : Date.now() + fallbackDelayMs
     if (this.#retryTimer) {
       this.#clearTimeout(this.#retryTimer)
       this.#retryTimer = null
@@ -323,6 +349,7 @@ export class DomainExecutionEventService implements DomainMainExecutionEventsRou
       this.#retryTimer = null
       void this.replayPending().catch((error) => {
         this.#log?.('error', 'Durable domain execution fan-out retry failed.', error)
+        this.#scheduleReplay(this.#retryBaseMs)
       })
     }, Math.max(0, nextAttemptAt - Date.now()))
     this.#retryTimer.unref?.()
@@ -336,6 +363,25 @@ function executionEventForConsumer(
   if (workspaceBound || !event.workspaceRoot) return event
   const { workspaceRoot: _untrustedWorkspace, ...unbound } = event
   return deepFreeze(domainExecutionEventSchema.parse(unbound))
+}
+
+function assertOwnedExecutionScope(
+  producerModuleId: string,
+  scope: DomainExecutionEventInput['scope']
+): void {
+  const producer = producerModuleId.trim()
+  const runtimeId = scope?.runtimeId?.trim()
+  const threadId = scope?.threadId?.trim()
+  if (Boolean(runtimeId) !== Boolean(threadId)) {
+    throw new Error('Domain execution scope must bind runtimeId and threadId together.')
+  }
+  if (
+    runtimeId &&
+    runtimeId !== producer &&
+    runtimeId !== `domain:${producer}`
+  ) {
+    throw new Error('Domain execution scope is not owned by its producer module.')
+  }
 }
 
 function executionArtifactWatermark(sequence: number, eventId: string): string {
