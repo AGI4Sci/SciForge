@@ -1,5 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { describe, expect, it, vi } from 'vitest'
@@ -65,7 +66,7 @@ const principal: PrincipalSnapshot = Object.freeze({
 describe('Content Space Agent discovery integration', () => {
   it('routes one external Team library intent through Provider, candidate, and root authorization discovery', () => {
     const catalog = createTestApplicationCatalog(
-      '/private/tmp/sciforge-content-space-discovery'
+      join(tmpdir(), 'sciforge-content-space-discovery')
     )
     try {
       const registry = createApplicationCapabilityRegistry(
@@ -193,7 +194,7 @@ describe('Content Space Agent discovery integration', () => {
       })
     )
     const application = await activateContentSpaceTestApplication({
-      userDataDir: '/private/tmp/sciforge-content-space-administration-integration',
+      userDataDir: join(tmpdir(), 'sciforge-content-space-administration-integration'),
       providerEntry,
       principal
     })
@@ -445,7 +446,10 @@ describe('Content Space Agent discovery integration', () => {
       })
     )
     const application = await activateContentSpaceTestApplication({
-      userDataDir: '/private/tmp/sciforge-content-space-destructive-confirmation-integration',
+      userDataDir: join(
+        tmpdir(),
+        'sciforge-content-space-destructive-confirmation-integration'
+      ),
       providerEntry,
       principal
     })
@@ -521,7 +525,7 @@ describe('Content Space Agent discovery integration', () => {
   })
 
   it('round-trips an authorized Workspace file through real Broker and Host transfers', async () => {
-    const rootDirectory = await mkdtemp('/private/tmp/sciforge-content-space-transfer-')
+    const rootDirectory = await mkdtemp(join(tmpdir(), 'sciforge-content-space-transfer-'))
     const workspace = join(rootDirectory, 'workspace')
     const temporary = join(rootDirectory, 'temporary')
     const userData = join(rootDirectory, 'user-data')
@@ -783,7 +787,7 @@ describe('Content Space Agent discovery integration', () => {
       })
     )
     const application = await activateContentSpaceTestApplication({
-      userDataDir: '/private/tmp/sciforge-content-space-broker-integration',
+      userDataDir: join(tmpdir(), 'sciforge-content-space-broker-integration'),
       providerEntry,
       principal,
       applicationHost: { fileTransfersFor: () => fileTransfers }
