@@ -171,7 +171,9 @@ start electron app
 deployment sidecar 只建立固定 Provider Instance 的运行时 origin，不是 Content Space
 operation verification policy。缺失或非法时 Instance/descriptor/capability 仍可发现，但 bind、
 status、普通文件、Team 与 supplier 调用都会在 settings、credential、network、process 之前返回
-`provider_unavailable`。配置有效也不会把任何操作提升为 PoC 可执行或生产就绪。
+`provider_unavailable`。此时 unavailable 页面仍提供本机 `Disconnect`；点击后还须再次确认，
+只删除当前 Principal 的本地 credential 与 settings，不联系 Provider，也不删除远端账号或文件。
+配置有效也不会把任何操作提升为 PoC 可执行或生产就绪。
 
 ## 7. 安装后的静态与发现验收
 

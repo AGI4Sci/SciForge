@@ -417,6 +417,109 @@ describe('Content Space Agent discovery integration', () => {
     }
   })
 
+  it('requires fresh confirmation before deleting a listed ordinary child', async () => {
+    const execute = vi.fn<ContentSpaceExtendedOperationsExecutor['execute']>(async (input) => {
+      const request = input.request as Readonly<{ entries: readonly unknown[] }>
+      return Object.freeze({
+        ok: true as const,
+        value: Object.freeze({
+          deleted: Object.freeze([...request.entries]),
+          failed: Object.freeze([])
+        })
+      })
+    })
+    const providerEntry = createMockProviderFixtureEntry((provider) =>
+      defineContentSpaceProvider({
+        ...provider,
+        features: Object.freeze({
+          ...provider.features,
+          extendedOperations: Object.freeze({
+            describeOperations: () => Object.freeze([Object.freeze({
+              operation: 'deleteEntries' as const,
+              readiness: 'production_ready' as const,
+              reasonCode: 'available' as const
+            })]),
+            execute
+          })
+        })
+      })
+    )
+    const application = await activateContentSpaceTestApplication({
+      userDataDir: '/private/tmp/sciforge-content-space-destructive-confirmation-integration',
+      providerEntry,
+      principal
+    })
+
+    try {
+      const { broker } = application
+      const caller = Object.freeze({
+        audience: 'agent' as const,
+        callerId: 'agent:content-space-destructive-confirmation-integration',
+        workspaceId: '/workspace'
+      })
+      const authorizationInvocationId = 'content_space_destructive_authorize_0001'
+      const authorized = await broker.invoke({
+        ...caller,
+        approvals: [{
+          actionId: CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
+          invocationId: authorizationInvocationId,
+          mode: 'confirmation' as const
+        }]
+      }, {
+        actionId: CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
+        invocationId: authorizationInvocationId,
+        input: {
+          providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF,
+          scope: 'personal',
+          label: 'Local Content Space'
+        }
+      })
+      const root = successValue<{ resource: NonNullable<typeof authorized.resource> }>(
+        authorized.output
+      ).resource
+
+      const created = await broker.invoke(caller, {
+        actionId: CONTENT_SPACE_CAPABILITY_IDS.agentCreateFolder,
+        invocationId: 'content_space_destructive_create_0002',
+        resource: root,
+        input: { name: 'Disposable' }
+      }, { signal: new AbortController().signal })
+      const listed = await broker.invoke(caller, {
+        actionId: CONTENT_SPACE_CAPABILITY_IDS.agentListEntries,
+        resource: created.resource!,
+        input: { page: { limit: 20 } }
+      })
+      const child = successValue<{
+        items: Array<{
+          entry: Readonly<{
+            kind: string
+            label: string
+            reference: Readonly<{ providerInstanceRef: string; containerId: string }>
+          }>
+          resource: NonNullable<typeof created.resource>
+        }>
+      }>(listed.output).items.find(({ entry }) =>
+        entry.kind === 'container' && entry.label === 'Disposable'
+      )
+      expect(child).toBeDefined()
+
+      await expect(broker.invoke(caller, {
+        actionId: CONTENT_SPACE_CAPABILITY_IDS.agentExtendedDestructive,
+        invocationId: 'content_space_destructive_delete_0003',
+        resource: child!.resource,
+        input: {
+          operation: 'deleteEntries',
+          request: { entries: [child!.entry.reference] }
+        }
+      }, { signal: new AbortController().signal })).rejects.toMatchObject({
+        code: 'approval_denied'
+      })
+      expect(execute).not.toHaveBeenCalled()
+    } finally {
+      await application.dispose()
+    }
+  })
+
   it('round-trips an authorized Workspace file through real Broker and Host transfers', async () => {
     const rootDirectory = await mkdtemp('/private/tmp/sciforge-content-space-transfer-')
     const workspace = join(rootDirectory, 'workspace')

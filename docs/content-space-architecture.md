@@ -80,6 +80,9 @@ Instance, capability factory, and service descriptor composed, but every
 Provider-backed call fails `provider_unavailable` before settings, credentials,
 network, or supplier-process work. Node-local unbind and credential retirement
 remain available without the sidecar and perform no Provider business call.
+The integration-owned unavailable enrollment view exposes that local cleanup
+only after explicit Human confirmation and makes clear that remote files are
+unchanged.
 This availability gate is independent of
 Content Space verification profiles and the optional supplier overlay. The
 isolated `resources/domain-deployments/**` namespace means a sidecar-only build
@@ -115,6 +118,12 @@ atomic expected-state field, so observation and reconciliation are not CAS.
 The ordinary root Broker resource fixes the target but is not standing
 administration approval: those five Agent mutations each require fresh Human
 confirmation before Provider dispatch.
+The same rule applies to every native-document or extended operation declared
+`destructive`: an ordinary child, feature-selection, or Provider-administration
+resource fixes authority but never substitutes for fresh confirmation. The
+Broker rejects a missing per-invocation approval before Provider binding or
+dispatch; only non-destructive `external-write` operations retain delegated
+`resource-authorized` execution.
 Content Space binds every one of the ten Administration outputs to the exact
 request and Broker authority, including page progress and unique identities.
 Read mismatches are `provider_unavailable`; write/destructive mismatches are

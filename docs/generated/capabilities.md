@@ -85,11 +85,11 @@ Registered actions: **266**
 | `content-space.agent-admin-update-space` | 1.0.0 | agent | external-write | confirmation | resource |
 | `content-space.agent-create-folder` | 1.0.0 | agent | external-write | none | resource |
 | `content-space.agent-download` | 1.0.0 | agent | workspace-write | none | resource |
-| `content-space.agent-extended-destructive` | 1.0.0 | agent | destructive | none | resource |
+| `content-space.agent-extended-destructive` | 1.0.0 | agent | destructive | confirmation | resource |
 | `content-space.agent-extended-read` | 2.0.0 | agent | read | none | resource |
 | `content-space.agent-extended-write` | 2.0.0 | agent | external-write | none | resource |
 | `content-space.agent-list-entries` | 1.0.0 | agent | read | none | resource |
-| `content-space.agent-native-document-destructive` | 1.0.0 | agent | destructive | none | resource |
+| `content-space.agent-native-document-destructive` | 1.0.0 | agent | destructive | confirmation | resource |
 | `content-space.agent-native-document-read` | 1.0.0 | agent | read | none | resource |
 | `content-space.agent-native-document-workspace-write` | 1.0.0 | agent | workspace-write | none | resource |
 | `content-space.agent-native-document-write` | 1.0.0 | agent | external-write | none | resource |
@@ -23551,14 +23551,13 @@ Executes one contracted extended operation against the exact Broker-authorized C
 - Version: `1.0.0`
 - Audiences: agent
 - Effect: `destructive`
-- Approval: none
+- Approval: confirmation
 - Scope: resource
 
 ### Contract
 
 ```json
 {
-  "autonomousWrite": "resource-authorized",
   "concurrency": {
     "idempotency": "required",
     "revision": "none"
@@ -30480,14 +30479,13 @@ Executes one provider-native document operation against the exact Broker-authori
 - Version: `1.0.0`
 - Audiences: agent
 - Effect: `destructive`
-- Approval: none
+- Approval: confirmation
 - Scope: resource
 
 ### Contract
 
 ```json
 {
-  "autonomousWrite": "resource-authorized",
   "concurrency": {
     "idempotency": "required",
     "revision": "none"

@@ -49,7 +49,7 @@ A provider-specific main-process boundary that owns trusted endpoint and tenant 
 _Avoid_: Provider Contract, Agent tool, renderer client, Host routing switch
 
 **Provider Deployment Configuration**:
-A package-declared, deployment-owned private binding between one fixed Provider Instance Reference and the HTTPS origin required to construct its Connector runtime. Its absence or invalidity leaves discovery installed but makes Provider calls unavailable before Connection storage, credentials, network, or supplier execution.
+A package-declared, deployment-owned private binding between one fixed Provider Instance Reference and the HTTPS origin required to construct its Connector runtime. Its absence or invalidity leaves discovery installed but makes Provider-backed calls unavailable before Connection storage, credentials, network, or supplier execution; confirmed node-local unbind and credential retirement remain available without a Provider call.
 _Avoid_: compiled demo endpoint, environment override, caller-selected URL, package setting, fallback Provider
 
 **Provider Binding Attestation**:
@@ -73,7 +73,7 @@ A Human-only interaction that proves control of an existing External Account and
 _Avoid_: SciForge login, provider account creation, Content Space operation, Agent-supplied credential
 
 **Provider Enrollment View**:
-A Provider Integration-owned Human interface mounted only after a concrete Provider Instance is selected inside the consuming domain's surface. Its placement does not transfer credential or connection ownership to that domain.
+A Provider Integration-owned Human interface mounted only after a concrete Provider Instance is selected inside the consuming domain's surface. Its placement does not transfer credential or connection ownership to that domain. If Provider status is unavailable, the view may still expose the integration's existing node-local unbind only after explicit Human confirmation and without contacting the Provider.
 _Avoid_: plugin configuration, standalone Provider panel, Content Space-owned credential form
 
 **Provider Connection Authority**:

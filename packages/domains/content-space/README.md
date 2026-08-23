@@ -74,6 +74,13 @@ explicit absence of optimistic-concurrency/CAS semantics. An ordinary root
 resource is not standing administration approval: each of these five Agent
 mutations requires fresh Human confirmation before Provider dispatch.
 
+Delegated resources authorize non-destructive ordinary writes only. Every
+native-document or extended operation declared `destructive` requires fresh
+per-invocation Human confirmation and carries no `autonomousWrite` grant. An
+ordinary child, feature-selection, or Provider-administration resource cannot
+substitute for that confirmation; the Broker rejects the call before Provider
+binding or dispatch.
+
 All ten Administration outputs are strictly bound to the exact request and
 Broker authority. Pages must be bounded, unique, and progressing, and an empty
 page cannot carry `nextCursor`. Root-scoped results echo the exact root;

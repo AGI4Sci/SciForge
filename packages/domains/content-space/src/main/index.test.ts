@@ -361,15 +361,15 @@ describe('Content Space main composition', () => {
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminUnpinSpace,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember,
+      CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentDestructive,
+      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedDestructive,
       CONTENT_SPACE_CAPABILITY_IDS.openPortalTarget
     ])
     const autonomousResourceWriteIds = new Set<string>([
       CONTENT_SPACE_CAPABILITY_IDS.agentCreateFolder,
       CONTENT_SPACE_CAPABILITY_IDS.agentUploadNew,
       CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentWrite,
-      CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentDestructive,
       CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite,
-      CONTENT_SPACE_CAPABILITY_IDS.agentExtendedDestructive,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace
     ])
     const workspaceWriteIds = new Set<string>([

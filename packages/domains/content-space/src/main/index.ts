@@ -1219,8 +1219,8 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         scope: 'resource',
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND, CONTENT_FILE_RESOURCE_KIND],
         effect,
-        approval: 'none',
-        ...(effect === 'external-write' || effect === 'destructive'
+        approval: effect === 'destructive' ? 'confirmation' : 'none',
+        ...(effect === 'external-write'
           ? { autonomousWrite: 'resource-authorized' as const }
           : {}),
         concurrency: {
@@ -1266,8 +1266,8 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
           CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND
         ],
         effect,
-        approval: 'none',
-        ...(effect === 'external-write' || effect === 'destructive'
+        approval: effect === 'destructive' ? 'confirmation' : 'none',
+        ...(effect === 'external-write'
           ? { autonomousWrite: 'resource-authorized' as const }
           : {}),
         concurrency: {

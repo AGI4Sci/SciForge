@@ -207,6 +207,46 @@ export function OpenContentEnrollment({
   const rootClassName = ['opencontent-enrollment', className]
     .filter(Boolean)
     .join(' ')
+  const disconnectControl = confirmingDisconnect ? (
+    <div
+      className="opencontent-enrollment__confirmation"
+      role="group"
+      aria-labelledby={disconnectConfirmationId}
+    >
+      <div>
+        <strong id={disconnectConfirmationId}>Disconnect on this device?</strong>
+        <span>Your OpenContent account and remote files will not be deleted.</span>
+      </div>
+      <div className="opencontent-enrollment__actions">
+        <button
+          type="button"
+          className="opencontent-enrollment__button opencontent-enrollment__button--danger"
+          disabled={operation === 'unbind'}
+          onClick={() => void disconnect()}
+        >
+          {operation === 'unbind' ? 'Disconnecting…' : 'Yes, disconnect'}
+        </button>
+        <button
+          ref={cancelDisconnect}
+          type="button"
+          className="opencontent-enrollment__button opencontent-enrollment__button--quiet"
+          disabled={operation === 'unbind'}
+          onClick={() => setConfirmingDisconnect(false)}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  ) : (
+    <button
+      type="button"
+      className="opencontent-enrollment__button opencontent-enrollment__button--quiet"
+      onClick={() => setConfirmingDisconnect(true)}
+    >
+      <Unplug aria-hidden="true" />
+      Disconnect
+    </button>
+  )
 
   if (checking) {
     return (
@@ -239,6 +279,11 @@ export function OpenContentEnrollment({
                 <RotateCw aria-hidden="true" />
                 Try again
               </button>
+            ) : null}
+            {canDisconnectLocally(viewState, providerInstanceRef) ? (
+              <div className="opencontent-enrollment__local-cleanup">
+                {disconnectControl}
+              </div>
             ) : null}
           </div>
         </div>
@@ -275,46 +320,7 @@ export function OpenContentEnrollment({
             This connection belongs to the current Local Account on this device.
           </p>
 
-          {confirmingDisconnect ? (
-            <div
-              className="opencontent-enrollment__confirmation"
-              role="group"
-              aria-labelledby={disconnectConfirmationId}
-            >
-              <div>
-                <strong id={disconnectConfirmationId}>Disconnect on this device?</strong>
-                <span>Your OpenContent account and remote files will not be deleted.</span>
-              </div>
-              <div className="opencontent-enrollment__actions">
-                <button
-                  type="button"
-                  className="opencontent-enrollment__button opencontent-enrollment__button--danger"
-                  disabled={operation === 'unbind'}
-                  onClick={() => void disconnect()}
-                >
-                  {operation === 'unbind' ? 'Disconnecting…' : 'Yes, disconnect'}
-                </button>
-                <button
-                  ref={cancelDisconnect}
-                  type="button"
-                  className="opencontent-enrollment__button opencontent-enrollment__button--quiet"
-                  disabled={operation === 'unbind'}
-                  onClick={() => setConfirmingDisconnect(false)}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="opencontent-enrollment__button opencontent-enrollment__button--quiet"
-              onClick={() => setConfirmingDisconnect(true)}
-            >
-              <Unplug aria-hidden="true" />
-              Disconnect
-            </button>
-          )}
+          {disconnectControl}
 
           {notice ? <p className="opencontent-enrollment__error" role="alert">{notice.message}</p> : null}
         </div>
@@ -478,6 +484,17 @@ function statusMatchesProvider(
 ): boolean {
   return status.state === 'disconnected' ||
     status.providerInstanceRef === providerInstanceRef
+}
+
+function canDisconnectLocally(
+  viewState: OpenContentEnrollmentViewState,
+  providerInstanceRef: string
+): boolean {
+  if (viewState.providerInstanceRef !== providerInstanceRef) return false
+  if (viewState.phase === 'unavailable') return true
+  return viewState.phase === 'resolved' &&
+    viewState.result.outcome === 'error' &&
+    viewState.result.error.code !== 'invalid_provider_instance'
 }
 
 function noticeFor(error: OpenContentEnrollmentError): EnrollmentNotice {

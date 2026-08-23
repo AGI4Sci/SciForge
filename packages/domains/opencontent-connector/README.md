@@ -16,7 +16,9 @@ change-time, or birth-time drift, closes it, and freezes the parsed value.
 Missing, oversized, malformed, non-canonical, non-HTTPS, or
 symlinked configuration makes Provider-backed calls unavailable before package
 settings, credentials, network, or supplier-process access; local unbind and
-credential retirement remain available. Provider discovery, capability
+credential retirement remain available. The integration-owned unavailable view
+exposes that same local cleanup only after explicit Human confirmation; it does
+not contact the Provider or delete remote files. Provider discovery, capability
 definitions, and the internal service descriptor remain registered.
 There is no environment, argv, caller, renderer, package-setting,
 alternate-path, or fallback endpoint channel.

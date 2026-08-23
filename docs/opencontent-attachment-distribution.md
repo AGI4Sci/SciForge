@@ -59,7 +59,7 @@ The Connector then accepts only strict JSON for the fixed Provider Instance and 
 origin with no userinfo, path, query, fragment, or extra fields. Missing or invalid configuration
 keeps discovery registered but returns `provider_unavailable` for Provider-backed calls before
 storage, credentials, network, or supplier execution. Node-local unbind and credential retirement
-remain available and perform no Provider business call. Resolution requests no-follow semantics where available, binds the opened
+remain available and perform no Provider business call. The unavailable enrollment view exposes that same local cleanup only after explicit Human confirmation and does not delete remote files. Resolution requests no-follow semantics where available, binds the opened
 descriptor to the pre-open regular-file identity, performs one bounded read, verifies identity, size,
 modification time, change time, and birth time before and after the read, and closes the descriptor.
 It never falls back to environment, argv, caller, renderer, or package settings. The

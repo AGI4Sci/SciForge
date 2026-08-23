@@ -51,6 +51,25 @@ Content Space SHALL expose no Project provisioning operation, intent/report sche
 
 ## MODIFIED Requirements
 
+### Requirement: Writes are explicit, uniquely authorized, and never blindly retried
+
+Every ordinary, native-document, extended, and administration write SHALL require the current authorized Principal, exact Broker authority for every target, a separately admitted operation, bounded typed input, cancellation, and one Broker-admitted logical invocation identity outside the business payload. Every Agent native-document or extended operation whose declared effect is `destructive` SHALL additionally require fresh per-invocation Human confirmation and SHALL carry no autonomous-write grant. An ordinary root, listed child, feature-selection, or Provider-administration resource alone SHALL NOT satisfy that confirmation. The Broker SHALL reject a missing confirmation before Provider binding or dispatch. Create-folder and upload-new SHALL additionally require one explicit container/parent target and bounded Human-approved name/input. The Provider and service SHALL not replace or manufacture the invocation identity, overwrite implicitly, choose another target, widen from one resource to a sibling, or retry after an uncertain result. Collision SHALL return a typed conflict and an indeterminate remote result SHALL return `outcome_unknown`.
+
+#### Scenario: Name already exists
+
+- **WHEN** create-folder or upload-new would collide
+- **THEN** the service SHALL return the typed conflict without overwrite, rename, or target change
+
+#### Scenario: Write outcome is uncertain
+
+- **WHEN** cancellation, timeout, session supersession, or transport loss prevents proof of success or failure
+- **THEN** the operation SHALL return `outcome_unknown` and SHALL NOT automatically retry
+
+#### Scenario: Listed child is used for a destructive operation without fresh confirmation
+
+- **WHEN** an Agent obtains an ordinary child resource through an authorized listing and invokes a native-document or extended destructive operation without fresh confirmation for that exact invocation
+- **THEN** the Broker SHALL deny the invocation before Provider binding or dispatch
+
 ### Requirement: Readiness is explicit per operation
 
 Every ordinary, native-document, extended, and administration operation SHALL declare exactly one descriptive readiness state: `poc_only`, `blocked_by_contract`, or `production_ready`. Content Space SHALL evaluate the current invocation's admission separately from that declaration using the trusted Provider contribution, Provider Instance policy, Broker authority, resource capability, platform Gate, audience, current Principal, and any installed verification profile. An admitted `poc_only` invocation SHALL continue to be reported as `poc_only`; admission SHALL NOT rewrite it as `production_ready`. `blocked_by_contract` SHALL never be admitted.
