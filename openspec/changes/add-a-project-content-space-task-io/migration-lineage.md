@@ -1,6 +1,6 @@
 # Forward-only collaboration migration lineage checkpoint
 
-Status: **frozen input classifier; target migration number intentionally unassigned**.
+Status: **schema v11 allocated; all accepted routes proved on PostgreSQL 17 with zero skips**.
 
 ## Invariants
 
@@ -10,7 +10,7 @@ Status: **frozen input classifier; target migration number intentionally unassig
 4. The classifier runs under an advisory migration lock and read-only inspection before any DDL or data mutation.
 5. Exactly one route must match. Zero or multiple matches fail closed as `collaboration_schema_lineage_unknown`.
 6. The convergence migration is forward-only and idempotent only for its exact target fingerprint. It is never a compatibility facade.
-7. All routes must end with byte-for-byte equivalent canonical fingerprint input and the same recorded target version.
+7. All routes must end with the same authoritative schema descriptor fingerprint and recorded target version. Historical non-authoritative columns/tables MAY remain for audit compatibility, but SHALL NOT enter current authorization or execution decisions.
 
 ## Frozen source routes
 
@@ -23,7 +23,7 @@ Status: **frozen input classifier; target migration number intentionally unassig
   - `0002_provider_identity_inbox.sql`: `b6165f6ef946a979c3bb27f521e43ad18e6fb66d02f1489ebc82e1be9997e517`
   - `0003_managed_provider_containers.sql`: `39ed7fc08c3643d92990084be1c12d5fb46d63f400380b7efd43f0e307fc9345`
   - `0004_remote_capability_approvals.sql`: `5d98dda3322fc821cc121b45fec391e2b2108c6f33ece395dd2011941ee61b0a`
-- Catalog fingerprint: generated mechanically from the above commit and checked into the implementation checkpoint before migration execution is enabled.
+- Source catalog fingerprint: `0577af72da028cee0f45daf6bbf8dad873f9ff2fde578662ffb30d50629b9843`.
 
 ### Route `public-a-v5`
 
@@ -35,7 +35,8 @@ Status: **frozen input classifier; target migration number intentionally unassig
   - `0003_task_progress.sql`: `42a61c8ef8252c9522effefc83b81c949cedf474017ab9066b0f56850d883442`
   - `0004_coordination_contract.sql`: `34bc9ec114689805a0e27b8d9bb6b87c799e063068fa5a3890e00001704037fc`
   - `0005_unified_identity_device_bindings.sql`: `454dddbe063a0023f8d9b9942b8bb6468218eeaba3850fea7b6171ba185b3261`
-- Catalog fingerprint: generated from the exact public source tree. Existing OIDC, Device, Agent, and human-approval rows are retained; only A-owned semantics are normalized.
+- Source catalog fingerprint: `238d1ae31083f9bba86539e1be20630e89614ebf5df304ff7407bc3e40cfbc54`.
+- Existing OIDC, Device, Agent, and human-approval rows are retained; only A-owned semantics are normalized.
 
 ### Route `isolated-a-v9`
 
@@ -49,11 +50,12 @@ Status: **frozen input classifier; target migration number intentionally unassig
   - `0007_portable_resource_refs.sql`: `1773351f19ef7e70bfdce01428d14e4889d31187fd2b506bdaf8ab80a1861b60`
   - `0008_managed_provider_containers.sql`: `0944dc35b43fd8a6c69ab040e933804dc080979e6d59b5e5c8cad552539b5d7a`
   - `0009_portal_bounded_reads.sql`: `ed5ed45d301c63de01547de007f715ff87e422f987ab470b2169e60618bb97da`
-- Candidate eligibility: this source is not eligible for promotion merely because the commit exists locally. Operational use must additionally bind the running isolated database/image to this source provenance, or retain its backup and receipts and withdraw it as a release candidate.
+- Source catalog fingerprint: `d6f1098f4b1fcdaa3524c4d9924068e1073701ea8db6c668a425ee16dc2fcb0f`.
+- Candidate eligibility: **withdrawn**. The running isolated instance is retained only as a donor/staging observation; it is not descended from the common base and cannot be promoted or deployed by this branch. See `staging-provenance.md`.
 
 ## Convergence contract
 
-The target migration will:
+`0011_a_content_space_execution_identity.sql` is the only convergence migration after the reused historical numbers. It:
 
 - preserve canonical users, identities, devices, agents, projects, memberships, tasks, records, inboxes, receipts, human requests/answers, provider identities, managed providers, and remote approvals where present;
 - create or normalize only A-owned collaboration structures;
@@ -62,11 +64,11 @@ The target migration will:
 - acquire deterministic relation locks before validation/backfill and publish the final schema version only after all constraints and indexes validate;
 - verify the final catalog fingerprint in the same transaction and again at readiness.
 
-## Number allocation gate
+## Allocation and verification result
 
-No migration file or target version is named in this checkpoint. The first implementation commit after this document must:
-
-1. prove the three source classifiers using PostgreSQL 17 fixtures;
-2. select a version strictly greater than every historical reused number (`> 10`);
-3. record that choice in the change design and mechanical fingerprint manifest; and
-4. demonstrate fresh-v4, public-v5, and isolated-v9 convergence to the same fingerprint.
+- Target version: `11`, strictly greater than every historical reused number.
+- Migration file: `0011_a_content_space_execution_identity.sql`; no `0002`–`0010` file was added or replayed from the donor branch.
+- Canonical authoritative schema fingerprint: `2edbeb3a49ae2ece3cac3a1bdb21ec2579f240cbbaebf5ae8cf5606fac166223`.
+- PostgreSQL: `17.6`.
+- Routes: fresh-v4, upstream-v4, public-v5, and isolated-v9.
+- Result: every route reached schema v11 and the same canonical fingerprint with zero skipped assertions.

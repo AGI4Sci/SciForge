@@ -6,7 +6,7 @@ Cloud Collaboration currently has no canonical contract connecting a Project to 
 
 This change gives A ownership of the Cloud collaboration facts while preserving E/Host ownership of ContentSpace access. A stores an opaque portable locator and a separately verified authorization-proof binding; the locator never grants access. Each Task stores one typed `fileIntent`, and Cloud derives every `resourceRefId` from that intent. One `executionId` is the only execution epoch and is fenced by the assignee, Task revision, Project binding revision, and intent digest.
 
-The collaboration database also has three deployed ancestries that reused migration numbers with different SQL: the common upstream schema v4, the former public A schema v5, and isolated staging schema v9. Before selecting a new migration number, this change freezes a forward-only lineage classifier and convergence route for all three sources.
+The collaboration database also has three deployed ancestries that reused migration numbers with different SQL: the common upstream schema v4, the former public A schema v5, and isolated staging schema v9. This change freezes a forward-only lineage classifier and converges fresh/v4/v5/v9 through the new schema-v11 migration.
 
 ## Scope
 
@@ -32,4 +32,4 @@ The collaboration database also has three deployed ancestries that reused migrat
 
 The migration is forward-only. A database is admitted only when its migration rows and catalog fingerprint match exactly one frozen source route. Unknown, mixed, partially copied, or already-mutated layouts fail before DDL or data writes. All accepted routes converge to one exact final fingerprint and retain their existing collaboration data.
 
-The first checkpoint freezes the lineage but deliberately does not allocate the new migration number. The number is selected only after this checkpoint is committed and reviewed.
+The first checkpoint froze the lineage without allocating a number. After the checkpoint, PostgreSQL 17 source classifiers were proved and version `11` was selected. No historical migration number was reused. Public deployment remains explicitly out of scope.
