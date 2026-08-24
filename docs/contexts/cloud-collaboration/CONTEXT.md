@@ -30,6 +30,10 @@ _Avoid_: OpenContent Team identity, Project-owned storage, shared credential, Wo
 The durable Cloud request that names one Project, content owner, exact desired Provider directory members, target Provider Instance, and provisioning revision. It is not evidence that any Provider write has happened.
 _Avoid_: Provider mutation receipt, Team ACL, Task offer
 
+**Provider Directory Principal Fact**:
+The current global, non-secret Cloud fact that one exact SciForge User published one exact Provider Directory Principal Reference for one Provider Instance from an ACTIVE Device. It has a stable fact identity, compare-and-set revision, current readiness, Device/Principal provenance, and an opaque binding-attestation digest. It can exist before a Project so Project creation can atomically select exact fact revisions; it neither proves Provider membership nor grants Project or Task authority.
+_Avoid_: Provider ACL, Project Content Readiness, inferred email mapping, local Connection, reusable authorization
+
 **Project Content Provisioning Attestation**:
 A Device-signed, non-secret statement of the exact Provider root and member observations made by the Project Owner Desktop for one provisioning intent revision. It proves who observed which facts, not continued Provider permission or reusable authorization.
 _Avoid_: Provider Binding Attestation, access token, Provider ACL grant, persistent authorization scope

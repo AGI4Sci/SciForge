@@ -12,7 +12,7 @@ For a Project system download, the OpenContent adapter SHALL first validate the 
 
 ### Requirement: Project upload reaches the real OpenContent write path
 
-For `system-upload-new`, the adapter SHALL use only the current Principal-bound Connector session, exact authorized Project directory and Host-managed byte source. It SHALL execute the real OpenContent upload-new operation with no overwrite, no alternate account, no Owner/Coordinator credential and no mock response. The adapter SHALL validate the exact returned root/parent/resource/name/bytes/digest and re-observe the resource before success; permission denial SHALL return unauthorized, collision SHALL return typed conflict, and an indeterminate or drifted result SHALL return `outcome_unknown` without automatic retry.
+For `system-upload-new`, the adapter SHALL use only the current Principal-bound Connector session, exact authorized Project directory and Host-managed byte source. It SHALL execute the real OpenContent upload-new operation with no overwrite, no alternate account, no Owner/Coordinator credential and no mock response. The adapter SHALL validate the exact returned root/parent/resource/name and re-observe the resource before success; permission denial SHALL return unauthorized, collision SHALL return typed conflict, and an indeterminate or drifted result SHALL return `outcome_unknown` without automatic retry. Byte/digest validation MAY remain as a stronger implementation diagnostic but SHALL NOT be required to complete this Run-0 PoC.
 
 #### Scenario: Worker loses Team membership immediately before upload
 

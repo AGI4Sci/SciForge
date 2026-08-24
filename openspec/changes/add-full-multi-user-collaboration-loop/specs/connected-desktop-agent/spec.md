@@ -62,10 +62,16 @@ Cloud 和 Desktop SHALL 在每次认证恢复、Token refresh 后和关键远端
 
 ### Requirement: 设备与服务器秘密不得越过所有权边界
 
-Device 私钥、Agent machine credential、OIDC material、Provider credential 和服务器 secret SHALL 只持久化在其所有者的原生安全存储或服务器专用 secret file 中。跨包合同、IPC、日志、Trace、数据库业务字段、Git 和验收回执 SHALL 只携带公钥、opaque ID、签名、哈希或脱敏状态，不得携带秘密。
+Device 私钥、Agent machine credential 和 OIDC material SHALL 只由 Identity 私有运行边界持有并持久化到其原生安全存储；Provider credential SHALL 只由对应 Connector 私有运行边界持有并持久化到其原生安全存储；服务器 secret SHALL 只由 owning server/provider runtime 直接读取专用 secret file。跨包合同、IPC、日志、Trace、数据库业务字段、Git 和验收回执 SHALL 只携带公钥、非授权 opaque ID、签名、哈希或脱敏状态，不得携带秘密。`domain-collaboration` SHALL NOT 解封、读取、写入或接收可重放 Agent machine credential，只能调用 Identity-owned token-free Agent transport。
 
 #### Scenario: 生成验收回执
 
 - **WHEN** Run-0 汇总身份、Device 和 Agent 证据
 - **THEN** 回执 MAY 记录脱敏 ID、公钥指纹和验证状态
 - **AND** SHALL NOT 记录私钥、Token、密码、Provider credential 或可重放 machine credential。
+
+#### Scenario: Agent 注册与 WSS 恢复
+
+- **WHEN** Desktop 注册/旋转 Agent 或在重启后恢复 Agent-authenticated command、Inbox 或 WSS
+- **THEN** Identity SHALL 在私有边界完成 ephemeral bootstrap、credential 解封、ACTIVE Device/Agent 绑定复核和 authorization 注入
+- **AND** collaboration SHALL 只收到严格的 Agent facts、事件、响应与非秘密状态，不得收到 credential、Authorization header 或可用于恢复 credential 的 bearer locator。

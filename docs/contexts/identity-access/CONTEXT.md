@@ -60,6 +60,10 @@ _Avoid_: collaboration login, bearer token field, Agent credential, Provider ses
 The main-only request boundary through which another trusted domain asks Identity and Access to perform one allowlisted Cloud operation as the current OIDC User without receiving authorization headers or Token material.
 _Avoid_: shared Token broker, collaboration session secret, renderer HTTP client
 
+**Agent Cloud Session**:
+The Identity-owned, main-only authentication authority for one Cloud-issued Agent bound to the current Canonical SciForge User and exact ACTIVE Desktop Device. Identity privately creates the ephemeral registration bootstrap, decrypts and stores the replayable Agent machine credential in native secure storage, revalidates the binding before every use, and injects it only inside token-free Agent command, Inbox and WSS operations. Collaboration receives Agent facts and events but never the credential, bootstrap private key or Authorization header.
+_Avoid_: collaboration-owned credential store, shared bearer, Device identity alone, Project role
+
 **Human Principal**:
 The representation of the current SciForge User and the assurance with which that identity was established. Local Account selection can assert `local-selection`. A verified OIDC session mapped through `/v1/me` can assert `cloud-authenticated` only while the current Desktop Device is `ACTIVE`. A Human Principal may own a node-local Provider Connection, but the Provider's own authentication rather than either Principal assurance proves control of the External Account.
 _Avoid_: caller ID, installation ID, email match, provider login

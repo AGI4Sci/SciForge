@@ -76,10 +76,26 @@ Run-0 SHALL 至少验证：Worker accept 后重启并恢复同一 execution、We
 
 ### Requirement: 验收回执可复核且不泄密
 
-最终 verification receipt SHALL 记录 exact commit、packaged artifact、server image/schema、脱敏 User/Device/Agent/Project/Task/execution timeline、provisioning/member receipts、runtime/model IDs、source/packaged/isolated-live 结果、`integrityVerified`、失败、跳过项和 Human manual operations。会议输入 SHALL 为合成内容，实体 ID SHALL 脱敏，真实 credential SHALL 只由对应 Human 在自己的 Desktop 输入；回执 SHALL NOT 包含秘密、完整 prompt、真实敏感会议内容或可重放授权。
+最终 verification receipt SHALL 记录 exact commit、packaged artifact、server image/schema、脱敏 User/Device/Agent/Project/Task/execution timeline、provisioning/member receipts、runtime/model IDs、source/packaged/isolated-live 结果、失败、跳过项和 Human manual operations。逐文件 bytes/SHA-256 与汇总 `integrityVerified` MAY 作为诊断记录，但不属于本 PoC 的完成门禁。会议输入 SHALL 为合成内容，实体 ID SHALL 脱敏，真实 credential SHALL 只由对应 Human 在自己的 Desktop 输入；回执 SHALL NOT 包含秘密、完整 prompt、真实敏感会议内容或可重放授权。
 
 #### Scenario: 某一 live recovery 未完成
 
 - **WHEN** 回执无法提供该 recovery 的 execution/receipt evidence
 - **THEN** 该门禁 SHALL 明确为 not_run、blocked 或 failed
 - **AND** 总体状态 SHALL 不得把它计算为通过。
+
+### Requirement: Repository architecture principles gate 是发布硬门禁
+
+本变更在 source、packaged 和 upstream PR 准备前 SHALL 通过独立的 `Repository architecture principles gate`。门禁必须按以下原文执行：**不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证。** 任一项缺少非秘密自动化证据或发现违反时，整体门禁 SHALL fail，不得被 focused test 或人工说明覆盖。
+
+#### Scenario: 新增 Coordinator 包
+
+- **WHEN** 安装或删除 `domain-project-coordinator`
+- **THEN** standard manifest/generated composition SHALL 是唯一组合路径
+- **AND** Host central feature map、domain ID switch 和 Host-private import SHALL 保持无变更。
+
+#### Scenario: source 通过但 packaged 未验证
+
+- **WHEN** source composition 测试通过而 packaged composition 无同 commit 证据或仍可达 legacy/双注册路径
+- **THEN** Repository architecture principles gate SHALL fail
+- **AND** 变更 SHALL NOT 进入 upstream PR 准备状态。

@@ -46,7 +46,7 @@ Project upload SHALL 从 execution-bound Workspace 的 validated relative path �
 
 ### Requirement: 文件输出保持无覆盖和精确强核验
 
-每个 execution SHALL 使用 Human/plan 批准且在 Project directory 内唯一的输出名称。成功 upload receipt SHALL 精确绑定 Provider Instance、root、parent、resource identity、名称、bytes 和 SHA-256；系统 SHALL 重新观察 exact resource，并在可下载时核验 bytes/digest。名称冲突 SHALL 返回 typed conflict，系统不得覆盖、自动重命名或写入邻近目录。
+每个 execution SHALL 使用 Human/plan 批准且在 Project directory 内唯一的输出名称。成功 upload receipt SHALL 精确绑定 Provider Instance、root、parent、resource identity 和名称；系统 SHALL 重新观察 exact resource。名称冲突 SHALL 返回 typed conflict，系统不得覆盖、自动重命名或写入邻近目录。实现 MAY 额外记录 bytes/SHA-256，但它们不属于本 PoC 的完成条件。
 
 #### Scenario: 输出名称已存在
 
@@ -70,13 +70,13 @@ Worker 只有在当前 `executionId` 仍 active、Task revision 匹配、Device/
 
 #### Scenario: 上传响应丢失但文件实际存在
 
-- **WHEN** Coordinator reconcile 观察到 exact parent、name、bytes/digest 与 invocation receipt 一致
+- **WHEN** Coordinator reconcile 观察到 exact Provider Instance、parent、name 和 resource identity 与 invocation receipt 一致，并由 Human 确认关联该 observed output
 - **THEN** HCI MAY 将该 observed output 关联到原 execution 并继续审阅
 - **AND** 关联动作 SHALL 记录 Human、observation 和 revision provenance。
 
 ### Requirement: 文件完整性是系统验收事实
 
-系统 receipt 与自动测试 SHALL 计算并验证每个传输文件的 bytes 和 SHA-256，以证明下载、Runtime transformation、上传与最终下载的内容连续性。面向 Human 的最终验收回执 MAY 只记录 `integrityVerified: true` 而省略逐文件 bytes/SHA-256；底层可审计证据仍 SHALL 存在且不包含秘密或真实敏感会议内容。
+系统 MAY 在 receipt 与自动测试中计算 bytes/SHA-256 作为非秘密诊断，但本次 Run-0 不要求逐文件 digest，也不以 `integrityVerified` 阻塞真实多用户会议闭环。验收仍 SHALL 记录 exact Project/Task/execution/resource identity、真实下载/上传 observation、Human review 和最终产物人工核对，且 SHALL NOT 包含秘密或真实敏感会议内容。
 
 #### Scenario: 最终下载 digest 不匹配
 

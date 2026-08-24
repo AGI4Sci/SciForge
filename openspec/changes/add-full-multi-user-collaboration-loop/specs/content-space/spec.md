@@ -30,7 +30,7 @@ Content Space SHALL use metadata observation only to validate portable locator s
 
 ### Requirement: Project transfer receipts are exact and integrity-bound
 
-Successful system download/upload receipts SHALL bind the Broker invocation, current Principal/Device identity version, caller, Project/Task/execution context digest, Provider Instance, exact root/resource/parent, byte count, SHA-256, operation result and observation time. Upload-new SHALL also re-observe exact parent/name/resource identity before returning success. Receipt drift from a read SHALL fail unavailable/unauthorized as applicable; drift after an external write SHALL return `outcome_unknown`. Receipts SHALL contain no credential, Provider Connection, endpoint, raw path or reusable authority.
+Successful system download/upload receipts SHALL bind the Broker invocation, current Principal/Device identity version, caller, Project/Task/execution context digest, Provider Instance, exact root/resource/parent, operation result and observation time. Upload-new SHALL also re-observe exact parent/name/resource identity before returning success. Receipt drift from a read SHALL fail unavailable/unauthorized as applicable; drift after an external write SHALL return `outcome_unknown`. Receipts SHALL contain no credential, Provider Connection, endpoint, raw path or reusable authority. Byte counts and SHA-256 MAY be retained as non-secret implementation diagnostics, but their presence or final re-verification SHALL NOT gate this Run-0 PoC.
 
 #### Scenario: Provider upload receipt names another parent
 

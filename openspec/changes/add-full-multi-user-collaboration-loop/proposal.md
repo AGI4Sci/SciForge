@@ -30,7 +30,7 @@ SciForge 已分别具备 OIDC/Device 身份、云端 Project/Task、OpenContent 
 
 ## Impact
 
-- 影响 `@sciforge/collaboration-contracts`、`@sciforge/collaboration-server`、`@sciforge/collaboration-identity`、`@sciforge/domain-collaboration`、新的 `@sciforge/domain-project-coordinator`、Content Space/OpenContent 集成、通用 Domain SDK、AgentRuntime 接入和 packaged composition。
+- 影响 `@sciforge/collaboration-contracts`、`@sciforge/collaboration-server`、`@sciforge/domain-identity-access`、`@sciforge/domain-collaboration`、新的 `@sciforge/domain-project-coordinator`、Content Space/OpenContent 集成、通用 Domain SDK、AgentRuntime 接入和 packaged composition；旧 `@sciforge/collaboration-identity` 并行凭据包被删除。
 - Cloud 数据库需要向前迁移 Project membership/readiness、content provisioning、Task execution、Inbox/receipt、revision/idempotency 和 recovery journal；既有公网数据库不执行本变更迁移。
 - 新增同机隔离的 `cloud-run0.sciforge.cn`、`login-run0.sciforge.cn`、`SciForge-Run0` realm、独立数据库/角色/Compose/凭据/备份目录；DNS 未完成时验收停在 `awaiting_dns`。
 - source、packaged、隔离 live 三层测试都必须走标准 manifest/generated composition 和真实生产路径；验收不得使用 Fake provider、Mock Content Space、fixture runtime、直接数据库写入或秘密回执。

@@ -36,9 +36,9 @@ All donor code is therefore reviewed by behavior and rewritten behind final pack
 
 | Package/context | Owns | Explicitly does not own |
 | --- | --- | --- |
-| `domain-identity-access` | OIDC/token custody, current Principal, Device enrollment/status, Device signing, token-free authenticated Cloud transport | Agent registration, Project, Task, Provider identity |
+| `domain-identity-access` | OIDC/token custody, current Principal, Device enrollment/status, Device signing, Agent credential bootstrap/custody, token-free User/Agent Cloud transport | Project, Task, Agent Project role, Provider identity |
 | collaboration contracts/server | User/Agent/Project/Membership/Task/Execution/Inbox/Record, revisions, idempotency, persistence and authorization | Desktop Runtime, Provider calls, credentials |
-| `domain-collaboration` | Agent registration/machine credential, presence/WSS, durable local Inbox/outbox, local acceptance policy and execution journal | OIDC Token, Coordinator business UI, Provider implementation |
+| `domain-collaboration` | Runtime configuration, Agent facts/status projection, token-free presence/WSS consumption, durable local Inbox/outbox, local acceptance policy and execution journal | OIDC Token, Agent machine credential, Coordinator business UI, Provider implementation |
 | `domain-project-coordinator` | Project/plan/Worker selection/Task/review/recovery HCI and Project content saga orchestration | OIDC/Provider credential, Cloud repository, vendor client |
 | `domain-content-space` | Provider-neutral resources, Broker authorization, ordinary/admin/system transfer capabilities, Workspace byte boundary and receipts | Project aggregate, Cloud membership, vendor credentials |
 | OpenContent packages | Provider account binding, private credentials/transport, exact Team/file semantics and real Provider observation | SciForge User/Project/Task authority |
@@ -52,9 +52,9 @@ Alternative rejected: put all UI and runtime behavior in `domain-collaboration`.
 
 Domain SDK defines a generic main-only authenticated request contribution whose public request contains only an allowlisted relative Cloud route, strict method/body schema, idempotency metadata and abort signal. `domain-identity-access` resolves the current OIDC session, validates Device continuity, injects authorization in its private boundary, executes the request and returns a strict token-free response. Collaboration packages receive neither headers nor session material.
 
-Agent machine credentials remain separate and are used only for Agent-authenticated routes/WSS after the Agent is registered to the current OIDC User and Device. Pairing uses the User-authenticated transport and binds only a Human endpoint.
+Agent machine credentials remain cryptographically separate from OIDC material, but their bootstrap, decryption, native persistence and Bearer injection belong to the same Identity private runtime. After the Agent is registered to the current OIDC User and exact ACTIVE Device, collaboration consumes only strict token-free Agent command, Inbox and WSS methods plus non-secret credential status; it never receives the sealed bootstrap private key or replayable credential. Pairing uses the User-authenticated transport and binds only a Human endpoint.
 
-Alternative rejected: B's collaboration-owned OIDC session broker and duplicated Token secret. It creates a second credential owner and makes logout/revocation races ambiguous.
+Alternative rejected: B's collaboration-owned OIDC session broker, Agent credential store or direct authenticated Cloud client. Any of them creates a second credential owner and makes logout, Device revoke and Agent rotation races ambiguous.
 
 ### 3. Agent bootstrap is a guarded state machine
 
@@ -89,7 +89,9 @@ Alternative rejected: A Cloud `acceptancePolicy` field. It would become a cross-
 
 ### 6. Project provisioning is a client-orchestrated durable saga
 
-Cloud first creates Project facts and an exact provisioning intent at revision N. The Owner Desktop's coordinator package obtains one Human confirmation for the complete, immutable revision-N operation plan. The Broker turns that confirmation into finite, one-use approval proofs for each enumerated Content Space create/list/add/list operation; it is not a standing administration grant, and any changed member/root/request requires new confirmation.
+Before a file-bearing Project exists, each authenticated User publishes one current global `ProviderDirectoryPrincipalFact` for an exact Provider Instance from that User's ACTIVE Device. The fact wraps only a non-authorizing Provider Directory Principal Reference plus User/Device provenance, readiness and compare-and-set revision. One exact User and Provider Instance has one current stable fact; conflicting replacement is explicit and never inferred from email, display name, OIDC subject or Agent ownership.
+
+Cloud then creates the Project, explicit Memberships and exact provisioning intent at revision N in one transaction. The Owner comes from the authenticated OIDC actor rather than a caller-authored field, and the create command selects the content owner and every desired Provider member by exact ready fact ID and expected fact revision. Stale, degraded, cross-User or cross-Provider facts fail closed. The Owner Desktop's coordinator package obtains one Human confirmation for the complete, immutable revision-N operation plan. The Broker turns that confirmation into finite, one-use approval proofs for each enumerated Content Space create/list/add/list operation; it is not a standing administration grant, and any changed member/root/request requires new confirmation.
 
 Each external operation uses the normal Content Space capability and current Owner Provider Connection. The coordinator package journals logical invocation IDs and exact receipts, re-reads the Provider member list, builds a provider-neutral report, and asks Identity/Host to sign the structured digest with the current enrolled Device key. Cloud verifies the Device signature, current Owner/Device, intent revision and report digest before binding and activating the Project.
 
@@ -109,7 +111,7 @@ Alternative rejected: A's persistent authorization-scope proof. Cloud cannot gra
 
 Content Space owns `system-download` and `system-upload-new` as generic system-only capabilities. `domain-collaboration` requests them with an execution-bound portable resource and Workspace-relative path through Domain SDK; it never imports Content Space implementation or receives paths/credentials. A manifest-contributed system-capability grant binds the allowed caller, exact operation IDs and no wider content family.
 
-For download, metadata proves identity/ancestry only; OpenContent `DownloadCheck` runs before Host opens the local destination. For upload, the real no-overwrite Provider write is the final ACL check. Both transfers enforce byte bounds, calculate bytes/SHA-256 and return exact receipts. Production composition has no mock factory.
+For download, metadata proves identity/ancestry only; OpenContent `DownloadCheck` runs before Host opens the local destination. For upload, the real no-overwrite Provider write is the final ACL check. Both transfers enforce byte bounds and return receipts bound to the exact operation and resource identity. Implementations may retain byte counts or content digests as non-secret diagnostics, but per-file bytes/SHA-256 are not a Run-0 completion gate in this PoC. Production composition has no mock factory.
 
 Alternative rejected: B's `productionMockContentSpace()` and E1's metadata-as-ACL interpretation. Both can report success after the real member has lost access.
 
@@ -140,6 +142,12 @@ Alternative rejected: reuse the public issuer/database for convenience. It would
 The acceptance runner records but does not fake Human/device interactions. Source and packaged automated suites may use fakes only in their test entries. Isolated-live completion requires five independent packaged profiles on at least three machines/VMs, real OIDC/Provider/Runtime interactions, the fixed meeting script and recovery matrix. Missing DNS yields `awaiting_dns`; insufficient devices yields `awaiting_real_devices`; any failed required gate yields `failed` or `incomplete`, never “complete with caveats.”
 
 The receipt uses fixture labels U0-U4 and redacted entity IDs, but records exact commit/package/image/schema and non-secret digests.
+
+### 13. Repository architecture principles are a release gate
+
+`Repository architecture principles gate` is a mandatory source and packaged release gate, not advisory review text. The exact frozen requirements are: **不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证。**
+
+The gate SHALL fail if a domain package can only be installed by editing Host-private routing, if the Host imports a domain implementation rather than a generic SDK contract, if old and new entrypoints remain registered together, if current acceptance/provider/domain identifiers select production behavior, if one business domain's backend and UI have independent ownership/versioning, or if only source composition is exercised. Passing unit tests cannot override a failed architecture gate.
 
 ## Risks / Trade-offs
 

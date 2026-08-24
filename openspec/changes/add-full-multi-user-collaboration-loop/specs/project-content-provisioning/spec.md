@@ -4,9 +4,9 @@
 
 ## ADDED Requirements
 
-### Requirement: 每个成员显式发布 Provider Directory Principal Reference
+### Requirement: 每个成员在 Project 创建前显式发布全局 Provider identity fact
 
-需要参与文件 Task 的每个 Project Member User SHALL 在自己的 Desktop 上绑定 OpenContent，并发布由当前 Device/Principal 证明的非秘密 `ProviderDirectoryPrincipalReference`。该引用 SHALL 固定 Provider Instance、closed `user` kind 和 opaque Provider principal ID；Cloud、Coordinator 和 Content Space SHALL NOT 通过邮箱、用户名、显示名、OIDC subject、Cloud userId 或 Agent owner 推断 Provider identity。
+需要参与文件 Task 的每个 User SHALL 在 Project 创建前于自己的 Desktop 绑定 OpenContent，并由当前 OIDC User/ACTIVE Device 发布全局、非秘密 `ProviderDirectoryPrincipalFact`。该 fact SHALL 以稳定 fact ID 固定 exact User、Provider Instance、closed `user` kind、opaque Provider principal ID、Device/Principal provenance、当前 readiness 和 compare-and-set revision；同一 exact User + Provider Instance SHALL 仅有一个 current fact。Cloud、Coordinator 和 Content Space SHALL NOT 通过邮箱、用户名、显示名、OIDC subject、Cloud userId 或 Agent owner 推断、合并或替换 Provider identity。Fact 内的 `ProviderDirectoryPrincipalReference` 及 binding attestation digest SHALL NOT 被解释为 Provider ACL、Project Membership 或 Task authority。
 
 #### Scenario: Worker 未发布 Provider identity
 
@@ -14,9 +14,15 @@
 - **THEN** Cloud SHALL 将其 content readiness 标记为 missing/pending
 - **AND** SHALL NOT 允许其 Agent 接受文件 Task，直到精确引用被验证和 provisioned。
 
+#### Scenario: User 从另一 Device 替换 Provider identity
+
+- **WHEN** 该 User 以旧 fact revision 或不同 opaque principal 重新发布
+- **THEN** Cloud SHALL 通过 compare-and-set 拒绝竞态或要求显式替换
+- **AND** SHALL NOT 自动改写已有 Project 的 desired-member snapshot 或声称 Provider ACL 已变化。
+
 ### Requirement: Cloud 创建 Project 和持久 provisioning intent
 
-创建需要文件协作的 Project 时，Cloud SHALL 原子保存 Project、显式 Membership、唯一 Coordinator、目标 content owner、精确 Provider member references、provisioning revision 和 durable intent，并将 Project 置为 `provisioning/paused`。在 Device-signed provisioning attestation 被验证和绑定前，Cloud SHALL NOT 将 Project 标记为 active 或派发文件 Task。
+创建需要文件协作的 Project 时，Cloud SHALL 从当前 OIDC actor 派生 Owner，并原子保存 Project、显式 Membership、唯一 Coordinator、目标 content owner、每个 desired member 的 exact ready fact ID/revision snapshot、provisioning revision 和 durable intent，并将 Project 置为 `provisioning/paused`。Content owner SHALL 是显式 Member，所有 fact SHALL 归属各自 exact User 且固定同一 Provider Instance；stale、degraded、cross-User 或 cross-Provider fact SHALL 使整个 transaction fail closed。在 Device-signed provisioning attestation 被验证和绑定前，Cloud SHALL NOT 将 Project 标记为 active 或派发文件 Task。
 
 #### Scenario: Project 创建成功但外部 Provider 尚未写入
 
