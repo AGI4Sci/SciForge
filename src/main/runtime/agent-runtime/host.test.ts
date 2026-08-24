@@ -5402,6 +5402,61 @@ describe('AgentRuntimeHost', () => {
     await host.dispose()
   })
 
+  it('rejects a durable start when the Principal assurance changes', async () => {
+    const localPrincipal: PrincipalSnapshot = Object.freeze({
+      authority: 'identity-access.local',
+      subject: 'user-a',
+      assurance: 'local-selection',
+      deviceId: 'installation-a',
+      identityVersion: 1
+    })
+    const elevatedPrincipal: PrincipalSnapshot = Object.freeze({
+      ...localPrincipal,
+      assurance: 'cloud-authenticated',
+    })
+    let liveContext: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: localPrincipal.identityVersion,
+      principal: localPrincipal
+    })
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    })
+    const turnArtifacts = fakeTurnArtifactPublisher()
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      turnArtifacts,
+      getPrincipalContext: () => liveContext
+    })
+    host.subscribeRequiredBeforeTurn(async (event) => {
+      expect(event.principalContext).toEqual({
+        identityVersion: localPrincipal.identityVersion,
+        principal: localPrincipal
+      })
+      liveContext = Object.freeze({
+        identityVersion: elevatedPrincipal.identityVersion,
+        principal: elevatedPrincipal
+      })
+    })
+
+    await expect(host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Do not dispatch after assurance changes.',
+      clientDirectiveId: 'directive-assurance-transition'
+    })).rejects.toMatchObject({
+      name: 'AgentRuntimeTurnPreflightError',
+      code: 'runtime_turn_principal_changed',
+      retryable: false
+    })
+    expect(codex.startTurn).not.toHaveBeenCalled()
+    expect(turnArtifacts.bindStart).not.toHaveBeenCalled()
+    await host.dispose()
+  })
+
   it('rejects a durable start when the Principal changes after the before-turn barrier', async () => {
     const signedOutV1: PrincipalContextSnapshot = Object.freeze({
       identityVersion: 1,

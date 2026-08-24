@@ -56,6 +56,11 @@ type IdentityLease = Readonly<{
   context: IdentityAccessContext
 }>
 
+type IdentityAuthority = Pick<
+  IdentityLease,
+  'userId' | 'oidcIdentityId' | 'issuer' | 'subject'
+>
+
 type DeviceOperationLease = IdentityLease & Readonly<{
   operationSequence: number
 }>
@@ -85,6 +90,7 @@ export class DesktopDeviceService {
   #status: DesktopDeviceStatus
   #devices: DesktopDeviceSummary[] = []
   #operation: DeviceOperation | null = null
+  #identityAuthority: IdentityAuthority | null
   #identityEpoch = 1
   #deviceOperationSequence = 0
   #closed = false
@@ -98,7 +104,9 @@ export class DesktopDeviceService {
     this.#displayName = options.displayName?.trim() || hostname() || 'SciForge Desktop'
     this.#capabilities = options.capabilities ?? ['agent.execute', 'workspace.read']
     this.#linkDevice = options.linkDevice
-    this.#status = options.identity.getStatus().state === 'signed-in'
+    const initialIdentity = options.identity.getStatus()
+    this.#identityAuthority = identityAuthority(initialIdentity)
+    this.#status = initialIdentity.state === 'signed-in'
       ? { state: 'not-enrolled' }
       : { state: 'signed-out' }
     this.#disposeIdentitySubscription = options.identity.subscribe((status) => {
@@ -338,6 +346,14 @@ export class DesktopDeviceService {
   }
 
   #handleIdentityStatus(status: DesktopIdentityStatus): void {
+    const nextAuthority = identityAuthority(status)
+    if (sameIdentityAuthority(this.#identityAuthority, nextAuthority)) {
+      if (!this.#closed && status.state === 'signed-in') {
+        void this.refresh().catch(() => undefined)
+      }
+      return
+    }
+    this.#identityAuthority = nextAuthority
     this.#identityEpoch += 1
     this.#deviceOperationSequence += 1
     this.#operation = null
@@ -468,4 +484,25 @@ function toSummary(device: Device): DesktopDeviceSummary {
 
 function desktopIdempotencyKey(operation: string): string {
   return `idem_desktop_${operation}_${randomUUID()}`
+}
+
+function identityAuthority(status: DesktopIdentityStatus): IdentityAuthority | null {
+  if (status.state !== 'signed-in') return null
+  return {
+    userId: status.user.userId,
+    oidcIdentityId: status.user.oidcIdentityId,
+    issuer: status.user.issuer,
+    subject: status.user.subject
+  }
+}
+
+function sameIdentityAuthority(
+  left: IdentityAuthority | null,
+  right: IdentityAuthority | null
+): boolean {
+  if (left === null || right === null) return left === right
+  return left.userId === right.userId &&
+    left.oidcIdentityId === right.oidcIdentityId &&
+    left.issuer === right.issuer &&
+    left.subject === right.subject
 }
