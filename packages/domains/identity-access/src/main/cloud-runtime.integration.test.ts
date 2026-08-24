@@ -197,12 +197,54 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       })
       expect(principal.current()).toMatchObject({
         authority: 'sciforge-cloud',
-        assurance: 'cloud-authenticated'
+        subject: 'usr_CloudUser000001',
+        assurance: 'cloud-authenticated',
+        deviceId: 'dev_CloudDevice0001'
       })
+      expect(principal.current()?.deviceId).not.toBe(installationId)
+      const principalBeforeRefresh = principal.snapshot()
+      const principalPublicationCount = principalSnapshots.length
+      const deviceStatesDuringRefresh: string[] = []
+      const disposeRuntimeRefresh = runtime.subscribe(() => {
+        deviceStatesDuringRefresh.push(runtime.snapshot().device.state)
+      })
+
+      await expect(runtime.initialize()).resolves.toMatchObject({
+        identity: { state: 'signed-in' },
+        device: { state: 'active' }
+      })
+      disposeRuntimeRefresh()
+      expect(refreshRotation).toBe(2)
+      expect(principal.snapshot()).toEqual(principalBeforeRefresh)
+      expect(principalSnapshots).toHaveLength(principalPublicationCount)
+      expect(deviceStatesDuringRefresh.length).toBeGreaterThan(0)
+      expect(new Set(deviceStatesDuringRefresh)).toEqual(new Set(['active']))
       let principalVersion = expectLatestPrincipal(
         principalSnapshots,
         'cloud-authenticated',
         0
+      )
+
+      deviceMode = 'revoked'
+      await expect(runtime.initialize()).resolves.toMatchObject({
+        identity: { state: 'signed-in' },
+        device: { state: 'revoked' }
+      })
+      expect(refreshRotation).toBe(3)
+      expect(principal.current()?.assurance).toBe('local-selection')
+      principalVersion = expectLatestPrincipal(
+        principalSnapshots,
+        'local-selection',
+        principalVersion
+      )
+
+      deviceMode = 'active'
+      await runtime.refreshDevices()
+      expect(principal.current()?.assurance).toBe('cloud-authenticated')
+      principalVersion = expectLatestPrincipal(
+        principalSnapshots,
+        'cloud-authenticated',
+        principalVersion
       )
 
       deviceMode = 'missing'
@@ -281,7 +323,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       expect(principal.current()?.assurance).toBe('cloud-authenticated')
 
       const firstRotatedRefreshToken = currentRefreshToken
-      expect(refreshRotation).toBe(1)
+      expect(refreshRotation).toBe(3)
       expect(packageSecrets.value('oidc.session')).toContain(firstRotatedRefreshToken)
       runtime.close()
       disposePrincipal()
@@ -305,7 +347,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
           identity: { state: 'signed-in' },
           device: { state: 'active' }
         })
-        expect(refreshRotation).toBe(2)
+        expect(refreshRotation).toBe(4)
         expect(currentRefreshToken).not.toBe(firstRotatedRefreshToken)
         expect(packageSecrets.value('oidc.session')).toContain(currentRefreshToken)
         expect(restartedPrincipal.current()?.assurance).toBe('cloud-authenticated')
