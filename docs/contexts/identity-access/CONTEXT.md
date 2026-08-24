@@ -1,6 +1,6 @@
 # Identity and Access
 
-> Current-state audit: 2026-08-22. Local Account selection and the Host-injected `local-selection` Principal remain available for offline work. The `identity-access` domain package also implements system-browser Authorization Code with PKCE, strict OIDC token verification, canonical Cloud User lookup, Desktop Device enrollment, and the `cloud-authenticated` Principal transition. The SciForge Cloud service that supplies `/v1/me` and Device APIs is an external deployment dependency rather than an implementation owned by this repository.
+> Current-state audit: 2026-08-24. Local Account selection and the Host-injected `local-selection` Principal remain available for offline work. The `identity-access` domain package implements system-browser Authorization Code with PKCE, strict OIDC token verification, canonical Cloud User lookup, Desktop Device enrollment/revalidation, and the `cloud-authenticated` Principal transition. The frozen collaboration target additionally keeps Device signing and every User-authenticated Cloud request inside this package's main-only private boundary.
 
 Identity and Access is the SciForge bounded context for recognizing people and establishing who is currently acting. It keeps SciForge identity independent from external services while allowing a user to authorize explicit account bindings.
 
@@ -52,6 +52,14 @@ _Avoid_: anonymous cloud user, guest account, shared administrator
 The SciForge operating state backed by a current cloud-authenticated Human Principal. Cloud Projects and cross-user identity authority require Connected Mode; an independently authenticated external Provider Connection does not turn Local Mode into Connected Mode.
 _Avoid_: internet available, provider login, Local Profile
 
+**OIDC Session**:
+The Identity-owned, main-only authentication session established through the Desktop OIDC Client and mapped to one Canonical SciForge User. Its Token material is never a collaboration contract, renderer state, Provider credential, or Agent machine credential.
+_Avoid_: collaboration login, bearer token field, Agent credential, Provider session
+
+**Token-Free Authenticated Cloud Transport**:
+The main-only request boundary through which another trusted domain asks Identity and Access to perform one allowlisted Cloud operation as the current OIDC User without receiving authorization headers or Token material.
+_Avoid_: shared Token broker, collaboration session secret, renderer HTTP client
+
 **Human Principal**:
 The representation of the current SciForge User and the assurance with which that identity was established. Local Account selection can assert `local-selection`. A verified OIDC session mapped through `/v1/me` can assert `cloud-authenticated` only while the current Desktop Device is `ACTIVE`. A Human Principal may own a node-local Provider Connection, but the Provider's own authentication rather than either Principal assurance proves control of the External Account.
 _Avoid_: caller ID, installation ID, email match, provider login
@@ -85,12 +93,20 @@ An External Account owned by OpenContent and used for OpenContent documents, spa
 _Avoid_: SciForge account, SciForge login, Human Principal
 
 **OpenContent Account Enrollment**:
-The explicit node-local binding of one existing OpenContent Account to the current Local Account after OpenContent authenticates the supplied credentials. SciForge does not create the account, infer identity from matching attributes, or transfer Project permissions into OpenContent ACLs.
+The explicit node-local binding of one existing OpenContent Account to the current Human Principal after OpenContent authenticates the supplied credentials. SciForge does not create the account, infer identity from matching attributes, or transfer Project permissions into OpenContent ACLs.
 _Avoid_: SciForge login, account provisioning, account merge, email-based binding
 
 **Device**:
 A user-associated endpoint on which SciForge functionality is present. A Device has an explicit kind and does not become a Human Principal or Agent merely by being registered.
 _Avoid_: SciForge User, session, Agent
+
+**Active Desktop Device**:
+The current Canonical SciForge User's Desktop Device whose Cloud lifecycle state has been revalidated as `ACTIVE`. It is required for Connected Mode and Agent authority but does not by itself create an Agent or prove a Provider permission.
+_Avoid_: installation ID alone, OIDC Session, Agent, Provider Connection
+
+**Device Signing Key**:
+A non-exportable key pair owned by one Desktop Device and used only by the Identity/Host boundary to sign canonical, domain-approved fact digests. Its public key identifies verification authority; its private key is neither a general Agent tool nor a portable credential.
+_Avoid_: Agent machine credential, OIDC Token, Provider credential, arbitrary document signature
 
 **Agent Host**:
 A computer Device capable of running a SciForge Agent and using locally authorized models, tools, data, and network resources. Only an Agent Host can own an Agent execution identity.
@@ -103,3 +119,7 @@ _Avoid_: Worker, Agent Host, mobile Agent
 **Agent**:
 An execution identity owned by one SciForge User and hosted by one Agent Host. An Agent may hold different execution roles in different Projects, but it is never a person or a Device.
 _Avoid_: SciForge User, Device, Coordinator product, Worker product
+
+**Agent Bootstrap**:
+The ordered establishment of a Canonical SciForge User, Active Desktop Device, configured Agent Runtime, and finally one active Agent for that Device. It is not pairing and does not create a role-specific account.
+_Avoid_: automatic login, Coordinator account creation, pairing, Runtime installation alone

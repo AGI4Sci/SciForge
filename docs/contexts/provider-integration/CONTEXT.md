@@ -53,8 +53,8 @@ A package-declared, deployment-owned private binding between one fixed Provider 
 _Avoid_: compiled demo endpoint, environment override, caller-selected URL, package setting, fallback Provider
 
 **Provider Binding Attestation**:
-Token-free evidence binding one Provider Instance and complete current Principal to an opaque stable external subject and opaque Connection revision. It is re-attested against the actual current session before business dispatch and is neither a credential nor portable authority. Provider account and display-name metadata may refresh without changing that stable subject; they never participate in identity continuity.
-_Avoid_: Host assurance, raw external account ID, cached login claim, portable Connection
+Token-free evidence binding one Provider Instance and complete current Principal to an opaque stable external subject and opaque Connection revision. It is re-attested against the actual current session before business dispatch and is neither a credential, portable authority, Project provisioning fact, nor Provider ACL grant. Provider account and display-name metadata may refresh without changing that stable subject; they never participate in identity continuity.
+_Avoid_: Project Content Provisioning Attestation, Host assurance, raw external account ID, cached login claim, portable Connection
 
 **Provider Connection Retirement**:
 The irreversible local invalidation of a Provider Connection whose trusted Provider Instance is no longer installed or admitted. A retired connection never authorizes another Provider Instance; its integration owner remains responsible for deleting the credential while the owning Human Principal is current.
@@ -79,6 +79,10 @@ _Avoid_: plugin configuration, standalone Provider panel, Content Space-owned cr
 **Provider Connection Authority**:
 The rule that every Provider operation uses the executing node owner's current Provider Connection. A remote requester, Task, portable reference, Agent prompt, or runtime argument can never nominate, transfer, or borrow another connection.
 _Avoid_: caller-selected account, Project credential, Coordinator credential, administrator fallback
+
+**Operation-Time Authorization Check**:
+A Connector-owned real Provider check or business operation that evaluates the current re-attested session immediately before a protected read or write. Metadata visibility and a previously observed member list are not substitutes for this check.
+_Avoid_: ancestry observation, cached ACL, Cloud Membership, provisioning signature
 
 **Portable Resource Reference Envelope**:
 A versioned, bounded, non-secret carrier for one registered logical provider-resource reference. It is durable and cross-node but grants no access by itself.
