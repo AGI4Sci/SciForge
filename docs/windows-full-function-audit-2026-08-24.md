@@ -7,17 +7,20 @@ Date: 2026-08-24
 - Upstream: `AGI4Sci/SciForge:gui`
 - Baseline commit: `941dafba5f9b94ecd2afedb4a50a804f10f35dd8`
 - Isolated audit branch: `codex/windows-full-audit`
+- Final packaged runtime source commit: `557681dffd155d5a191fdb06bc87453a5b3e34ab`
 - Windows target: Windows 11 x64
 - Packaged runtime: Electron `42.7.0`, Node module ABI `146`
-- Validation source manifest: 3,029 files, SHA-256 `f12bcc3d08244204e54f01faaf2e6b585b0039796c3b3019912aebc7ae78332b`
-- Unpacked executable SHA-256: `8649e8947a1213db27b792986c5bb92a7d9d40d260811bcd20ea4e0f412df2e2`
-- `app.asar` SHA-256: `bc0c18bd8c942342bb12de4cb8cee72636d746a691c77981561cc8c6692ccbd0`
+- Validation source manifest: 3,029 files, SHA-256 `467b88e0d5f9c7ceefdc035649858ca1da09773ddccc4cd99aa2def9935b3208`
+- `package-lock.json` SHA-256: `90efdacd4e3af000cf44f7d962d13e8696facb4dc3de7bc214cc3b33aaca1a59`
+- Unpacked executable SHA-256: `cd4390b8de8602e01d4ca45899be3434565bb1e1560d37e9a17cafe23b4a6683`
+- `app.asar` SHA-256: `ce83ea12191d10aa478b0bb531d1a2c10db412cee5385fd0841dfe5b88701b8c`
 
-The Windows artifact was built from the audited source before the package-only
-version metadata closure (`2.0.3` / `3.0.2`) and this report were added. The
-runtime source did not change after that build, so the artifact remains valid
-for runtime behavior but is not presented as a byte-for-byte build of the final
-commit tree.
+The Windows artifact was rebuilt from the final merged runtime source after the
+custom-profile isolation fix and the package metadata closure. It therefore
+contains OpenContent connector `2.0.3`, its exact provider dependency `3.0.2`,
+and the settings migration correction. Only this evidence report changes after
+the packaged source commit; no production or runtime source is modified by the
+hash update.
 
 ## Results summary
 
@@ -26,7 +29,7 @@ commit tree.
 | Dependency tree | PASS | `npm ls --all --silent` |
 | TypeScript | PASS | Support, SDK, 26 domain packages, Web and Node |
 | Lint | PASS | 0 errors, 0 warnings after the image viewer dependency fix |
-| Automated tests | PASS | 366 files, 3,372 tests with bounded workers |
+| Automated tests | PASS WITH FOCUSED RERUN | Aggregate run passed 3,373/3,374 tests; one large Markdown renderer test exceeded its 5 s budget under contention, then its exact file passed 17/17 in 3.1 s |
 | Collaboration suite | PASS | Contracts, identity, provider composition and secret audit |
 | Keycloak contracts | PASS | 31/31 |
 | Domain composition | PASS | 26 packages fresh; 266 governed actions |
@@ -69,12 +72,12 @@ commit tree.
 | Severity | Problem | Fix | Verification |
 | --- | --- | --- | --- |
 | P1 | OpenContent deployment config could accept a pathname replaced after the secure open/read | Re-check pathname identity against the verified file descriptor after reading; reject symlinks and replacement | Connector tests 256/256, including 19 deployment-config tests |
-| P1 | Lowercase legacy `sciforge` Windows user-data settings were not migrated deterministically | Read current path first, then compatible sibling directory; sanitize and persist to the current path | Focused settings migration test and full root suite |
+| P1 | Settings migration could inspect a sibling standard profile when SciForge used an arbitrary custom `--user-data-dir` | Permit sibling migration only for the canonical `SciForge` directory and only from the explicit lowercase legacy `sciforge` directory; custom profiles never import sibling settings | Settings store tests 34/34, including canonical migration and custom-profile isolation |
 | P2 | Root aggregate typecheck exhausted the default Node heap | Use bounded explicit heaps for Web and Node TypeScript checks | Full aggregate typecheck PASS |
-| P2 | Default test parallelism caused timeout-only failures on the validation host | Bound root Vitest workers to four | 366 files / 3,372 tests PASS |
+| P2 | Default test parallelism caused timeout-only failures on the validation host | Bound root Vitest workers to four | Aggregate run 3,373/3,374; the sole timing-only file passed 17/17 on an immediate bounded rerun |
 | P2 | BGC discovery test hard-coded a macOS helper path on non-macOS hosts | Use the production platform resolver in the test | Focused test PASS |
 | P3 | Image viewer memo dependencies caused needless recomputation and a lint warning | Keep only values actually read by the memo | Focused tests 4/4; full lint 0 warnings |
-| Governance | Connector runtime changed without a publishable version advance | Bump connector to `2.0.3` and its exact dependency provider to `3.0.2` | Version audit findings: none; package tests 469/469 |
+| Governance | Connector runtime changed without a publishable version advance | Bump connector to `2.0.3` and its exact dependency provider to `3.0.2`, then rebuild the Windows artifact from that final manifest closure | Version audit findings: none; package tests 469/469; final packaged hashes recorded above |
 
 ## External or manual follow-ups
 
@@ -117,5 +120,8 @@ No feature is deleted by this audit. These are product decisions for review.
 - One dependency prints a Node legacy-build recommendation during tests. It is
   not a Windows runtime failure, but the import path should be reviewed during
   the next dependency maintenance cycle.
+- The aggregate root test run had one timing-only failure in the large Markdown
+  renderer case under host contention. Its exact 17-test file passed on an
+  immediate bounded rerun; no production assertion failed.
 - A partial, unused first D-drive synchronization directory was superseded by
   the verified `-v2` directory. It is not part of Git or the packaged artifact.
