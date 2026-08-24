@@ -3,6 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
+  AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+  type AuthenticatedCloudTransport
+} from '../authenticated-cloud-transport.js'
+import {
   IDENTITY_CAPABILITY_IDS,
   IDENTITY_RESET_CONFIRMATION
 } from '../contract.js'
@@ -20,6 +25,57 @@ afterEach(() => {
 })
 
 describe('Identity main contributions', () => {
+  it('publishes the token-free authenticated Cloud transport through Host mediation', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-transport-'))
+    roots.push(root)
+    const registered = new Map<string, object>()
+    const register = vi.fn((registration: Readonly<{
+      serviceId: string
+      contractVersion: string
+      service: object
+    }>) => {
+      registered.set(`${registration.serviceId}@${registration.contractVersion}`, registration.service)
+    })
+    const entry = createDomainMainEntry({
+      getUserDataDir: () => root,
+      getDeviceId: () => 'device-1',
+      packageSecrets: memorySecrets(),
+      internalServices: {
+        register: register as never,
+        acquire: vi.fn() as never
+      },
+      defineCapability: (definition) => definition
+    })
+
+    expect(register).toHaveBeenCalledWith(expect.objectContaining({
+      serviceId: AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+      contractVersion: AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
+      allowedConsumerModuleIds: ['sciforge.collaboration', 'sciforge.project-coordinator']
+    }))
+    expect(entry.contributions[3]).toMatchObject({
+      id: 'identity-access.authenticated-cloud-transport',
+      kind: 'main.extension',
+      contract: {
+        location: 'main.internal-service-descriptor',
+        serviceId: AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+        contractVersion: AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
+        allowedConsumerModuleIds: ['sciforge.collaboration', 'sciforge.project-coordinator']
+      }
+    })
+    const transport = registered.get(
+      `${AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID}@${AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION}`
+    ) as AuthenticatedCloudTransport
+    expect(transport.status()).toEqual({
+      state: 'unavailable',
+      reason: 'Cloud identity runtime is not active.'
+    })
+    await expect(transport.execute({
+      contractVersion: 1,
+      operationId: 'sciforge.cloud.command',
+      payload: {}
+    })).rejects.toMatchObject({ code: 'transport_unavailable' })
+  })
+
   it('declares one UI-only global capability set with governed mutation policies', () => {
     const definitions = createIdentityCapabilityFactory({
       defineCapability: (definition) => definition,
@@ -59,6 +115,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const factory = entry.contributions[0]!.value as ReturnType<typeof createIdentityCapabilityFactory>
@@ -98,6 +155,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const factory = entry.contributions[0]!.value as ReturnType<typeof createIdentityCapabilityFactory>
@@ -299,6 +357,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const factory = entry.contributions[0]!.value as ReturnType<typeof createIdentityCapabilityFactory>
@@ -322,6 +381,7 @@ describe('Identity main contributions', () => {
         getUserDataDir: () => '/private/tmp/sciforge-identity-missing-device',
         ...(getDeviceId ? { getDeviceId } : {}),
         packageSecrets: memorySecrets(),
+        internalServices: memoryInternalServices(),
         defineCapability: (definition) => definition
       })
       const provider = entry.contributions[1]!.value as { current(): unknown }
@@ -340,6 +400,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const lifecycle = entry.contributions[2]!.value as {
@@ -364,6 +425,7 @@ describe('Identity main contributions', () => {
       getDeviceId: () => 'device-1',
       getAppVersion,
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const lifecycle = entry.contributions[2]!.value as {
@@ -391,6 +453,7 @@ describe('Identity main contributions', () => {
       getDeviceId: () => 'device-1',
       getAppVersion: () => '1.0.0',
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const lifecycle = entry.contributions[2]!.value as {
@@ -423,6 +486,7 @@ describe('Identity main contributions', () => {
       getDeviceId: () => 'device-1',
       getAppVersion: () => '1.0.0',
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const lifecycle = entry.contributions[2]!.value as {
@@ -465,6 +529,7 @@ describe('Identity main contributions', () => {
       getDeviceId: () => 'device-1',
       getAppVersion: () => '1.0.0',
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const lifecycle = entry.contributions[2]!.value as {
@@ -509,6 +574,7 @@ describe('Identity main contributions', () => {
         getDeviceId: () => 'device-1',
         getAppVersion: () => '1.0.0',
         packageSecrets: memorySecrets(),
+        internalServices: memoryInternalServices(),
         defineCapability: (definition) => definition
       })
       const lifecycle = entry.contributions[2]!.value as {
@@ -544,6 +610,25 @@ function memorySecrets() {
     },
     remove: async (key: string) => {
       values.delete(key)
+    }
+  }
+}
+
+function memoryInternalServices() {
+  const services = new Map<string, object>()
+  return {
+    register: <Service extends object>(registration: Readonly<{
+      serviceId: string
+      contractVersion: string
+      allowedConsumerModuleIds: readonly string[]
+      service: Service
+    }>) => {
+      services.set(`${registration.serviceId}@${registration.contractVersion}`, registration.service)
+    },
+    acquire: <Service extends object>(serviceId: string, contractVersion: string): Service => {
+      const service = services.get(`${serviceId}@${contractVersion}`)
+      if (!service) throw new Error('Internal service is not registered.')
+      return service as Service
     }
   }
 }

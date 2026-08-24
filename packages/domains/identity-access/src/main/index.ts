@@ -2,6 +2,11 @@ import type {
   DomainMainHost,
   DomainMainRuntimeLifecycleContribution
 } from '@sciforge/domain-sdk/host'
+import { defineDomainMainInternalServiceDescriptor } from '@sciforge/domain-sdk/host'
+import {
+  AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
+  AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID
+} from '../authenticated-cloud-transport.js'
 import {
   principalDeviceIdSchema,
   type DomainMainPrincipalProvider
@@ -27,12 +32,15 @@ import {
 import {
   IDENTITY_ACCESS_DOMAIN_MODULE_ID,
   IDENTITY_CAPABILITY_FACTORY_CONTRIBUTION,
+  IDENTITY_AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT,
+  IDENTITY_AUTHENTICATED_CLOUD_TRANSPORT_CONTRIBUTION,
   IDENTITY_PRINCIPAL_PROVIDER_CONTRIBUTION,
   IDENTITY_RUNTIME_LIFECYCLE_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition.js'
 import { IdentityService } from './service.js'
 import { CloudIdentityRuntime } from './cloud-runtime.js'
+import { createIdentityAuthenticatedCloudTransport } from './authenticated-cloud-transport.js'
 
 export { LocalCloudIdentityLinkService } from './cloud-link-service.js'
 
@@ -104,12 +112,26 @@ type IdentityMainContribution =
   | IdentityCapabilityFactory
   | DomainMainPrincipalProvider
   | DomainMainRuntimeLifecycleContribution
+  | typeof authenticatedCloudTransportDescriptor
+
+const authenticatedCloudTransportDescriptor = defineDomainMainInternalServiceDescriptor({
+  location: 'main.internal-service-descriptor',
+  serviceId: AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+  contractVersion: AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
+  allowedConsumerModuleIds: [
+    'sciforge.collaboration',
+    'sciforge.project-coordinator'
+  ]
+})
 
 export function createDomainMainEntry(
   host: DomainMainHost
 ): TrustedDomainProcessEntryInput<IdentityMainContribution> {
   if (!host.packageSecrets) {
     throw new Error('Identity requires package-scoped secret storage.')
+  }
+  if (!host.internalServices) {
+    throw new Error('Identity requires Host internal-service mediation.')
   }
   let service: IdentityService | undefined
   const getService = (): IdentityService => {
@@ -131,6 +153,15 @@ export function createDomainMainEntry(
     if (!cloudRuntime) throw new Error('Cloud identity runtime is not active.')
     return cloudRuntime
   }
+  const authenticatedCloudTransport = createIdentityAuthenticatedCloudTransport({
+    getRuntime: () => cloudRuntime
+  })
+  host.internalServices.register({
+    serviceId: AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+    contractVersion: AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
+    allowedConsumerModuleIds: authenticatedCloudTransportDescriptor.allowedConsumerModuleIds,
+    service: authenticatedCloudTransport
+  })
   const closeCloudRuntime = (runtime: CloudIdentityRuntime | null): void => {
     if (!runtime || closedCloudRuntimes.has(runtime)) return
     closedCloudRuntimes.add(runtime)
@@ -214,6 +245,11 @@ export function createDomainMainEntry(
         ...IDENTITY_RUNTIME_LIFECYCLE_CONTRIBUTION,
         value: lifecycle,
         onDispose: disposeCloud
+      },
+      {
+        ...IDENTITY_AUTHENTICATED_CLOUD_TRANSPORT_CONTRIBUTION,
+        contract: IDENTITY_AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT,
+        value: authenticatedCloudTransportDescriptor
       }
     ]
   }

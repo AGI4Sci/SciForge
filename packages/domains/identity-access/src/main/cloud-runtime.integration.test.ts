@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { deviceSchema, meResponseSchema, type Device } from '@sciforge/collaboration-contracts'
+import { AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID } from '../authenticated-cloud-transport.js'
 import { CloudIdentityRuntime } from './cloud-runtime.js'
 import { cloudInstallationId } from './device-service.js'
 import { IdentityService } from './service.js'
@@ -28,6 +29,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
     let revocationAccepted = false
     let revokedTokenRejected = false
     const requestFacts: Array<{ path: string; bearer: boolean }> = []
+    const commandPayloads: unknown[] = []
     let issuer = ''
     let baseUrl = ''
 
@@ -134,6 +136,15 @@ describe('CloudIdentityRuntime HTTP integration', () => {
           })
           return
         }
+        if (url.pathname === '/v1/commands') {
+          commandPayloads.push(await readRequestJson(request))
+          sendJson(response, 200, {
+            protocolVersion: '1.0',
+            type: 'project.listed',
+            projects: []
+          })
+          return
+        }
         if (url.pathname === '/v1/device-enrollments' && enrollmentFails) {
           sendJson(response, 503, {
             error: {
@@ -219,6 +230,20 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       expect(principalSnapshots).toHaveLength(principalPublicationCount)
       expect(deviceStatesDuringRefresh.length).toBeGreaterThan(0)
       expect(new Set(deviceStatesDuringRefresh)).toEqual(new Set(['active']))
+      await expect(runtime.executeAuthenticatedCloud({
+        contractVersion: 1,
+        operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
+        payload: { protocolVersion: '1.0', type: 'project.list' }
+      })).resolves.toEqual({
+        contractVersion: 1,
+        status: 200,
+        body: {
+          protocolVersion: '1.0',
+          type: 'project.listed',
+          projects: []
+        }
+      })
+      expect(commandPayloads).toEqual([{ protocolVersion: '1.0', type: 'project.list' }])
       let principalVersion = expectLatestPrincipal(
         principalSnapshots,
         'cloud-authenticated',
@@ -231,6 +256,12 @@ describe('CloudIdentityRuntime HTTP integration', () => {
         device: { state: 'revoked' }
       })
       expect(refreshRotation).toBe(3)
+      await expect(runtime.executeAuthenticatedCloud({
+        contractVersion: 1,
+        operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
+        payload: { protocolVersion: '1.0', type: 'project.list' }
+      })).rejects.toMatchObject({ code: 'device_required' })
+      expect(commandPayloads).toHaveLength(1)
       expect(principal.current()?.assurance).toBe('local-selection')
       principalVersion = expectLatestPrincipal(
         principalSnapshots,
@@ -523,4 +554,10 @@ async function readRequestForm(request: IncomingMessage): Promise<URLSearchParam
   const chunks: Buffer[] = []
   for await (const chunk of request) chunks.push(Buffer.from(chunk))
   return new URLSearchParams(Buffer.concat(chunks).toString('utf8'))
+}
+
+async function readRequestJson(request: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = []
+  for await (const chunk of request) chunks.push(Buffer.from(chunk))
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }

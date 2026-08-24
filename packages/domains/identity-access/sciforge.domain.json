@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.identity-access",
     "displayName": "Identity and Access",
-    "version": "1.1.3",
+    "version": "1.2.0",
     "hostApi": {
       "minimum": "1.4.0",
       "maximumExclusive": "2.0.0"
@@ -17,6 +17,15 @@
     "priority": 900
   },
   "contributionContracts": {
+    "identity-access.authenticated-cloud-transport": {
+      "location": "main.internal-service-descriptor",
+      "serviceId": "sciforge.authenticated-cloud-transport",
+      "contractVersion": "1.0.0",
+      "allowedConsumerModuleIds": [
+        "sciforge.collaboration",
+        "sciforge.project-coordinator"
+      ]
+    },
     "identity-access.workbench-toolbar-action": {
       "location": "workbench.topbar",
       "commandId": "identity-access.open-account",
@@ -45,6 +54,12 @@
         {
           "id": "identity-access.runtime-lifecycle",
           "kind": "main.runtime-lifecycle",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.authenticated-cloud-transport",
+          "kind": "main.extension",
+          "version": "1.0.0",
           "priority": 900
         }
       ]

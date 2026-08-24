@@ -467,6 +467,17 @@ export class DesktopIdentityService {
     return this.getStatus().state === 'signed-in' ? this.accessToken : null
   }
 
+  async useAccessToken<Result>(operation: (accessToken: string) => Promise<Result>): Promise<Result> {
+    const accessToken = this.getAccessToken()
+    if (!accessToken) {
+      throw new DesktopIdentityError(
+        'OIDC_SESSION_EXPIRED',
+        'Sign in to SciForge Cloud before continuing.'
+      )
+    }
+    return operation(accessToken)
+  }
+
   subscribe(listener: DesktopIdentityStatusListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
