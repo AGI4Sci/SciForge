@@ -304,9 +304,10 @@ async function loadDefaultSettings(): Promise<AppSettingsV1> {
 function compatibleSettingsPaths(currentPath: string): string[] {
   const currentUserDataDir = dirname(currentPath)
   const currentDirName = basename(currentUserDataDir)
+  if (currentDirName !== APP_USER_DATA_DIR_NAME) return []
+
   const parentDir = dirname(currentUserDataDir)
-  return [APP_PACKAGE_NAME, APP_USER_DATA_DIR_NAME]
-    .filter((dirName) => dirName !== currentDirName)
+  return [APP_PACKAGE_NAME]
     .map((dirName) => join(parentDir, dirName, SETTINGS_FILE_NAME))
 }
 
