@@ -22,6 +22,8 @@ import {
   toManagedContainer,
   toParticipant,
   toProject,
+  toProjectContentSpaceBinding,
+  toCloudResourceRef,
   toProjectEndpointBinding,
   toProjectInput,
   toProjectRecord,
@@ -302,9 +304,16 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     }
     case 'project.endpoint.get': return entityResponse(command,
       toProjectEndpointBinding(await service.getProjectEndpointBinding(requiredActor(actor), command.projectId)))
+    case 'project.content_space.bind': return entityResponse(command,
+      toProjectContentSpaceBinding(await service.bindProjectContentSpace(requiredUser(actor), command)))
+    case 'project.content_space.unbind': return entityResponse(command,
+      toProjectContentSpaceBinding(await service.unbindProjectContentSpace(requiredUser(actor), command)))
+    case 'project.content_space.get': return entityResponse(command,
+      toProjectContentSpaceBinding(await service.getProjectContentSpaceBinding(requiredActor(actor), command.projectId)))
     case 'task.create': return entityResponse(command, toTask(await service.createTask(requiredAgent(actor), {
       projectId: command.projectId, assigneeAgentId: command.assigneeAgentId, title: command.title,
       objective: command.objective, completionCriteria: command.completionCriteria, dependencyTaskIds: command.dependencyTaskIds,
+      fileIntent: command.fileIntent ?? null,
       expectedProjectRevision: command.expectedRevision, idempotencyKey: command.idempotencyKey })))
     case 'task.get': return entityResponse(command, toTask(await service.getTask(requiredActor(actor), command.taskId)))
     case 'task.transition': {
@@ -312,10 +321,15 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
       if (status === 'offered') throw new CollaborationServiceError('invalid_state_transition', 'Retrying a terminal Task requires explicit Coordinator reassignment.')
       if (status === 'cancelled') return entityResponse(command, toTask(await service.cancelTask(requiredAgent(actor), command)))
       return entityResponse(command, toTask(await service.transitionTask(requiredAgent(actor), {
-        taskId: command.taskId, expectedRevision: command.expectedRevision, status,
+        taskId: command.taskId, executionId: command.executionId,
+        expectedRevision: command.expectedRevision, status,
         resultSummary: command.resultSummary, failureSummary: command.safeFailureCode,
         idempotencyKey: command.idempotencyKey })))
     }
+    case 'task.retry_or_reassign': return entityResponse(command, toTask(await service.retryOrReassignTask(
+      requiredAgent(actor), command)))
+    case 'resource.get': return entityResponse(command,
+      toCloudResourceRef(await service.getCloudResourceRef(requiredActor(actor), command.resourceRefId)))
     case 'project_record.submit': return entityResponse(command, toProjectRecord(await service.submitProjectRecord(requiredHumanOrAgent(actor), {
       projectId: command.projectId, kind: command.kind, summary: command.body,
       sourceTaskId: command.sourceTaskId ?? undefined, sourceRevision: command.sourceRevision,

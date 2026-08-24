@@ -17,6 +17,7 @@ test('restart reconciliation resumes an already-running cloud Task without repla
   let cloudTask: Task = {
     ...taskFixture,
     assigneeAgentId: TEST_IDS.agentId,
+    executionFence: { ...taskFixture.executionFence, assigneeAgentId: TEST_IDS.agentId },
     status: 'running',
     revision: 3,
     updatedAt: TEST_LATER_TIMESTAMP
@@ -31,9 +32,11 @@ test('restart reconciliation resumes an already-running cloud Task without repla
     agents: [],
     projections: [],
     projects: [],
-    tasks: [{ ...taskFixture, assigneeAgentId: TEST_IDS.agentId }],
+    tasks: [{ ...taskFixture, assigneeAgentId: TEST_IDS.agentId,
+      executionFence: { ...taskFixture.executionFence, assigneeAgentId: TEST_IDS.agentId } }],
     taskRuns: [{
-      task: { ...taskFixture, assigneeAgentId: TEST_IDS.agentId },
+      task: { ...taskFixture, assigneeAgentId: TEST_IDS.agentId,
+        executionFence: { ...taskFixture.executionFence, assigneeAgentId: TEST_IDS.agentId } },
       state: 'accepting',
       clientDirectiveId: directiveId,
       updatedAt: TEST_TIMESTAMP
@@ -49,6 +52,7 @@ test('restart reconciliation resumes an already-running cloud Task without repla
   const outbox = {
     enqueue: async (kind: string, request: RestRequest) => {
       assert.equal(request.type, 'task.transition')
+      assert.equal(request.executionId, cloudTask.executionFence.executionId)
       transitions.push(request.status)
       cloudTask = {
         ...cloudTask,

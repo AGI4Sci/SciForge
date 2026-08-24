@@ -129,6 +129,9 @@ export type StoredTask = {
   objective: string
   completionCriteria: string[]
   dependencyTaskIds: string[]
+  fileIntent: import('@sciforge/collaboration-contracts').TaskFileIntent | null
+  resourceRefIds: string[]
+  executionFence: import('@sciforge/collaboration-contracts').TaskExecutionFence
   status: TaskStatus
   retryCount: number
   maxRetries: number
@@ -140,6 +143,44 @@ export type StoredTask = {
   createdAt: string
   updatedAt: string
   completedAt?: string
+}
+
+export type StoredProjectContentSpaceBinding = {
+  projectId: string
+  rootLocator: import('@sciforge/collaboration-contracts').PortableContentSpaceLocator
+  rootLocatorDigest: string
+  authorization: {
+    proofId: string
+    issuer: string
+    proofDigest: string
+    principal: import('@sciforge/collaboration-contracts').ContentSpacePrincipalBinding
+    scopes: ['content-space.read', 'content-space.upload-new']
+    issuedAt: string
+    expiresAt: string
+  }
+  status: 'active' | 'closed'
+  revision: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type StoredCloudResourceRef = {
+  resourceRefId: string
+  projectId: string
+  taskId: string
+  executionId: string
+  taskRevision: number
+  bindingRevision: number
+  intentDigest: string
+  role: 'input-file' | 'output-container'
+  ordinal: number
+  locator: import('@sciforge/collaboration-contracts').PortableContentSpaceLocator
+  locatorDigest: string
+  status: 'available' | 'invalidated' | 'revoked'
+  invalidatedAt?: string
+  revision: number
+  createdAt: string
+  updatedAt: string
 }
 
 export type ProjectRecordKind = 'observation' | 'proposal' | 'decision' | 'summary' | 'task_result'
@@ -276,6 +317,7 @@ export type StoredHumanRequest = {
   humanRequestId: string
   projectId: string
   taskId: string
+  executionId: string
   targetUserId: string
   requestedByAgentId: string
   requiredAssurance: 'basic' | 'verified' | 'strong'
@@ -292,6 +334,7 @@ export type StoredHumanAnswer = {
   humanRequestId: string
   projectId: string
   taskId: string
+  executionId: string
   requestRevision: number
   answeredByUserId: string
   answeredFromHumanEndpointId: string

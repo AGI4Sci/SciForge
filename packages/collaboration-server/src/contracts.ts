@@ -10,6 +10,8 @@ import {
   projectEndpointBindingSchema,
   projectRecordSchema,
   projectSchema,
+  projectContentSpaceBindingSchema,
+  cloudResourceRefSchema,
   remoteSessionProjectionSchema,
   taskSchema,
   userPrincipalSchema,
@@ -21,6 +23,8 @@ import {
   type InboxMessage,
   type ParticipantProfile,
   type Project,
+  type ProjectContentSpaceBinding,
+  type CloudResourceRef,
   type ProjectInput,
   type ProjectEndpointBinding,
   type ProjectRecord,
@@ -39,6 +43,8 @@ import type {
   StoredInboxMessage,
   StoredParticipant,
   StoredProject,
+  StoredProjectContentSpaceBinding,
+  StoredCloudResourceRef,
   StoredProjectEndpointBinding,
   StoredProjectInput,
   StoredProjectMember,
@@ -131,10 +137,31 @@ export function toTask(task: StoredTask): Task {
   return taskSchema.parse({ schemaVersion: 1, type: 'task', taskId: task.taskId, projectId: task.projectId,
     createdByCoordinatorAgentId: task.createdByAgentId, assigneeAgentId: task.assigneeAgentId,
     title: task.title, objective: task.objective, completionCriteria: task.completionCriteria,
-    dependencyTaskIds: task.dependencyTaskIds, status, attempt: task.retryCount + 1, maxRetries: task.maxRetries,
+    dependencyTaskIds: task.dependencyTaskIds, fileIntent: task.fileIntent,
+    resourceRefIds: task.resourceRefIds, executionFence: task.executionFence,
+    status, attempt: task.retryCount + 1, maxRetries: task.maxRetries,
     ...(task.activeTurnId ? { activeTurnId: task.activeTurnId } : {}),
     ...(task.completedAt ? { completedAt: task.completedAt } : {}), revision: task.revision,
     createdAt: task.createdAt, updatedAt: task.updatedAt })
+}
+
+export function toProjectContentSpaceBinding(
+  binding: StoredProjectContentSpaceBinding
+): ProjectContentSpaceBinding {
+  return projectContentSpaceBindingSchema.parse({
+    schemaVersion: 1,
+    type: 'project_content_space_binding',
+    ...binding
+  })
+}
+
+export function toCloudResourceRef(resource: StoredCloudResourceRef): CloudResourceRef {
+  return cloudResourceRefSchema.parse({
+    schemaVersion: 1,
+    type: 'resource_ref',
+    ...resource,
+    invalidatedAt: resource.invalidatedAt ?? null
+  })
 }
 
 export function toProjectRecord(record: StoredProjectRecord): ProjectRecord {

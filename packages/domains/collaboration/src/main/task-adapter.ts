@@ -257,6 +257,7 @@ export class CollaborationTaskAdapter {
       type: 'task.transition',
       idempotencyKey,
       taskId: task.taskId,
+      executionId: task.executionFence.executionId,
       expectedRevision: task.revision,
       status,
       ...(resultSummary?.trim() ? { resultSummary: resultSummary.slice(0, 32_000) } : {}),

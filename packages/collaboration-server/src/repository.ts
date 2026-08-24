@@ -9,6 +9,7 @@ import type {
   StoredInboxMessage,
   StoredParticipant,
   StoredProject,
+  StoredProjectContentSpaceBinding,
   StoredProjectEndpointBinding,
   StoredProjectInput,
   StoredProjectMember,
@@ -16,6 +17,7 @@ import type {
   StoredProjection,
   StoredReceipt,
   StoredTask,
+  StoredCloudResourceRef,
   StoredUser,
   StoredHumanRequest,
   StoredHumanAnswer,
@@ -49,10 +51,14 @@ export interface CollaborationReadRepository {
   getRemoteApprovalByReferenceDigest(referenceDigest: string): Promise<StoredRemoteCapabilityApproval | null>
   listExpiredRemoteApprovals(now: string, limit: number): Promise<StoredRemoteCapabilityApproval[]>
   getProject(projectId: string): Promise<StoredProject | null>
+  getProjectContentSpaceBinding(projectId: string): Promise<StoredProjectContentSpaceBinding | null>
+  getCloudResourceRef(resourceRefId: string): Promise<StoredCloudResourceRef | null>
+  listCloudResourceRefs(taskId: string, executionId: string): Promise<StoredCloudResourceRef[]>
   listActiveProjectsForCoordinator(agentId: string): Promise<StoredProject[]>
   getProjectMember(projectId: string, userId: string): Promise<StoredProjectMember | null>
   listProjectMembers(projectId: string): Promise<StoredProjectMember[]>
   countProjectTasks(projectId: string, coordinationRound?: number): Promise<number>
+  countOpenFileTasks(projectId: string): Promise<number>
   listOpenTasksForAgent(agentId: string): Promise<StoredTask[]>
   getTask(taskId: string): Promise<StoredTask | null>
   getProjectRecord(projectRecordId: string): Promise<StoredProjectRecord | null>
@@ -95,6 +101,10 @@ export interface CollaborationTransaction extends CollaborationReadRepository {
   updateRemoteApproval(approval: StoredRemoteCapabilityApproval, expectedRevision: number): Promise<void>
   insertProject(project: StoredProject, members: StoredProjectMember[]): Promise<void>
   updateProject(project: StoredProject, expectedRevision: number): Promise<void>
+  upsertProjectContentSpaceBinding(binding: StoredProjectContentSpaceBinding, expectedRevision: number | null): Promise<void>
+  insertCloudResourceRefs(resources: StoredCloudResourceRef[]): Promise<void>
+  invalidateCloudResourceRefs(taskId: string, executionId: string, invalidatedAt: string): Promise<number>
+  invalidateCloudResourceRefsForBinding(projectId: string, bindingRevision: number, invalidatedAt: string): Promise<number>
   insertTask(task: StoredTask): Promise<void>
   updateTask(task: StoredTask, expectedRevision: number): Promise<void>
   insertProjectRecord(record: StoredProjectRecord): Promise<void>

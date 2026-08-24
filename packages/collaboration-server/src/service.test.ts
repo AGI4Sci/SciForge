@@ -62,7 +62,186 @@ async function activateManagedContainer(
   })
 }
 
+function enableContentSpaceRepository(repository: FakeCollaborationRepository): void {
+  const state = repository.state as typeof repository.state & {
+    projectContentSpaceBindings: Map<string, Record<string, unknown>>
+    cloudResourceRefs: Map<string, Record<string, unknown>>
+  }
+  state.projectContentSpaceBindings = new Map()
+  state.cloudResourceRefs = new Map()
+  Object.assign(repository, {
+    getProjectContentSpaceBinding: async (projectId: string) =>
+      structuredClone(state.projectContentSpaceBindings.get(projectId) ?? null),
+    upsertProjectContentSpaceBinding: async (binding: Record<string, unknown>, expectedRevision: number | null) => {
+      const current = state.projectContentSpaceBindings.get(String(binding.projectId))
+      if ((expectedRevision === null && current) ||
+          (expectedRevision !== null && Number(current?.revision) !== expectedRevision)) {
+        throw new Error('fake repository project content-space binding revision conflict')
+      }
+      state.projectContentSpaceBindings.set(String(binding.projectId), structuredClone(binding))
+    },
+    countOpenFileTasks: async (projectId: string) => [...repository.state.tasks.values()].filter((task) =>
+      task.projectId === projectId && task.fileIntent !== null &&
+      !['rejected', 'completed', 'failed', 'cancelled'].includes(task.status)).length,
+    getCloudResourceRef: async (resourceRefId: string) =>
+      structuredClone(state.cloudResourceRefs.get(resourceRefId) ?? null),
+    listCloudResourceRefs: async (taskId: string, executionId: string) =>
+      structuredClone([...state.cloudResourceRefs.values()].filter((resource) =>
+        resource.taskId === taskId && resource.executionId === executionId)),
+    insertCloudResourceRefs: async (resources: Array<Record<string, unknown>>) => {
+      for (const resource of resources) {
+        const id = String(resource.resourceRefId)
+        if (state.cloudResourceRefs.has(id)) throw new Error('fake repository duplicate resource ref')
+        state.cloudResourceRefs.set(id, structuredClone(resource))
+      }
+    },
+    invalidateCloudResourceRefs: async (taskId: string, executionId: string, invalidatedAt: string) => {
+      let count = 0
+      for (const [id, resource] of state.cloudResourceRefs) {
+        if (resource.taskId === taskId && resource.executionId === executionId && resource.status === 'available') {
+          state.cloudResourceRefs.set(id, { ...resource, status: 'invalidated', invalidatedAt,
+            revision: Number(resource.revision) + 1, updatedAt: invalidatedAt })
+          count += 1
+        }
+      }
+      return count
+    },
+    invalidateCloudResourceRefsForBinding: async (
+      projectId: string,
+      bindingRevision: number,
+      invalidatedAt: string
+    ) => {
+      let count = 0
+      for (const [id, resource] of state.cloudResourceRefs) {
+        if (resource.projectId === projectId && resource.bindingRevision === bindingRevision &&
+            resource.status === 'available') {
+          state.cloudResourceRefs.set(id, { ...resource, status: 'invalidated', invalidatedAt,
+            revision: Number(resource.revision) + 1, updatedAt: invalidatedAt })
+          count += 1
+        }
+      }
+      return count
+    }
+  })
+}
+
 describe('CollaborationService canonical transactions', () => {
+  it('binds a Host-authorized ContentSpace and fences derived ResourceRefs by execution', async () => {
+    const repository = new FakeCollaborationRepository()
+    enableContentSpaceRepository(repository)
+    const authentication = new AuthenticationService(repository, now)
+    const alice = await onboard(new CollaborationService({ repository, now }), authentication,
+      'contentspace-alice', 'contentspace-provider-alice')
+    const bob = await onboard(new CollaborationService({ repository, now }), authentication,
+      'contentspace-bob', 'contentspace-provider-bob')
+    const bootstrap = new CollaborationService({ repository, now })
+    const aliceAgent = await registerAgent(bootstrap, alice.user, 'contentspacealice')
+    const bobAgent = await registerAgent(bootstrap, bob.user, 'contentspacebob')
+    const aliceDevice = await authentication.resolveBearer(aliceAgent.deviceCredential!)
+    const bobDevice = await authentication.resolveBearer(bobAgent.deviceCredential!)
+    if (aliceDevice.kind !== 'agent_device' || bobDevice.kind !== 'agent_device') throw new Error('Expected Agent actors')
+
+    const rootLocator = {
+      contractVersion: 1 as const,
+      kind: 'content-space.container-reference' as const,
+      authority: 'sciforge.content-space.host',
+      identity: { spaceId: 'space-alpha', containerId: 'project-root' }
+    }
+    const inputLocator = {
+      contractVersion: 1 as const,
+      kind: 'content-space.file-reference' as const,
+      authority: 'sciforge.content-space.host',
+      identity: { spaceId: 'space-alpha', fileId: 'input-one', semanticRevision: '7' }
+    }
+    const proof = {
+      format: 'sciforge.content-space.authorization-proof.v1' as const,
+      issuer: 'sciforge.content-space.host',
+      payload: 'opaque-host-signed-proof'
+    }
+    const verifierInputs: Array<Record<string, unknown>> = []
+    const service = new CollaborationService({ repository, now,
+      verifyContentSpaceAuthorization: async (input) => {
+        verifierInputs.push(structuredClone(input))
+        return {
+          proofId: 'csp_HostProof0001', issuer: proof.issuer, proofDigest: stableDigest(proof),
+          principal: { authority: 'sciforge.oidc', subject: alice.user.userId,
+            deviceId: input.actorCredentialId, identityVersion: 1 },
+          principalUserId: alice.userId, rootLocatorDigest: stableDigest(rootLocator),
+          scopes: ['content-space.read', 'content-space.upload-new'],
+          issuedAt: '2026-08-15T01:59:00.000Z', expiresAt: '2026-08-15T03:00:00.000Z'
+        }
+      } })
+    const project = await service.createProject(alice.user, { displayName: 'Host-authorized Project',
+      goal: 'Exercise typed file Tasks', memberUserIds: [alice.userId, bob.userId],
+      coordinatorAgentId: aliceAgent.agent.agentId,
+      budgets: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 2, maxCoordinationRounds: 2 },
+      idempotencyKey: 'idem_contentspace_project' })
+
+    const binding = await service.bindProjectContentSpace(alice.user, { projectId: project.projectId,
+      expectedRevision: project.revision, rootLocator, authorizationProof: proof,
+      idempotencyKey: 'idem_contentspace_binding' })
+    expect(verifierInputs).toHaveLength(1)
+    expect(verifierInputs[0]).toMatchObject({ actorUserId: alice.userId,
+      actorCredentialId: alice.user.credentialId, rootLocator, authorizationProof: proof })
+    expect(JSON.stringify(binding)).not.toContain(proof.payload)
+
+    const task = await service.createTask(aliceDevice, { projectId: project.projectId,
+      assigneeAgentId: bobAgent.agent.agentId, title: 'Analyze authorized input', objective: 'Produce a new result',
+      completionCriteria: ['result uploaded'], dependencyTaskIds: [], expectedProjectRevision: project.revision + 1,
+      fileIntent: { schemaVersion: 1, bindingRevision: binding.revision,
+        inputs: [{ kind: 'content-space.input-file', locator: inputLocator,
+          destinationName: 'input.csv', expectedSemanticRevision: '7' }],
+        output: { kind: 'content-space.output-new', target: 'project-binding-root', mode: 'upload-new' } },
+      idempotencyKey: 'idem_contentspace_task' })
+    expect(task.resourceRefIds).toHaveLength(2)
+    expect(task.executionFence).toMatchObject({ assigneeAgentId: bobAgent.agent.agentId,
+      taskRevision: task.revision, bindingRevision: binding.revision,
+      intentDigest: stableDigest(task.fileIntent) })
+    const firstExecutionId = task.executionFence.executionId
+    const firstResources = await Promise.all(task.resourceRefIds.map((id) => service.getCloudResourceRef(alice.user, id)))
+    expect(firstResources.map((resource) => resource.role)).toEqual(['input-file', 'output-container'])
+    expect(firstResources.every((resource) => resource.executionId === firstExecutionId &&
+      resource.intentDigest === task.executionFence.intentDigest)).toBe(true)
+
+    const accepted = await service.transitionTask(bobDevice, { taskId: task.taskId, executionId: firstExecutionId,
+      status: 'accepted', expectedRevision: task.revision, idempotencyKey: 'idem_contentspace_accept' })
+    const running = await service.transitionTask(bobDevice, { taskId: task.taskId, executionId: firstExecutionId,
+      status: 'in_progress', expectedRevision: accepted.revision, idempotencyKey: 'idem_contentspace_running' })
+    const failed = await service.transitionTask(bobDevice, { taskId: task.taskId, executionId: firstExecutionId,
+      status: 'failed', expectedRevision: running.revision, failureSummary: 'bounded failure',
+      idempotencyKey: 'idem_contentspace_failed' })
+    expect((await service.getCloudResourceRef(alice.user, task.resourceRefIds[0]!)).status).toBe('invalidated')
+
+    const reassigned = await service.retryOrReassignTask(aliceDevice, { taskId: task.taskId,
+      previousExecutionId: firstExecutionId, assigneeAgentId: bobAgent.agent.agentId,
+      expectedRevision: failed.revision, idempotencyKey: 'idem_contentspace_reassign' })
+    expect(reassigned.executionFence.executionId).not.toBe(firstExecutionId)
+    expect(reassigned.resourceRefIds).not.toEqual(task.resourceRefIds)
+    await expect(service.transitionTask(bobDevice, { taskId: task.taskId, executionId: firstExecutionId,
+      status: 'accepted', expectedRevision: reassigned.revision,
+      idempotencyKey: 'idem_contentspace_stale_execution' })).rejects.toMatchObject({ code: 'revision_conflict' })
+    await expect(service.unbindProjectContentSpace(alice.user, { projectId: project.projectId,
+      expectedRevision: project.revision + 2, expectedBindingRevision: binding.revision,
+      idempotencyKey: 'idem_contentspace_unbind_open' })).rejects.toMatchObject({ code: 'invalid_state_transition' })
+
+    const acceptedAgain = await service.transitionTask(bobDevice, { taskId: task.taskId,
+      executionId: reassigned.executionFence.executionId, status: 'accepted', expectedRevision: reassigned.revision,
+      idempotencyKey: 'idem_contentspace_accept_again' })
+    const runningAgain = await service.transitionTask(bobDevice, { taskId: task.taskId,
+      executionId: reassigned.executionFence.executionId, status: 'in_progress', expectedRevision: acceptedAgain.revision,
+      idempotencyKey: 'idem_contentspace_running_again' })
+    await service.transitionTask(bobDevice, { taskId: task.taskId,
+      executionId: reassigned.executionFence.executionId, status: 'completed', expectedRevision: runningAgain.revision,
+      resultSummary: 'bounded result', idempotencyKey: 'idem_contentspace_complete_again' })
+    const closed = await service.unbindProjectContentSpace(alice.user, { projectId: project.projectId,
+      expectedRevision: project.revision + 2, expectedBindingRevision: binding.revision,
+      idempotencyKey: 'idem_contentspace_unbind_closed' })
+    expect(closed).toMatchObject({ status: 'closed', revision: binding.revision + 1 })
+    for (const id of reassigned.resourceRefIds) {
+      expect((await service.getCloudResourceRef(alice.user, id)).status).toBe('invalidated')
+    }
+  })
+
   it('rejects a handcrafted personal locator when the owner has no managed container', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
@@ -504,15 +683,19 @@ describe('CollaborationService canonical transactions', () => {
     expect((await repository.pullInbox({ kind: 'agent', id: bobAgent.agent.agentId }, 0, 20, at.toISOString())))
       .toHaveLength(1)
     await expect(service.transitionTask(aliceDevice, { taskId: task.taskId, status: 'accepted',
-      expectedRevision: 1, idempotencyKey: 'idem_wrong_agent_accept' })).rejects.toMatchObject({ code: 'permission_denied' })
+      executionId: task.executionFence.executionId, expectedRevision: 1,
+      idempotencyKey: 'idem_wrong_agent_accept' })).rejects.toMatchObject({ code: 'permission_denied' })
 
     const restarted = new CollaborationService({ repository, notifier, now })
     const accepted = await restarted.transitionTask(bobDevice, { taskId: task.taskId, status: 'accepted',
-      expectedRevision: 1, idempotencyKey: 'idem_bob_accept_task_01' })
+      executionId: task.executionFence.executionId, expectedRevision: 1,
+      idempotencyKey: 'idem_bob_accept_task_01' })
     const running = await restarted.transitionTask(bobDevice, { taskId: task.taskId, status: 'in_progress',
-      expectedRevision: accepted.revision, idempotencyKey: 'idem_bob_run_task_01' })
+      executionId: accepted.executionFence.executionId, expectedRevision: accepted.revision,
+      idempotencyKey: 'idem_bob_run_task_01' })
     const completed = await restarted.transitionTask(bobDevice, { taskId: task.taskId, status: 'completed',
-      expectedRevision: running.revision, resultSummary: '分析完成，结果可复核。',
+      executionId: running.executionFence.executionId, expectedRevision: running.revision,
+      resultSummary: '分析完成，结果可复核。',
       idempotencyKey: 'idem_bob_complete_task_01' })
     expect(completed.status).toBe('completed')
     const coordinatorInbox = await restarted.pullInbox(aliceDevice, { afterSequence: 0, limit: 20 })
@@ -619,11 +802,13 @@ describe('CollaborationService canonical transactions', () => {
       completionCriteria: ['收到回答'], dependencyTaskIds: [], expectedProjectRevision: project.revision,
       idempotencyKey: 'idem_task_human_loop' })
     const accepted = await service.transitionTask(bobDevice, { taskId: task.taskId, status: 'accepted', expectedRevision: 1,
-      idempotencyKey: 'idem_task_human_accept' })
+      executionId: task.executionFence.executionId, idempotencyKey: 'idem_task_human_accept' })
     const running = await service.transitionTask(bobDevice, { taskId: task.taskId, status: 'in_progress',
-      expectedRevision: accepted.revision, idempotencyKey: 'idem_task_human_running' })
+      executionId: accepted.executionFence.executionId, expectedRevision: accepted.revision,
+      idempotencyKey: 'idem_task_human_running' })
     const request = await service.createHumanNeeded(bobDevice, { projectId: project.projectId, taskId: task.taskId,
-      expectedTaskRevision: running.revision, targetUserId: bob.userId, requiredAssurance: 'verified',
+      executionId: running.executionFence.executionId, expectedTaskRevision: running.revision,
+      targetUserId: bob.userId, requiredAssurance: 'verified',
       prompt: '是否继续？', expiresAt: '2026-08-15T03:00:00.000Z', idempotencyKey: 'idem_human_needed_bob' })
     const providerNotifications = await repository.pullInbox(
       { kind: 'human_endpoint', id: bob.endpointId }, 0, 20, at.toISOString())
@@ -655,7 +840,8 @@ describe('CollaborationService canonical transactions', () => {
       idempotencyKey: 'idem_human_answer_bob' })
     expect(repeatedAnswer.humanAnswerId).toBe(answer.humanAnswerId)
     const expiringRequest = await service.createHumanNeeded(bobDevice, { projectId: project.projectId, taskId: task.taskId,
-      expectedTaskRevision: running.revision + 1, targetUserId: bob.userId, requiredAssurance: 'verified',
+      executionId: running.executionFence.executionId, expectedTaskRevision: running.revision + 1,
+      targetUserId: bob.userId, requiredAssurance: 'verified',
       prompt: '过期后不可回答', expiresAt: '2026-08-15T03:30:00.000Z',
       idempotencyKey: 'idem_human_needed_expiring_bob' })
     const laterService = new CollaborationService({ repository, now: () => new Date('2026-08-15T04:00:00.000Z') })

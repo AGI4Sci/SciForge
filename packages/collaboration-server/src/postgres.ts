@@ -13,6 +13,7 @@ import type {
   StoredInboxMessage,
   StoredParticipant,
   StoredProject,
+  StoredProjectContentSpaceBinding,
   StoredProjectEndpointBinding,
   StoredProjectInput,
   StoredProjectMember,
@@ -20,6 +21,7 @@ import type {
   StoredProjection,
   StoredReceipt,
   StoredTask,
+  StoredCloudResourceRef,
   StoredUser,
   StoredHumanRequest,
   StoredHumanAnswer,
@@ -158,6 +160,15 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     return this.read().listExpiredRemoteApprovals(now, limit)
   }
   getProject(projectId: string): Promise<StoredProject | null> { return this.read().getProject(projectId) }
+  getProjectContentSpaceBinding(projectId: string): Promise<StoredProjectContentSpaceBinding | null> {
+    return this.read().getProjectContentSpaceBinding(projectId)
+  }
+  getCloudResourceRef(resourceRefId: string): Promise<StoredCloudResourceRef | null> {
+    return this.read().getCloudResourceRef(resourceRefId)
+  }
+  listCloudResourceRefs(taskId: string, executionId: string): Promise<StoredCloudResourceRef[]> {
+    return this.read().listCloudResourceRefs(taskId, executionId)
+  }
   listActiveProjectsForCoordinator(agentId: string): Promise<StoredProject[]> {
     return this.read().listActiveProjectsForCoordinator(agentId)
   }
@@ -166,6 +177,7 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
   }
   listProjectMembers(projectId: string): Promise<StoredProjectMember[]> { return this.read().listProjectMembers(projectId) }
   countProjectTasks(projectId: string, round?: number): Promise<number> { return this.read().countProjectTasks(projectId, round) }
+  countOpenFileTasks(projectId: string): Promise<number> { return this.read().countOpenFileTasks(projectId) }
   listOpenTasksForAgent(agentId: string): Promise<StoredTask[]> { return this.read().listOpenTasksForAgent(agentId) }
   getTask(taskId: string): Promise<StoredTask | null> { return this.read().getTask(taskId) }
   getProjectRecord(id: string): Promise<StoredProjectRecord | null> { return this.read().getProjectRecord(id) }
@@ -442,6 +454,31 @@ class PostgresReadRepository implements CollaborationReadRepository {
     return result.rows[0] ? mapProject(result.rows[0]) : null
   }
 
+  async getProjectContentSpaceBinding(projectId: string): Promise<StoredProjectContentSpaceBinding | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.project_content_space_bindings WHERE project_id=$1`,
+      [projectId]
+    )
+    return result.rows[0] ? mapProjectContentSpaceBinding(result.rows[0]) : null
+  }
+
+  async getCloudResourceRef(resourceRefId: string): Promise<StoredCloudResourceRef | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.resource_refs WHERE resource_ref_id=$1`,
+      [resourceRefId]
+    )
+    return result.rows[0] ? mapCloudResourceRef(result.rows[0]) : null
+  }
+
+  async listCloudResourceRefs(taskId: string, executionId: string): Promise<StoredCloudResourceRef[]> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.resource_refs
+       WHERE task_id=$1 AND execution_id=$2 ORDER BY ordinal,resource_ref_id`,
+      [taskId, executionId]
+    )
+    return result.rows.map(mapCloudResourceRef)
+  }
+
   async listActiveProjectsForCoordinator(agentId: string): Promise<StoredProject[]> {
     const result = await this.sql.query(
       `SELECT * FROM sciforge_collaboration.projects
@@ -472,6 +509,16 @@ class PostgresReadRepository implements CollaborationReadRepository {
         ? `SELECT count(*) AS count FROM sciforge_collaboration.tasks WHERE project_id = $1`
         : `SELECT count(*) AS count FROM sciforge_collaboration.tasks WHERE project_id = $1 AND coordination_round = $2`,
       coordinationRound === undefined ? [projectId] : [projectId, coordinationRound]
+    )
+    return number(result.rows[0]?.count)
+  }
+
+  async countOpenFileTasks(projectId: string): Promise<number> {
+    const result = await this.sql.query<{ count: unknown }>(
+      `SELECT count(*) AS count FROM sciforge_collaboration.tasks
+       WHERE project_id=$1 AND file_intent IS NOT NULL
+         AND status IN ('offered','accepted','in_progress','needs_human')`,
+      [projectId]
     )
     return number(result.rows[0]?.count)
   }
@@ -838,12 +885,12 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
   async insertHumanRequest(request: StoredHumanRequest): Promise<void> {
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.human_requests
-       (human_request_id,project_id,task_id,target_user_id,requested_by_agent_id,required_assurance,prompt,status,
-        revision,expires_at,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      [request.humanRequestId, request.projectId, request.taskId, request.targetUserId, request.requestedByAgentId,
-        request.requiredAssurance, request.prompt, request.status, request.revision, request.expiresAt,
-        request.createdAt, request.updatedAt]
+       (human_request_id,project_id,task_id,execution_id,target_user_id,requested_by_agent_id,required_assurance,
+        prompt,status,revision,expires_at,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [request.humanRequestId, request.projectId, request.taskId, request.executionId,
+        request.targetUserId, request.requestedByAgentId, request.requiredAssurance, request.prompt,
+        request.status, request.revision, request.expiresAt, request.createdAt, request.updatedAt]
     )
   }
 
@@ -859,10 +906,11 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
   async insertHumanAnswer(answer: StoredHumanAnswer): Promise<void> {
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.human_answers
-       (human_answer_id,human_request_id,project_id,task_id,request_revision,answered_by_user_id,
+       (human_answer_id,human_request_id,project_id,task_id,execution_id,request_revision,answered_by_user_id,
         answered_from_human_endpoint_id,assurance,answer,revision,answered_at,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-      [answer.humanAnswerId, answer.humanRequestId, answer.projectId, answer.taskId, answer.requestRevision,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [answer.humanAnswerId, answer.humanRequestId, answer.projectId, answer.taskId, answer.executionId,
+        answer.requestRevision,
         answer.answeredByUserId, answer.answeredFromHumanEndpointId, answer.assurance, answer.answer,
         answer.revision, answer.answeredAt, answer.createdAt, answer.updatedAt]
     )
@@ -927,28 +975,119 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     expectRevision(result.rowCount)
   }
 
+  async upsertProjectContentSpaceBinding(
+    binding: StoredProjectContentSpaceBinding,
+    expectedRevision: number | null
+  ): Promise<void> {
+    if (expectedRevision === null) {
+      await this.sql.query(
+        `INSERT INTO sciforge_collaboration.project_content_space_bindings
+         (project_id,root_locator,root_locator_digest,authorization_proof_id,authorization_issuer,
+          authorization_proof_digest,principal_authority,principal_subject,principal_device_id,
+          principal_identity_version,authorization_scopes,authorization_issued_at,authorization_expires_at,
+          status,revision,created_at,updated_at)
+         VALUES ($1,$2::jsonb,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17)`,
+        [binding.projectId, JSON.stringify(binding.rootLocator), binding.rootLocatorDigest,
+          binding.authorization.proofId, binding.authorization.issuer, binding.authorization.proofDigest,
+          binding.authorization.principal.authority, binding.authorization.principal.subject,
+          binding.authorization.principal.deviceId, binding.authorization.principal.identityVersion,
+          JSON.stringify(binding.authorization.scopes), binding.authorization.issuedAt,
+          binding.authorization.expiresAt, binding.status, binding.revision, binding.createdAt, binding.updatedAt]
+      )
+      return
+    }
+    const result = await this.sql.query(
+      `UPDATE sciforge_collaboration.project_content_space_bindings
+       SET root_locator=$2::jsonb,root_locator_digest=$3,authorization_proof_id=$4,
+           authorization_issuer=$5,authorization_proof_digest=$6,principal_authority=$7,
+           principal_subject=$8,principal_device_id=$9,principal_identity_version=$10,
+           authorization_scopes=$11::jsonb,authorization_issued_at=$12,authorization_expires_at=$13,
+           status=$14,revision=$15,updated_at=$16
+       WHERE project_id=$1 AND revision=$17`,
+      [binding.projectId, JSON.stringify(binding.rootLocator), binding.rootLocatorDigest,
+        binding.authorization.proofId, binding.authorization.issuer, binding.authorization.proofDigest,
+        binding.authorization.principal.authority, binding.authorization.principal.subject,
+        binding.authorization.principal.deviceId, binding.authorization.principal.identityVersion,
+        JSON.stringify(binding.authorization.scopes), binding.authorization.issuedAt,
+        binding.authorization.expiresAt, binding.status, binding.revision, binding.updatedAt, expectedRevision]
+    )
+    expectRevision(result.rowCount)
+  }
+
+  async insertCloudResourceRefs(resources: StoredCloudResourceRef[]): Promise<void> {
+    for (const resource of resources) {
+      await this.sql.query(
+        `INSERT INTO sciforge_collaboration.resource_refs
+         (resource_ref_id,project_id,task_id,execution_id,task_revision,binding_revision,intent_digest,
+          role,ordinal,locator,locator_digest,status,invalidated_at,revision,created_at,updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16)`,
+        [resource.resourceRefId, resource.projectId, resource.taskId, resource.executionId,
+          resource.taskRevision, resource.bindingRevision, resource.intentDigest, resource.role,
+          resource.ordinal, JSON.stringify(resource.locator), resource.locatorDigest, resource.status,
+          resource.invalidatedAt ?? null, resource.revision, resource.createdAt, resource.updatedAt]
+      )
+    }
+  }
+
+  async invalidateCloudResourceRefs(taskId: string, executionId: string, invalidatedAt: string): Promise<number> {
+    const result = await this.sql.query(
+      `UPDATE sciforge_collaboration.resource_refs
+       SET status='invalidated',invalidated_at=$3,revision=revision+1,updated_at=$3
+       WHERE task_id=$1 AND execution_id=$2 AND status='available'`,
+      [taskId, executionId, invalidatedAt]
+    )
+    return result.rowCount ?? 0
+  }
+
+  async invalidateCloudResourceRefsForBinding(
+    projectId: string,
+    bindingRevision: number,
+    invalidatedAt: string
+  ): Promise<number> {
+    const result = await this.sql.query(
+      `UPDATE sciforge_collaboration.resource_refs
+       SET status='invalidated',invalidated_at=$3,revision=revision+1,updated_at=$3
+       WHERE project_id=$1 AND binding_revision=$2 AND status='available'`,
+      [projectId, bindingRevision, invalidatedAt]
+    )
+    return result.rowCount ?? 0
+  }
+
   async insertTask(task: StoredTask): Promise<void> {
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.tasks
-       (task_id,project_id,assignee_agent_id,created_by_agent_id,title,objective,completion_criteria,dependency_task_ids,status,retry_count,
-        max_retries,coordination_round,active_turn_id,result_summary,failure_summary,revision,created_at,updated_at,completed_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+       (task_id,project_id,assignee_agent_id,created_by_agent_id,title,objective,completion_criteria,dependency_task_ids,
+        file_intent,resource_ref_ids,execution_id,execution_assignee_agent_id,execution_task_revision,
+        execution_binding_revision,intent_digest,status,retry_count,max_retries,coordination_round,active_turn_id,
+        result_summary,failure_summary,revision,created_at,updated_at,completed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
       [task.taskId, task.projectId, task.assigneeAgentId, task.createdByAgentId, task.title, task.objective,
-        JSON.stringify(task.completionCriteria), JSON.stringify(task.dependencyTaskIds), task.status, task.retryCount,
-        task.maxRetries, task.coordinationRound, task.activeTurnId ?? null, task.resultSummary ?? null,
-        task.failureSummary ?? null, task.revision, task.createdAt, task.updatedAt, task.completedAt ?? null]
+        JSON.stringify(task.completionCriteria), JSON.stringify(task.dependencyTaskIds),
+        task.fileIntent === null ? null : JSON.stringify(task.fileIntent), JSON.stringify(task.resourceRefIds),
+        task.executionFence.executionId, task.executionFence.assigneeAgentId,
+        task.executionFence.taskRevision, task.executionFence.bindingRevision, task.executionFence.intentDigest,
+        task.status, task.retryCount, task.maxRetries, task.coordinationRound, task.activeTurnId ?? null,
+        task.resultSummary ?? null, task.failureSummary ?? null, task.revision, task.createdAt,
+        task.updatedAt, task.completedAt ?? null]
     )
   }
 
   async updateTask(task: StoredTask, expectedRevision: number): Promise<void> {
     const result = await this.sql.query(
       `UPDATE sciforge_collaboration.tasks
-       SET assignee_agent_id=$2,title=$3,objective=$4,completion_criteria=$5::jsonb,dependency_task_ids=$6::jsonb,status=$7,retry_count=$8,
-           max_retries=$9,coordination_round=$10,active_turn_id=$11,result_summary=$12,failure_summary=$13,revision=$14,updated_at=$15,completed_at=$16
-       WHERE task_id=$1 AND revision=$17`,
+       SET assignee_agent_id=$2,title=$3,objective=$4,completion_criteria=$5::jsonb,dependency_task_ids=$6::jsonb,
+           file_intent=$7::jsonb,resource_ref_ids=$8::jsonb,execution_id=$9,execution_assignee_agent_id=$10,
+           execution_task_revision=$11,execution_binding_revision=$12,intent_digest=$13,status=$14,retry_count=$15,
+           max_retries=$16,coordination_round=$17,active_turn_id=$18,result_summary=$19,failure_summary=$20,
+           revision=$21,updated_at=$22,completed_at=$23
+       WHERE task_id=$1 AND revision=$24`,
       [task.taskId, task.assigneeAgentId, task.title, task.objective, JSON.stringify(task.completionCriteria),
-        JSON.stringify(task.dependencyTaskIds), task.status, task.retryCount, task.maxRetries, task.coordinationRound,
-        task.activeTurnId ?? null, task.resultSummary ?? null, task.failureSummary ?? null, task.revision,
+        JSON.stringify(task.dependencyTaskIds), task.fileIntent === null ? null : JSON.stringify(task.fileIntent),
+        JSON.stringify(task.resourceRefIds), task.executionFence.executionId,
+        task.executionFence.assigneeAgentId, task.executionFence.taskRevision,
+        task.executionFence.bindingRevision, task.executionFence.intentDigest, task.status,
+        task.retryCount, task.maxRetries, task.coordinationRound, task.activeTurnId ?? null,
+        task.resultSummary ?? null, task.failureSummary ?? null, task.revision,
         task.updatedAt, task.completedAt ?? null, expectedRevision]
     )
     expectRevision(result.rowCount)
@@ -1118,10 +1257,56 @@ function mapTask(row: SqlRow): StoredTask {
   return { taskId: string(row, 'task_id'), projectId: string(row, 'project_id'), assigneeAgentId: string(row, 'assignee_agent_id'),
     createdByAgentId: string(row, 'created_by_agent_id'), title: string(row, 'title'), objective: string(row, 'objective'),
     completionCriteria: jsonStrings(row.completion_criteria), dependencyTaskIds: jsonStrings(row.dependency_task_ids),
+    fileIntent: row.file_intent == null ? null : jsonRecord(row.file_intent) as StoredTask['fileIntent'],
+    resourceRefIds: jsonStrings(row.resource_ref_ids),
+    executionFence: {
+      executionId: string(row, 'execution_id'),
+      assigneeAgentId: string(row, 'execution_assignee_agent_id'),
+      taskRevision: number(row.execution_task_revision),
+      bindingRevision: row.execution_binding_revision == null ? null : number(row.execution_binding_revision),
+      intentDigest: string(row, 'intent_digest')
+    },
     status: string(row, 'status') as StoredTask['status'], retryCount: number(row.retry_count), maxRetries: number(row.max_retries),
     coordinationRound: number(row.coordination_round), activeTurnId: optionalString(row, 'active_turn_id'),
     resultSummary: optionalString(row, 'result_summary'), failureSummary: optionalString(row, 'failure_summary'), revision: number(row.revision),
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at), completedAt: optionalIso(row.completed_at) }
+}
+function mapProjectContentSpaceBinding(row: SqlRow): StoredProjectContentSpaceBinding {
+  return {
+    projectId: string(row, 'project_id'),
+    rootLocator: jsonRecord(row.root_locator) as StoredProjectContentSpaceBinding['rootLocator'],
+    rootLocatorDigest: string(row, 'root_locator_digest'),
+    authorization: {
+      proofId: string(row, 'authorization_proof_id'),
+      issuer: string(row, 'authorization_issuer'),
+      proofDigest: string(row, 'authorization_proof_digest'),
+      principal: {
+        authority: string(row, 'principal_authority'),
+        subject: string(row, 'principal_subject'),
+        deviceId: string(row, 'principal_device_id'),
+        identityVersion: number(row.principal_identity_version)
+      },
+      scopes: jsonStrings(row.authorization_scopes) as StoredProjectContentSpaceBinding['authorization']['scopes'],
+      issuedAt: iso(row.authorization_issued_at),
+      expiresAt: iso(row.authorization_expires_at)
+    },
+    status: string(row, 'status') as StoredProjectContentSpaceBinding['status'],
+    revision: number(row.revision),
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at)
+  }
+}
+function mapCloudResourceRef(row: SqlRow): StoredCloudResourceRef {
+  return {
+    resourceRefId: string(row, 'resource_ref_id'), projectId: string(row, 'project_id'),
+    taskId: string(row, 'task_id'), executionId: string(row, 'execution_id'),
+    taskRevision: number(row.task_revision), bindingRevision: number(row.binding_revision),
+    intentDigest: string(row, 'intent_digest'), role: string(row, 'role') as StoredCloudResourceRef['role'],
+    ordinal: number(row.ordinal), locator: jsonRecord(row.locator) as StoredCloudResourceRef['locator'],
+    locatorDigest: string(row, 'locator_digest'), status: string(row, 'status') as StoredCloudResourceRef['status'],
+    invalidatedAt: optionalIso(row.invalidated_at), revision: number(row.revision),
+    createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
+  }
 }
 function mapRecord(row: SqlRow): StoredProjectRecord {
   return { projectRecordId: string(row, 'project_record_id'), projectId: string(row, 'project_id'),
@@ -1220,6 +1405,7 @@ function mapProjectInput(row: SqlRow): StoredProjectInput {
 }
 function mapHumanRequest(row: SqlRow): StoredHumanRequest {
   return { humanRequestId: string(row, 'human_request_id'), projectId: string(row, 'project_id'), taskId: string(row, 'task_id'),
+    executionId: string(row, 'execution_id'),
     targetUserId: string(row, 'target_user_id'), requestedByAgentId: string(row, 'requested_by_agent_id'),
     requiredAssurance: string(row, 'required_assurance') as StoredHumanRequest['requiredAssurance'], prompt: string(row, 'prompt'),
     status: string(row, 'status') as StoredHumanRequest['status'], revision: number(row.revision), expiresAt: iso(row.expires_at),
@@ -1227,7 +1413,8 @@ function mapHumanRequest(row: SqlRow): StoredHumanRequest {
 }
 function mapHumanAnswer(row: SqlRow): StoredHumanAnswer {
   return { humanAnswerId: string(row, 'human_answer_id'), humanRequestId: string(row, 'human_request_id'),
-    projectId: string(row, 'project_id'), taskId: string(row, 'task_id'), requestRevision: number(row.request_revision),
+    projectId: string(row, 'project_id'), taskId: string(row, 'task_id'), executionId: string(row, 'execution_id'),
+    requestRevision: number(row.request_revision),
     answeredByUserId: string(row, 'answered_by_user_id'), answeredFromHumanEndpointId: string(row, 'answered_from_human_endpoint_id'),
     assurance: string(row, 'assurance') as StoredHumanAnswer['assurance'], answer: string(row, 'answer'), revision: number(row.revision),
     answeredAt: iso(row.answered_at), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) }

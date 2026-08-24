@@ -1,8 +1,15 @@
 import { randomBytes } from 'node:crypto'
 import {
+  taskFileIntentSchema,
+  portableContentSpaceLocatorSchema,
+  verifiedContentSpaceAuthorizationSchema,
   providerDirectRecipientSchema,
+  type ContentSpaceAuthorizationProof,
+  type PortableContentSpaceLocator,
   type ProviderDirectRecipient,
-  type ProviderIdentity
+  type ProviderIdentity,
+  type TaskFileIntent,
+  type VerifiedContentSpaceAuthorization
 } from '@sciforge/collaboration-contracts'
 
 import { actorInboxRecipient, authorize, type AgentActor, type AuthContext, type HumanEndpointActor, type UserActor } from './auth.js'
@@ -22,12 +29,14 @@ import type {
   StoredParticipant,
   StoredProjection,
   StoredProject,
+  StoredProjectContentSpaceBinding,
   StoredProjectEndpointBinding,
   StoredProjectInput,
   StoredProjectMember,
   StoredProjectRecord,
   StoredReceipt,
   StoredTask,
+  StoredCloudResourceRef,
   StoredUser,
   StoredHumanRequest,
   StoredHumanAnswer,
@@ -48,6 +57,14 @@ export type CollaborationServiceOptions = {
   inboxRetentionMs?: number
   receiptRetentionMs?: number
   remoteApprovalReference?: () => string
+  verifyContentSpaceAuthorization?: (input: Readonly<{
+    actorUserId: string
+    actorCredentialId: string
+    actorAssurance: 'verified' | 'strong'
+    rootLocator: PortableContentSpaceLocator
+    authorizationProof: ContentSpaceAuthorizationProof
+    now: string
+  }>) => Promise<VerifiedContentSpaceAuthorization>
 }
 
 type CommandResult<T extends Record<string, unknown>> = {
@@ -85,6 +102,7 @@ export class CollaborationService {
   private readonly inboxRetentionMs: number
   private readonly receiptRetentionMs: number
   private readonly remoteApprovalReference: () => string
+  private readonly verifyContentSpaceAuthorization?: CollaborationServiceOptions['verifyContentSpaceAuthorization']
 
   constructor(options: CollaborationServiceOptions) {
     this.repository = options.repository
@@ -94,6 +112,7 @@ export class CollaborationService {
     this.inboxRetentionMs = bounded(options.inboxRetentionMs ?? 30 * 86_400_000, 86_400_000, 90 * 86_400_000)
     this.receiptRetentionMs = bounded(options.receiptRetentionMs ?? 30 * 86_400_000, 86_400_000, 90 * 86_400_000)
     this.remoteApprovalReference = options.remoteApprovalReference ?? issueRemoteApprovalReference
+    this.verifyContentSpaceAuthorization = options.verifyContentSpaceAuthorization
   }
 
   async createRemoteCapabilityApproval(actor: AgentActor, input: {
@@ -996,7 +1015,8 @@ export class CollaborationService {
         if (!project) continue
         const message = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId }, 'task.updated',
           { protocolVersion: '1.0', type: 'task.updated', projectId: project.projectId, taskId: task.taskId,
-            revision: task.revision, status: contractTaskStatus(task.status), safeFailureCode: 'assignee_revoked' }, at)
+            executionId: task.executionFence.executionId, revision: task.revision,
+            status: contractTaskStatus(task.status), safeFailureCode: 'assignee_revoked' }, at)
         notifications.push({ recipient: message.recipient, sequence: message.sequence })
       }
       for (const project of await tx.listActiveProjectsForCoordinator(agent.agentId)) {
@@ -1507,6 +1527,7 @@ export class CollaborationService {
   async createHumanNeeded(actor: AgentActor, input: {
     projectId: string
     taskId: string
+    executionId: string
     expectedTaskRevision: number
     targetUserId: string
     requiredAssurance: 'basic' | 'verified' | 'strong'
@@ -1520,12 +1541,14 @@ export class CollaborationService {
       const project = required(await tx.getProject(input.projectId), 'Project')
       if (task.projectId !== project.projectId) fail('validation_failed', 'The Task belongs to another Project.')
       expectRevision(task.revision, input.expectedTaskRevision)
+      assertCurrentExecution(task, actor.agentId, input.executionId)
       const member = await tx.getProjectMember(project.projectId, input.targetUserId)
       authorize({ actor, operation: 'human_needed', assigneeAgentId: task.assigneeAgentId, projectMember: Boolean(member?.active) })
       if (new Date(input.expiresAt).getTime() <= new Date(at).getTime()) fail('request_expired', 'HumanNeeded expiry must be in the future.')
       if (task.status !== 'in_progress' && task.status !== 'needs_human') fail('invalid_state_transition', 'HumanNeeded requires a running Task.')
       const request: StoredHumanRequest = { humanRequestId: newId('hrq'), projectId: project.projectId,
-        taskId: task.taskId, targetUserId: input.targetUserId, requestedByAgentId: actor.agentId,
+        taskId: task.taskId, executionId: input.executionId,
+        targetUserId: input.targetUserId, requestedByAgentId: actor.agentId,
         requiredAssurance: input.requiredAssurance, prompt: input.prompt, status: 'pending', revision: 1,
         expiresAt: input.expiresAt, createdAt: at, updatedAt: at }
       await tx.insertHumanRequest(request)
@@ -1541,7 +1564,8 @@ export class CollaborationService {
       const notifications = [{ recipient: message.recipient, sequence: message.sequence }]
       const coordinatorMessage = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId }, 'task.updated', {
         protocolVersion: '1.0', type: 'task.updated', projectId: project.projectId, taskId: task.taskId,
-        revision: taskRevision, status: 'needs_human', humanRequestId: request.humanRequestId
+        executionId: task.executionFence.executionId, revision: taskRevision,
+        status: 'needs_human', humanRequestId: request.humanRequestId
       }, at)
       notifications.push({ recipient: coordinatorMessage.recipient, sequence: coordinatorMessage.sequence })
       const [participant, binding] = await Promise.all([
@@ -1592,11 +1616,18 @@ export class CollaborationService {
       }
       expectRevision(request.revision, input.requestRevision)
       if (request.status !== 'pending' || request.expiresAt <= at) fail('request_expired', 'The HumanNeeded request is no longer current.')
+      const task = required(await tx.getTask(request.taskId), 'Task')
+      if (task.executionFence.executionId !== request.executionId ||
+          task.executionFence.assigneeAgentId !== request.requestedByAgentId ||
+          task.assigneeAgentId !== request.requestedByAgentId) {
+        fail('revision_conflict', 'The HumanNeeded request belongs to a stale Task execution.')
+      }
       const existing = await tx.getHumanAnswerForRequest(request.humanRequestId)
       if (existing) return { response: entityResponse('human_answer.created', existing), resourceKind: 'human_answer',
         resourceId: existing.humanAnswerId }
       const answer: StoredHumanAnswer = { humanAnswerId: newId('han'), humanRequestId: request.humanRequestId,
-        projectId: request.projectId, taskId: request.taskId, requestRevision: request.revision,
+        projectId: request.projectId, taskId: request.taskId, executionId: request.executionId,
+        requestRevision: request.revision,
         answeredByUserId: actor.userId, answeredFromHumanEndpointId: actor.humanEndpointId,
         assurance: actor.assurance, answer: input.answer, revision: 1, answeredAt: at, createdAt: at, updatedAt: at }
       await tx.insertHumanAnswer(answer)
@@ -1703,6 +1734,131 @@ export class CollaborationService {
     }).then(responseEntity<StoredProject>)
   }
 
+  async bindProjectContentSpace(actor: UserActor, input: {
+    projectId: string
+    expectedRevision: number
+    rootLocator: PortableContentSpaceLocator
+    authorizationProof: ContentSpaceAuthorizationProof
+    idempotencyKey: string
+  }): Promise<StoredProjectContentSpaceBinding> {
+    const rootLocator = portableContentSpaceLocatorSchema.parse(input.rootLocator)
+    if (rootLocator.kind !== 'content-space.container-reference') {
+      fail('validation_failed', 'A Project ContentSpace root must be a container locator.')
+    }
+    return this.commit(actor, 'project.content_space.bind', input.idempotencyKey, input, async (tx, at) => {
+      if (!this.verifyContentSpaceAuthorization) {
+        fail('resource_offline', 'No trusted E/Host ContentSpace authorization verifier is configured.')
+      }
+      const parsed = verifiedContentSpaceAuthorizationSchema.safeParse(
+        await this.verifyContentSpaceAuthorization({
+          actorUserId: actor.userId,
+          actorCredentialId: actor.credentialId,
+          actorAssurance: actor.assurance,
+          rootLocator,
+          authorizationProof: input.authorizationProof,
+          now: at
+        })
+      )
+      if (!parsed.success) fail('permission_denied', 'The E/Host authorization proof is invalid.')
+      const verified = parsed.data
+      const rootLocatorDigest = stableDigest(rootLocator)
+      if (
+        verified.principalUserId !== actor.userId ||
+        verified.issuer !== input.authorizationProof.issuer ||
+        verified.proofDigest !== stableDigest(input.authorizationProof) ||
+        verified.rootLocatorDigest !== rootLocatorDigest ||
+        verified.expiresAt <= at ||
+        verified.issuedAt > at
+      ) {
+        fail('permission_denied', 'The E/Host authorization proof is not current for this Principal and root.')
+      }
+
+      await tx.lockIdempotency('project-content-space', input.projectId)
+      const project = required(await tx.getProject(input.projectId), 'Project')
+      const member = await tx.getProjectMember(project.projectId, actor.userId)
+      authorize({ actor, operation: 'project_admin', projectRole: member?.role })
+      expectRevision(project.revision, input.expectedRevision)
+      const existing = await tx.getProjectContentSpaceBinding(project.projectId)
+      if (existing?.status === 'active' && await tx.countOpenFileTasks(project.projectId) > 0) {
+        fail('invalid_state_transition', 'An active file Task fences the current Project ContentSpace binding.')
+      }
+      const binding: StoredProjectContentSpaceBinding = {
+        projectId: project.projectId,
+        rootLocator,
+        rootLocatorDigest,
+        authorization: {
+          proofId: verified.proofId,
+          issuer: verified.issuer,
+          proofDigest: verified.proofDigest,
+          principal: verified.principal,
+          scopes: [...verified.scopes],
+          issuedAt: verified.issuedAt,
+          expiresAt: verified.expiresAt
+        },
+        status: 'active',
+        revision: existing ? existing.revision + 1 : 1,
+        createdAt: existing?.createdAt ?? at,
+        updatedAt: at
+      }
+      if (existing) {
+        await tx.invalidateCloudResourceRefsForBinding(project.projectId, existing.revision, at)
+      }
+      await tx.upsertProjectContentSpaceBinding(binding, existing?.revision ?? null)
+      await tx.updateProject({ ...project, revision: project.revision + 1, updatedAt: at }, project.revision)
+      return {
+        response: entityResponse('project.content_space.bound', binding),
+        resourceKind: 'project_content_space_binding',
+        resourceId: project.projectId
+      }
+    }).then(responseEntity<StoredProjectContentSpaceBinding>)
+  }
+
+  async unbindProjectContentSpace(actor: UserActor, input: {
+    projectId: string
+    expectedRevision: number
+    expectedBindingRevision: number
+    idempotencyKey: string
+  }): Promise<StoredProjectContentSpaceBinding> {
+    return this.commit(actor, 'project.content_space.unbind', input.idempotencyKey, input, async (tx, at) => {
+      await tx.lockIdempotency('project-content-space', input.projectId)
+      const project = required(await tx.getProject(input.projectId), 'Project')
+      const member = await tx.getProjectMember(project.projectId, actor.userId)
+      authorize({ actor, operation: 'project_admin', projectRole: member?.role })
+      expectRevision(project.revision, input.expectedRevision)
+      const existing = required(await tx.getProjectContentSpaceBinding(project.projectId), 'Project ContentSpace binding')
+      expectRevision(existing.revision, input.expectedBindingRevision)
+      if (existing.status !== 'active') fail('invalid_state_transition', 'The Project ContentSpace binding is already closed.')
+      if (await tx.countOpenFileTasks(project.projectId) > 0) {
+        fail('invalid_state_transition', 'An active file Task must finish or be cancelled before unbinding.')
+      }
+      const binding: StoredProjectContentSpaceBinding = {
+        ...existing,
+        status: 'closed',
+        revision: existing.revision + 1,
+        updatedAt: at
+      }
+      await tx.invalidateCloudResourceRefsForBinding(project.projectId, existing.revision, at)
+      await tx.upsertProjectContentSpaceBinding(binding, existing.revision)
+      await tx.updateProject({ ...project, revision: project.revision + 1, updatedAt: at }, project.revision)
+      return {
+        response: entityResponse('project.content_space.unbound', binding),
+        resourceKind: 'project_content_space_binding',
+        resourceId: project.projectId
+      }
+    }).then(responseEntity<StoredProjectContentSpaceBinding>)
+  }
+
+  async getProjectContentSpaceBinding(
+    actor: AuthContext,
+    projectId: string
+  ): Promise<StoredProjectContentSpaceBinding> {
+    if (actor.kind === 'system') fail('permission_denied', 'System context cannot read Project bindings.')
+    const project = required(await this.repository.getProject(projectId), 'Project')
+    const member = await this.repository.getProjectMember(project.projectId, actor.userId)
+    authorize({ actor, operation: 'project_read', projectMember: Boolean(member?.active) })
+    return required(await this.repository.getProjectContentSpaceBinding(projectId), 'Project ContentSpace binding')
+  }
+
   async createTask(actor: AgentActor, input: {
     projectId: string
     assigneeAgentId: string
@@ -1710,6 +1866,7 @@ export class CollaborationService {
     objective: string
     completionCriteria: string[]
     dependencyTaskIds: string[]
+    fileIntent?: TaskFileIntent | null
     expectedProjectRevision: number
     idempotencyKey: string
   }): Promise<StoredTask> {
@@ -1719,6 +1876,7 @@ export class CollaborationService {
     const dependencies = uniqueTexts(input.dependencyTaskIds, 1_000, 100)
     return this.commit(actor, 'task.create', input.idempotencyKey, { ...input, completionCriteria: criteria,
       dependencyTaskIds: dependencies }, async (tx, at) => {
+      await tx.lockIdempotency('project-task-create', input.projectId)
       const project = required(await tx.getProject(input.projectId), 'Project')
       if (project.status !== 'active') fail('invalid_state_transition', 'Tasks may only be created for an active Project.')
       authorize({ actor, operation: 'task_create', coordinatorAgentId: project.coordinatorAgentId })
@@ -1737,16 +1895,36 @@ export class CollaborationService {
         const dependency = required(await tx.getTask(dependencyTaskId), 'Dependency Task')
         if (dependency.projectId !== project.projectId) fail('validation_failed', 'Dependencies must belong to the same Project.')
       }
-      const task: StoredTask = { taskId: newId('tsk'), projectId: project.projectId, assigneeAgentId: assignee.agentId,
+      const fileIntent = input.fileIntent == null ? null : taskFileIntentSchema.parse(input.fileIntent)
+      const intentDigest = stableDigest(fileIntent)
+      const taskId = newId('tsk')
+      const executionId = newId('exe')
+      let binding: StoredProjectContentSpaceBinding | null = null
+      if (fileIntent !== null) {
+        binding = required(await tx.getProjectContentSpaceBinding(project.projectId), 'Project ContentSpace binding')
+        if (binding.status !== 'active' || binding.authorization.expiresAt <= at) {
+          fail('permission_denied', 'The Project ContentSpace authorization is inactive or expired.')
+        }
+        expectRevision(binding.revision, fileIntent.bindingRevision)
+      }
+      const resources = fileIntent && binding
+        ? deriveCloudResourceRefs({ taskId, executionId, taskRevision: 1, projectId: project.projectId,
+            fileIntent, binding, intentDigest, at })
+        : []
+      const task: StoredTask = { taskId, projectId: project.projectId, assigneeAgentId: assignee.agentId,
         createdByAgentId: actor.agentId, title: input.title, objective: input.objective, completionCriteria: criteria,
-        dependencyTaskIds: dependencies, status: 'offered', retryCount: 0, maxRetries: project.budgets.maxTaskRetries,
+        dependencyTaskIds: dependencies, fileIntent, resourceRefIds: resources.map((resource) => resource.resourceRefId),
+        executionFence: { executionId, assigneeAgentId: assignee.agentId, taskRevision: 1,
+          bindingRevision: fileIntent?.bindingRevision ?? null, intentDigest },
+        status: 'offered', retryCount: 0, maxRetries: project.budgets.maxTaskRetries,
         coordinationRound: project.coordinationRound, revision: 1, createdAt: at, updatedAt: at }
       await tx.insertTask(task)
+      if (resources.length > 0) await tx.insertCloudResourceRefs(resources)
       const updatedProject: StoredProject = { ...project, revision: project.revision + 1, updatedAt: at }
       await tx.updateProject(updatedProject, project.revision)
       const message = await this.appendInbox(tx, { kind: 'agent', id: assignee.agentId }, 'task.offered',
         { protocolVersion: '1.0', type: 'task.offered', projectId: project.projectId,
-          taskId: task.taskId, revision: task.revision }, at)
+          taskId: task.taskId, executionId, revision: task.revision }, at)
       return { response: entityResponse('task.created', task), resourceKind: 'task', resourceId: task.taskId,
         notifications: [{ recipient: message.recipient, sequence: message.sequence }] }
     }).then(responseEntity<StoredTask>)
@@ -1754,6 +1932,7 @@ export class CollaborationService {
 
   async transitionTask(actor: AgentActor, input: {
     taskId: string
+    executionId: string
     status: 'accepted' | 'rejected' | 'in_progress' | 'needs_human' | 'completed' | 'failed'
     expectedRevision: number
     resultSummary?: string
@@ -1771,6 +1950,7 @@ export class CollaborationService {
       const project = required(await tx.getProject(task.projectId), 'Project')
       authorize({ actor, operation: 'task_update', assigneeAgentId: task.assigneeAgentId })
       expectRevision(task.revision, input.expectedRevision)
+      assertCurrentExecution(task, actor.agentId, input.executionId)
       if (!TASK_TRANSITIONS[task.status].includes(input.status)) {
         fail('invalid_state_transition', `Task cannot transition from ${task.status} to ${input.status}.`)
       }
@@ -1780,10 +1960,14 @@ export class CollaborationService {
         failureSummary: input.failureSummary ?? task.failureSummary, revision: task.revision + 1, updatedAt: at,
         completedAt: ['completed', 'failed', 'rejected'].includes(input.status) ? at : undefined }
       await tx.updateTask(updated, task.revision)
+      if (task.fileIntent !== null && ['completed', 'failed', 'rejected'].includes(input.status)) {
+        await tx.invalidateCloudResourceRefs(task.taskId, task.executionFence.executionId, at)
+      }
       const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
       const coordinatorMessage = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId }, 'task.updated',
         { protocolVersion: '1.0', type: 'task.updated', projectId: project.projectId, taskId: task.taskId,
-          revision: updated.revision, status: contractTaskStatus(updated.status),
+          executionId: task.executionFence.executionId, revision: updated.revision,
+          status: contractTaskStatus(updated.status),
           ...(input.failureSummary ? { safeFailureCode: 'task_failed' } : {}) }, at)
       notifications.push({ recipient: coordinatorMessage.recipient, sequence: coordinatorMessage.sequence })
       return { response: entityResponse('task.updated', updated), resourceKind: 'task', resourceId: task.taskId, notifications }
@@ -1798,9 +1982,18 @@ export class CollaborationService {
     return task
   }
 
+  async getCloudResourceRef(actor: AuthContext, resourceRefId: string): Promise<StoredCloudResourceRef> {
+    if (actor.kind === 'system') fail('permission_denied', 'System context cannot read Cloud ResourceRefs.')
+    const resource = required(await this.repository.getCloudResourceRef(resourceRefId), 'Cloud ResourceRef')
+    const member = await this.repository.getProjectMember(resource.projectId, actor.userId)
+    authorize({ actor, operation: 'project_read', projectMember: Boolean(member?.active) })
+    return resource
+  }
+
   async retryOrReassignTask(actor: AgentActor, input: {
     taskId: string
     assigneeAgentId: string
+    previousExecutionId: string
     expectedRevision: number
     idempotencyKey: string
   }): Promise<StoredTask> {
@@ -1809,18 +2002,41 @@ export class CollaborationService {
       const project = required(await tx.getProject(task.projectId), 'Project')
       authorize({ actor, operation: 'task_create', coordinatorAgentId: project.coordinatorAgentId })
       expectRevision(task.revision, input.expectedRevision)
+      if (task.executionFence.executionId !== input.previousExecutionId) {
+        fail('revision_conflict', 'The previous Task execution is stale.')
+      }
       if (task.status !== 'failed' && task.status !== 'rejected') fail('invalid_state_transition', 'Only rejected or failed tasks may be retried.')
       if (task.retryCount >= project.budgets.maxTaskRetries) fail('budget_exhausted', 'The task automatic retry budget is exhausted.')
       const assignee = required(await tx.getAgent(input.assigneeAgentId), 'Assignee Agent')
       const member = await tx.getProjectMember(project.projectId, assignee.ownerUserId)
       if (assignee.status !== 'active' || !member?.active || member.role === 'observer') fail('permission_denied', 'The assignee is not authorized for this Project.')
+      const nextRevision = task.revision + 1
+      const executionId = newId('exe')
+      const intentDigest = stableDigest(task.fileIntent)
+      if (task.fileIntent !== null) {
+        await tx.invalidateCloudResourceRefs(task.taskId, task.executionFence.executionId, at)
+      }
+      let resources: StoredCloudResourceRef[] = []
+      if (task.fileIntent !== null) {
+        const binding = required(await tx.getProjectContentSpaceBinding(project.projectId), 'Project ContentSpace binding')
+        if (binding.status !== 'active' || binding.revision !== task.fileIntent.bindingRevision ||
+            binding.authorization.expiresAt <= at) {
+          fail('revision_conflict', 'The Task binding is no longer active and authorized.')
+        }
+        resources = deriveCloudResourceRefs({ taskId: task.taskId, executionId,
+          taskRevision: nextRevision, projectId: project.projectId, fileIntent: task.fileIntent,
+          binding, intentDigest, at })
+      }
       const updated: StoredTask = { ...task, assigneeAgentId: assignee.agentId, status: 'offered',
         retryCount: task.retryCount + 1, resultSummary: undefined, failureSummary: undefined,
-        completedAt: undefined, revision: task.revision + 1, updatedAt: at }
+        completedAt: undefined, revision: nextRevision, resourceRefIds: resources.map((resource) => resource.resourceRefId),
+        executionFence: { executionId, assigneeAgentId: assignee.agentId, taskRevision: nextRevision,
+          bindingRevision: task.fileIntent?.bindingRevision ?? null, intentDigest }, updatedAt: at }
+      if (resources.length > 0) await tx.insertCloudResourceRefs(resources)
       await tx.updateTask(updated, task.revision)
       const message = await this.appendInbox(tx, { kind: 'agent', id: assignee.agentId }, 'task.offered',
         { protocolVersion: '1.0', type: 'task.offered', projectId: project.projectId,
-          taskId: task.taskId, revision: updated.revision }, at)
+          taskId: task.taskId, executionId, revision: updated.revision }, at)
       return { response: entityResponse('task.updated', updated), resourceKind: 'task', resourceId: task.taskId,
         notifications: [{ recipient: message.recipient, sequence: message.sequence }] }
     }).then(responseEntity<StoredTask>)
@@ -1828,6 +2044,7 @@ export class CollaborationService {
 
   async cancelTask(actor: AgentActor, input: {
     taskId: string
+    executionId: string
     expectedRevision: number
     idempotencyKey: string
   }): Promise<StoredTask> {
@@ -1836,13 +2053,20 @@ export class CollaborationService {
       const project = required(await tx.getProject(task.projectId), 'Project')
       authorize({ actor, operation: 'task_create', coordinatorAgentId: project.coordinatorAgentId })
       expectRevision(task.revision, input.expectedRevision)
+      if (task.executionFence.executionId !== input.executionId) {
+        fail('revision_conflict', 'The Task execution is stale.')
+      }
       if (['completed', 'cancelled'].includes(task.status)) fail('invalid_state_transition', 'The task is already terminal.')
       const updated: StoredTask = { ...task, status: 'cancelled', completedAt: at,
         revision: task.revision + 1, updatedAt: at }
       await tx.updateTask(updated, task.revision)
+      if (task.fileIntent !== null) {
+        await tx.invalidateCloudResourceRefs(task.taskId, task.executionFence.executionId, at)
+      }
       const message = await this.appendInbox(tx, { kind: 'agent', id: task.assigneeAgentId }, 'task.cancelled',
         { protocolVersion: '1.0', type: 'task.cancelled', projectId: project.projectId,
-          taskId: task.taskId, revision: updated.revision, reason: 'Cancelled by the active Coordinator.' }, at)
+          taskId: task.taskId, executionId: task.executionFence.executionId,
+          revision: updated.revision, reason: 'Cancelled by the active Coordinator.' }, at)
       return { response: entityResponse('task.updated', updated), resourceKind: 'task', resourceId: task.taskId,
         notifications: [{ recipient: message.recipient, sequence: message.sequence }] }
     }).then(responseEntity<StoredTask>)
@@ -2424,6 +2648,74 @@ function expectRevision(current: number, expected: number): void {
   if (current !== expected) fail('revision_conflict', 'The resource revision is stale.', { details: { currentRevision: current } })
 }
 
+function assertCurrentExecution(task: StoredTask, actorAgentId: string, executionId: string): void {
+  if (
+    task.executionFence.executionId !== executionId ||
+    task.executionFence.assigneeAgentId !== actorAgentId ||
+    task.assigneeAgentId !== actorAgentId ||
+    task.executionFence.intentDigest !== stableDigest(task.fileIntent) ||
+    task.executionFence.bindingRevision !== (task.fileIntent?.bindingRevision ?? null)
+  ) {
+    fail('revision_conflict', 'The Task execution fence is stale or inconsistent.')
+  }
+}
+
+function deriveCloudResourceRefs(input: Readonly<{
+  taskId: string
+  executionId: string
+  taskRevision: number
+  projectId: string
+  fileIntent: TaskFileIntent
+  binding: StoredProjectContentSpaceBinding
+  intentDigest: string
+  at: string
+}>): StoredCloudResourceRef[] {
+  if (input.binding.revision !== input.fileIntent.bindingRevision) {
+    fail('revision_conflict', 'The Project ContentSpace binding revision is stale.')
+  }
+  const entries = [
+    ...input.fileIntent.inputs.map((item, ordinal) => ({
+      role: 'input-file' as const,
+      ordinal,
+      locator: item.locator
+    })),
+    {
+      role: 'output-container' as const,
+      ordinal: input.fileIntent.inputs.length,
+      locator: input.binding.rootLocator
+    }
+  ]
+  return entries.map((entry) => {
+    const locatorDigest = stableDigest(entry.locator)
+    const resourceRefId = `rrf_${stableDigest({
+      projectId: input.projectId,
+      taskId: input.taskId,
+      executionId: input.executionId,
+      intentDigest: input.intentDigest,
+      role: entry.role,
+      ordinal: entry.ordinal,
+      locatorDigest
+    }).slice(0, 32)}`
+    return {
+      resourceRefId,
+      projectId: input.projectId,
+      taskId: input.taskId,
+      executionId: input.executionId,
+      taskRevision: input.taskRevision,
+      bindingRevision: input.fileIntent.bindingRevision,
+      intentDigest: input.intentDigest,
+      role: entry.role,
+      ordinal: entry.ordinal,
+      locator: entry.locator,
+      locatorDigest,
+      status: 'available' as const,
+      revision: 1,
+      createdAt: input.at,
+      updatedAt: input.at
+    }
+  })
+}
+
 function completeParticipant(participant: StoredParticipant): StoredParticipant {
   return { ...participant, status: participant.primaryHumanEndpointId && participant.primaryAgentId ? 'complete' : 'incomplete' }
 }
@@ -2498,7 +2790,8 @@ function validateProjectSummary(summary: string): void {
 
 function toHumanNeededEntity(request: StoredHumanRequest): Record<string, unknown> {
   return { schemaVersion: 1, type: 'human_needed', humanRequestId: request.humanRequestId,
-    projectId: request.projectId, taskId: request.taskId, targetUserId: request.targetUserId,
+    projectId: request.projectId, taskId: request.taskId, executionId: request.executionId,
+    targetUserId: request.targetUserId,
     requestedByAgentId: request.requestedByAgentId, requiredAssurance: request.requiredAssurance,
     prompt: request.prompt, status: request.status, expiresAt: request.expiresAt,
     revision: request.revision, createdAt: request.createdAt, updatedAt: request.updatedAt }
@@ -2512,6 +2805,7 @@ function humanNeededProviderText(request: StoredHumanRequest): string {
 function toHumanAnswerEntity(answer: StoredHumanAnswer): Record<string, unknown> {
   return { schemaVersion: 1, type: 'human_answer', humanAnswerId: answer.humanAnswerId,
     humanRequestId: answer.humanRequestId, projectId: answer.projectId, taskId: answer.taskId,
+    executionId: answer.executionId,
     requestRevision: answer.requestRevision, answeredByUserId: answer.answeredByUserId,
     answeredFromHumanEndpointId: answer.answeredFromHumanEndpointId, assurance: answer.assurance,
     answer: answer.answer, answeredAt: answer.answeredAt, revision: answer.revision,
