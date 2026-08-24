@@ -15868,7 +15868,7 @@ Clicks one revision-bound target or one viewport point.
 
 ## `browser-preview.close`
 
-Closes exactly one pane-owned Playwright browser page and profile.
+Closes exactly one pane-owned Web Preview page and profile.
 
 - Version: `1.0.0`
 - Audiences: ui
@@ -16240,7 +16240,7 @@ Creates the canonical Playwright page for a visible SciForge browser panel.
     "playwright",
     "bootstrap"
   ],
-  "title": "Open Playwright browser page"
+  "title": "Open Web Preview page"
 }
 ```
 
@@ -123992,7 +123992,7 @@ Releases an open Workspace Preview session.
 | Anchored Comments | anchoredComments: |  |
 | Artifact Versions |  |  |
 | Biology Room | biologyRoom: |  |
-| Browser Preview | browserPreview: |  |
+| Web Preview | browserPreview: |  |
 | Change Inspector |  |  |
 | Collaboration |  |  |
 | Content Space |  |  |
