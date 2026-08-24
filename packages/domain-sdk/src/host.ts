@@ -853,6 +853,7 @@ export type DomainRendererWorkbenchHost = Readonly<{
   openRightPanel: (input: DomainWorkbenchOpenRightPanelInput) => void
   openBottomPanel?: (input: DomainWorkbenchOpenSurfaceInput) => void
   toggleGlobalOverlay?: (input: DomainWorkbenchToggleGlobalOverlayInput) => void
+  openSettings?: (input: Readonly<{ sectionId: string }>) => boolean
   sendMessage?: (
     input: DomainRendererWorkbenchSendMessageInput
   ) => Promise<DomainRendererWorkbenchSendMessageResult>

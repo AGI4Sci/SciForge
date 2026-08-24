@@ -285,6 +285,9 @@ describe('domain module boundaries', () => {
       )
       if (!installed) expect(runtimeMcpInstallation).not.toContain(`${manifest.packageName}/`)
     }
+    expect(sharedInstallation).not.toContain('@sciforge/domain-content-space-mock-provider')
+    expect(mainInstallation).not.toContain('@sciforge/domain-content-space-mock-provider')
+    expect(rendererInstallation).not.toContain('@sciforge/domain-content-space-mock-provider')
   })
 
   it('keeps migrated domain implementations out of legacy host feature paths', () => {

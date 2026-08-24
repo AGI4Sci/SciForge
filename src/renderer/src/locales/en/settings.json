@@ -439,6 +439,7 @@
   "remoteResourcesTitle": "Remote resources",
   "remoteWorkspaceSettingsTitle": "Remote workspaces",
   "remoteWorkspaceSettingsDesc": "Connect from the workspace selector. SSH targets, VPN environments, host-key policy, and workspace authorization are managed by the Remote SSH panel.",
+  "remoteResourcesOpenTargets": "Open Remote Targets",
   "modelRouterRoleBaseUrl": "Base URL",
   "modelRouterRoleApiKey": "API key",
   "modelRouterRoleModel": "Model name",

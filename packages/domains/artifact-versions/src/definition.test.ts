@@ -36,7 +36,11 @@ test('manifest publishes the artifact history panel through generic renderer con
     {
       location: 'workbench.topbar',
       commandId: ARTIFACT_VERSIONS_RENDERER_COMMAND_CONTRIBUTION.id,
-      label: 'rightPanelArtifactVersions'
+      label: 'rightPanelArtifactVersions',
+      group: {
+        id: 'workbench.history',
+        label: 'workbenchToolGroupHistory'
+      }
     }
   )
   assert.equal(

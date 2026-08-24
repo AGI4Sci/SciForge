@@ -8,6 +8,7 @@ import { WORKSPACE_FILE_PREVIEW_EVENT } from '../lib/workspace-file-preview'
 import {
   DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT,
   DOMAIN_WORKBENCH_OPEN_BOTTOM_PANEL_EVENT,
+  DOMAIN_WORKBENCH_OPEN_SETTINGS_EVENT,
   domainRendererNavigationHost,
   setDomainWorkbenchResourceNavigationProvider
 } from './domain-renderer-navigation'
@@ -21,6 +22,7 @@ describe('domain renderer navigation host', () => {
     const previews: DomainWorkspacePreviewTarget[] = []
     const panels: DomainWorkbenchOpenRightPanelInput[] = []
     let bottomPanel: DomainWorkbenchOpenSurfaceInput | undefined
+    let settingsSection: string | undefined
     targetWindow.addEventListener(WORKSPACE_FILE_PREVIEW_EVENT, (event) => {
       previews.push((event as CustomEvent<DomainWorkspacePreviewTarget>).detail)
     })
@@ -29,6 +31,9 @@ describe('domain renderer navigation host', () => {
     })
     targetWindow.addEventListener(DOMAIN_WORKBENCH_OPEN_BOTTOM_PANEL_EVENT, (event) => {
       bottomPanel = (event as CustomEvent<DomainWorkbenchOpenSurfaceInput>).detail
+    })
+    targetWindow.addEventListener(DOMAIN_WORKBENCH_OPEN_SETTINGS_EVENT, (event) => {
+      settingsSection = (event as CustomEvent<{ sectionId: string }>).detail.sectionId
     })
     const activation = {
       contributionId: 'fixture.panel',
@@ -99,6 +104,9 @@ describe('domain renderer navigation host', () => {
       sessionId: 'session-1',
       activation
     })
+    expect(domainRendererNavigationHost.workbench.openSettings?.({
+      sectionId: ' remoteResources '
+    })).toBe(true)
 
     expect(previews[0]).toMatchObject({
       path: 'paper.pdf',
@@ -136,5 +144,6 @@ describe('domain renderer navigation host', () => {
       sessionId: 'session-1',
       activation
     })
+    expect(settingsSection).toBe('remoteResources')
   })
 })

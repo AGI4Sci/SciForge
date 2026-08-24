@@ -439,6 +439,7 @@
   "remoteResourcesTitle": "远程资源",
   "remoteWorkspaceSettingsTitle": "远程工作区",
   "remoteWorkspaceSettingsDesc": "请从工作区位置选择器发起连接。SSH 目标、VPN 环境、主机密钥策略与工作区授权由 Remote SSH 面板管理。",
+  "remoteResourcesOpenTargets": "打开远程目标",
   "modelRouterRoleBaseUrl": "Base URL",
   "modelRouterRoleApiKey": "API Key",
   "modelRouterRoleModel": "模型名称",

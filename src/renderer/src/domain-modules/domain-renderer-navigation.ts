@@ -20,6 +20,8 @@ export const DOMAIN_WORKBENCH_OPEN_BOTTOM_PANEL_EVENT =
   'sciforge:domain-workbench-open-bottom-panel' as const
 export const DOMAIN_WORKBENCH_TOGGLE_GLOBAL_OVERLAY_EVENT =
   'sciforge:domain-workbench-toggle-global-overlay' as const
+export const DOMAIN_WORKBENCH_OPEN_SETTINGS_EVENT =
+  'sciforge:domain-workbench-open-settings' as const
 
 type DomainWorkbenchMessageSender = (
   input: DomainRendererWorkbenchSendMessageInput
@@ -99,6 +101,15 @@ export const domainRendererNavigationHost: Readonly<{
         DOMAIN_WORKBENCH_TOGGLE_GLOBAL_OVERLAY_EVENT,
         { detail: input }
       ))
+    },
+    openSettings: (input: Readonly<{ sectionId: string }>) => {
+      const sectionId = input.sectionId.trim()
+      if (!sectionId) return false
+      window.dispatchEvent(new CustomEvent<Readonly<{ sectionId: string }>>(
+        DOMAIN_WORKBENCH_OPEN_SETTINGS_EVENT,
+        { detail: { sectionId } }
+      ))
+      return true
     },
     sendMessage: (input: DomainRendererWorkbenchSendMessageInput) =>
       messageSender?.(input) ?? Promise.resolve({

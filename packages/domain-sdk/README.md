@@ -150,7 +150,9 @@ A command declaration ID is its stable command ID. Its runtime value has the exa
 `{ execute, isAvailable?, isActive? }`. Every invocation carries only bounded process-neutral data:
 optional session, runtime and workspace identity, registered session resources, the active surface,
 and an optional JSON payload. Toolbar actions reference a command in their pure manifest contract;
-their runtime value supplies only presentation. This is the sole command execution path.
+their runtime value supplies only presentation. Related actions may declare one namespaced group
+and localized group label so the Host can present a single menu without merging their storage or
+runtime behavior. This is the sole command execution path.
 
 Right panels, bottom panels, and global overlays likewise keep serializable metadata in the
 manifest contribution contract and bind one `{ render }` value in a trusted renderer entrypoint.
@@ -167,7 +169,8 @@ owner. Duplicate resource owners, missing panels, and cross-owner targets fail r
 `canOpenResource` and the boolean `openResource` result let callers omit unavailable navigation;
 callers never name another package's contribution ID or activation schema.
 
-`DomainRendererHost` exposes only generic workbench navigation, bounded message sending,
+`DomainRendererHost` exposes only generic workbench navigation, including optional section-based
+settings navigation, bounded message sending,
 workspace file picking, registered visual-target inspection, and capability invocation. Visual
 inspection never accepts DOM selectors. Redacted targets return a denied inspection without target
 metadata. Successful target and text-selection inspection resolves asynchronously to an opaque,

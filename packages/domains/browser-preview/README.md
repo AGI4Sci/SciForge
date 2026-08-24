@@ -1,4 +1,4 @@
-# Browser Preview domain
+# Web Preview domain
 
 This package owns SciForge's Playwright-backed browser page, its renderer panel,
 and the capability resource exposed to UI and agent callers.

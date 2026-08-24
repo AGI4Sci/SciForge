@@ -39,7 +39,11 @@ describe('Visual Review domain definition', () => {
     expect(VISUAL_REVIEW_RENDERER_TOOLBAR_ACTION_CONTRACT).toEqual({
       location: 'workbench.topbar',
       commandId: 'visual-review.open',
-      label: 'rightPanelVisualReview'
+      label: 'rightPanelVisualReview',
+      group: {
+        id: 'workbench.review',
+        label: 'workbenchToolGroupReview'
+      }
     })
   })
 

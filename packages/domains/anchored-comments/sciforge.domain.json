@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.anchored-comments",
     "displayName": "Anchored Comments",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "hostApi": {
       "minimum": "1.0.0",
       "maximumExclusive": "2.0.0"
@@ -20,7 +20,11 @@
     "anchored-comments.workbench-toolbar-action": {
       "location": "workbench.topbar",
       "commandId": "anchored-comments.toggle-comment-mode",
-      "label": "Comment on anything"
+      "label": "Comment on anything",
+      "group": {
+        "id": "workbench.review",
+        "label": "workbenchToolGroupReview"
+      }
     },
     "anchored-comments.overlay": {
       "location": "workbench.global-overlay",

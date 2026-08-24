@@ -235,7 +235,11 @@ export function isDomainRendererCommandActive(
 export const domainRendererWorkbenchToolbarActionContractSchema = z.object({
   location: z.literal(WORKBENCH_TOPBAR_LOCATION),
   commandId: domainPackageContributionIdSchema,
-  label: z.string().trim().min(1).max(160)
+  label: z.string().trim().min(1).max(160),
+  group: z.object({
+    id: domainPackageContributionIdSchema,
+    label: z.string().trim().min(1).max(160)
+  }).strict().optional()
 }).strict()
 
 export type DomainRendererWorkbenchToolbarActionContract = z.infer<

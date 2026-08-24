@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.evidence-dag",
     "displayName": "Evidence DAG",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "hostApi": {
       "minimum": "1.0.0",
       "maximumExclusive": "2.0.0"
@@ -39,7 +39,11 @@
     "evidence-dag.workbench-toolbar-action": {
       "location": "workbench.topbar",
       "commandId": "evidence-dag.open",
-      "label": "rightPanelEvidenceDag"
+      "label": "rightPanelEvidenceDag",
+      "group": {
+        "id": "workbench.graphs",
+        "label": "workbenchToolGroupGraphs"
+      }
     }
   },
   "entrypoints": [

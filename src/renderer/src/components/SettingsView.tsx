@@ -14,6 +14,8 @@ import {
   type AppSettingsV1
 } from '@shared/app-settings'
 import { rendererRuntimeClient } from '../agent/runtime-client'
+import { domainRendererNavigationHost } from '../domain-modules/domain-renderer-navigation'
+import { installedRendererContributions } from '../domain-modules/installed-renderer-contributions'
 import { applyTheme, applyUiFontScale } from '../lib/apply-theme'
 import { formatWorkspacePickerError } from '../lib/format-workspace-picker-error'
 import {
@@ -67,6 +69,7 @@ export function SettingsView(): ReactElement {
   const setRoute = useChatStore((s) => s.setRoute)
   const settingsReturnRoute = useChatStore((s) => s.settingsReturnRoute)
   const settingsSection = useChatStore((s) => s.settingsSection)
+  const activeThreadId = useChatStore((s) => s.activeThreadId)
   const openCode = useChatStore((s) => s.openCode)
   const openSchedule = useChatStore((s) => s.openSchedule)
   const openInitialSetup = useChatStore((s) => s.openInitialSetup)
@@ -498,6 +501,29 @@ export function SettingsView(): ReactElement {
     update({ workspaceRoot: DEFAULT_WORKSPACE_ROOT })
   }
 
+  const openRemoteTargets = (): void => {
+    const sessionId = activeThreadId?.trim()
+    const contributionId = installedRendererContributions.rightPanels
+      .list()
+      .find((panel) => panel.contribution.resourceKind === 'remote-ssh')
+      ?.id
+    if (!sessionId || !contributionId) return
+    setRoute('chat')
+    window.requestAnimationFrame(() => {
+      domainRendererNavigationHost.workbench.openRightPanel({
+        contributionId,
+        sessionId
+      })
+    })
+  }
+
+  const canOpenRemoteTargets = Boolean(
+    activeThreadId?.trim() &&
+    installedRendererContributions.rightPanels
+      .list()
+      .some((panel) => panel.contribution.resourceKind === 'remote-ssh')
+  )
+
   const selectControlClass =
     'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
 
@@ -540,6 +566,8 @@ export function SettingsView(): ReactElement {
     skillNotice,
     openSkillRoot,
     openPlugins,
+    openRemoteTargets,
+    canOpenRemoteTargets,
     splitSettingsList,
     listSettingsText
   }

@@ -40,7 +40,7 @@ test('publishes Browser Preview metadata in the manifest contract and only rende
   assert.deepEqual(runtime.contract, BROWSER_PREVIEW_RENDERER_RIGHT_PANEL_CONTRACT)
   assert.deepEqual(BROWSER_PREVIEW_RENDERER_RIGHT_PANEL_CONTRACT, {
     location: 'workbench.right-panel',
-    title: 'Playwright browser',
+    title: 'Web Preview',
     resourceKind: 'browser-page'
   })
   assert.deepEqual(Object.keys(panel), ['render'])

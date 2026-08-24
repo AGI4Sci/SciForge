@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.remote-ssh",
     "displayName": "Remote SSH",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "hostApi": {
       "minimum": "1.0.0",
       "maximumExclusive": "2.0.0"

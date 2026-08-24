@@ -45,6 +45,43 @@ export type ContributedRightPanelMode = string & {
 }
 export type RightPanelMode = CoreRightPanelMode | ContributedRightPanelMode | null
 
+type WorkbenchToolbarItem = Readonly<{
+  id: string
+  commandId: string
+  label: string
+  icon: RegisteredWorkbenchToolbarActionContribution['contribution']['icon']
+  active: boolean
+  group?: Readonly<{ id: string; label: string }>
+}>
+
+type WorkbenchToolbarEntry = WorkbenchToolbarItem | Readonly<{
+  id: string
+  label: string
+  items: readonly WorkbenchToolbarItem[]
+}>
+
+export function groupWorkbenchToolbarItems(
+  items: readonly WorkbenchToolbarItem[]
+): readonly WorkbenchToolbarEntry[] {
+  const emittedGroups = new Set<string>()
+  const entries: WorkbenchToolbarEntry[] = []
+  for (const item of items) {
+    if (!item.group) {
+      entries.push(item)
+      continue
+    }
+    if (emittedGroups.has(item.group.id)) continue
+    emittedGroups.add(item.group.id)
+    const groupedItems = items.filter((candidate) => candidate.group?.id === item.group?.id)
+    entries.push({
+      id: item.group.id,
+      label: item.group.label,
+      items: groupedItems
+    })
+  }
+  return entries
+}
+
 export type WorkbenchTopBarProps = {
   focusedRightPanelMode: RightPanelMode
   onToggleFocusedRightPanelMode: (mode: Exclude<RightPanelMode, null>) => void
@@ -102,6 +139,13 @@ export function WorkbenchTopBar({
   const editorMenuButtonRef = useRef<HTMLButtonElement>(null)
   const editorMenuPanelRef = useRef<HTMLDivElement>(null)
   const [editorMenuPosition, setEditorMenuPosition] = useState<{ left: number; top: number; width: number } | null>(null)
+  const toolbarGroupMenuRef = useRef<HTMLDivElement>(null)
+  const [openToolbarGroupId, setOpenToolbarGroupId] = useState<string | null>(null)
+  const [toolbarGroupMenuPosition, setToolbarGroupMenuPosition] = useState<{
+    left: number
+    top: number
+    width: number
+  } | null>(null)
   const toolbarContext: DomainRendererCommandInvocation =
     toolbarCommandInvocation ?? (workspaceRoot ? { workspaceRoot } : {})
   const contributedItems = visibleWorkbenchToolbarActions(
@@ -114,8 +158,15 @@ export function WorkbenchTopBar({
       commandId: contribution.commandId,
       label: t(contribution.label),
       icon: contribution.icon,
-      active: contribution.isActive(toolbarContext)
+      active: contribution.isActive(toolbarContext),
+      ...(contribution.group ? {
+        group: {
+          id: contribution.group.id,
+          label: t(contribution.group.label)
+        }
+      } : {})
     }))
+  const contributedEntries = groupWorkbenchToolbarItems(contributedItems)
   const items = [
     ...(planPanelEnabled ? [{ mode: 'plan' as const, label: t('rightPanelPlan'), icon: ClipboardList }] : []),
     { mode: 'file' as const, label: t('rightPanelFiles'), icon: FolderOpen }
@@ -148,6 +199,27 @@ export function WorkbenchTopBar({
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    if (!openToolbarGroupId) return
+    const closeOnOutsidePointer = (event: PointerEvent): void => {
+      const target = event.target
+      if (!(target instanceof Node) || toolbarGroupMenuRef.current?.contains(target)) return
+      setOpenToolbarGroupId(null)
+      setToolbarGroupMenuPosition(null)
+    }
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      setOpenToolbarGroupId(null)
+      setToolbarGroupMenuPosition(null)
+    }
+    window.addEventListener('pointerdown', closeOnOutsidePointer)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      window.removeEventListener('pointerdown', closeOnOutsidePointer)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [openToolbarGroupId])
 
   const updateEditorMenuPosition = useCallback((): void => {
     const anchor = editorMenuButtonRef.current
@@ -418,6 +490,50 @@ export function WorkbenchTopBar({
       </div>
     ) : null
 
+  const activeToolbarGroup = contributedEntries.find((entry) =>
+    'items' in entry && entry.id === openToolbarGroupId
+  )
+  const toolbarGroupMenu =
+    activeToolbarGroup && 'items' in activeToolbarGroup && toolbarGroupMenuPosition ? (
+      <div
+        ref={toolbarGroupMenuRef}
+        role="menu"
+        aria-label={activeToolbarGroup.label}
+        style={toolbarGroupMenuPosition}
+        className="ds-card-strong fixed z-[1001] overflow-hidden rounded-xl border border-ds-border py-1.5 shadow-[0_18px_52px_rgba(15,23,42,0.18)] backdrop-blur-xl dark:shadow-[0_22px_58px_rgba(0,0,0,0.38)]"
+      >
+        <div className="border-b border-ds-border-muted px-3 pb-2 pt-1.5 text-[11px] font-semibold text-ds-faint">
+          {activeToolbarGroup.label}
+        </div>
+        {activeToolbarGroup.items.map((item) => {
+          const Icon = item.icon
+          return (
+            <button
+              key={item.id}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpenToolbarGroupId(null)
+                setToolbarGroupMenuPosition(null)
+                onExecuteToolbarCommand?.(item.commandId)
+              }}
+              disabled={!onExecuteToolbarCommand}
+              className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] transition ${
+                item.active
+                  ? 'bg-ds-hover text-ds-ink'
+                  : 'text-ds-muted hover:bg-ds-hover/70 hover:text-ds-ink'
+              }`}
+              aria-current={item.active ? 'page' : undefined}
+            >
+              <Icon className="h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">{item.label}</span>
+              {item.active ? <Check className="h-3.5 w-3.5 shrink-0 text-accent" /> : null}
+            </button>
+          )
+        })}
+      </div>
+    ) : null
+
   return (
     <div className="chat-workbench-topbar ds-no-drag -my-1 flex min-w-0 max-w-full flex-nowrap items-center justify-start gap-1 overflow-x-auto px-0.5 py-1">
       {guiUpdateAction ? (
@@ -530,7 +646,51 @@ export function WorkbenchTopBar({
         </button>
       ) : null}
 
-      {contributedItems.map((item) => {
+      {contributedEntries.map((entry) => {
+        if ('items' in entry) {
+          const Icon = entry.items[0]!.icon
+          const active = entry.items.some((item) => item.active)
+          const open = openToolbarGroupId === entry.id
+          return (
+            <button
+              key={entry.id}
+              type="button"
+              onClick={(event) => {
+                if (open) {
+                  setOpenToolbarGroupId(null)
+                  setToolbarGroupMenuPosition(null)
+                  return
+                }
+                const rect = event.currentTarget.getBoundingClientRect()
+                const width = 240
+                setToolbarGroupMenuPosition({
+                  left: Math.min(
+                    Math.max(8, rect.left),
+                    Math.max(8, window.innerWidth - width - 8)
+                  ),
+                  top: rect.bottom + 8,
+                  width
+                })
+                setOpenToolbarGroupId(entry.id)
+              }}
+              disabled={!onExecuteToolbarCommand}
+              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${
+                active || open
+                  ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
+                  : 'border-transparent bg-white/38 text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:hover:bg-white/8'
+              }`}
+              aria-label={entry.label}
+              aria-pressed={active}
+              aria-expanded={open}
+              aria-haspopup="menu"
+              title={entry.label}
+            >
+              <Icon className="h-4 w-4" strokeWidth={1.75} />
+              <ChevronDown className="h-3 w-3 opacity-60" strokeWidth={1.9} />
+            </button>
+          )
+        }
+        const item = entry
         const Icon = item.icon
         return (
           <button
@@ -551,6 +711,10 @@ export function WorkbenchTopBar({
           </button>
         )
       })}
+
+      {typeof document === 'undefined'
+        ? toolbarGroupMenu
+        : createPortal(toolbarGroupMenu, document.body)}
 
       <WorkbenchToolbarCustomizer
         actions={toolbarActions}

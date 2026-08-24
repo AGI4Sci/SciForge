@@ -70,7 +70,11 @@ test('Project DAG definition declares its stable toolbar command reference', () 
     {
       location: 'workbench.topbar',
       commandId: 'project-dag.open',
-      label: 'rightPanelProjectDag'
+      label: 'rightPanelProjectDag',
+      group: {
+        id: 'workbench.graphs',
+        label: 'workbenchToolGroupGraphs'
+      }
     }
   )
 })

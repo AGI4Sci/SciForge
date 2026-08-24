@@ -29,7 +29,11 @@ test('manifest publishes generic right-panel, command, and toolbar contracts', (
     {
       location: 'workbench.topbar',
       commandId: GIT_CHECKPOINTS_RENDERER_COMMAND_CONTRIBUTION.id,
-      label: 'gitCheckpointsToolbar'
+      label: 'gitCheckpointsToolbar',
+      group: {
+        id: 'workbench.history',
+        label: 'workbenchToolGroupHistory'
+      }
     }
   )
   assert.equal(

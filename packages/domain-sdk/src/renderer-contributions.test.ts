@@ -141,13 +141,21 @@ describe('renderer extension contribution contracts', () => {
     const contract = defineDomainRendererWorkbenchToolbarActionContract({
       location: WORKBENCH_TOPBAR_LOCATION,
       commandId: 'fixture.open-panel',
-      label: 'Open Fixture'
+      label: 'Open Fixture',
+      group: {
+        id: 'workbench.review',
+        label: 'Review'
+      }
     })
 
     assert.deepEqual(contract, {
       location: 'workbench.topbar',
       commandId: 'fixture.open-panel',
-      label: 'Open Fixture'
+      label: 'Open Fixture',
+      group: {
+        id: 'workbench.review',
+        label: 'Review'
+      }
     })
     assert.equal(Object.isFrozen(contract), true)
     assert.equal(isDomainRendererWorkbenchToolbarActionValue({ icon: () => null }), true)

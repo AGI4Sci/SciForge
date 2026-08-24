@@ -32,7 +32,7 @@ import type {
 import type { LocalRuntimeInfoJson, LocalRuntimeSkillJson } from '../agent/local-runtime-contract'
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
-import { useChatStore } from '../store/chat-store'
+import { useChatStore, type SettingsRouteSection } from '../store/chat-store'
 import { selectFocusedAgentSurface } from '../store/chat-store-focus-actions'
 import { hasPendingRuntimeWork } from '../store/chat-store-runtime-helpers'
 import { Sidebar } from './chat/Sidebar'
@@ -146,6 +146,7 @@ import { installedRendererContributions } from '../domain-modules/installed-rend
 import {
   DOMAIN_WORKBENCH_OPEN_BOTTOM_PANEL_EVENT,
   DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT,
+  DOMAIN_WORKBENCH_OPEN_SETTINGS_EVENT,
   DOMAIN_WORKBENCH_TOGGLE_GLOBAL_OVERLAY_EVENT,
   setDomainWorkbenchMessageSender
 } from '../domain-modules/domain-renderer-navigation'
@@ -857,6 +858,29 @@ export function Workbench(): ReactElement {
       unsubscribe()
     }
   }, [])
+
+  useEffect(() => {
+    const allowedSections = new Set<SettingsRouteSection>([
+      'general',
+      'speechToText',
+      'agents',
+      'skill',
+      'mcp',
+      'shortcuts',
+      'remoteResources'
+    ])
+    const openDomainSettings = (event: Event): void => {
+      const sectionId = (event as CustomEvent<Readonly<{ sectionId: string }>>)
+        .detail?.sectionId?.trim() as SettingsRouteSection | undefined
+      if (!sectionId || !allowedSections.has(sectionId)) return
+      openSettings(sectionId)
+    }
+    window.addEventListener(DOMAIN_WORKBENCH_OPEN_SETTINGS_EVENT, openDomainSettings)
+    return () => window.removeEventListener(
+      DOMAIN_WORKBENCH_OPEN_SETTINGS_EVENT,
+      openDomainSettings
+    )
+  }, [openSettings])
   const annotationQuestionBridge = useMemo(() => ({
     sideConversations,
     spawnSideConversation,

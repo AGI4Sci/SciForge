@@ -8,8 +8,8 @@
   },
   "module": {
     "id": "sciforge.browser-preview",
-    "displayName": "Browser Preview",
-    "version": "1.0.2",
+    "displayName": "Web Preview",
+    "version": "1.0.3",
     "hostApi": {
       "minimum": "1.0.0",
       "maximumExclusive": "2.0.0"
@@ -19,7 +19,7 @@
   "contributionContracts": {
     "browser-preview.workbench-right-panel": {
       "location": "workbench.right-panel",
-      "title": "Playwright browser",
+      "title": "Web Preview",
       "resourceKind": "browser-page"
     },
     "browser-preview.workbench-toolbar-action": {

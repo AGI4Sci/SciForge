@@ -153,7 +153,9 @@ export function WorkbenchToolbarCustomizer({
                   {label}
                 </span>
                 <span className="block truncate text-[10.5px] text-ds-faint">
-                  {action.ownerId}
+                  {contribution.group
+                    ? `${t(contribution.group.label)} · ${action.ownerId}`
+                    : action.ownerId}
                 </span>
               </span>
               <span className="inline-flex shrink-0 items-center">

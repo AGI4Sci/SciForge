@@ -19,6 +19,7 @@ import {
   Plus,
   RefreshCw,
   Server,
+  Settings2,
   ShieldCheck,
   Square,
   Terminal,
@@ -59,6 +60,7 @@ export type RemoteSshPanelProps = Readonly<{
   onCollapse?: () => void
   openExternal?: (url: string) => void | Promise<void>
   openRemoteSession?: (input: WorkspaceHostOpenRemoteSessionInput) => Promise<void>
+  openRemoteResourcesSettings?: () => void
 }>
 
 export type RemoteSshTargetGroup = Readonly<{
@@ -203,7 +205,8 @@ export function RemoteSshPanel({
   className = '',
   onCollapse,
   openExternal,
-  openRemoteSession
+  openRemoteSession,
+  openRemoteResourcesSettings
 }: RemoteSshPanelProps): ReactElement {
   const { t } = useTranslation('common')
   const normalizedWorkspaceId = workspaceId?.trim() || undefined
@@ -774,6 +777,17 @@ export function RemoteSshPanel({
             {t('remoteSshConfiguredTargets', { count: targets.length })}
           </p>
         </div>
+        {openRemoteResourcesSettings ? (
+          <button
+            type="button"
+            onClick={openRemoteResourcesSettings}
+            className="rounded-md p-1.5 text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            aria-label={t('remoteSshOpenResourcesSettings')}
+            title={t('remoteSshOpenResourcesSettings')}
+          >
+            <Settings2 className="h-4 w-4" strokeWidth={1.8} />
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => void refresh()}

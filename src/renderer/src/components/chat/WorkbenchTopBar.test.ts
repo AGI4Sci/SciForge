@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
 import { installedRendererContributions } from '../../domain-modules/installed-renderer-contributions'
-import { WorkbenchTopBar } from './WorkbenchTopBar'
+import { groupWorkbenchToolbarItems, WorkbenchTopBar } from './WorkbenchTopBar'
 
 describe('WorkbenchTopBar toolbar contributions', () => {
   beforeEach(async () => {
@@ -65,8 +65,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
     expect(html).toContain('Paper Radar')
     expect(html).toContain('aria-pressed="true"')
-    expect(html).toContain('aria-label="Customize feature plugins"')
-    expect(html).toContain('>Configure plugins</span>')
+    expect(html).toContain('aria-label="Customize toolbar favorites"')
+    expect(html).toContain('>Customize toolbar</span>')
   })
 
   it('omits a registered contribution when its generic availability predicate fails', () => {
@@ -93,12 +93,14 @@ describe('WorkbenchTopBar toolbar contributions', () => {
     })
   })
 
-  it('shows Evidence DAG as a right panel item', () => {
+  it('groups installed Review, History, and Graph actions without merging their commands', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       focusedRightPanelMode: 'evidence-dag',
       onToggleFocusedRightPanelMode: vi.fn(),
       toolbarActions: installedRendererContributions.toolbarActions.list(),
       toolbarCommandInvocation: {
+        sessionId: 'thread-1',
+        workspaceRoot: '/workspace/lab',
         activeSurface: {
           kind: 'right-panel',
           contributionId: 'evidence-dag.workbench-right-panel'
@@ -107,26 +109,44 @@ describe('WorkbenchTopBar toolbar contributions', () => {
       onExecuteToolbarCommand: vi.fn()
     }))
 
-    expect(html).toContain('Evidence DAG')
-    expect(html).toContain('aria-pressed="true"')
+    expect(html).toContain('aria-label="Review"')
+    expect(html).toContain('aria-label="History"')
+    expect(html).toContain('aria-label="Graphs"')
+    expect(html).toMatch(
+      /<button(?=[^>]*aria-label="Graphs")(?=[^>]*aria-pressed="true")[^>]*>/
+    )
+    expect(html).not.toContain('aria-label="Evidence DAG"')
+    expect(html).not.toContain('aria-label="Project DAG"')
+    expect(html).not.toContain('aria-label="Comments"')
+    expect(html).not.toContain('aria-label="Visual Review"')
+    expect(html).not.toContain('aria-label="Artifact Versions"')
+    expect(html).not.toContain('aria-label="Git Checkpoints"')
   })
 
-  it('shows Project DAG as a right panel item', () => {
-    const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      focusedRightPanelMode: 'project-dag',
-      onToggleFocusedRightPanelMode: vi.fn(),
-      toolbarActions: installedRendererContributions.toolbarActions.list(),
-      toolbarCommandInvocation: {
-        activeSurface: {
-          kind: 'right-panel',
-          contributionId: 'project-dag.workbench-right-panel'
-        }
-      },
-      onExecuteToolbarCommand: vi.fn()
-    }))
+  it('keeps ungrouped entries independent and preserves declared groups', () => {
+    const icon = (() => null) as never
+    const entries = groupWorkbenchToolbarItems([
+      { id: 'comment', commandId: 'comment.open', label: 'Comment', icon, active: false,
+        group: { id: 'workbench.review', label: 'Review' } },
+      { id: 'files', commandId: 'files.open', label: 'Files', icon, active: false },
+      { id: 'visual', commandId: 'visual.open', label: 'Visual Review', icon, active: true,
+        group: { id: 'workbench.review', label: 'Review' } }
+    ])
 
-    expect(html).toContain('Project DAG')
-    expect(html).toContain('aria-pressed="true"')
+    expect(entries).toHaveLength(2)
+    expect(entries[0]).toMatchObject({ id: 'workbench.review', label: 'Review' })
+    expect('items' in entries[0]!).toBe(true)
+    expect(entries[1]).toMatchObject({ id: 'files', label: 'Files' })
+
+    const singleGroupedEntry = groupWorkbenchToolbarItems([
+      { id: 'comment', commandId: 'comment.open', label: 'Comment', icon, active: false,
+        group: { id: 'workbench.review', label: 'Review' } }
+    ])
+    expect(singleGroupedEntry[0]).toMatchObject({
+      id: 'workbench.review',
+      label: 'Review'
+    })
+    expect('items' in singleGroupedEntry[0]!).toBe(true)
   })
 
   it('shows Create Loop only through its registered toolbar contribution', () => {

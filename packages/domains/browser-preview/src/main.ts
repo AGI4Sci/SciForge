@@ -111,7 +111,7 @@ export type BrowserCapabilityFactory<CapabilityDefinition = unknown> = Readonly<
   moduleId: typeof BROWSER_PREVIEW_DOMAIN_MODULE_ID
   policy: Readonly<{
     id: 'browser-preview'
-    title: 'Browser Preview'
+    title: 'Web Preview'
     directTransportPrefixes: readonly ['browserPreview:']
     allowedDirectTransports: readonly []
   }>
@@ -275,7 +275,7 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
     moduleId: BROWSER_PREVIEW_DOMAIN_MODULE_ID,
     policy: Object.freeze({
       id: 'browser-preview' as const,
-      title: 'Browser Preview' as const,
+      title: 'Web Preview' as const,
       directTransportPrefixes: Object.freeze(['browserPreview:']) as readonly ['browserPreview:'],
       allowedDirectTransports: Object.freeze([]) as readonly []
     }),
@@ -283,7 +283,7 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
       options.defineCapability({
         id: BROWSER_PREVIEW_CAPABILITY_IDS.open,
         version: '1.0.0',
-        title: 'Open Playwright browser page',
+        title: 'Open Web Preview page',
         description: 'Creates the canonical Playwright page for a visible SciForge browser panel.',
         audiences: ['ui'],
         scope: 'global',
@@ -329,7 +329,7 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
       options.defineCapability(resourceCapability({
         id: BROWSER_PREVIEW_CAPABILITY_IDS.close,
         title: 'Close browser page',
-        description: 'Closes exactly one pane-owned Playwright browser page and profile.',
+        description: 'Closes exactly one pane-owned Web Preview page and profile.',
         effect: 'external-write',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'required' },

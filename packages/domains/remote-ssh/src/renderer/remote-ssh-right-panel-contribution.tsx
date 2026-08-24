@@ -57,6 +57,9 @@ export function createRemoteSshRightPanelContribution(
         onCollapse={onCollapse}
         openExternal={host.openExternal}
         openRemoteSession={host.workspace?.openRemoteSession}
+        openRemoteResourcesSettings={() => {
+          host.workbench?.openSettings?.({ sectionId: 'remoteResources' })
+        }}
       />
     )
   })
