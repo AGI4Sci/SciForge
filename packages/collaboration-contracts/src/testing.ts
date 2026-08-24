@@ -54,6 +54,7 @@ export const TEST_IDS = Object.freeze({
   requestId: 'req_Reque0000001',
   localItemId: 'lit_Local0000001',
   turnId: 'trn_Turn00000001',
+  deviceId: 'dev_Device000001',
   installationId: 'ins_Insta0000001'
 })
 
@@ -119,6 +120,7 @@ export const agentNodeFixture = agentNodeSchema.parse({
   schemaVersion: 1,
   type: 'agent_node',
   agentId: TEST_IDS.agentId,
+  deviceId: TEST_IDS.deviceId,
   ownerUserId: TEST_IDS.userId,
   installationId: TEST_IDS.installationId,
   displayName: '实验室桌面机',
@@ -260,6 +262,7 @@ export const humanNeededFixture = humanNeededSchema.parse({
   requestedByAgentId: TEST_IDS.agentId,
   requiredAssurance: 'verified',
   prompt: '是否继续处理异常样本？',
+  confirmableAction: null,
   status: 'pending',
   expiresAt: TEST_LATER_TIMESTAMP,
   revision: 1,
@@ -278,8 +281,11 @@ export const humanAnswerFixture = humanAnswerSchema.parse({
   requestRevision: 1,
   answeredByUserId: TEST_IDS.userId,
   answeredFromHumanEndpointId: TEST_IDS.humanEndpointId,
+  answeredFromOidcIdentityId: null,
   assurance: 'verified',
   answer: '继续，但请保留原始结果。',
+  decision: null,
+  confirmationId: null,
   answeredAt: TEST_LATER_TIMESTAMP,
   revision: 1,
   createdAt: TEST_TIMESTAMP,

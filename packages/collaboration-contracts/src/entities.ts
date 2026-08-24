@@ -3,7 +3,9 @@ import {
   agentIdSchema,
   assuranceLevelSchema,
   challengeIdSchema,
+  confirmationIdSchema,
   credentialVersionSchema,
+  deviceIdSchema,
   displayNameSchema,
   entityMetadataShape,
   executionIdSchema,
@@ -14,6 +16,7 @@ import {
   localItemIdSchema,
   managedContainerIdSchema,
   nonEmptyTextSchema,
+  oidcIdentityIdSchema,
   participantIdSchema,
   projectIdSchema,
   projectEndpointBindingIdSchema,
@@ -140,8 +143,9 @@ export const agentNodeSchema = z.object({
   ...entityMetadataShape,
   type: z.literal('agent_node'),
   agentId: agentIdSchema,
+  deviceId: deviceIdSchema.nullable().optional(),
   ownerUserId: userIdSchema,
-  installationId: installationIdSchema,
+  installationId: installationIdSchema.optional(),
   displayName: displayNameSchema,
   nodeType: agentNodeTypeSchema,
   capabilities: z.array(agentCapabilitySchema).max(256).refine(uniqueStrings, 'Capabilities must be unique'),
@@ -389,6 +393,14 @@ export const projectRecordSchema = z.object({
 export type ProjectRecord = z.infer<typeof projectRecordSchema>
 
 export const humanNeededStatusSchema = z.enum(['pending', 'answered', 'expired', 'cancelled'])
+export const confirmableHumanActionSchema = z.object({
+  actionType: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u),
+  safeSummary: z.string().trim().min(1).max(500),
+  effect: z.enum(['workspace-write', 'external-write', 'destructive']),
+  actionDigest: z.string().regex(/^[a-f0-9]{64}$/u)
+}).strict()
+export type ConfirmableHumanAction = z.infer<typeof confirmableHumanActionSchema>
+
 export const humanNeededSchema = z.object({
   ...entityMetadataShape,
   type: z.literal('human_needed'),
@@ -400,6 +412,7 @@ export const humanNeededSchema = z.object({
   requestedByAgentId: agentIdSchema,
   requiredAssurance: assuranceLevelSchema,
   prompt: nonEmptyTextSchema,
+  confirmableAction: confirmableHumanActionSchema.nullable(),
   status: humanNeededStatusSchema,
   expiresAt: timestampSchema
 }).strict()
@@ -415,11 +428,21 @@ export const humanAnswerSchema = z.object({
   executionId: executionIdSchema,
   requestRevision: revisionSchema,
   answeredByUserId: userIdSchema,
-  answeredFromHumanEndpointId: humanEndpointIdSchema,
+  answeredFromHumanEndpointId: humanEndpointIdSchema.nullable(),
+  answeredFromOidcIdentityId: oidcIdentityIdSchema.nullable(),
   assurance: assuranceLevelSchema,
   answer: nonEmptyTextSchema,
+  decision: z.enum(['approve', 'reject']).nullable(),
+  confirmationId: confirmationIdSchema.nullable(),
   answeredAt: timestampSchema
-}).strict()
+}).strict().superRefine((answer, context) => {
+  if ((answer.answeredFromHumanEndpointId === null) === (answer.answeredFromOidcIdentityId === null)) {
+    context.addIssue({ code: 'custom', path: ['answeredFromOidcIdentityId'], message: 'Exactly one HumanAnswer source is required' })
+  }
+  if ((answer.decision === null) !== (answer.confirmationId === null)) {
+    context.addIssue({ code: 'custom', path: ['confirmationId'], message: 'A confirmable decision requires a confirmation ID' })
+  }
+})
 export type HumanAnswer = z.infer<typeof humanAnswerSchema>
 
 export const orderedProjectionItemSchema = z.object({

@@ -7,6 +7,7 @@ import {
   humanEndpointIdSchema,
   idempotencyKeySchema,
   installationIdSchema,
+  oidcIdentityIdSchema,
   protocolEnvelopeShape,
   protocolVersionSchema,
   requestIdSchema,
@@ -45,7 +46,6 @@ function isBase64UrlBytes(value: string, expectedBytes: number | { min: number }
     : decodedLength >= expectedBytes.min
 }
 
-export const oidcIdentityIdSchema = opaqueId('oid')
 export const deviceEnrollmentIdSchema = opaqueId('enr')
 export const externalIdentityIdSchema = opaqueId('xid')
 export type OidcIdentityId = z.infer<typeof oidcIdentityIdSchema>

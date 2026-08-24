@@ -13,11 +13,16 @@ import {
   timestampSchema
 } from './core.js'
 
+const containsControlCharacter = (value: string): boolean => [...value].some((character) => {
+  const codePoint = character.codePointAt(0)!
+  return codePoint <= 0x1f || codePoint === 0x7f
+})
+
 const canonicalOpaqueSchema = (maximum: number) => z.string()
   .min(1)
   .max(maximum)
   .refine((value) => value === value.trim(), 'Opaque values must be canonical.')
-  .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value), 'Opaque values cannot contain control characters.')
+  .refine((value) => !containsControlCharacter(value), 'Opaque values cannot contain control characters.')
 
 const utf8Length = (value: string): number => new TextEncoder().encode(value).byteLength
 
@@ -70,6 +75,7 @@ export const verifiedContentSpaceAuthorizationSchema = z.object({
   proofId: contentSpaceAuthorizationProofIdSchema,
   issuer: canonicalOpaqueSchema(128).regex(/^[a-z][a-z0-9._-]{2,127}$/u),
   proofDigest: sha256Schema,
+  actorPrincipalDigest: sha256Schema,
   principal: contentSpacePrincipalBindingSchema,
   principalUserId: canonicalOpaqueSchema(128),
   rootLocatorDigest: sha256Schema,
@@ -101,6 +107,7 @@ export const projectContentSpaceBindingSchema = z.object({
     proofId: contentSpaceAuthorizationProofIdSchema,
     issuer: canonicalOpaqueSchema(128),
     proofDigest: sha256Schema,
+    actorPrincipalDigest: sha256Schema,
     principal: contentSpacePrincipalBindingSchema,
     scopes: z.tuple([
       z.literal('content-space.read'),
@@ -115,7 +122,8 @@ export type ProjectContentSpaceBinding = z.infer<typeof projectContentSpaceBindi
 
 export const taskFileDestinationNameSchema = z.string().trim().min(1).max(128)
   .refine((value) => value !== '.' && value !== '..', 'Destination names cannot be traversal segments.')
-  .refine((value) => !/[\\/\u0000-\u001f\u007f]/u.test(value), 'Destination names must be one safe path component.')
+  .refine((value) => !value.includes('/') && !value.includes('\\') && !containsControlCharacter(value),
+    'Destination names must be one safe path component.')
 
 export const taskFileInputIntentSchema = z.object({
   kind: z.literal('content-space.input-file'),

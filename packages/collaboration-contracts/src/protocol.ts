@@ -3,8 +3,10 @@ import {
   agentIdSchema,
   assuranceLevelSchema,
   challengeIdSchema,
+  deviceIdSchema,
   humanEndpointIdSchema,
   idempotencyKeySchema,
+  installationIdSchema,
   inboxMessageIdSchema,
   localItemIdSchema,
   managedContainerIdSchema,
@@ -39,6 +41,7 @@ import {
   humanAnswerSchema,
   humanEndpointBindingSchema,
   humanNeededSchema,
+  confirmableHumanActionSchema,
   managedProviderContainerSchema,
   localSessionProjectionBindingSchema,
   orderedProjectionItemSchema,
@@ -440,7 +443,13 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...writeCommandShape, type: z.literal('endpoint.bind'), userId: userIdSchema, challengeId: z.string().regex(/^chl_[A-Za-z0-9]{12,64}$/u), challengeResponse: z.string().min(8).max(512) }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('endpoint.transition'), humanEndpointId: humanEndpointIdSchema, expectedRevision: revisionSchema, status: z.enum(['active', 'suspended', 'revoked']) }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('endpoint.transfer'), humanEndpointId: humanEndpointIdSchema, targetUserId: userIdSchema, expectedRevision: revisionSchema }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('agent.register'), ownerUserId: userIdSchema, installationId: z.string().regex(/^ins_[A-Za-z0-9]{12,64}$/u), displayName: z.string().trim().min(1).max(200), nodeType: z.enum(['desktop', 'server']), capabilities: z.array(z.string().regex(/^[a-z][a-z0-9_.-]{0,127}$/u)).max(256) }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('agent.register'), deviceId: deviceIdSchema.optional(), ownerUserId: userIdSchema.optional(), installationId: installationIdSchema.optional(), displayName: z.string().trim().min(1).max(200), nodeType: z.enum(['desktop', 'server']), capabilities: z.array(z.string().regex(/^[a-z][a-z0-9_.-]{0,127}$/u)).max(256) }).strict().superRefine((command, context) => {
+    const deviceRegistration = command.deviceId !== undefined && command.installationId === undefined
+    const legacyRegistration = command.deviceId === undefined && command.installationId !== undefined && command.ownerUserId !== undefined
+    if (!deviceRegistration && !legacyRegistration) {
+      context.addIssue({ code: 'custom', message: 'Agent registration requires either one Device ID or the complete legacy installation identity.' })
+    }
+  }),
   z.object({ ...writeCommandShape, type: z.literal('agent.heartbeat'), agentId: agentIdSchema, expectedRevision: revisionSchema, connectionStatus: z.enum(['online', 'offline']), capabilities: z.array(z.string().regex(/^[a-z][a-z0-9_.-]{0,127}$/u)).max(256) }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('agent.rotate_credential'), agentId: agentIdSchema, expectedRevision: revisionSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('agent.owner.transfer'), agentId: agentIdSchema, targetUserId: userIdSchema, expectedRevision: revisionSchema }).strict(),
@@ -480,8 +489,8 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...writeCommandShape, type: z.literal('project_record.accept'), projectRecordId: projectRecordIdSchema, expectedRevision: revisionSchema, decision: z.enum(['accepted', 'rejected']) }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('inbox.pull'), recipientType: z.enum(['user', 'agent']), afterSequence: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), limit: z.number().int().min(1).max(1_000) }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('inbox.ack'), inboxMessageId: inboxMessageIdSchema, sequence: sequenceSchema }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('human.answer'), humanRequestId: z.string().regex(/^hrq_[A-Za-z0-9]{12,64}$/u), requestRevision: revisionSchema, answer: nonEmptyTextSchema }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('human.needed.create'), projectId: projectIdSchema, taskId: taskIdSchema, executionId: executionIdSchema, expectedTaskRevision: revisionSchema, targetUserId: userIdSchema, requiredAssurance: assuranceLevelSchema, prompt: nonEmptyTextSchema, expiresAt: timestampSchema }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('human.answer'), humanRequestId: z.string().regex(/^hrq_[A-Za-z0-9]{12,64}$/u), requestRevision: revisionSchema, answer: nonEmptyTextSchema, decision: z.enum(['approve', 'reject']).optional() }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('human.needed.create'), projectId: projectIdSchema, taskId: taskIdSchema, executionId: executionIdSchema, expectedTaskRevision: revisionSchema, targetUserId: userIdSchema, requiredAssurance: assuranceLevelSchema, prompt: nonEmptyTextSchema, confirmableAction: confirmableHumanActionSchema.nullable().optional(), expiresAt: timestampSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('receipt.get'), receiptId: receiptIdSchema }).strict()
 ])
 export type RestRequest = z.infer<typeof restRequestSchema>

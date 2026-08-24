@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   agentNodeSchema,
+  humanAnswerSchema,
   humanEndpointBindingSchema,
+  humanNeededSchema,
   participantProfileSchema,
   projectRecordSchema,
   projectSchema,
@@ -17,6 +19,8 @@ import {
   chineseProviderLocatorFixture,
   collaborationFixtures,
   humanEndpointBindingFixture,
+  humanAnswerFixture,
+  humanNeededFixture,
   invalidTestOnlyValue,
   participantProfileFixture,
   projectFixture,
@@ -65,6 +69,44 @@ describe('strict collaboration entities', () => {
 })
 
 describe('identity and ownership invariants', () => {
+  it('requires exactly one HumanAnswer provenance source and couples decisions to confirmations', () => {
+    expect(humanAnswerSchema.safeParse({
+      ...humanAnswerFixture,
+      answeredFromOidcIdentityId: 'oid_TargetIdentity01',
+      answeredFromHumanEndpointId: null
+    }).success).toBe(true)
+    expect(humanAnswerSchema.safeParse({
+      ...humanAnswerFixture,
+      answeredFromOidcIdentityId: 'oid_TargetIdentity01'
+    }).success).toBe(false)
+    expect(humanAnswerSchema.safeParse({
+      ...humanAnswerFixture,
+      decision: 'approve'
+    }).success).toBe(false)
+    expect(humanAnswerSchema.safeParse({
+      ...humanAnswerFixture,
+      decision: 'approve',
+      confirmationId: 'cfm_Approval000001'
+    }).success).toBe(true)
+  })
+
+  it('carries only a bounded digest-based confirmable action in HumanNeeded', () => {
+    expect(humanNeededSchema.safeParse({
+      ...humanNeededFixture,
+      confirmableAction: {
+        actionType: 'workspace.delete_file', safeSummary: 'Delete generated output.',
+        effect: 'destructive', actionDigest: 'a'.repeat(64)
+      }
+    }).success).toBe(true)
+    expect(humanNeededSchema.safeParse({
+      ...humanNeededFixture,
+      confirmableAction: {
+        actionType: 'workspace.delete_file', safeSummary: 'Delete generated output.',
+        effect: 'destructive', actionDigest: 'a'.repeat(64), command: 'rm -rf /'
+      }
+    }).success).toBe(false)
+  })
+
   it('requires revoked endpoint and Agent timestamps and forces revoked Agents offline', () => {
     expect(humanEndpointBindingSchema.safeParse({
       ...humanEndpointBindingFixture,

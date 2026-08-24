@@ -125,6 +125,7 @@ describe('Project ContentSpace and Task file I/O contracts', () => {
         proofId: 'csp_Proof00000001',
         issuer: 'sciforge.host',
         proofDigest: TEST_HASH,
+        actorPrincipalDigest: TEST_HASH,
         principal: {
           authority: 'sciforge.identity',
           subject: TEST_IDS.userId,
