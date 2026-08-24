@@ -1,0 +1,43 @@
+{
+  "name": "@sciforge/domain-project-coordinator",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "description": "Project planning, Worker selection, Task review, and content provisioning HCI for SciForge collaboration.",
+  "exports": {
+    "./contract": "./src/contract.ts",
+    "./definition": "./src/definition.ts",
+    "./main": "./src/main.ts",
+    "./ports": "./src/ports.ts",
+    "./renderer": "./src/renderer/index.tsx"
+  },
+  "files": [
+    "src",
+    "sciforge.domain.json",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@sciforge/collaboration-contracts": "1.0.0",
+    "@sciforge/domain-collaboration": "^2.0.0",
+    "@sciforge/domain-identity-access": "^2.0.0",
+    "@sciforge/domain-sdk": "^0.3.0",
+    "lucide-react": "^0.544.0",
+    "react": "^19.0.0",
+    "react-i18next": "^15.7.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.8.2"
+  }
+}

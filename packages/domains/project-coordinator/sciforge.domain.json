@@ -1,0 +1,70 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-project-coordinator",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.project-coordinator",
+    "displayName": "Project Coordinator",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.5.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 73
+  },
+  "contributionContracts": {
+    "project-coordinator.workbench-right-panel": {
+      "location": "workbench.right-panel",
+      "title": "projectCoordinatorTitle",
+      "resourceKind": "project-coordination"
+    },
+    "project-coordinator.workbench-toolbar-action": {
+      "location": "workbench.topbar",
+      "commandId": "project-coordinator.open",
+      "label": "projectCoordinatorToolbar"
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+          "kind": "main.capability-factory",
+          "id": "project-coordinator.capabilities",
+          "priority": 73
+        }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        {
+          "kind": "renderer.workbench-right-panel",
+          "id": "project-coordinator.workbench-right-panel",
+          "priority": 73
+        },
+        {
+          "kind": "renderer.command",
+          "id": "project-coordinator.open",
+          "priority": 73
+        },
+        {
+          "kind": "renderer.workbench-toolbar-action",
+          "id": "project-coordinator.workbench-toolbar-action",
+          "priority": 73
+        },
+        {
+          "kind": "renderer.i18n-resource",
+          "id": "project-coordinator.translations",
+          "priority": 73
+        }
+      ]
+    }
+  ]
+}
