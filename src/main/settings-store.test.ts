@@ -555,6 +555,30 @@ describe('JsonSettingsStore', () => {
     expect(await readFile(currentSettingsPath, 'utf8')).not.toContain('sk-legacy-provider')
   })
 
+  it('does not import settings from a sibling standard directory for a custom profile', async () => {
+    const supportRoot = await mkdtemp(join(tmpdir(), 'sciforge-settings-custom-profile-'))
+    const standardUserDataDir = join(supportRoot, 'SciForge')
+    const customUserDataDir = join(supportRoot, 'isolated-worker-profile')
+
+    await mkdir(standardUserDataDir, { recursive: true })
+    await writeFile(
+      join(standardUserDataDir, 'sciforge-settings.json'),
+      JSON.stringify({
+        version: 1,
+        locale: 'zh',
+        installationId: 'standard-profile-installation'
+      }),
+      'utf8'
+    )
+
+    const loaded = await new JsonSettingsStore(customUserDataDir).load()
+
+    expect(loaded.locale).toBe('en')
+    expect(loaded.installationId).not.toBe('standard-profile-installation')
+    expect(await readFile(join(customUserDataDir, 'sciforge-settings.json'), 'utf8'))
+      .not.toContain('standard-profile-installation')
+  })
+
   it('creates the configured code workspace on load', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
     const workspaceRoot = join(userDataDir, 'missing-workspace')

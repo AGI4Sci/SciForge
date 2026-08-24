@@ -249,7 +249,7 @@ export function ImageWorkspaceViewer({
   const resolvedModel = useMemo(() => model ?? buildImageWorkspaceViewerModel({
     observation,
     asset: resolvedAsset
-  }), [asset, model, observation, resolvedAsset, transport?.descriptor])
+  }), [model, observation, resolvedAsset])
   const [loadedPreviewState, setLoadedPreviewState] = useState<ImageWorkspaceViewerPreviewState>(() =>
     initialImagePreviewState({
       model: resolvedModel,
