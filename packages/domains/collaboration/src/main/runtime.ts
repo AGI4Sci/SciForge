@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   restRequestSchema,
   type AgentInboxMessage,
@@ -9,10 +9,9 @@ import {
   type RestResponse,
   type Task
 } from '@sciforge/collaboration-contracts'
-import type {
-  DomainMainPackageSecretStoreHost,
-  DomainMainPackageSettingsHost
-} from '@sciforge/domain-sdk/package-storage'
+import type { AuthenticatedCloudTransport } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
+import type { AgentCloudRuntime } from '@sciforge/domain-identity-access/agent-cloud-runtime'
+import type { DomainMainPackageSettingsHost } from '@sciforge/domain-sdk/package-storage'
 import type {
   DomainAgentTranscriptMessageEvent,
   DomainMainRuntimeDisposer,
@@ -31,18 +30,17 @@ import type {
   CollaborationStatusSnapshot,
   CollaborationSynchronizationRetryInput,
   CollaborationTaskListInput,
+  CollaborationTaskOfferDecisionInput,
   CollaborationTaskView,
+  CollaborationWorkerAcceptanceUpdateInput,
   CollaborationProjectionView
 } from '../contract.js'
 import {
-  CollaborationConnection,
-  type CollaborationInboxHandler
-} from './connection.js'
-import {
-  HttpCollaborationCloudClient,
-  collaborationRequestId,
-  type CollaborationCloudClient
-} from './cloud-client.js'
+  coordinatorCloudCommandSchema,
+  type CoordinatorCloudCommand
+} from '../coordinator-cloud-command.js'
+import { CollaborationConnection, type CollaborationInboxHandler } from './connection.js'
+import { collaborationRequestId } from './request-id.js'
 import { DurableCloudOutbox } from './outbox.js'
 import {
   ProjectionCoordinator,
@@ -54,6 +52,7 @@ import {
   CollaborationLocalStore,
   FileCollaborationStateBackend,
   type CollaborationLocalProjection,
+  type CollaborationTaskRun,
   type CollaborationStateBackend
 } from './store.js'
 import { CollaborationTaskAdapter } from './task-adapter.js'
@@ -61,9 +60,9 @@ import { CollaborationTaskAdapter } from './task-adapter.js'
 export type CollaborationRuntimeOptions = Readonly<{
   statePath: string
   packageSettings: DomainMainPackageSettingsHost
-  packageSecrets: DomainMainPackageSecretStoreHost
+  authenticatedCloudTransport: AuthenticatedCloudTransport
+  agentCloudRuntime: AgentCloudRuntime
   stateBackend?: CollaborationStateBackend
-  createCloudClient?: (baseUrl: string) => CollaborationCloudClient
   sanitizeText?: (value: string) => string
   now?: () => Date
 }>
@@ -101,18 +100,11 @@ export class CollaborationRuntime {
     await this.store.open()
     this.context = context
     this.active = true
-    const configured = await this.settings.read()
-    if (configured.settings) {
-      this.localAgentIdentity = this.store.snapshot().agents.find((agent) => (
-        agent.installationId === configured.settings!.installationId
-      ))?.agentId
-    }
-
     let connection!: CollaborationConnection
     const outbox = new DurableCloudOutbox({
       store: this.store,
-      packageSecrets: this.options.packageSecrets,
-      cloudClient: () => connection.cloudClient(),
+      agentCloudRuntime: this.options.agentCloudRuntime,
+      localAgentId: () => this.localAgentIdentity,
       sanitizeText: this.options.sanitizeText,
       now: this.options.now
     })
@@ -149,12 +141,18 @@ export class CollaborationRuntime {
         if (
           message.payload.type === 'task.offered' ||
           message.payload.type === 'task.cancelled' ||
-          message.payload.type === 'task.updated'
+          message.payload.type === 'task.updated' ||
+          message.payload.type === 'human.answer.received' ||
+          message.payload.type === 'collaboration.state.changed'
         ) {
           await tasks.handleInbox(message)
           return
         }
         if (message.payload.type === 'agent.revoked') {
+          await tasks.fenceLocalAgent(
+            message.payload.agentId,
+            'Cloud revoked this Agent; all local executions were fenced.'
+          )
           await connection.acceptAgentRevocation(message.payload.agentId, message.createdAt)
           this.localAgentIdentity = undefined
           return
@@ -172,12 +170,11 @@ export class CollaborationRuntime {
     connection = new CollaborationConnection({
       store: this.store,
       settings: this.settings,
-      packageSecrets: this.options.packageSecrets,
       outbox,
-      createCloudClient: this.options.createCloudClient ?? ((baseUrl) => (
-        new HttpCollaborationCloudClient({ baseUrl })
-      )),
+      authenticatedCloudTransport: this.options.authenticatedCloudTransport,
+      agentCloudRuntime: this.options.agentCloudRuntime,
       inboxHandler,
+      afterHeartbeat: (connectionStatus) => tasks.publishAvailability(connectionStatus),
       sanitizeText: this.options.sanitizeText,
       now: this.options.now
     })
@@ -186,7 +183,13 @@ export class CollaborationRuntime {
       connection,
       outbox,
       agentExecution: context.agentExecution,
+      capabilities: context.capabilities,
       localAgentId: () => this.localAgentIdentity,
+      workspaceRootForExecution: (executionId) => join(
+        dirname(this.options.statePath),
+        'worker-workspaces',
+        executionId
+      ),
       sanitizeText: this.options.sanitizeText,
       now: this.options.now
     })
@@ -194,6 +197,7 @@ export class CollaborationRuntime {
     this.outbox = outbox
     this.projections = projections
     this.tasks = tasks
+    this.localAgentIdentity = await connection.localAgentId()
 
     const disposeTurnEvents = context.turnEvents.subscribe(async (event) => {
       if (event.kind !== 'after-turn' || !('turnId' in event) || !event.turnId) return
@@ -228,6 +232,7 @@ export class CollaborationRuntime {
     // it only after the connection has initialized; an offline activation keeps
     // the runs durable in reconciling state until an explicit recovery/restart.
     await tasks.recover()
+    await tasks.publishAvailability(connection.state().state === 'connected' ? 'online' : 'offline')
 
     return async () => {
       await disposeTurnEvents()
@@ -265,6 +270,12 @@ export class CollaborationRuntime {
     const connection = this.requireConnection()
     const state = this.store.snapshot()
     const configured = await this.settings.read()
+    const connectionState = connection.state()
+    const localAgentId = await connection.localAgentId()
+    const agentAuthorityReady = localAgentId
+      ? (await this.options.agentCloudRuntime.authorityStatus(localAgentId)).state === 'ready'
+      : false
+    const localAgent = state.agents.find((agent) => agent.agentId === localAgentId)
     const participant = state.user && state.participant
       ? {
           userId: state.user.userId,
@@ -298,7 +309,10 @@ export class CollaborationRuntime {
             status: agent.lifecycleStatus === 'revoked' ? 'revoked' as const : agent.connectionStatus,
             capabilities: agent.capabilities,
             ...(agent.lastSeenAt ? { lastSeenAt: agent.lastSeenAt } : {}),
-            primary: state.participant?.primaryAgentId === agent.agentId
+            primary: state.participant?.primaryAgentId === agent.agentId,
+            ...(agent.agentId === localAgentId
+              ? { workerAcceptanceMode: this.requireTasks().acceptanceMode(agent.agentId) }
+              : {})
           }))
         }
       : undefined
@@ -311,24 +325,17 @@ export class CollaborationRuntime {
       state: mapProjectState(project.status),
       revision: project.revision,
       coordinatorAgentId: project.coordinatorAgentId,
-      memberUserIds: project.memberUserIds,
-      tasks: state.tasks.filter((task) => task.projectId === project.projectId).map(mapTaskView)
+      tasks: state.taskRuns
+        .filter((run) => run.offer.projectId === project.projectId)
+        .map((run) => mapTaskView(run, this.requireTasks().acceptanceMode(run.offer.recipientAgentId)))
     }))
-    const connectionState = connection.state()
-    const deviceCredentialAvailable = await this.options.packageSecrets.has('device-credential')
-    const localAgent = configured.settings
-      ? state.agents.find((agent) => (
-          agent.installationId === configured.settings!.installationId
-          && agent.lifecycleStatus === 'active'
-        ))
-      : undefined
     return {
       revision: state.revision,
       connection: {
         configured: configured.settings !== null,
         ...(configured.settings ? { baseUrl: configured.settings.baseUrl } : {}),
         state: configured.settings ? connectionState.state : 'unconfigured',
-        deviceCredentialAvailable,
+        agentAuthorityReady,
         ...(localAgent ? { localAgentId: localAgent.agentId } : {}),
         ...(connectionState.lastConnectedAt ? { lastConnectedAt: connectionState.lastConnectedAt } : {}),
         lastInboxSequence: state.lastInboxSequence,
@@ -695,10 +702,46 @@ export class CollaborationRuntime {
 
   listTasks(input: CollaborationTaskListInput): readonly CollaborationTaskView[] {
     const states = new Set(input.states ?? [])
-    return this.store.snapshot().tasks
-      .filter((task) => !input.projectId || task.projectId === input.projectId)
-      .map(mapTaskView)
+    return this.store.snapshot().taskRuns
+      .filter((run) => !input.projectId || run.offer.projectId === input.projectId)
+      .map((run) => mapTaskView(run, this.requireTasks().acceptanceMode(run.offer.recipientAgentId)))
       .filter((task) => states.size === 0 || states.has(task.state))
+  }
+
+  async updateWorkerAcceptancePolicy(
+    input: CollaborationWorkerAcceptanceUpdateInput
+  ): Promise<Readonly<{ agentId: string; mode: 'manual' | 'automatic' }>> {
+    const localAgentId = await this.requireConnection().localAgentId()
+    if (!localAgentId || input.agentId !== localAgentId) {
+      throw new Error('Worker acceptance policy can only be changed on its exact local Agent Device.')
+    }
+    const mode = await this.requireTasks().updateAcceptanceMode(input.agentId, input.mode)
+    return Object.freeze({ agentId: input.agentId, mode })
+  }
+
+  async decideTaskOffer(input: CollaborationTaskOfferDecisionInput): Promise<void> {
+    await this.requireTasks().decideOffer(
+      input.executionId,
+      input.decision === 'accept'
+        ? { decision: 'accept' }
+        : {
+            decision: 'reject',
+            reason: input.reason,
+            ...(input.safeReasonDetail ? { safeReasonDetail: input.safeReasonDetail } : {})
+          }
+    )
+  }
+
+  /**
+   * The sole Coordinator Agent write path. The internal-service caller cannot
+   * nominate an Agent; the durable outbox binds the currently active local
+   * Agent immediately before Identity executes the strict Cloud command.
+   */
+  async executeCoordinatorCloudCommand(command: CoordinatorCloudCommand): Promise<RestResponse> {
+    return this.requireOutbox().enqueueAndWait(
+      'coordinator.command',
+      coordinatorCloudCommandSchema.parse(command)
+    )
   }
 
   private async reconcileTranscriptSnapshots(): Promise<void> {
@@ -753,7 +796,7 @@ export class CollaborationRuntime {
   private async refreshCollaborationFact(message: AgentInboxMessage): Promise<void> {
     const projectId = 'projectId' in message.payload ? message.payload.projectId : undefined
     if (!projectId) return
-    const response = await this.requireConnection().executeAsDevice(restRequestSchema.parse({
+    const response = await this.requireConnection().executeAsAgent(restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
       type: 'project.get',
@@ -770,7 +813,7 @@ export class CollaborationRuntime {
     projectionId: string,
     notifiedRevision: number
   ): Promise<void> {
-    const response = await this.requireConnection().executeAsDevice(restRequestSchema.parse({
+    const response = await this.requireConnection().executeAsAgent(restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
       type: 'projection.get',
@@ -962,23 +1005,25 @@ function mapProjectState(status: Project['status']): 'active' | 'paused' | 'comp
   return status === 'draft' ? 'paused' : status
 }
 
-function mapTaskView(task: Task): CollaborationTaskView {
-  const state = task.status === 'needs_human'
-    ? 'needs-human'
-    : task.status === 'succeeded'
-      ? 'completed'
-      : task.status === 'rejected'
-        ? 'cancelled'
-        : task.status
+function mapTaskView(
+  run: CollaborationTaskRun,
+  acceptanceMode: 'manual' | 'automatic'
+): CollaborationTaskView {
+  const latestTurn = [...run.agentJournal].reverse().find((entry) => entry.turnId)?.turnId
   return {
-    taskId: task.taskId,
-    projectId: task.projectId,
-    assigneeAgentId: task.assigneeAgentId,
-    revision: task.revision,
-    title: task.title,
-    state,
-    ...(task.activeTurnId ? { localTurnId: task.activeTurnId } : {}),
-    updatedAt: task.updatedAt
+    taskId: run.offer.taskId,
+    projectId: run.offer.projectId,
+    executionId: run.offer.executionId,
+    assigneeAgentId: run.offer.recipientAgentId,
+    revision: run.task?.revision ?? run.expectedTaskRevision,
+    title: run.task?.title ?? 'Pending Task offer',
+    state: run.state,
+    acceptanceMode,
+    decisionRequired: run.state === 'awaiting-manual',
+    preflightReasons: run.latestPreflight?.reasons ?? [],
+    ...(latestTurn ? { localTurnId: latestTurn } : {}),
+    updatedAt: run.updatedAt,
+    ...(run.error ? { error: run.error } : {})
   }
 }
 

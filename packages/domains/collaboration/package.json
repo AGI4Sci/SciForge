@@ -1,11 +1,12 @@
 {
   "name": "@sciforge/domain-collaboration",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "license": "MIT",
   "type": "module",
   "private": false,
   "description": "User, device, Agent, personal Session projection, and Project collaboration domain.",
   "exports": {
+    "./coordinator-cloud-command": "./src/coordinator-cloud-command.ts",
     "./contract": "./src/contract.ts",
     "./definition": "./src/definition.ts",
     "./main": "./src/main.ts",
@@ -22,19 +23,19 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@sciforge/collaboration-contracts": "^0.1.0",
-    "@sciforge/domain-sdk": "^0.2.0",
+    "@sciforge/collaboration-contracts": "1.0.0",
+    "@sciforge/domain-content-space": "^4.0.0",
+    "@sciforge/domain-identity-access": "^2.0.0",
+    "@sciforge/domain-sdk": "^0.3.0",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-i18next": "^15.7.4",
-    "ws": "^8.21.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.0",
-    "@types/ws": "^8.18.1",
     "react-dom": "^19.0.0",
     "tsx": "^4.22.4",
     "typescript": "^5.8.2"

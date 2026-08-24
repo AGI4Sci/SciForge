@@ -9,14 +9,27 @@
   "module": {
     "id": "sciforge.collaboration",
     "displayName": "Collaboration",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "hostApi": {
-      "minimum": "1.2.0",
+      "minimum": "1.5.0",
       "maximumExclusive": "2.0.0"
     },
     "priority": 72
   },
   "contributionContracts": {
+    "collaboration.coordinator-cloud-command": {
+      "location": "main.internal-service-descriptor",
+      "serviceId": "sciforge.collaboration.coordinator-cloud-command",
+      "contractVersion": "1.0.0",
+      "allowedConsumerModuleIds": [
+        "sciforge.project-coordinator"
+      ]
+    },
+    "collaboration.runtime-lifecycle": {
+      "requestedSystemCapabilityGrants": [
+        "content-space.system-transfer"
+      ]
+    },
     "collaboration.workbench-right-panel": {
       "location": "workbench.right-panel",
       "title": "Collaboration",
@@ -47,6 +60,12 @@
         {
           "kind": "main.runtime-lifecycle",
           "id": "collaboration.runtime-lifecycle"
+        },
+        {
+          "kind": "main.extension",
+          "id": "collaboration.coordinator-cloud-command",
+          "version": "1.0.0",
+          "priority": 72
         }
       ]
     },

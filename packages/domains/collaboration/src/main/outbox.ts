@@ -1,23 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto'
 import {
   restRequestSchema,
-  type RestRequest
+  restResponseSchema,
+  type RestRequest,
+  type RestResponse
 } from '@sciforge/collaboration-contracts'
-import type { DomainMainPackageSecretStoreHost } from '@sciforge/domain-sdk/package-storage'
+import type { AgentCloudRuntime } from '@sciforge/domain-identity-access/agent-cloud-runtime'
 import type { ProjectionCloudOutbox, ProjectionDeliveryCommand } from './projection-coordinator.js'
 import type { CollaborationOutboxEntry } from './store.js'
 import { CollaborationLocalStore } from './store.js'
-import {
-  HttpCollaborationCloudClient,
-  type CollaborationCloudClient
-} from './cloud-client.js'
-
-export const COLLABORATION_DEVICE_CREDENTIAL_SECRET_KEY = 'device-credential' as const
 
 export type DurableCloudOutboxOptions = Readonly<{
   store: CollaborationLocalStore
-  packageSecrets: DomainMainPackageSecretStoreHost
-  cloudClient: () => CollaborationCloudClient | null
+  agentCloudRuntime: AgentCloudRuntime
+  localAgentId: () => string | undefined
   sanitizeText?: (value: string) => string
   now?: () => Date
 }>
@@ -94,6 +90,32 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
     this.schedule()
   }
 
+  /**
+   * Durably enqueue one idempotent command and return the exact strict Cloud
+   * response retained with the delivered entry. This is used when the next
+   * local journal checkpoint needs a Cloud-issued immutable identity.
+   */
+  async enqueueAndWait(
+    kind: CollaborationOutboxEntry['kind'],
+    request: RestRequest
+  ): Promise<RestResponse> {
+    await this.enqueue(kind, request)
+    await this.waitForIdle()
+    if (!('idempotencyKey' in request)) {
+      throw new Error('Durable cloud outbox accepts idempotent write commands only.')
+    }
+    const entry = this.options.store.snapshot().outbox.find((candidate) => (
+      candidate.idempotencyKey === request.idempotencyKey
+    ))
+    if (!entry || entry.state !== 'delivered') {
+      throw new Error(entry?.error ?? 'Cloud command is pending delivery.')
+    }
+    if (!entry.response) {
+      throw new Error('Delivered Cloud command is missing its durable response.')
+    }
+    return restResponseSchema.parse(entry.response)
+  }
+
   async retry(id?: string): Promise<void> {
     await this.options.store.transact((draft) => {
       const candidates = draft.outbox.filter((entry) => (
@@ -119,10 +141,10 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
 
   private async drain(): Promise<void> {
     while (!this.stopped) {
-      const client = this.options.cloudClient()
-      if (!client) return
-      const secret = await this.options.packageSecrets.read(COLLABORATION_DEVICE_CREDENTIAL_SECRET_KEY)
-      if (!secret) return
+      const agentId = this.options.localAgentId()
+      if (!agentId) return
+      const authority = await this.options.agentCloudRuntime.authorityStatus(agentId)
+      if (authority.state !== 'ready') return
       const next = this.options.store.snapshot().outbox
         .filter((entry) => entry.state === 'pending' || entry.state === 'reconciling')
         .sort((left, right) => left.createdAt.localeCompare(right.createdAt))[0]
@@ -138,13 +160,19 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
         entry.error = undefined
       })
       try {
-        const response = await client.execute(request, { value: secret })
-        if (response.type === 'rest.error') throw new Error(response.error.message)
-        const expectedResponse = request.type === 'capability.approval.create'
-          ? response.type === 'capability.approval.created'
+        const response = restResponseSchema.parse(
+          await this.options.agentCloudRuntime.execute({ agentId, request })
+        )
+        if (response.type === 'rest.error' && next.kind !== 'coordinator.command') {
+          throw new Error(response.error.message)
+        }
+        const expectedResponse = response.type === 'rest.error'
+          ? true
+          : request.type === 'capability.approval.create'
+            ? response.type === 'capability.approval.created'
           : request.type === 'capability.approval.result' || request.type === 'capability.approval.withdraw'
             ? response.type === 'rest.entity' && response.entity.type === 'remote_capability_approval'
-            : response.type === 'rest.receipt'
+            : response.type === 'rest.receipt' || response.type === 'rest.entity'
         if (!expectedResponse) throw new Error(`Cloud write returned unexpected ${response.type}.`)
         const deliveredAt = this.now().toISOString()
         await this.options.store.transact((draft) => {
@@ -152,6 +180,7 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
           entry.state = 'delivered'
           entry.updatedAt = deliveredAt
           entry.deliveredAt = deliveredAt
+          entry.response = restResponseSchema.parse(response)
           if (
             request.type === 'capability.approval.create'
             && response.type === 'capability.approval.created'
@@ -210,10 +239,6 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
       }
     }
   }
-}
-
-export function createHttpCloudClient(baseUrl: string): CollaborationCloudClient {
-  return new HttpCollaborationCloudClient({ baseUrl })
 }
 
 function requireOutbox(

@@ -3,12 +3,19 @@ import { dirname } from 'node:path'
 import { z } from 'zod'
 import {
   agentNodeSchema,
+  cloudResourceRefSchema,
+  externalOperationRecoveryJournalEntrySchema,
+  humanAnswerSchema,
   humanEndpointBindingSchema,
   managedProviderContainerSchema,
   participantProfileSchema,
   projectSchema,
   providerLocatorSchema,
   remoteSessionProjectionSchema,
+  taskExecutionPreflightSchema,
+  taskExecutionSchema,
+  taskOfferRejectionReasonSchema,
+  taskResultOutputSchema,
   taskSchema,
   userPrincipalSchema
 } from '@sciforge/collaboration-contracts'
@@ -19,6 +26,13 @@ const projectionIdSchema = remoteSessionProjectionSchema.shape.projectionId
 const userIdSchema = userPrincipalSchema.shape.userId
 const endpointIdSchema = humanEndpointBindingSchema.shape.humanEndpointId
 const providerMessageIdSchema = z.string().min(1).max(512)
+
+export const collaborationWorkerAcceptanceModeSchema = z.enum(['manual', 'automatic'])
+export const collaborationWorkerAcceptancePolicySchema = z.object({
+  agentId: agentNodeSchema.shape.agentId,
+  mode: collaborationWorkerAcceptanceModeSchema,
+  updatedAt: timestampSchema
+}).strict()
 
 export const collaborationLocalProjectionSchema = z.object({
   projection: remoteSessionProjectionSchema,
@@ -113,6 +127,11 @@ export const collaborationOutboxEntrySchema = z.object({
     'task.progress',
     'task.result',
     'task.failed',
+    'task.offer-decision',
+    'task.external-operation',
+    'task.human-needed',
+    'coordinator.command',
+    'worker.availability',
     'agent.heartbeat',
     'inbox.ack',
     'capability.approval.create',
@@ -125,27 +144,234 @@ export const collaborationOutboxEntrySchema = z.object({
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
   deliveredAt: timestampSchema.optional(),
+  response: z.record(z.string(), z.json()).optional(),
   error: z.string().trim().min(1).max(4_000).optional()
 }).strict().superRefine((entry, context) => {
   if ((entry.state === 'delivered') !== (entry.deliveredAt !== undefined)) {
     context.addIssue({ code: 'custom', path: ['deliveredAt'], message: 'Delivered outbox entry requires deliveredAt.' })
   }
+  if (entry.response !== undefined && entry.state !== 'delivered') {
+    context.addIssue({
+      code: 'custom',
+      path: ['response'],
+      message: 'Only a delivered outbox command may retain its strict Cloud response.'
+    })
+  }
 })
 
-export const collaborationTaskRunSchema = z.object({
-  task: taskSchema,
-  state: z.enum(['offered', 'accepting', 'running', 'reconciling', 'needs-human', 'completed', 'failed', 'stale']),
-  runtimeId: z.string().trim().min(1).max(128).optional(),
-  threadId: z.string().trim().min(1).max(512).optional(),
-  workspaceRoot: z.string().trim().min(1).max(4_096).optional(),
-  clientDirectiveId: z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
-  localTurnId: z.string().trim().min(1).max(512).optional(),
-  resultText: z.string().max(32_000).optional(),
-  startedAt: timestampSchema.optional(),
-  updatedAt: timestampSchema,
-  completedAt: timestampSchema.optional(),
-  error: z.string().trim().min(1).max(4_000).optional()
+const taskExecutionIdSchema = taskExecutionSchema.shape.executionId
+const taskOfferIdSchema = z.string()
+  .regex(/^ofr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$/u)
+const localInvocationIdSchema = z.string().trim().min(1).max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)
+const clientDirectiveIdSchema = z.string().trim().min(1).max(256)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u)
+
+const collaborationContentTransferPreflightObservationSchema = z.object({
+  operation: z.enum(['download', 'upload-new']),
+  status: z.enum(['ready', 'provider_not_ready', 'principal_stale', 'binding_stale']),
+  intentDigest: sha256Schema,
+  observationRevision: sha256Schema
 }).strict()
+
+export const collaborationTaskOfferJournalSchema = z.object({
+  projectId: projectSchema.shape.projectId,
+  taskId: taskSchema.shape.taskId,
+  executionId: taskExecutionIdSchema,
+  taskOfferId: taskOfferIdSchema,
+  currentTaskRevision: taskSchema.shape.revision,
+  currentExecutionRevision: taskExecutionSchema.shape.revision,
+  offerRevision: taskSchema.shape.revision,
+  recipientAgentId: agentNodeSchema.shape.agentId,
+  receivedAt: timestampSchema
+}).strict()
+
+export const collaborationWorkerPreflightSchema = z.object({
+  cloud: taskExecutionPreflightSchema,
+  outcome: z.enum(['allowed', 'denied']),
+  reasons: z.array(z.enum([
+    'cloud_denied',
+    'runtime_not_ready',
+    'provider_not_ready',
+    'content_not_ready',
+    'agent_inactive',
+    'execution_mismatch'
+  ])).max(16),
+  contentTransferReadiness: z.array(
+    collaborationContentTransferPreflightObservationSchema
+  ).max(101),
+  evaluatedAt: timestampSchema
+}).strict().superRefine((preflight, context) => {
+  if ((preflight.outcome === 'allowed') !== (preflight.reasons.length === 0)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['reasons'],
+      message: 'An allowed local preflight has no denial reasons.'
+    })
+  }
+})
+
+export const collaborationTaskOfferDecisionSchema = z.discriminatedUnion('decision', [
+  z.object({
+    decision: z.literal('accept'),
+    decidedAt: timestampSchema
+  }).strict(),
+  z.object({
+    decision: z.literal('reject'),
+    reason: taskOfferRejectionReasonSchema,
+    safeReasonDetail: z.string().trim().min(1).max(500).nullable(),
+    decidedAt: timestampSchema
+  }).strict().superRefine((decision, context) => {
+    if ((decision.reason === 'other') !== (decision.safeReasonDetail !== null)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['safeReasonDetail'],
+        message: 'Only other rejection requires a bounded safe detail.'
+      })
+    }
+  })
+])
+
+export const collaborationAgentInvocationJournalSchema = z.object({
+  logicalInvocationId: localInvocationIdSchema,
+  clientDirectiveId: clientDirectiveIdSchema,
+  state: z.enum([
+    'prepared',
+    'dispatched',
+    'observed_success',
+    'observed_failure',
+    'late_outcome'
+  ]),
+  preparedAt: timestampSchema,
+  dispatchedAt: timestampSchema.nullable(),
+  observedAt: timestampSchema.nullable(),
+  runtimeId: z.string().trim().min(1).max(128).nullable(),
+  threadId: z.string().trim().min(1).max(512).nullable(),
+  turnId: z.string().trim().min(1).max(512).nullable(),
+  runtimeState: z.enum(['completed', 'failed', 'cancelled']).nullable(),
+  safeResultText: z.string().max(32_000).nullable(),
+  safeError: z.string().trim().min(1).max(4_000).nullable()
+}).strict().superRefine((entry, context) => {
+  const dispatched = entry.state !== 'prepared'
+  if (dispatched !== (entry.dispatchedAt !== null)) {
+    context.addIssue({ code: 'custom', path: ['dispatchedAt'], message: 'Dispatched Agent work requires dispatch time.' })
+  }
+  const observed = entry.state === 'observed_success' ||
+    entry.state === 'observed_failure' || entry.state === 'late_outcome'
+  if (observed !== (entry.observedAt !== null && entry.runtimeState !== null)) {
+    context.addIssue({ code: 'custom', path: ['observedAt'], message: 'Observed Agent work requires exact outcome facts.' })
+  }
+})
+
+export const collaborationExternalOperationJournalSchema = z.object({
+  logicalInvocationId: localInvocationIdSchema,
+  operation: z.enum(['download', 'upload_new']),
+  workspaceRelativePath: z.string().trim().min(1).max(4_096),
+  requestDigest: sha256Schema,
+  state: z.enum([
+    'prepared',
+    'cloud_prepared',
+    'cloud_dispatched',
+    'effect_dispatched',
+    'observed_success',
+    'observed_failure',
+    'outcome_unknown',
+    'late_outcome'
+  ]),
+  cloudJournal: externalOperationRecoveryJournalEntrySchema.nullable(),
+  receiptDigest: sha256Schema.nullable(),
+  observationDigest: sha256Schema.nullable(),
+  preparedAt: timestampSchema,
+  effectDispatchedAt: timestampSchema.nullable(),
+  observedAt: timestampSchema.nullable(),
+  safeFailureCode: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u).nullable(),
+  safeError: z.string().trim().min(1).max(4_000).nullable()
+}).strict().superRefine((entry, context) => {
+  if ((entry.state !== 'prepared') !== (entry.cloudJournal !== null)) {
+    context.addIssue({ code: 'custom', path: ['cloudJournal'], message: 'Cloud-prepared work retains its canonical journal entry.' })
+  }
+  const effectDispatched = ['effect_dispatched', 'observed_success', 'observed_failure', 'outcome_unknown', 'late_outcome']
+    .includes(entry.state)
+  if (effectDispatched !== (entry.effectDispatchedAt !== null)) {
+    context.addIssue({ code: 'custom', path: ['effectDispatchedAt'], message: 'Provider dispatch requires its durable local time.' })
+  }
+  const observed = ['observed_success', 'observed_failure', 'outcome_unknown', 'late_outcome']
+    .includes(entry.state)
+  if (observed !== (entry.observedAt !== null)) {
+    context.addIssue({ code: 'custom', path: ['observedAt'], message: 'Observed transfer state requires observation time.' })
+  }
+  const success = entry.state === 'observed_success'
+  if (success !== (entry.receiptDigest !== null && entry.observationDigest !== null)) {
+    context.addIssue({ code: 'custom', path: ['observationDigest'], message: 'Successful transfer requires exact receipt and observation digests.' })
+  }
+})
+
+export const collaborationTaskLateOutcomeSchema = z.object({
+  source: z.enum(['agent_runtime', 'content_space', 'cloud']),
+  logicalInvocationId: localInvocationIdSchema,
+  outcome: z.enum(['completed_after_fence', 'failed_after_fence', 'outcome_unknown']),
+  observedAt: timestampSchema,
+  safeDetail: z.string().trim().min(1).max(4_000)
+}).strict()
+
+export const collaborationTaskRunSchema = z.object({
+  offer: collaborationTaskOfferJournalSchema,
+  task: taskSchema.nullable(),
+  execution: taskExecutionSchema.nullable(),
+  latestPreflight: collaborationWorkerPreflightSchema.nullable(),
+  decision: collaborationTaskOfferDecisionSchema.nullable(),
+  expectedTaskRevision: taskSchema.shape.revision,
+  expectedExecutionRevision: taskExecutionSchema.shape.revision,
+  state: z.enum([
+    'offered',
+    'awaiting-manual',
+    'accepting',
+    'running',
+    'needs-human',
+    'submitting',
+    'completed',
+    'rejected',
+    'failed',
+    'fenced',
+    'manual-recovery'
+  ]),
+  workspaceRoot: z.string().trim().min(1).max(4_096),
+  runtimeId: z.string().trim().min(1).max(128).nullable(),
+  threadId: z.string().trim().min(1).max(512).nullable(),
+  humanRequestId: z.string().regex(/^hrq_[A-Za-z0-9]{12,64}$/u).nullable(),
+  humanAnswer: humanAnswerSchema.nullable(),
+  resources: z.array(cloudResourceRefSchema).max(101),
+  agentJournal: z.array(collaborationAgentInvocationJournalSchema).max(1_000),
+  externalJournal: z.array(collaborationExternalOperationJournalSchema).max(1_000),
+  outputs: z.array(taskResultOutputSchema).max(100),
+  recoveryJournalEntryIds: z.array(
+    externalOperationRecoveryJournalEntrySchema.shape.contentRecoveryJournalEntryId
+  ).max(100),
+  resultSummary: z.string().trim().min(1).max(32_000).nullable(),
+  lateOutcomes: z.array(collaborationTaskLateOutcomeSchema).max(1_000),
+  startedAt: timestampSchema.nullable(),
+  updatedAt: timestampSchema,
+  completedAt: timestampSchema.nullable(),
+  error: z.string().trim().min(1).max(4_000).nullable()
+}).strict().superRefine((run, context) => {
+  if (run.task && (
+    run.task.taskId !== run.offer.taskId || run.task.projectId !== run.offer.projectId
+  )) {
+    context.addIssue({ code: 'custom', path: ['task'], message: 'Task snapshot must match the immutable offer.' })
+  }
+  if (run.execution && (
+    run.execution.taskId !== run.offer.taskId ||
+    run.execution.executionId !== run.offer.executionId ||
+    run.execution.assigneeAgentId !== run.offer.recipientAgentId
+  )) {
+    context.addIssue({ code: 'custom', path: ['execution'], message: 'Execution snapshot must match the immutable offer.' })
+  }
+  const terminal = ['completed', 'rejected', 'failed', 'fenced', 'manual-recovery'].includes(run.state)
+  if (terminal !== (run.completedAt !== null)) {
+    context.addIssue({ code: 'custom', path: ['completedAt'], message: 'Terminal Worker run requires completion time.' })
+  }
+})
 
 export const collaborationDiagnosticRecordSchema = z.object({
   code: z.string().trim().min(1).max(128),
@@ -192,6 +418,22 @@ export const collaborationLocalStateSchema = z.object({
   projects: z.array(projectSchema).max(10_000),
   tasks: z.array(taskSchema).max(100_000),
   taskRuns: z.array(collaborationTaskRunSchema).max(100_000),
+  workerAcceptancePolicies: z.array(collaborationWorkerAcceptancePolicySchema)
+    .max(64)
+    .default([])
+    .superRefine((policies, context) => {
+      const seen = new Set<string>()
+      for (const [index, policy] of policies.entries()) {
+        if (seen.has(policy.agentId)) {
+          context.addIssue({
+            code: 'custom',
+            path: [index, 'agentId'],
+            message: 'Each local Agent Device has exactly one acceptance policy.'
+          })
+        }
+        seen.add(policy.agentId)
+      }
+    }),
   queue: z.array(collaborationQueueItemSchema).max(100_000),
   receipts: z.array(collaborationLocalReceiptSchema).max(200_000),
   outbox: z.array(collaborationOutboxEntrySchema).max(100_000),
@@ -205,6 +447,15 @@ export type CollaborationQueueItem = z.infer<typeof collaborationQueueItemSchema
 export type CollaborationLocalReceipt = z.infer<typeof collaborationLocalReceiptSchema>
 export type CollaborationOutboxEntry = z.infer<typeof collaborationOutboxEntrySchema>
 export type CollaborationTaskRun = z.infer<typeof collaborationTaskRunSchema>
+export type CollaborationExternalOperationJournal = z.infer<
+  typeof collaborationExternalOperationJournalSchema
+>
+export type CollaborationWorkerAcceptanceMode = z.infer<
+  typeof collaborationWorkerAcceptanceModeSchema
+>
+export type CollaborationWorkerAcceptancePolicy = z.infer<
+  typeof collaborationWorkerAcceptancePolicySchema
+>
 export type CollaborationLocalRemoteApproval = z.infer<typeof collaborationLocalRemoteApprovalSchema>
 
 export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.freeze({
@@ -219,6 +470,7 @@ export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.f
   projects: [],
   tasks: [],
   taskRuns: [],
+  workerAcceptancePolicies: [],
   queue: [],
   receipts: [],
   outbox: [],
@@ -339,12 +591,6 @@ export class CollaborationLocalStore {
       if (entry.state !== 'sending') continue
       entry.state = 'reconciling'
       entry.updatedAt = recoveredAt
-      changed = true
-    }
-    for (const run of draft.taskRuns) {
-      if (run.state !== 'accepting' && run.state !== 'running') continue
-      run.state = 'reconciling'
-      run.updatedAt = recoveredAt
       changed = true
     }
     if (!changed) return

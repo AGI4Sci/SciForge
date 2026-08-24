@@ -73,19 +73,18 @@ test('renders phone endpoint and owned Agents as one Participant card', () => {
       providerOptions={snapshot.providerOptions}
       selectedProviderKey="provider.fixture"
       locator={{}}
-      participantDisplayName="Researcher A"
       agentDisplayName="Laptop A"
       pairing={null}
       busyKey={null}
       onProviderChange={NOOP}
       onLocatorChange={NOOP}
-      onParticipantDisplayNameChange={NOOP}
       onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
       onRegisterAgent={NOOP}
-      credentialRecoveryAgent={undefined}
-      onRecoverAgentCredential={NOOP}
+      authorityRecoveryAgent={undefined}
+      onRecoverAgentAuthority={NOOP}
       onSelectPrimary={NOOP}
+      onWorkerAcceptanceModeChange={NOOP}
     />
   )
 
@@ -99,6 +98,8 @@ test('renders phone endpoint and owned Agents as one Participant card', () => {
   assert.match(html, /data-agent-owner="user-a"/u)
   assert.match(html, /data-primary-agent="true"/u)
   assert.match(html, /data-primary-agent="false"/u)
+  assert.match(html, /data-worker-acceptance-agent-id="agent-a"/u)
+  assert.match(html, /value="manual" selected=""/u)
   assert.match(html, /collaborationSetPrimary/u)
 })
 
@@ -120,19 +121,18 @@ test('allows Agent registration after phone verification without any Project', (
       providerOptions={snapshot.providerOptions}
       selectedProviderKey="provider.fixture"
       locator={{}}
-      participantDisplayName="Researcher A"
       agentDisplayName="Laptop A"
       pairing={null}
       busyKey={null}
       onProviderChange={NOOP}
       onLocatorChange={NOOP}
-      onParticipantDisplayNameChange={NOOP}
       onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
       onRegisterAgent={NOOP}
-      credentialRecoveryAgent={undefined}
-      onRecoverAgentCredential={NOOP}
+      authorityRecoveryAgent={undefined}
+      onRecoverAgentAuthority={NOOP}
       onSelectPrimary={NOOP}
+      onWorkerAcceptanceModeChange={NOOP}
     />
   )
 
@@ -143,14 +143,14 @@ test('allows Agent registration after phone verification without any Project', (
   assert.doesNotMatch(html, /projectId/u)
 })
 
-test('offers credential recovery only for the identified local Agent', () => {
+test('offers authority recovery only for the identified local Agent', () => {
   const fixture = statusFixture()
   const snapshot = collaborationStatusSnapshotSchema.parse({
     ...fixture,
     connection: {
       ...fixture.connection,
       state: 'disconnected',
-      deviceCredentialAvailable: false,
+      agentAuthorityReady: false,
       localAgentId: 'agent-a'
     }
   })
@@ -161,24 +161,23 @@ test('offers credential recovery only for the identified local Agent', () => {
       providerOptions={snapshot.providerOptions}
       selectedProviderKey="provider.fixture"
       locator={{}}
-      participantDisplayName="Researcher A"
       agentDisplayName=""
       pairing={null}
       busyKey={null}
       onProviderChange={NOOP}
       onLocatorChange={NOOP}
-      onParticipantDisplayNameChange={NOOP}
       onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
       onRegisterAgent={NOOP}
-      credentialRecoveryAgent={localAgent}
-      onRecoverAgentCredential={NOOP}
+      authorityRecoveryAgent={localAgent}
+      onRecoverAgentAuthority={NOOP}
       onSelectPrimary={NOOP}
+      onWorkerAcceptanceModeChange={NOOP}
     />
   )
 
-  assert.match(html, /data-collaboration-agent-credential-recover="true"/u)
-  assert.match(html, /collaborationRecoverAgentCredential/u)
+  assert.match(html, /data-collaboration-agent-authority-recover="true"/u)
+  assert.match(html, /collaborationRecoverAgentAuthority/u)
   assert.doesNotMatch(html, /data-collaboration-agent-name="true"/u)
 })
 
@@ -190,31 +189,27 @@ test('renders controlled first-binding inputs and builds typed commands without 
       providerOptions={fixture.providerOptions}
       selectedProviderKey="provider.fixture"
       locator={{ realm: 'realm-cn' }}
-      participantDisplayName="研究员甲"
       agentDisplayName="桌面 Agent"
       pairing={null}
       busyKey={null}
       onProviderChange={NOOP}
       onLocatorChange={NOOP}
-      onParticipantDisplayNameChange={NOOP}
       onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
       onRegisterAgent={NOOP}
-      credentialRecoveryAgent={undefined}
-      onRecoverAgentCredential={NOOP}
+      authorityRecoveryAgent={undefined}
+      onRecoverAgentAuthority={NOOP}
       onSelectPrimary={NOOP}
+      onWorkerAcceptanceModeChange={NOOP}
     />
   )
-  assert.match(pairing, /data-collaboration-user-name="true"/u)
-  assert.match(pairing, /value="研究员甲"/u)
+  assert.doesNotMatch(pairing, /data-collaboration-user-name/u)
 
   assert.deepEqual(buildEndpointChallengeInput({
     providerKey: 'provider.fixture',
-    requestedDisplayName: ' 研究员甲 ',
     locator: { realm: ' realm-cn ' }
   }), {
     providerKey: 'provider.fixture',
-    requestedDisplayName: '研究员甲',
     locator: { realm: 'realm-cn' }
   })
   assert.deepEqual(buildAgentRegistrationInput(' 桌面 Agent '), {
@@ -223,8 +218,7 @@ test('renders controlled first-binding inputs and builds typed commands without 
     capabilities: []
   })
   assert.equal(buildEndpointChallengeInput({
-    providerKey: 'provider.fixture',
-    requestedDisplayName: ' ',
+    providerKey: ' ',
     locator: { realm: 'realm-cn' }
   }), undefined)
   assert.equal(buildAgentRegistrationInput(' '), undefined)
@@ -661,7 +655,12 @@ test('keeps locator discovery inside the authenticated user managed container', 
 test('renders Project Coordinator, Task assignee state, ordered queue, and explicit recovery errors', () => {
   const snapshot = collaborationStatusSnapshotSchema.parse(statusFixture())
   const projects = renderToStaticMarkup(
-    <ProjectsSection projects={snapshot.projects} participant={snapshot.participant} />
+    <ProjectsSection
+      projects={snapshot.projects}
+      participant={snapshot.participant}
+      busy={false}
+      onTaskOfferDecision={NOOP}
+    />
   )
   assert.match(projects, /data-project-id="project-1"/u)
   assert.match(projects, /data-project-status="active"/u)
@@ -686,6 +685,32 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
   const error = renderToStaticMarkup(<ExplicitError message="Typed permission error" />)
   assert.match(error, /role="alert"/u)
   assert.match(error, /Typed permission error/u)
+})
+
+test('renders explicit accept and reject controls only for a manual Worker offer', () => {
+  const fixture = statusFixture()
+  const snapshot = collaborationStatusSnapshotSchema.parse({
+    ...fixture,
+    projects: fixture.projects.map((project) => ({
+      ...project,
+      tasks: project.tasks.map((task) => ({
+        ...task,
+        state: 'awaiting-manual',
+        decisionRequired: true
+      }))
+    }))
+  })
+  const html = renderToStaticMarkup(
+    <ProjectsSection
+      projects={snapshot.projects}
+      participant={snapshot.participant}
+      busy={false}
+      onTaskOfferDecision={NOOP}
+    />
+  )
+  assert.match(html, /data-task-offer-decision="true"/u)
+  assert.match(html, /collaborationTaskAccept/u)
+  assert.match(html, /collaborationTaskReject/u)
 })
 
 test('keeps the challenge poll handle out of render state and has no provider branch', () => {
@@ -883,6 +908,7 @@ function statusFixture() {
         status: 'online' as const,
         capabilities: ['agent-runtime'],
         primary: true,
+        workerAcceptanceMode: 'manual' as const,
         lastSeenAt: '2026-08-15T04:00:00.000Z'
       }, {
         agentId: 'agent-b',
@@ -901,14 +927,17 @@ function statusFixture() {
       state: 'active' as const,
       revision: 5,
       coordinatorAgentId: 'agent-a',
-      memberUserIds: ['user-a', 'user-b'],
       tasks: [{
         taskId: 'task-1',
         projectId: 'project-1',
+        executionId: 'execution-task-1',
         assigneeAgentId: 'agent-b',
         revision: 2,
         title: 'Validate structure',
         state: 'needs-human' as const,
+        acceptanceMode: 'manual' as const,
+        decisionRequired: false,
+        preflightReasons: [],
         updatedAt: '2026-08-15T04:01:00.000Z'
       }]
     }],

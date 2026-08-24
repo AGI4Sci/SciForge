@@ -20,6 +20,19 @@ export const COLLABORATION_RUNTIME_LIFECYCLE_CONTRIBUTION = contributionFor(
   'main',
   'main.runtime-lifecycle'
 )
+export const COLLABORATION_RUNTIME_LIFECYCLE_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    COLLABORATION_RUNTIME_LIFECYCLE_CONTRIBUTION.id
+  ]!
+export const COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRIBUTION = contributionFor(
+  'main',
+  'main.extension',
+  'collaboration.coordinator-cloud-command'
+)
+export const COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRIBUTION.id
+  ]!
 export const COLLABORATION_RIGHT_PANEL_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.workbench-right-panel'
@@ -45,10 +58,10 @@ export const COLLABORATION_I18N_CONTRIBUTION = contributionFor(
   'renderer.i18n-resource'
 )
 
-function contributionFor(process: DomainPackageProcess, kind: string) {
+function contributionFor(process: DomainPackageProcess, kind: string, id?: string) {
   const contribution = domainPackageDefinition.entrypoints
     .find((entrypoint) => entrypoint.process === process)
-    ?.contributions.find((candidate) => candidate.kind === kind)
+    ?.contributions.find((candidate) => candidate.kind === kind && (!id || candidate.id === id))
   if (!contribution) {
     throw new Error(`Collaboration manifest is missing ${process}:${kind}.`)
   }

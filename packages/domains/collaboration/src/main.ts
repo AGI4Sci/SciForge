@@ -1,10 +1,22 @@
 import type { z } from 'zod'
-import type {
-  DomainMainHost,
-  DomainMainRuntimeDisposer,
-  DomainMainRuntimeLifecycleContribution
+import {
+  defineDomainMainInternalServiceDescriptor,
+  type DomainMainInternalServiceDescriptor,
+  type DomainMainHost,
+  type DomainMainRuntimeDisposer,
+  type DomainMainRuntimeLifecycleContribution
 } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
+import {
+  AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
+  AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+  type AuthenticatedCloudTransport
+} from '@sciforge/domain-identity-access/authenticated-cloud-transport'
+import {
+  AGENT_CLOUD_RUNTIME_CONTRACT_VERSION,
+  AGENT_CLOUD_RUNTIME_SERVICE_ID,
+  type AgentCloudRuntime
+} from '@sciforge/domain-identity-access/agent-cloud-runtime'
 import {
   COLLABORATION_CAPABILITY_IDS,
   collaborationAgentRegisterInputSchema,
@@ -35,6 +47,10 @@ import {
   collaborationSynchronizationRetryResultSchema,
   collaborationTaskListInputSchema,
   collaborationTaskListResultSchema,
+  collaborationTaskOfferDecisionInputSchema,
+  collaborationTaskOfferDecisionResultSchema,
+  collaborationWorkerAcceptanceUpdateInputSchema,
+  collaborationWorkerAcceptanceUpdateResultSchema,
   type CollaborationAgentRegisterInput,
   type CollaborationConnectionConfigureInput,
   type CollaborationConnectionConnectInput,
@@ -46,14 +62,24 @@ import {
   type CollaborationProjectionShareInput,
   type CollaborationProjectionUpdateInput,
   type CollaborationSynchronizationRetryInput,
-  type CollaborationTaskListInput
+  type CollaborationTaskListInput,
+  type CollaborationTaskOfferDecisionInput,
+  type CollaborationWorkerAcceptanceUpdateInput
 } from './contract.js'
 import {
   COLLABORATION_CAPABILITY_FACTORY_CONTRIBUTION,
+  COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRACT,
+  COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRIBUTION,
   COLLABORATION_DOMAIN_MODULE_ID,
   COLLABORATION_RUNTIME_LIFECYCLE_CONTRIBUTION,
+  COLLABORATION_RUNTIME_LIFECYCLE_CONTRACT,
   domainPackageDefinition
 } from './definition.js'
+import {
+  COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION,
+  COORDINATOR_CLOUD_COMMAND_SERVICE_ID,
+  defineCoordinatorCloudCommandService
+} from './coordinator-cloud-command.js'
 import {
   CollaborationRuntime,
   collaborationStatePath,
@@ -105,6 +131,7 @@ export type CollaborationCapabilityFactory<CapabilityDefinition = unknown> = Rea
 type CollaborationMainContribution<CapabilityDefinition = unknown> =
   | CollaborationCapabilityFactory<CapabilityDefinition>
   | DomainMainRuntimeLifecycleContribution
+  | DomainMainInternalServiceDescriptor
 
 type CollaborationMainHost = DomainMainHost & Readonly<{
   createCollaborationRuntime?: (options: CollaborationRuntimeOptions) => CollaborationRuntime
@@ -115,11 +142,20 @@ type OwnedRuntime = Readonly<{
   deactivate: DomainMainRuntimeDisposer
 }> & { disposed: boolean }
 
+const coordinatorCloudCommandDescriptor = defineDomainMainInternalServiceDescriptor({
+  location: 'main.internal-service-descriptor',
+  serviceId: COORDINATOR_CLOUD_COMMAND_SERVICE_ID,
+  contractVersion: COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION,
+  allowedConsumerModuleIds: ['sciforge.project-coordinator']
+})
+
 export function createDomainMainEntry<CapabilityDefinition = unknown>(
   host: CollaborationMainHost
 ): TrustedDomainProcessEntryInput<CollaborationMainContribution<CapabilityDefinition>> {
-  if (!host.packageSettings || !host.packageSecrets) {
-    throw new Error('Collaboration requires package-scoped settings and secret storage.')
+  const packageSettings = host.packageSettings
+  const internalServices = host.internalServices
+  if (!packageSettings || !internalServices) {
+    throw new Error('Collaboration requires package storage and Identity Cloud service mediation.')
   }
   const createRuntime = host.createCollaborationRuntime ?? ((options) => new CollaborationRuntime(options))
   let owned: OwnedRuntime | null = null
@@ -129,6 +165,15 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     if (!owned || owned.disposed) throw new Error('Collaboration runtime is not active.')
     return owned.runtime
   }
+  const coordinatorCloudCommandService = defineCoordinatorCloudCommandService({
+    execute: (command) => requireRuntime().executeCoordinatorCloudCommand(command)
+  })
+  internalServices.register({
+    serviceId: COORDINATOR_CLOUD_COMMAND_SERVICE_ID,
+    contractVersion: COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION,
+    allowedConsumerModuleIds: coordinatorCloudCommandDescriptor.allowedConsumerModuleIds,
+    service: coordinatorCloudCommandService
+  })
   const disposeOwned = async (record: OwnedRuntime | null): Promise<void> => {
     if (!record || record.disposed) return
     record.disposed = true
@@ -140,10 +185,19 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     activate: async (context) => {
       if (owned || activation) throw new Error('Collaboration runtime lifecycle is already active.')
       const pending = (async (): Promise<OwnedRuntime> => {
+        const authenticatedCloudTransport = internalServices.acquire<AuthenticatedCloudTransport>(
+          AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+          AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION
+        )
+        const agentCloudRuntime = internalServices.acquire<AgentCloudRuntime>(
+          AGENT_CLOUD_RUNTIME_SERVICE_ID,
+          AGENT_CLOUD_RUNTIME_CONTRACT_VERSION
+        )
         const runtime = createRuntime({
           statePath: collaborationStatePath(context.userDataDir),
-          packageSettings: host.packageSettings!,
-          packageSecrets: host.packageSecrets!,
+          packageSettings,
+          authenticatedCloudTransport,
+          agentCloudRuntime,
           sanitizeText: host.textSanitizer?.sanitizeText
         })
         try {
@@ -182,12 +236,18 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
       },
       {
         ...COLLABORATION_RUNTIME_LIFECYCLE_CONTRIBUTION,
+        contract: COLLABORATION_RUNTIME_LIFECYCLE_CONTRACT,
         value: lifecycle,
         onDispose: async () => {
           const pending = activation
           if (pending) await disposeOwned(await pending)
           else await disposeOwned(owned)
         }
+      },
+      {
+        ...COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRIBUTION,
+        contract: COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRACT,
+        value: coordinatorCloudCommandDescriptor
       }
     ]
   }
@@ -290,7 +350,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
       define({
         id: COLLABORATION_CAPABILITY_IDS.endpointChallengePoll,
         title: 'Poll endpoint verification',
-        description: 'Redeems the package-secret polling credential and saves the one-time user credential in the secret store.',
+        description: 'Reads the authenticated OIDC User endpoint challenge until the exact provider identity is verified.',
         effect: 'read',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
@@ -305,7 +365,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
       capability(
         COLLABORATION_CAPABILITY_IDS.agentRegister,
         'Register this Agent',
-        'Registers the stable installation and saves the one-time device credential in the package secret store.',
+        'Registers the active Identity Device as an Agent through Identity-owned private authority.',
         'external-write',
         collaborationAgentRegisterInputSchema,
         collaborationAgentRegisterResultSchema,
@@ -399,6 +459,33 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
             )
           }
         })
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate,
+        'Update local Worker acceptance policy',
+        'Stores manual or automatic Task offer handling for this exact local Agent Device.',
+        'external-write',
+        collaborationWorkerAcceptanceUpdateInputSchema,
+        collaborationWorkerAcceptanceUpdateResultSchema,
+        async (raw) => ({
+          output: await options.getRuntime().updateWorkerAcceptancePolicy(
+            collaborationWorkerAcceptanceUpdateInputSchema.parse(raw) as CollaborationWorkerAcceptanceUpdateInput
+          )
+        })
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.taskOfferDecide,
+        'Decide a Worker Task offer',
+        'Accepts or explicitly rejects one exact manual Worker execution offer.',
+        'external-write',
+        collaborationTaskOfferDecisionInputSchema,
+        collaborationTaskOfferDecisionResultSchema,
+        async (raw) => {
+          await options.getRuntime().decideTaskOffer(
+            collaborationTaskOfferDecisionInputSchema.parse(raw) as CollaborationTaskOfferDecisionInput
+          )
+          return { output: { accepted: true as const } }
+        }
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.managedContainerInspect,
