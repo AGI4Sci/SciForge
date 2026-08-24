@@ -1,6 +1,5 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { HttpCollaborationIdentityClient } from '@sciforge/collaboration-identity'
 import {
   AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
   AuthenticatedCloudTransportError,
@@ -9,10 +8,7 @@ import {
   type AuthenticatedCloudResponse,
   type AuthenticatedCloudTransportStatus
 } from '../authenticated-cloud-transport.js'
-import type {
-  DomainMainExternalNavigationHost,
-  DomainMainPackageSecretStoreHost
-} from '@sciforge/domain-sdk/host'
+import type { DomainMainExternalNavigationHost } from '@sciforge/domain-sdk/host'
 import type {
   CloudIdentitySnapshot,
   DesktopDeviceActionResult,
@@ -22,12 +18,18 @@ import type {
 } from '../contract.js'
 import { LocalCloudIdentityLinkService } from './cloud-link-service.js'
 import {
-  createUnavailableCollaborationIdentityClient,
+  createUnavailableCloudIdentityClient,
   resolveDesktopIdentityRuntimeConfig
 } from './cloud-runtime-config.js'
+import { HttpCloudIdentityClient } from './cloud-identity-client.js'
 import { DesktopDeviceService } from './device-service.js'
 import { DesktopIdentityService } from './oidc-service.js'
-import { PackageDesktopIdentitySessionStore } from './session-store.js'
+import { PrivateVaultDesktopIdentitySessionStore } from './session-store.js'
+import type { IdentityPrivateVault } from './private-vault.js'
+import type {
+  DeviceFactSignatureMetadata,
+  DeviceFactSigningRequest
+} from '@sciforge/collaboration-contracts'
 
 type CloudIdentityRuntimeError = NonNullable<CloudIdentitySnapshot['error']>
 
@@ -41,7 +43,7 @@ export type CloudIdentityRuntimeOptions = Readonly<{
   appRoot: string
   environment: Readonly<Record<string, string | undefined>>
   installationId: string
-  packageSecrets: DomainMainPackageSecretStoreHost
+  privateVault: IdentityPrivateVault
   externalNavigation?: DomainMainExternalNavigationHost
   appVersion?: string
   fetchImpl?: typeof fetch
@@ -99,11 +101,11 @@ export class CloudIdentityRuntime {
       ? identityConfig.cloudBaseUrl.replace(/\/+$/u, '')
       : null
     const identityClient = identityConfig.mode === 'http'
-      ? new HttpCollaborationIdentityClient({
+      ? new HttpCloudIdentityClient({
           baseUrl: cloudBaseUrl!,
           ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {})
         })
-      : createUnavailableCollaborationIdentityClient(identityConfig.error)
+      : createUnavailableCloudIdentityClient(identityConfig.error)
     const appVersion = options.appVersion ?? await readApplicationVersion(options.appRoot)
     const linkResult = createCloudIdentityLinks(options.userDataDir)
     const links = linkResult.links
@@ -130,7 +132,7 @@ export class CloudIdentityRuntime {
         clientId: 'sciforge-desktop',
         audience: 'sciforge-cloud-api',
         identityClient,
-        sessionStore: new PackageDesktopIdentitySessionStore(options.packageSecrets),
+        sessionStore: new PrivateVaultDesktopIdentitySessionStore(options.privateVault),
         linkAuthenticatedUser: (user) => {
           links.linkIdentity({
             cloudUserId: user.userId,
@@ -148,7 +150,7 @@ export class CloudIdentityRuntime {
         identity,
         client: identityClient,
         installationSeed: options.installationId,
-        secrets: options.packageSecrets,
+        vault: options.privateVault,
         appVersion,
         linkDevice: (cloudDevice) => {
           links.linkDevice(cloudDevice.userId, cloudDevice.deviceId, cloudDevice.status)
@@ -272,14 +274,41 @@ export class CloudIdentityRuntime {
     return this.snapshot()
   }
 
+  async signDeviceFactAttestation(
+    request: DeviceFactSigningRequest
+  ): Promise<DeviceFactSignatureMetadata> {
+    this.#assertOpen()
+    return this.#device.signDeviceFactAttestation(request)
+  }
+
   authenticatedCloudTransportStatus(): AuthenticatedCloudTransportStatus {
     this.#assertOpen()
-    return this.#cloudBaseUrl
-      ? { state: 'ready', baseUrl: this.#cloudBaseUrl }
-      : {
-          state: 'unavailable',
-          reason: this.#transportUnavailableReason ?? 'SciForge Cloud is not configured.'
-        }
+    if (!this.#cloudBaseUrl) {
+      return {
+        state: 'unavailable',
+        reason: this.#transportUnavailableReason ?? 'SciForge Cloud is not configured.'
+      }
+    }
+    const identity = this.#identity.getStatus()
+    if (identity.state !== 'signed-in') {
+      return { state: 'identity_required', baseUrl: this.#cloudBaseUrl }
+    }
+    const device = this.#device.getStatus()
+    if (device.state !== 'active') {
+      return {
+        state: 'device_required',
+        baseUrl: this.#cloudBaseUrl,
+        reason: device.state === 'revoked'
+          ? 'This Desktop Device has been revoked.'
+          : 'Register this Desktop Device before continuing.'
+      }
+    }
+    return {
+      state: 'ready',
+      baseUrl: this.#cloudBaseUrl,
+      userId: identity.user.userId,
+      deviceId: device.device.deviceId
+    }
   }
 
   async executeAuthenticatedCloud(
@@ -328,7 +357,8 @@ export class CloudIdentityRuntime {
           headers: {
             authorization: `Bearer ${accessToken}`,
             accept: 'application/json',
-            'content-type': 'application/json'
+            'content-type': 'application/json',
+            ...authenticatedCloudIdempotencyHeader(request.payload)
           },
           body: JSON.stringify(request.payload),
           ...(options?.signal ? { signal: options.signal } : {})
@@ -430,6 +460,16 @@ export class CloudIdentityRuntime {
   #assertOpen(): void {
     if (this.#closed) throw new Error('Cloud identity runtime is closed.')
   }
+}
+
+function authenticatedCloudIdempotencyHeader(
+  payload: AuthenticatedCloudRequest['payload']
+): Readonly<Record<string, string>> {
+  if (payload === null || Array.isArray(payload) || typeof payload !== 'object') return {}
+  const idempotencyKey = payload.idempotencyKey
+  return typeof idempotencyKey === 'string'
+    ? { 'idempotency-key': idempotencyKey }
+    : {}
 }
 
 const MAX_AUTHENTICATED_CLOUD_RESPONSE_BYTES = 1_048_576

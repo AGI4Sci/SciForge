@@ -1,7 +1,7 @@
 import {
-  CollaborationIdentityClientError,
-  type CollaborationIdentityClient
-} from '@sciforge/collaboration-identity'
+  CloudIdentityClientError,
+  type CloudIdentityClient
+} from './cloud-identity-client.js'
 
 export type DesktopIdentityRuntimeConfig =
   | Readonly<{ mode: 'http'; issuer: string; cloudBaseUrl: string }>
@@ -39,11 +39,11 @@ export function resolveDesktopIdentityRuntimeConfig(input: Readonly<{
   return { mode: 'http', issuer: configuredIssuer, cloudBaseUrl: configuredCloudBaseUrl }
 }
 
-export function createUnavailableCollaborationIdentityClient(
+export function createUnavailableCloudIdentityClient(
   message: string
-): CollaborationIdentityClient {
+): CloudIdentityClient {
   const fail = (): never => {
-    throw new CollaborationIdentityClientError('provider_unavailable', message)
+    throw new CloudIdentityClientError('provider_unavailable', message)
   }
   return {
     getCurrentUser: async () => fail(),

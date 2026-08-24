@@ -32,6 +32,24 @@ export const IDENTITY_AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT =
   domainPackageDefinition.contributionContracts[
     IDENTITY_AUTHENTICATED_CLOUD_TRANSPORT_CONTRIBUTION.id
   ]!
+export const IDENTITY_DEVICE_FACT_ATTESTATION_SIGNING_CONTRIBUTION = contributionFor(
+  'main',
+  'main.extension',
+  'identity-access.device-fact-attestation-signing'
+)
+export const IDENTITY_DEVICE_FACT_ATTESTATION_SIGNING_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    IDENTITY_DEVICE_FACT_ATTESTATION_SIGNING_CONTRIBUTION.id
+  ]!
+export const IDENTITY_AGENT_CLOUD_RUNTIME_CONTRIBUTION = contributionFor(
+  'main',
+  'main.extension',
+  'identity-access.agent-cloud-runtime'
+)
+export const IDENTITY_AGENT_CLOUD_RUNTIME_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    IDENTITY_AGENT_CLOUD_RUNTIME_CONTRIBUTION.id
+  ]!
 export const IDENTITY_RENDERER_COMMAND_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.command'

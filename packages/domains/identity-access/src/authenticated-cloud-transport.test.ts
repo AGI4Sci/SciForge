@@ -44,12 +44,19 @@ describe('authenticated Cloud transport contract', () => {
 
   it('validates provider status and provider output', async () => {
     const transport = defineAuthenticatedCloudTransport({
-      status: () => ({ state: 'ready', baseUrl: 'https://cloud.example.test' }),
+      status: () => ({
+        state: 'ready',
+        baseUrl: 'https://cloud.example.test',
+        userId: 'usr_CloudUser000001',
+        deviceId: 'dev_CloudDevice0001'
+      }),
       execute: async () => ({ contractVersion: 1, status: 200, body: { ok: true } })
     })
     expect(transport.status()).toEqual({
       state: 'ready',
-      baseUrl: 'https://cloud.example.test'
+      baseUrl: 'https://cloud.example.test',
+      userId: 'usr_CloudUser000001',
+      deviceId: 'dev_CloudDevice0001'
     })
     await expect(transport.execute({
       contractVersion: 1,
@@ -58,7 +65,12 @@ describe('authenticated Cloud transport contract', () => {
     })).resolves.toMatchObject({ status: 200, body: { ok: true } })
 
     const drifted = defineAuthenticatedCloudTransport({
-      status: () => ({ state: 'ready', baseUrl: 'https://cloud.example.test' }),
+      status: () => ({
+        state: 'ready',
+        baseUrl: 'https://cloud.example.test',
+        userId: 'usr_CloudUser000001',
+        deviceId: 'dev_CloudDevice0001'
+      }),
       execute: async () => ({ contractVersion: 1, status: 200, body: null, token: 'secret' } as never)
     })
     await expect(drifted.execute({

@@ -8,6 +8,16 @@ import {
   type AuthenticatedCloudTransport
 } from '../authenticated-cloud-transport.js'
 import {
+  DEVICE_FACT_ATTESTATION_SIGNING_CONTRACT_VERSION,
+  DEVICE_FACT_ATTESTATION_SIGNING_SERVICE_ID,
+  type DeviceFactAttestationSigningService
+} from '../device-fact-attestation-signing.js'
+import {
+  AGENT_CLOUD_RUNTIME_CONTRACT_VERSION,
+  AGENT_CLOUD_RUNTIME_SERVICE_ID,
+  type AgentCloudRuntime
+} from '../agent-cloud-runtime.js'
+import {
   IDENTITY_CAPABILITY_IDS,
   IDENTITY_RESET_CONFIRMATION
 } from '../contract.js'
@@ -25,7 +35,7 @@ afterEach(() => {
 })
 
 describe('Identity main contributions', () => {
-  it('publishes the token-free authenticated Cloud transport through Host mediation', async () => {
+  it('publishes token-free User, Agent, and Device-signing services through Host mediation', async () => {
     const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-transport-'))
     roots.push(root)
     const registered = new Map<string, object>()
@@ -39,7 +49,6 @@ describe('Identity main contributions', () => {
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
-      packageSecrets: memorySecrets(),
       internalServices: {
         register: register as never,
         acquire: vi.fn() as never
@@ -62,6 +71,39 @@ describe('Identity main contributions', () => {
         allowedConsumerModuleIds: ['sciforge.collaboration', 'sciforge.project-coordinator']
       }
     })
+    expect(register).toHaveBeenCalledWith(expect.objectContaining({
+      serviceId: DEVICE_FACT_ATTESTATION_SIGNING_SERVICE_ID,
+      contractVersion: DEVICE_FACT_ATTESTATION_SIGNING_CONTRACT_VERSION,
+      allowedConsumerModuleIds: ['sciforge.project-coordinator']
+    }))
+    expect(entry.contributions[4]).toMatchObject({
+      id: 'identity-access.device-fact-attestation-signing',
+      kind: 'main.extension',
+      contract: {
+        location: 'main.internal-service-descriptor',
+        serviceId: DEVICE_FACT_ATTESTATION_SIGNING_SERVICE_ID,
+        contractVersion: DEVICE_FACT_ATTESTATION_SIGNING_CONTRACT_VERSION,
+        allowedConsumerModuleIds: ['sciforge.project-coordinator']
+      }
+    })
+    expect(entry.contributions[4]).not.toMatchObject({
+      contract: { allowedConsumerModuleIds: expect.arrayContaining(['sciforge.collaboration']) }
+    })
+    expect(register).toHaveBeenCalledWith(expect.objectContaining({
+      serviceId: AGENT_CLOUD_RUNTIME_SERVICE_ID,
+      contractVersion: AGENT_CLOUD_RUNTIME_CONTRACT_VERSION,
+      allowedConsumerModuleIds: ['sciforge.collaboration']
+    }))
+    expect(entry.contributions[5]).toMatchObject({
+      id: 'identity-access.agent-cloud-runtime',
+      kind: 'main.extension',
+      contract: {
+        location: 'main.internal-service-descriptor',
+        serviceId: AGENT_CLOUD_RUNTIME_SERVICE_ID,
+        contractVersion: AGENT_CLOUD_RUNTIME_CONTRACT_VERSION,
+        allowedConsumerModuleIds: ['sciforge.collaboration']
+      }
+    })
     const transport = registered.get(
       `${AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID}@${AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION}`
     ) as AuthenticatedCloudTransport
@@ -74,6 +116,22 @@ describe('Identity main contributions', () => {
       operationId: 'sciforge.cloud.command',
       payload: {}
     })).rejects.toMatchObject({ code: 'transport_unavailable' })
+    const signer = registered.get(
+      `${DEVICE_FACT_ATTESTATION_SIGNING_SERVICE_ID}@${DEVICE_FACT_ATTESTATION_SIGNING_CONTRACT_VERSION}`
+    ) as DeviceFactAttestationSigningService
+    await expect(signer.signDeviceFact({
+      purpose: 'project-content-provisioning-attestation',
+      factDigest: 'a'.repeat(64),
+      factRevision: 1,
+      observedAt: '2026-08-18T01:59:00.000Z'
+    })).rejects.toMatchObject({ code: 'signer_unavailable' })
+    const agentRuntime = registered.get(
+      `${AGENT_CLOUD_RUNTIME_SERVICE_ID}@${AGENT_CLOUD_RUNTIME_CONTRACT_VERSION}`
+    ) as AgentCloudRuntime
+    await expect(agentRuntime.authorityStatus('agt_000000000000000000000000')).resolves.toEqual({
+      state: 'unavailable',
+      reason: 'Cloud identity runtime is not active.'
+    })
   })
 
   it('declares one UI-only global capability set with governed mutation policies', () => {
@@ -114,7 +172,6 @@ describe('Identity main contributions', () => {
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
-      packageSecrets: memorySecrets(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -154,7 +211,6 @@ describe('Identity main contributions', () => {
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
-      packageSecrets: memorySecrets(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -356,7 +412,6 @@ describe('Identity main contributions', () => {
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
-      packageSecrets: memorySecrets(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -377,18 +432,12 @@ describe('Identity main contributions', () => {
 
   it('fails closed when the Host does not provide a canonical installation identity', () => {
     for (const getDeviceId of [undefined, () => ' device-1']) {
-      const entry = createDomainMainEntry({
+      expect(() => createDomainMainEntry({
         getUserDataDir: () => '/private/tmp/sciforge-identity-missing-device',
         ...(getDeviceId ? { getDeviceId } : {}),
-        packageSecrets: memorySecrets(),
         internalServices: memoryInternalServices(),
         defineCapability: (definition) => definition
-      })
-      const provider = entry.contributions[1]!.value as { current(): unknown }
-
-      expect(() => provider.current()).toThrow()
-      entry.contributions[0]!.onDispose?.()
-      entry.contributions[1]!.onDispose?.()
+      })).toThrow()
     }
   })
 
@@ -399,7 +448,6 @@ describe('Identity main contributions', () => {
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
-      packageSecrets: memorySecrets(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -424,7 +472,6 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       getAppVersion,
-      packageSecrets: memorySecrets(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -452,7 +499,6 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       getAppVersion: () => '1.0.0',
-      packageSecrets: memorySecrets(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -485,7 +531,6 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       getAppVersion: () => '1.0.0',
-      packageSecrets: memorySecrets(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -528,7 +573,6 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       getAppVersion: () => '1.0.0',
-      packageSecrets: memorySecrets(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -573,7 +617,6 @@ describe('Identity main contributions', () => {
         getUserDataDir: () => root,
         getDeviceId: () => 'device-1',
         getAppVersion: () => '1.0.0',
-        packageSecrets: memorySecrets(),
         internalServices: memoryInternalServices(),
         defineCapability: (definition) => definition
       })
@@ -598,20 +641,6 @@ describe('Identity main contributions', () => {
 
 function codedError(code: string): Error & { code: string } {
   return Object.assign(new Error(code), { code })
-}
-
-function memorySecrets() {
-  const values = new Map<string, string>()
-  return {
-    has: async (key: string) => values.has(key),
-    read: async (key: string) => values.get(key) ?? null,
-    write: async (key: string, value: string) => {
-      values.set(key, value)
-    },
-    remove: async (key: string) => {
-      values.delete(key)
-    }
-  }
 }
 
 function memoryInternalServices() {

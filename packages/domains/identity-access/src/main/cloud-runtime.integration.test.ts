@@ -30,6 +30,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
     let revokedTokenRejected = false
     const requestFacts: Array<{ path: string; bearer: boolean }> = []
     const commandPayloads: unknown[] = []
+    const commandIdempotencyKeys: Array<string | undefined> = []
     let issuer = ''
     let baseUrl = ''
 
@@ -137,6 +138,11 @@ describe('CloudIdentityRuntime HTTP integration', () => {
           return
         }
         if (url.pathname === '/v1/commands') {
+          commandIdempotencyKeys.push(
+            typeof request.headers['idempotency-key'] === 'string'
+              ? request.headers['idempotency-key']
+              : undefined
+          )
           commandPayloads.push(await readRequestJson(request))
           sendJson(response, 200, {
             protocolVersion: '1.0',
@@ -172,8 +178,8 @@ describe('CloudIdentityRuntime HTTP integration', () => {
     baseUrl = `http://127.0.0.1:${address.port}`
     issuer = `${baseUrl}/realms/SciForge`
 
-    const packageSecrets = memorySecrets({
-      'oidc.session': JSON.stringify({
+    const privateVault = memoryVault({
+      'oidc-session:': JSON.stringify({
         version: 1,
         issuer,
         clientId: 'sciforge-desktop',
@@ -196,7 +202,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
         SCIFORGE_CLOUD_BASE_URL: baseUrl
       },
       installationId: installationSeed,
-      packageSecrets,
+      privateVault,
       externalNavigation,
       appVersion: '0.2.17'
     })
@@ -233,7 +239,11 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       await expect(runtime.executeAuthenticatedCloud({
         contractVersion: 1,
         operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
-        payload: { protocolVersion: '1.0', type: 'project.list' }
+        payload: {
+          protocolVersion: '1.0',
+          type: 'project.transition',
+          idempotencyKey: 'idem_IdentityTransport0001'
+        }
       })).resolves.toEqual({
         contractVersion: 1,
         status: 200,
@@ -243,7 +253,12 @@ describe('CloudIdentityRuntime HTTP integration', () => {
           projects: []
         }
       })
-      expect(commandPayloads).toEqual([{ protocolVersion: '1.0', type: 'project.list' }])
+      expect(commandPayloads).toEqual([{
+        protocolVersion: '1.0',
+        type: 'project.transition',
+        idempotencyKey: 'idem_IdentityTransport0001'
+      }])
+      expect(commandIdempotencyKeys).toEqual(['idem_IdentityTransport0001'])
       let principalVersion = expectLatestPrincipal(
         principalSnapshots,
         'cloud-authenticated',
@@ -355,7 +370,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
 
       const firstRotatedRefreshToken = currentRefreshToken
       expect(refreshRotation).toBe(3)
-      expect(packageSecrets.value('oidc.session')).toContain(firstRotatedRefreshToken)
+      expect(privateVault.value({ kind: 'oidc-session' })).toContain(firstRotatedRefreshToken)
       runtime.close()
       disposePrincipal()
       principal.close()
@@ -369,7 +384,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
           SCIFORGE_CLOUD_BASE_URL: baseUrl
         },
         installationId: installationSeed,
-        packageSecrets,
+        privateVault,
         externalNavigation,
         appVersion: '0.2.17'
       })
@@ -380,7 +395,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
         })
         expect(refreshRotation).toBe(4)
         expect(currentRefreshToken).not.toBe(firstRotatedRefreshToken)
-        expect(packageSecrets.value('oidc.session')).toContain(currentRefreshToken)
+        expect(privateVault.value({ kind: 'oidc-session' })).toContain(currentRefreshToken)
         expect(restartedPrincipal.current()?.assurance).toBe('cloud-authenticated')
 
         const revokedRefreshToken = currentRefreshToken
@@ -389,7 +404,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
           device: { state: 'signed-out' }
         })
         expect(revocationAccepted).toBe(true)
-        expect(packageSecrets.value('oidc.session')).toBeNull()
+        expect(privateVault.value({ kind: 'oidc-session' })).toBeNull()
         expect(restartedPrincipal.current()?.assurance).toBe('local-selection')
         expect(issueTarget.mock.calls.some(([input]) => (
           input.url.startsWith(`${issuer}/protocol/openid-connect/logout?`) &&
@@ -398,7 +413,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
 
         restartedRuntime.close()
         restartedPrincipal.close()
-        await packageSecrets.write('oidc.session', JSON.stringify({
+        await privateVault.write({ kind: 'oidc-session' }, JSON.stringify({
           version: 1,
           issuer,
           clientId: 'sciforge-desktop',
@@ -414,7 +429,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
             SCIFORGE_CLOUD_BASE_URL: baseUrl
           },
           installationId: installationSeed,
-          packageSecrets,
+          privateVault,
           externalNavigation,
           appVersion: '0.2.17'
         })
@@ -425,7 +440,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
             error: { source: 'identity', code: 'OIDC_SESSION_EXPIRED' }
           })
           expect(revokedTokenRejected).toBe(true)
-          expect(packageSecrets.value('oidc.session')).toBeNull()
+          expect(privateVault.value({ kind: 'oidc-session' })).toBeNull()
           expect(rejectedPrincipal.current()?.assurance).toBe('local-selection')
         } finally {
           rejectedRuntime.close()
@@ -463,18 +478,20 @@ function expectLatestPrincipal(
   return latest!.identityVersion
 }
 
-function memorySecrets(initial: Readonly<Record<string, string>>) {
+function memoryVault(initial: Readonly<Record<string, string>>) {
   const values = new Map(Object.entries(initial))
+  const key = (ref: Readonly<{ kind: string; agentId?: string }>) =>
+    `${ref.kind}:${ref.agentId ?? ''}`
   return {
-    has: vi.fn(async (key: string) => values.has(key)),
-    read: vi.fn(async (key: string) => values.get(key) ?? null),
-    write: vi.fn(async (key: string, value: string) => {
-      values.set(key, value)
+    has: vi.fn(async (ref: Readonly<{ kind: string; agentId?: string }>) => values.has(key(ref))),
+    read: vi.fn(async (ref: Readonly<{ kind: string; agentId?: string }>) => values.get(key(ref)) ?? null),
+    write: vi.fn(async (ref: Readonly<{ kind: string; agentId?: string }>, value: string) => {
+      values.set(key(ref), value)
     }),
-    remove: vi.fn(async (key: string) => {
-      values.delete(key)
+    remove: vi.fn(async (ref: Readonly<{ kind: string; agentId?: string }>) => {
+      values.delete(key(ref))
     }),
-    value: (key: string) => values.get(key) ?? null
+    value: (ref: Readonly<{ kind: string; agentId?: string }>) => values.get(key(ref)) ?? null
   }
 }
 

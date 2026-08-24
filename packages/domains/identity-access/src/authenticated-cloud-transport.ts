@@ -3,6 +3,7 @@ import {
   domainPackageJsonValueSchema,
   type DomainPackageJsonValue
 } from '@sciforge/domain-sdk/contract'
+import { deviceIdSchema, userIdSchema } from '@sciforge/collaboration-contracts'
 
 export const AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID =
   'sciforge.authenticated-cloud-transport' as const
@@ -43,7 +44,18 @@ export const authenticatedCloudResponseSchema = z.object({
 export const authenticatedCloudTransportStatusSchema = z.discriminatedUnion('state', [
   z.object({
     state: z.literal('ready'),
+    baseUrl: z.url().max(2_048),
+    userId: userIdSchema,
+    deviceId: deviceIdSchema
+  }).strict().readonly(),
+  z.object({
+    state: z.literal('identity_required'),
     baseUrl: z.url().max(2_048)
+  }).strict().readonly(),
+  z.object({
+    state: z.literal('device_required'),
+    baseUrl: z.url().max(2_048),
+    reason: z.string().trim().min(1).max(2_048)
   }).strict().readonly(),
   z.object({
     state: z.literal('unavailable'),

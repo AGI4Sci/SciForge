@@ -9,9 +9,9 @@
   "module": {
     "id": "sciforge.identity-access",
     "displayName": "Identity and Access",
-    "version": "1.2.0",
+    "version": "2.0.0",
     "hostApi": {
-      "minimum": "1.4.0",
+      "minimum": "1.5.0",
       "maximumExclusive": "2.0.0"
     },
     "priority": 900
@@ -24,6 +24,22 @@
       "allowedConsumerModuleIds": [
         "sciforge.collaboration",
         "sciforge.project-coordinator"
+      ]
+    },
+    "identity-access.device-fact-attestation-signing": {
+      "location": "main.internal-service-descriptor",
+      "serviceId": "sciforge.device-fact-attestation-signing",
+      "contractVersion": "1.0.0",
+      "allowedConsumerModuleIds": [
+        "sciforge.project-coordinator"
+      ]
+    },
+    "identity-access.agent-cloud-runtime": {
+      "location": "main.internal-service-descriptor",
+      "serviceId": "sciforge.agent-cloud-runtime",
+      "contractVersion": "1.0.0",
+      "allowedConsumerModuleIds": [
+        "sciforge.collaboration"
       ]
     },
     "identity-access.workbench-toolbar-action": {
@@ -58,6 +74,18 @@
         },
         {
           "id": "identity-access.authenticated-cloud-transport",
+          "kind": "main.extension",
+          "version": "1.0.0",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.device-fact-attestation-signing",
+          "kind": "main.extension",
+          "version": "1.0.0",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.agent-cloud-runtime",
           "kind": "main.extension",
           "version": "1.0.0",
           "priority": 900
