@@ -347,7 +347,12 @@ export class DesktopDeviceService {
 
   #handleIdentityStatus(status: DesktopIdentityStatus): void {
     const nextAuthority = identityAuthority(status)
-    if (sameIdentityAuthority(this.#identityAuthority, nextAuthority)) return
+    if (sameIdentityAuthority(this.#identityAuthority, nextAuthority)) {
+      if (!this.#closed && status.state === 'signed-in') {
+        void this.refresh().catch(() => undefined)
+      }
+      return
+    }
     this.#identityAuthority = nextAuthority
     this.#identityEpoch += 1
     this.#deviceOperationSequence += 1

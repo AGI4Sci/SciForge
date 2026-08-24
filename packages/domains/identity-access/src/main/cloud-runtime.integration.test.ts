@@ -225,6 +225,28 @@ describe('CloudIdentityRuntime HTTP integration', () => {
         0
       )
 
+      deviceMode = 'revoked'
+      await expect(runtime.initialize()).resolves.toMatchObject({
+        identity: { state: 'signed-in' },
+        device: { state: 'revoked' }
+      })
+      expect(refreshRotation).toBe(3)
+      expect(principal.current()?.assurance).toBe('local-selection')
+      principalVersion = expectLatestPrincipal(
+        principalSnapshots,
+        'local-selection',
+        principalVersion
+      )
+
+      deviceMode = 'active'
+      await runtime.refreshDevices()
+      expect(principal.current()?.assurance).toBe('cloud-authenticated')
+      principalVersion = expectLatestPrincipal(
+        principalSnapshots,
+        'cloud-authenticated',
+        principalVersion
+      )
+
       deviceMode = 'missing'
       await expect(runtime.refreshDevices()).resolves.toMatchObject({
         device: { state: 'not-enrolled' }
@@ -301,7 +323,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       expect(principal.current()?.assurance).toBe('cloud-authenticated')
 
       const firstRotatedRefreshToken = currentRefreshToken
-      expect(refreshRotation).toBe(2)
+      expect(refreshRotation).toBe(3)
       expect(packageSecrets.value('oidc.session')).toContain(firstRotatedRefreshToken)
       runtime.close()
       disposePrincipal()
@@ -325,7 +347,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
           identity: { state: 'signed-in' },
           device: { state: 'active' }
         })
-        expect(refreshRotation).toBe(3)
+        expect(refreshRotation).toBe(4)
         expect(currentRefreshToken).not.toBe(firstRotatedRefreshToken)
         expect(packageSecrets.value('oidc.session')).toContain(currentRefreshToken)
         expect(restartedPrincipal.current()?.assurance).toBe('cloud-authenticated')

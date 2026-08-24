@@ -188,7 +188,11 @@ describe('DesktopDeviceService', () => {
       ok: true,
       status: { state: 'active' }
     })
+    const revalidated = deferred<void>()
     states.length = 0
+    const disposeRevalidation = service.subscribe((status) => {
+      if (status.state === 'active') revalidated.resolve()
+    })
 
     identity.setStatus(
       signedInStatus('usr_CloudUser000001', 'oid_CloudIdent0001'),
@@ -197,12 +201,56 @@ describe('DesktopDeviceService', () => {
 
     expect(service.getStatus()).toMatchObject({ state: 'active' })
     expect(states).toEqual([])
-    await service.refresh()
+    await revalidated.promise
     expect(listDevices.mock.calls.map(([context]) => context.accessToken)).toEqual([
       'access-token-one',
       'access-token-two'
     ])
     expect(states).toEqual(['active'])
+    disposeRevalidation()
+    service.close()
+  })
+
+  it('automatically drops the ACTIVE Device lease when token refresh finds it revoked', async () => {
+    const listDevices = vi.fn()
+      .mockResolvedValueOnce({ devices: [cloudDevice('active')] })
+      .mockResolvedValueOnce({ devices: [cloudDevice('revoked')] })
+    const identity = identityHarness(
+      signedInStatus('usr_CloudUser000001', 'oid_CloudIdent0001'),
+      'access-token-one'
+    )
+    const states: string[] = []
+    const service = new DesktopDeviceService({
+      identity: identity.identity,
+      client: clientStub({ listDevices }),
+      installationSeed: 'sciforge-local-installation',
+      secrets: memorySecrets(),
+      appVersion: '0.2.17'
+    })
+
+    await expect(service.ensureRegistered()).resolves.toMatchObject({
+      ok: true,
+      status: { state: 'active' }
+    })
+    const revalidated = deferred<void>()
+    const disposeRevalidation = service.subscribe((status) => {
+      states.push(status.state)
+      if (status.state === 'revoked') revalidated.resolve()
+    })
+
+    identity.setStatus(
+      signedInStatus('usr_CloudUser000001', 'oid_CloudIdent0001'),
+      'access-token-two'
+    )
+
+    await revalidated.promise
+    expect(listDevices.mock.calls.map(([context]) => context.accessToken)).toEqual([
+      'access-token-one',
+      'access-token-two'
+    ])
+    expect(service.getStatus()).toMatchObject({ state: 'revoked' })
+    expect(states).toEqual(['revoked'])
+    disposeRevalidation()
     service.close()
   })
 
