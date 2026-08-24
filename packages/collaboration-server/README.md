@@ -29,7 +29,7 @@
 ## 前置条件
 
 - Node.js `>=22.12.0`。
-- PostgreSQL 14 或更新的受支持版本；为协作服务使用独立数据库和最小权限角色。
+- PostgreSQL 17；schema-v11 的 fresh、v4、v5 与 v9 路由均以 PostgreSQL 17 作为发布门禁。
 - npm workspace 安装的仓库依赖。生产发布还必须包含版本完全匹配的 contracts、provider adapter 与 server 包。
 - 反向代理必须支持 HTTP/1.1 WebSocket Upgrade；应用默认只监听 loopback。
 
@@ -78,7 +78,7 @@ npm --workspace @sciforge/collaboration-server run dev
 
 `dev` 会读取包目录中可选的 `.env`。该文件只适合本机、必须被 Git 忽略，并且不应保存共享或生产凭据。更安全的做法是由 shell 的临时环境或本地 secret manager 向进程注入数据库连接。
 
-迁移是显式、幂等、失败即非零退出的发布步骤。不要在每个应用 worker 启动时隐式迁移，也不要让多个 migration unit 并发执行。
+迁移是显式、forward-only、失败即非零退出的发布步骤。schema-v11 只接受四条冻结路线：fresh、共同基线 v4、旧公网 v5、隔离 staging v9；每条已存在路线先核对机械 catalog fingerprint，再执行唯一的 `0011_a_content_space_execution_identity.sql`。不要在每个应用 worker 启动时隐式迁移，也不要让多个 migration unit 并发执行。未知、混合或部分 lineage 必须保持 `/readyz` 失败。
 
 构建产物的等价生产命令是：
 
@@ -102,6 +102,9 @@ node packages/collaboration-server/dist/cli.js
 | `SCIFORGE_COLLABORATION_LISTEN_PORT` | 默认 `8787` | 本地监听端口 |
 | `SCIFORGE_COLLABORATION_BASE_PATH` | 默认空 | 服务自身处理的路径前缀；代理 strip-prefix 时保持空 |
 | `SCIFORGE_COLLABORATION_ALLOWED_ORIGINS` | 默认空 | WebSocket 允许的逗号分隔 Origin；浏览器接入时生产必须显式设置 |
+| `SCIFORGE_COLLABORATION_OIDC_ISSUER` | 可选 | 固定 HTTPS issuer；未设置时不启用 OIDC API |
+| `SCIFORGE_COLLABORATION_OIDC_AUDIENCE` | 默认 `sciforge-cloud-api` | Access Token 必须包含的目标 audience |
+| `SCIFORGE_COLLABORATION_OIDC_ALLOWED_AUTHORIZED_PARTIES` | 默认 `sciforge-desktop,sciforge-web-mobile` | `azp` 精确 allowlist；不能由 token 或请求覆盖 |
 | `SCIFORGE_COLLABORATION_PROVIDER_CONFIG_FILE` | 可选 | 非敏感 provider JSON 的绝对路径；未设置时 provider runtime 不启动 |
 | `SCIFORGE_COLLABORATION_SECRET_DIRECTORY` | 启用 provider 时必填 | provider secret 文件目录 |
 

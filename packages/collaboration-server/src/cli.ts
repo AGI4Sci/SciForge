@@ -43,6 +43,7 @@ const providerConfiguration = providerConfigurationFile
 const providerSecretReader = providerSecretDirectory
   ? await FileProviderSecretReader.create(providerSecretDirectory)
   : undefined
+const oidcIssuer = process.env.SCIFORGE_COLLABORATION_OIDC_ISSUER?.trim()
 
 const runtime = createCollaborationServerRuntime({
   pool,
@@ -50,6 +51,12 @@ const runtime = createCollaborationServerRuntime({
   port: integerEnvironment('SCIFORGE_COLLABORATION_LISTEN_PORT', 8787, 1, 65_535),
   basePath: process.env.SCIFORGE_COLLABORATION_BASE_PATH,
   allowedOrigins: optionalCsvEnvironment('SCIFORGE_COLLABORATION_ALLOWED_ORIGINS'),
+  ...(oidcIssuer ? { oidc: {
+    issuer: oidcIssuer,
+    audience: process.env.SCIFORGE_COLLABORATION_OIDC_AUDIENCE?.trim() || 'sciforge-cloud-api',
+    allowedAuthorizedParties: optionalCsvEnvironment('SCIFORGE_COLLABORATION_OIDC_ALLOWED_AUTHORIZED_PARTIES') ??
+      ['sciforge-desktop', 'sciforge-web-mobile']
+  } } : {}),
   ...(providerConfiguration && providerSecretReader
     ? { providerRuntimeFactory: ({ repository, service, authentication }) => createInstalledProviderRuntime({
         pool, repository, service, authentication,

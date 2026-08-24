@@ -11,6 +11,47 @@ export type StoredUser = {
   revokedAt?: string
 }
 
+export type StoredOidcIdentity = {
+  identityId: string
+  userId: string
+  issuer: string
+  subject: string
+  emailAtLinkTime?: string
+  status: 'active' | 'revoked'
+  revision: number
+  createdAt: string
+  updatedAt: string
+  revokedAt?: string
+}
+
+export type StoredDeviceEnrollment = {
+  enrollmentId: string
+  userId: string
+  installationId: string
+  nonceDigest: string
+  status: 'pending' | 'consumed' | 'expired'
+  revision: number
+  expiresAt: string
+  createdAt: string
+  updatedAt: string
+  consumedAt?: string
+}
+
+export type StoredDevice = {
+  deviceId: string
+  userId: string
+  installationId: string
+  displayName: string
+  platform: import('@sciforge/collaboration-contracts').DevicePlatform
+  publicKeyJwk: import('@sciforge/collaboration-contracts').Ed25519PublicJwk
+  capabilitySummary: string[]
+  status: 'active' | 'revoked'
+  revision: number
+  createdAt: string
+  updatedAt: string
+  revokedAt?: string
+}
+
 export type StoredChallenge = {
   challengeId: string
   requestedUserId?: string
@@ -46,6 +87,7 @@ export type StoredEndpoint = {
 export type StoredAgent = {
   agentId: string
   installationId: string
+  deviceId?: string
   ownerUserId: string
   displayName: string
   nodeType: string
@@ -153,6 +195,7 @@ export type StoredProjectContentSpaceBinding = {
     proofId: string
     issuer: string
     proofDigest: string
+    actorPrincipalDigest: string
     principal: import('@sciforge/collaboration-contracts').ContentSpacePrincipalBinding
     scopes: ['content-space.read', 'content-space.upload-new']
     issuedAt: string
@@ -322,6 +365,7 @@ export type StoredHumanRequest = {
   requestedByAgentId: string
   requiredAssurance: 'basic' | 'verified' | 'strong'
   prompt: string
+  confirmableAction: import('@sciforge/collaboration-contracts').ConfirmableHumanAction | null
   status: 'pending' | 'answered' | 'expired' | 'cancelled'
   revision: number
   expiresAt: string
@@ -337,9 +381,12 @@ export type StoredHumanAnswer = {
   executionId: string
   requestRevision: number
   answeredByUserId: string
-  answeredFromHumanEndpointId: string
+  answeredFromHumanEndpointId: string | null
+  answeredFromOidcIdentityId: string | null
   assurance: 'basic' | 'verified' | 'strong'
   answer: string
+  decision: 'approve' | 'reject' | null
+  confirmationId: string | null
   revision: number
   answeredAt: string
   createdAt: string

@@ -8,6 +8,8 @@ import type {
   StoredAuditEvent,
   StoredChallenge,
   StoredCredential,
+  StoredDevice,
+  StoredDeviceEnrollment,
   StoredEndpoint,
   StoredInboxCursor,
   StoredInboxMessage,
@@ -27,6 +29,7 @@ import type {
   StoredHumanAnswer,
   StoredManagedContainer,
   StoredManagedContainerJob,
+  StoredOidcIdentity,
   StoredRemoteCapabilityApproval
 } from './model.js'
 import type {
@@ -119,12 +122,25 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
   }
 
   getUser(userId: string): Promise<StoredUser | null> { return this.read().getUser(userId) }
+  getOidcIdentity(identityId: string): Promise<StoredOidcIdentity | null> { return this.read().getOidcIdentity(identityId) }
+  getOidcIdentityByIssuerSubject(issuer: string, subject: string): Promise<StoredOidcIdentity | null> {
+    return this.read().getOidcIdentityByIssuerSubject(issuer, subject)
+  }
+  getDeviceEnrollment(enrollmentId: string): Promise<StoredDeviceEnrollment | null> {
+    return this.read().getDeviceEnrollment(enrollmentId)
+  }
+  getDevice(deviceId: string): Promise<StoredDevice | null> { return this.read().getDevice(deviceId) }
+  getDeviceByInstallation(installationId: string): Promise<StoredDevice | null> {
+    return this.read().getDeviceByInstallation(installationId)
+  }
+  listDevicesForUser(userId: string): Promise<StoredDevice[]> { return this.read().listDevicesForUser(userId) }
   getEndpoint(id: string): Promise<StoredEndpoint | null> { return this.read().getEndpoint(id) }
   getEndpointByProviderIdentity(provider: string, realmId: string, providerUserId: string): Promise<StoredEndpoint | null> {
     return this.read().getEndpointByProviderIdentity(provider, realmId, providerUserId)
   }
   getAgent(agentId: string): Promise<StoredAgent | null> { return this.read().getAgent(agentId) }
   getAgentByInstallation(id: string): Promise<StoredAgent | null> { return this.read().getAgentByInstallation(id) }
+  listAgentsForDevice(deviceId: string): Promise<StoredAgent[]> { return this.read().listAgentsForDevice(deviceId) }
   getParticipant(userId: string): Promise<StoredParticipant | null> { return this.read().getParticipant(userId) }
   listEndpointsForUser(userId: string): Promise<StoredEndpoint[]> { return this.read().listEndpointsForUser(userId) }
   listAgentsForUser(userId: string): Promise<StoredAgent[]> { return this.read().listAgentsForUser(userId) }
@@ -185,6 +201,7 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     return this.read().listProjectRecords(projectId, acceptedOnly)
   }
   getCredentialByDigest(digest: string): Promise<StoredCredential | null> { return this.read().getCredentialByDigest(digest) }
+  getCredential(credentialId: string): Promise<StoredCredential | null> { return this.read().getCredential(credentialId) }
   getReceipt(actorKey: string, key: string): Promise<StoredReceipt | null> { return this.read().getReceipt(actorKey, key) }
   getReceiptById(receiptId: string): Promise<StoredReceipt | null> { return this.read().getReceiptById(receiptId) }
   getInboxCursor(recipient: InboxRecipient): Promise<StoredInboxCursor | null> { return this.read().getInboxCursor(recipient) }
@@ -295,6 +312,46 @@ class PostgresReadRepository implements CollaborationReadRepository {
     return result.rows[0] ? mapUser(result.rows[0]) : null
   }
 
+  async getOidcIdentity(identityId: string): Promise<StoredOidcIdentity | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.oidc_identities WHERE identity_id=$1`, [identityId]
+    )
+    return result.rows[0] ? mapOidcIdentity(result.rows[0]) : null
+  }
+
+  async getOidcIdentityByIssuerSubject(issuer: string, subject: string): Promise<StoredOidcIdentity | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.oidc_identities WHERE issuer=$1 AND subject=$2`, [issuer, subject]
+    )
+    return result.rows[0] ? mapOidcIdentity(result.rows[0]) : null
+  }
+
+  async getDeviceEnrollment(enrollmentId: string): Promise<StoredDeviceEnrollment | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.device_enrollments WHERE enrollment_id=$1`, [enrollmentId]
+    )
+    return result.rows[0] ? mapDeviceEnrollment(result.rows[0]) : null
+  }
+
+  async getDevice(deviceId: string): Promise<StoredDevice | null> {
+    const result = await this.sql.query(`SELECT * FROM sciforge_collaboration.devices WHERE device_id=$1`, [deviceId])
+    return result.rows[0] ? mapDevice(result.rows[0]) : null
+  }
+
+  async getDeviceByInstallation(installationId: string): Promise<StoredDevice | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.devices WHERE installation_id=$1`, [installationId]
+    )
+    return result.rows[0] ? mapDevice(result.rows[0]) : null
+  }
+
+  async listDevicesForUser(userId: string): Promise<StoredDevice[]> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.devices WHERE user_id=$1 ORDER BY created_at,device_id`, [userId]
+    )
+    return result.rows.map(mapDevice)
+  }
+
   async getEndpoint(humanEndpointId: string): Promise<StoredEndpoint | null> {
     const result = await this.sql.query(`SELECT * FROM sciforge_collaboration.human_endpoint_bindings WHERE human_endpoint_id = $1`, [humanEndpointId])
     return result.rows[0] ? mapEndpoint(result.rows[0]) : null
@@ -331,6 +388,13 @@ class PostgresReadRepository implements CollaborationReadRepository {
 
   async listAgentsForUser(userId: string): Promise<StoredAgent[]> {
     const result = await this.sql.query(`SELECT * FROM sciforge_collaboration.agent_nodes WHERE owner_user_id=$1 ORDER BY updated_at,agent_id`, [userId])
+    return result.rows.map(mapAgent)
+  }
+
+  async listAgentsForDevice(deviceId: string): Promise<StoredAgent[]> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.agent_nodes WHERE device_id=$1 ORDER BY updated_at,agent_id`, [deviceId]
+    )
     return result.rows.map(mapAgent)
   }
 
@@ -464,7 +528,7 @@ class PostgresReadRepository implements CollaborationReadRepository {
 
   async getCloudResourceRef(resourceRefId: string): Promise<StoredCloudResourceRef | null> {
     const result = await this.sql.query(
-      `SELECT * FROM sciforge_collaboration.resource_refs WHERE resource_ref_id=$1`,
+      `SELECT * FROM sciforge_collaboration.task_resource_refs WHERE resource_ref_id=$1`,
       [resourceRefId]
     )
     return result.rows[0] ? mapCloudResourceRef(result.rows[0]) : null
@@ -472,7 +536,7 @@ class PostgresReadRepository implements CollaborationReadRepository {
 
   async listCloudResourceRefs(taskId: string, executionId: string): Promise<StoredCloudResourceRef[]> {
     const result = await this.sql.query(
-      `SELECT * FROM sciforge_collaboration.resource_refs
+      `SELECT * FROM sciforge_collaboration.task_resource_refs
        WHERE task_id=$1 AND execution_id=$2 ORDER BY ordinal,resource_ref_id`,
       [taskId, executionId]
     )
@@ -558,6 +622,13 @@ class PostgresReadRepository implements CollaborationReadRepository {
     return result.rows[0] ? mapCredential(result.rows[0]) : null
   }
 
+  async getCredential(credentialId: string): Promise<StoredCredential | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.credentials WHERE credential_id=$1`, [credentialId]
+    )
+    return result.rows[0] ? mapCredential(result.rows[0]) : null
+  }
+
   async getReceipt(actorKey: string, idempotencyKey: string): Promise<StoredReceipt | null> {
     const result = await this.sql.query(
       `SELECT * FROM sciforge_collaboration.receipts WHERE actor_key = $1 AND idempotency_key = $2`,
@@ -607,6 +678,40 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     await this.sql.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [lockScope])
   }
 
+  async lockOidcIdentity(issuer: string, subject: string): Promise<void> {
+    const lockScope = JSON.stringify(['oidc-identity', issuer, subject])
+    await this.sql.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [lockScope])
+  }
+
+  async getUserForUpdate(userId: string): Promise<StoredUser | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.user_principals WHERE user_id=$1 FOR UPDATE`, [userId]
+    )
+    return result.rows[0] ? mapUser(result.rows[0]) : null
+  }
+
+  async getOidcIdentityByIssuerSubjectForUpdate(issuer: string, subject: string): Promise<StoredOidcIdentity | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.oidc_identities WHERE issuer=$1 AND subject=$2 FOR UPDATE`,
+      [issuer, subject]
+    )
+    return result.rows[0] ? mapOidcIdentity(result.rows[0]) : null
+  }
+
+  async getDeviceEnrollmentForUpdate(enrollmentId: string): Promise<StoredDeviceEnrollment | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.device_enrollments WHERE enrollment_id=$1 FOR UPDATE`, [enrollmentId]
+    )
+    return result.rows[0] ? mapDeviceEnrollment(result.rows[0]) : null
+  }
+
+  async getDeviceForUpdate(deviceId: string): Promise<StoredDevice | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.devices WHERE device_id=$1 FOR UPDATE`, [deviceId]
+    )
+    return result.rows[0] ? mapDevice(result.rows[0]) : null
+  }
+
   async insertUser(user: StoredUser): Promise<void> {
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.user_principals
@@ -622,6 +727,62 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
        SET display_name=$2,status=$3,revision=$4,updated_at=$5,revoked_at=$6
        WHERE user_id=$1 AND revision=$7`,
       [user.userId, user.displayName, user.status, user.revision, user.updatedAt, user.revokedAt ?? null, expectedRevision]
+    )
+    expectRevision(result.rowCount)
+  }
+
+  async insertOidcIdentity(identity: StoredOidcIdentity): Promise<void> {
+    await this.sql.query(
+      `INSERT INTO sciforge_collaboration.oidc_identities
+       (identity_id,user_id,issuer,subject,email_at_link_time,status,revision,created_at,updated_at,revoked_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [identity.identityId, identity.userId, identity.issuer, identity.subject, identity.emailAtLinkTime ?? null,
+        identity.status, identity.revision, identity.createdAt, identity.updatedAt, identity.revokedAt ?? null]
+    )
+  }
+
+  async insertDeviceEnrollment(enrollment: StoredDeviceEnrollment): Promise<void> {
+    await this.sql.query(
+      `INSERT INTO sciforge_collaboration.device_enrollments
+       (enrollment_id,user_id,installation_id,nonce_digest,status,revision,expires_at,consumed_at,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [enrollment.enrollmentId, enrollment.userId, enrollment.installationId,
+        Buffer.from(enrollment.nonceDigest, 'hex'), enrollment.status, enrollment.revision, enrollment.expiresAt,
+        enrollment.consumedAt ?? null, enrollment.createdAt, enrollment.updatedAt]
+    )
+  }
+
+  async consumeDeviceEnrollment(enrollmentId: string, consumedAt: string, expectedRevision: number): Promise<boolean> {
+    const result = await this.sql.query(
+      `UPDATE sciforge_collaboration.device_enrollments
+       SET status='consumed',consumed_at=$2,revision=revision+1,updated_at=$2
+       WHERE enrollment_id=$1 AND status='pending' AND revision=$3 AND expires_at>$2`,
+      [enrollmentId, consumedAt, expectedRevision]
+    )
+    return result.rowCount === 1
+  }
+
+  async insertDevice(device: StoredDevice): Promise<void> {
+    await this.sql.query(
+      `INSERT INTO sciforge_collaboration.devices
+       (device_id,user_id,installation_id,display_name,platform,public_key_jwk,capability_summary,status,
+        revision,created_at,updated_at,revoked_at)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12)`,
+      [device.deviceId, device.userId, device.installationId, device.displayName, JSON.stringify(device.platform),
+        JSON.stringify(device.publicKeyJwk), JSON.stringify(device.capabilitySummary), device.status, device.revision,
+        device.createdAt, device.updatedAt, device.revokedAt ?? null]
+    )
+  }
+
+  async updateDevice(device: StoredDevice, expectedRevision: number): Promise<void> {
+    const result = await this.sql.query(
+      `UPDATE sciforge_collaboration.devices
+       SET display_name=$2,platform=$3::jsonb,public_key_jwk=$4::jsonb,capability_summary=$5::jsonb,
+           status=$6,revision=$7,updated_at=$8,revoked_at=$9
+       WHERE device_id=$1 AND user_id=$10 AND revision=$11`,
+      [device.deviceId, device.displayName, JSON.stringify(device.platform), JSON.stringify(device.publicKeyJwk),
+        JSON.stringify(device.capabilitySummary), device.status, device.revision, device.updatedAt,
+        device.revokedAt ?? null, device.userId, expectedRevision]
     )
     expectRevision(result.rowCount)
   }
@@ -705,10 +866,10 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
   async insertAgent(agent: StoredAgent): Promise<void> {
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.agent_nodes
-       (agent_id,installation_id,owner_user_id,display_name,node_type,capabilities,status,connection_status,
+       (agent_id,installation_id,device_id,owner_user_id,display_name,node_type,capabilities,status,connection_status,
         credential_generation,revision,last_seen_at,updated_at,revoked_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13)`,
-      [agent.agentId, agent.installationId, agent.ownerUserId, agent.displayName, agent.nodeType,
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14)`,
+      [agent.agentId, agent.installationId, agent.deviceId ?? null, agent.ownerUserId, agent.displayName, agent.nodeType,
         JSON.stringify(agent.capabilities), agent.status, agent.connectionStatus, agent.credentialGeneration,
         agent.revision, agent.lastSeenAt ?? null, agent.updatedAt, agent.revokedAt ?? null]
     )
@@ -717,10 +878,10 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
   async updateAgent(agent: StoredAgent, expectedRevision: number): Promise<void> {
     const result = await this.sql.query(
       `UPDATE sciforge_collaboration.agent_nodes
-       SET owner_user_id=$2,display_name=$3,node_type=$4,capabilities=$5::jsonb,status=$6,connection_status=$7,
-           credential_generation=$8,revision=$9,last_seen_at=$10,updated_at=$11,revoked_at=$12
-       WHERE agent_id=$1 AND revision=$13`,
-      [agent.agentId, agent.ownerUserId, agent.displayName, agent.nodeType, JSON.stringify(agent.capabilities),
+       SET device_id=$2,owner_user_id=$3,display_name=$4,node_type=$5,capabilities=$6::jsonb,status=$7,connection_status=$8,
+           credential_generation=$9,revision=$10,last_seen_at=$11,updated_at=$12,revoked_at=$13
+       WHERE agent_id=$1 AND revision=$14`,
+      [agent.agentId, agent.deviceId ?? null, agent.ownerUserId, agent.displayName, agent.nodeType, JSON.stringify(agent.capabilities),
         agent.status, agent.connectionStatus, agent.credentialGeneration, agent.revision, agent.lastSeenAt ?? null,
         agent.updatedAt, agent.revokedAt ?? null, expectedRevision]
     )
@@ -744,6 +905,18 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
         ? `UPDATE sciforge_collaboration.credentials SET revoked_at=$3 WHERE kind=$1 AND subject_user_id=$2 AND revoked_at IS NULL`
         : `UPDATE sciforge_collaboration.credentials SET revoked_at=$3 WHERE kind=$1 AND subject_agent_id=$2 AND revoked_at IS NULL`,
       [kind, subjectId, revokedAt]
+    )
+    return result.rowCount ?? 0
+  }
+
+  async revokeAgentCredentialsForDevice(deviceId: string, revokedAt: string): Promise<number> {
+    const result = await this.sql.query(
+      `UPDATE sciforge_collaboration.credentials AS credential
+       SET revoked_at=$2
+       FROM sciforge_collaboration.agent_nodes AS agent
+       WHERE agent.device_id=$1 AND credential.kind='agent_device'
+         AND credential.subject_agent_id=agent.agent_id AND credential.revoked_at IS NULL`,
+      [deviceId, revokedAt]
     )
     return result.rowCount ?? 0
   }
@@ -886,11 +1059,11 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.human_requests
        (human_request_id,project_id,task_id,execution_id,target_user_id,requested_by_agent_id,required_assurance,
-        prompt,status,revision,expires_at,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        prompt,confirmable_action,status,revision,expires_at,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [request.humanRequestId, request.projectId, request.taskId, request.executionId,
         request.targetUserId, request.requestedByAgentId, request.requiredAssurance, request.prompt,
-        request.status, request.revision, request.expiresAt, request.createdAt, request.updatedAt]
+        request.confirmableAction, request.status, request.revision, request.expiresAt, request.createdAt, request.updatedAt]
     )
   }
 
@@ -907,11 +1080,13 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.human_answers
        (human_answer_id,human_request_id,project_id,task_id,execution_id,request_revision,answered_by_user_id,
-        answered_from_human_endpoint_id,assurance,answer,revision,answered_at,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        answered_from_human_endpoint_id,answered_from_oidc_identity_id,assurance,answer,decision,confirmation_id,
+        revision,answered_at,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
       [answer.humanAnswerId, answer.humanRequestId, answer.projectId, answer.taskId, answer.executionId,
         answer.requestRevision,
-        answer.answeredByUserId, answer.answeredFromHumanEndpointId, answer.assurance, answer.answer,
+        answer.answeredByUserId, answer.answeredFromHumanEndpointId, answer.answeredFromOidcIdentityId,
+        answer.assurance, answer.answer, answer.decision, answer.confirmationId,
         answer.revision, answer.answeredAt, answer.createdAt, answer.updatedAt]
     )
   }
@@ -983,12 +1158,13 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
       await this.sql.query(
         `INSERT INTO sciforge_collaboration.project_content_space_bindings
          (project_id,root_locator,root_locator_digest,authorization_proof_id,authorization_issuer,
-          authorization_proof_digest,principal_authority,principal_subject,principal_device_id,
+          authorization_proof_digest,authorization_actor_principal_digest,principal_authority,principal_subject,principal_device_id,
           principal_identity_version,authorization_scopes,authorization_issued_at,authorization_expires_at,
           status,revision,created_at,updated_at)
-         VALUES ($1,$2::jsonb,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17)`,
+         VALUES ($1,$2::jsonb,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17,$18)`,
         [binding.projectId, JSON.stringify(binding.rootLocator), binding.rootLocatorDigest,
           binding.authorization.proofId, binding.authorization.issuer, binding.authorization.proofDigest,
+          binding.authorization.actorPrincipalDigest,
           binding.authorization.principal.authority, binding.authorization.principal.subject,
           binding.authorization.principal.deviceId, binding.authorization.principal.identityVersion,
           JSON.stringify(binding.authorization.scopes), binding.authorization.issuedAt,
@@ -999,13 +1175,14 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     const result = await this.sql.query(
       `UPDATE sciforge_collaboration.project_content_space_bindings
        SET root_locator=$2::jsonb,root_locator_digest=$3,authorization_proof_id=$4,
-           authorization_issuer=$5,authorization_proof_digest=$6,principal_authority=$7,
-           principal_subject=$8,principal_device_id=$9,principal_identity_version=$10,
-           authorization_scopes=$11::jsonb,authorization_issued_at=$12,authorization_expires_at=$13,
-           status=$14,revision=$15,updated_at=$16
-       WHERE project_id=$1 AND revision=$17`,
+           authorization_issuer=$5,authorization_proof_digest=$6,authorization_actor_principal_digest=$7,
+           principal_authority=$8,principal_subject=$9,principal_device_id=$10,principal_identity_version=$11,
+           authorization_scopes=$12::jsonb,authorization_issued_at=$13,authorization_expires_at=$14,
+           status=$15,revision=$16,updated_at=$17
+       WHERE project_id=$1 AND revision=$18`,
       [binding.projectId, JSON.stringify(binding.rootLocator), binding.rootLocatorDigest,
         binding.authorization.proofId, binding.authorization.issuer, binding.authorization.proofDigest,
+        binding.authorization.actorPrincipalDigest,
         binding.authorization.principal.authority, binding.authorization.principal.subject,
         binding.authorization.principal.deviceId, binding.authorization.principal.identityVersion,
         JSON.stringify(binding.authorization.scopes), binding.authorization.issuedAt,
@@ -1017,7 +1194,7 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
   async insertCloudResourceRefs(resources: StoredCloudResourceRef[]): Promise<void> {
     for (const resource of resources) {
       await this.sql.query(
-        `INSERT INTO sciforge_collaboration.resource_refs
+        `INSERT INTO sciforge_collaboration.task_resource_refs
          (resource_ref_id,project_id,task_id,execution_id,task_revision,binding_revision,intent_digest,
           role,ordinal,locator,locator_digest,status,invalidated_at,revision,created_at,updated_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16)`,
@@ -1031,7 +1208,7 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
 
   async invalidateCloudResourceRefs(taskId: string, executionId: string, invalidatedAt: string): Promise<number> {
     const result = await this.sql.query(
-      `UPDATE sciforge_collaboration.resource_refs
+      `UPDATE sciforge_collaboration.task_resource_refs
        SET status='invalidated',invalidated_at=$3,revision=revision+1,updated_at=$3
        WHERE task_id=$1 AND execution_id=$2 AND status='available'`,
       [taskId, executionId, invalidatedAt]
@@ -1045,7 +1222,7 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     invalidatedAt: string
   ): Promise<number> {
     const result = await this.sql.query(
-      `UPDATE sciforge_collaboration.resource_refs
+      `UPDATE sciforge_collaboration.task_resource_refs
        SET status='invalidated',invalidated_at=$3,revision=revision+1,updated_at=$3
        WHERE project_id=$1 AND binding_revision=$2 AND status='available'`,
       [projectId, bindingRevision, invalidatedAt]
@@ -1210,6 +1387,34 @@ function mapUser(row: SqlRow): StoredUser {
   return { userId: string(row, 'user_id'), displayName: string(row, 'display_name'), status: string(row, 'status') as StoredUser['status'],
     revision: number(row.revision), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at), revokedAt: optionalIso(row.revoked_at) }
 }
+function mapOidcIdentity(row: SqlRow): StoredOidcIdentity {
+  return {
+    identityId: string(row, 'identity_id'), userId: string(row, 'user_id'), issuer: string(row, 'issuer'),
+    subject: string(row, 'subject'), emailAtLinkTime: optionalString(row, 'email_at_link_time'),
+    status: string(row, 'status') as StoredOidcIdentity['status'], revision: number(row.revision),
+    createdAt: iso(row.created_at), updatedAt: iso(row.updated_at), revokedAt: optionalIso(row.revoked_at)
+  }
+}
+function mapDeviceEnrollment(row: SqlRow): StoredDeviceEnrollment {
+  return {
+    enrollmentId: string(row, 'enrollment_id'), userId: string(row, 'user_id'),
+    installationId: string(row, 'installation_id'), nonceDigest: digest(row.nonce_digest),
+    status: string(row, 'status') as StoredDeviceEnrollment['status'], revision: number(row.revision),
+    expiresAt: iso(row.expires_at), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
+    consumedAt: optionalIso(row.consumed_at)
+  }
+}
+function mapDevice(row: SqlRow): StoredDevice {
+  return {
+    deviceId: string(row, 'device_id'), userId: string(row, 'user_id'),
+    installationId: string(row, 'installation_id'), displayName: string(row, 'display_name'),
+    platform: jsonRecord(row.platform) as StoredDevice['platform'],
+    publicKeyJwk: jsonRecord(row.public_key_jwk) as StoredDevice['publicKeyJwk'],
+    capabilitySummary: jsonStrings(row.capability_summary), status: string(row, 'status') as StoredDevice['status'],
+    revision: number(row.revision), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
+    revokedAt: optionalIso(row.revoked_at)
+  }
+}
 function mapChallenge(row: SqlRow): StoredChallenge {
   return { challengeId: string(row, 'challenge_id'), requestedUserId: optionalString(row, 'requested_user_id'), provider: string(row, 'provider'),
     realmId: string(row, 'realm_id'), expectedProviderUserId: optionalString(row, 'expected_provider_user_id'),
@@ -1225,7 +1430,8 @@ function mapEndpoint(row: SqlRow): StoredEndpoint {
     revision: number(row.revision), verifiedAt: iso(row.verified_at), updatedAt: iso(row.updated_at), revokedAt: optionalIso(row.revoked_at) }
 }
 function mapAgent(row: SqlRow): StoredAgent {
-  return { agentId: string(row, 'agent_id'), installationId: string(row, 'installation_id'), ownerUserId: string(row, 'owner_user_id'),
+  return { agentId: string(row, 'agent_id'), installationId: string(row, 'installation_id'),
+    deviceId: optionalString(row, 'device_id'), ownerUserId: string(row, 'owner_user_id'),
     displayName: string(row, 'display_name'), nodeType: string(row, 'node_type'), capabilities: jsonStrings(row.capabilities),
     status: string(row, 'status') as StoredAgent['status'], connectionStatus: string(row, 'connection_status') as StoredAgent['connectionStatus'],
     credentialGeneration: number(row.credential_generation), revision: number(row.revision), lastSeenAt: optionalIso(row.last_seen_at),
@@ -1280,6 +1486,7 @@ function mapProjectContentSpaceBinding(row: SqlRow): StoredProjectContentSpaceBi
       proofId: string(row, 'authorization_proof_id'),
       issuer: string(row, 'authorization_issuer'),
       proofDigest: string(row, 'authorization_proof_digest'),
+      actorPrincipalDigest: string(row, 'authorization_actor_principal_digest'),
       principal: {
         authority: string(row, 'principal_authority'),
         subject: string(row, 'principal_subject'),
@@ -1408,6 +1615,9 @@ function mapHumanRequest(row: SqlRow): StoredHumanRequest {
     executionId: string(row, 'execution_id'),
     targetUserId: string(row, 'target_user_id'), requestedByAgentId: string(row, 'requested_by_agent_id'),
     requiredAssurance: string(row, 'required_assurance') as StoredHumanRequest['requiredAssurance'], prompt: string(row, 'prompt'),
+    confirmableAction: row.confirmable_action == null
+      ? null
+      : jsonRecord(row.confirmable_action) as StoredHumanRequest['confirmableAction'],
     status: string(row, 'status') as StoredHumanRequest['status'], revision: number(row.revision), expiresAt: iso(row.expires_at),
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) }
 }
@@ -1415,8 +1625,12 @@ function mapHumanAnswer(row: SqlRow): StoredHumanAnswer {
   return { humanAnswerId: string(row, 'human_answer_id'), humanRequestId: string(row, 'human_request_id'),
     projectId: string(row, 'project_id'), taskId: string(row, 'task_id'), executionId: string(row, 'execution_id'),
     requestRevision: number(row.request_revision),
-    answeredByUserId: string(row, 'answered_by_user_id'), answeredFromHumanEndpointId: string(row, 'answered_from_human_endpoint_id'),
-    assurance: string(row, 'assurance') as StoredHumanAnswer['assurance'], answer: string(row, 'answer'), revision: number(row.revision),
+    answeredByUserId: string(row, 'answered_by_user_id'),
+    answeredFromHumanEndpointId: optionalString(row, 'answered_from_human_endpoint_id') ?? null,
+    answeredFromOidcIdentityId: optionalString(row, 'answered_from_oidc_identity_id') ?? null,
+    assurance: string(row, 'assurance') as StoredHumanAnswer['assurance'], answer: string(row, 'answer'),
+    decision: (optionalString(row, 'decision') ?? null) as StoredHumanAnswer['decision'],
+    confirmationId: optionalString(row, 'confirmation_id') ?? null, revision: number(row.revision),
     answeredAt: iso(row.answered_at), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) }
 }
 function mapCursor(row: SqlRow): StoredInboxCursor {

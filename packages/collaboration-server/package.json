@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/collaboration-server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -58,6 +58,7 @@
     "dev": "node --env-file-if-exists=.env --import tsx src/cli.ts",
     "migrate": "node dist/cli.js migrate",
     "test": "vitest run",
+    "test:postgres17": "tsx src/postgres17-contract.integration.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

@@ -4,6 +4,8 @@ import type {
   StoredAuditEvent,
   StoredChallenge,
   StoredCredential,
+  StoredDevice,
+  StoredDeviceEnrollment,
   StoredEndpoint,
   StoredInboxCursor,
   StoredInboxMessage,
@@ -23,15 +25,23 @@ import type {
   StoredHumanAnswer,
   StoredManagedContainer,
   StoredManagedContainerJob,
+  StoredOidcIdentity,
   StoredRemoteCapabilityApproval
 } from './model.js'
 
 export interface CollaborationReadRepository {
   getUser(userId: string): Promise<StoredUser | null>
+  getOidcIdentity(identityId: string): Promise<StoredOidcIdentity | null>
+  getOidcIdentityByIssuerSubject(issuer: string, subject: string): Promise<StoredOidcIdentity | null>
+  getDeviceEnrollment(enrollmentId: string): Promise<StoredDeviceEnrollment | null>
+  getDevice(deviceId: string): Promise<StoredDevice | null>
+  getDeviceByInstallation(installationId: string): Promise<StoredDevice | null>
+  listDevicesForUser(userId: string): Promise<StoredDevice[]>
   getEndpoint(humanEndpointId: string): Promise<StoredEndpoint | null>
   getEndpointByProviderIdentity(provider: string, realmId: string, providerUserId: string): Promise<StoredEndpoint | null>
   getAgent(agentId: string): Promise<StoredAgent | null>
   getAgentByInstallation(installationId: string): Promise<StoredAgent | null>
+  listAgentsForDevice(deviceId: string): Promise<StoredAgent[]>
   getParticipant(userId: string): Promise<StoredParticipant | null>
   listEndpointsForUser(userId: string): Promise<StoredEndpoint[]>
   listAgentsForUser(userId: string): Promise<StoredAgent[]>
@@ -64,6 +74,7 @@ export interface CollaborationReadRepository {
   getProjectRecord(projectRecordId: string): Promise<StoredProjectRecord | null>
   listProjectRecords(projectId: string, acceptedOnly: boolean): Promise<StoredProjectRecord[]>
   getCredentialByDigest(tokenDigest: string): Promise<StoredCredential | null>
+  getCredential(credentialId: string): Promise<StoredCredential | null>
   getReceipt(actorKey: string, idempotencyKey: string): Promise<StoredReceipt | null>
   getReceiptById(receiptId: string): Promise<StoredReceipt | null>
   getInboxCursor(recipient: InboxRecipient): Promise<StoredInboxCursor | null>
@@ -72,8 +83,18 @@ export interface CollaborationReadRepository {
 
 export interface CollaborationTransaction extends CollaborationReadRepository {
   lockIdempotency(actorKey: string, idempotencyKey: string): Promise<void>
+  lockOidcIdentity(issuer: string, subject: string): Promise<void>
+  getUserForUpdate(userId: string): Promise<StoredUser | null>
+  getOidcIdentityByIssuerSubjectForUpdate(issuer: string, subject: string): Promise<StoredOidcIdentity | null>
+  getDeviceEnrollmentForUpdate(enrollmentId: string): Promise<StoredDeviceEnrollment | null>
+  getDeviceForUpdate(deviceId: string): Promise<StoredDevice | null>
   insertUser(user: StoredUser): Promise<void>
   updateUser(user: StoredUser, expectedRevision: number): Promise<void>
+  insertOidcIdentity(identity: StoredOidcIdentity): Promise<void>
+  insertDeviceEnrollment(enrollment: StoredDeviceEnrollment): Promise<void>
+  consumeDeviceEnrollment(enrollmentId: string, consumedAt: string, expectedRevision: number): Promise<boolean>
+  insertDevice(device: StoredDevice): Promise<void>
+  updateDevice(device: StoredDevice, expectedRevision: number): Promise<void>
   insertChallenge(challenge: StoredChallenge): Promise<void>
   getChallenge(challengeId: string): Promise<StoredChallenge | null>
   getChallengeByCodeDigest(challengeDigest: string): Promise<StoredChallenge | null>
@@ -86,6 +107,7 @@ export interface CollaborationTransaction extends CollaborationReadRepository {
   updateAgent(agent: StoredAgent, expectedRevision: number): Promise<void>
   insertCredential(credential: StoredCredential): Promise<void>
   revokeCredentials(kind: StoredCredential['kind'], subjectId: string, revokedAt: string): Promise<number>
+  revokeAgentCredentialsForDevice(deviceId: string, revokedAt: string): Promise<number>
   upsertParticipant(participant: StoredParticipant, expectedRevision: number | null): Promise<void>
   insertProjection(projection: StoredProjection): Promise<void>
   updateProjection(projection: StoredProjection, expectedRevision: number): Promise<void>

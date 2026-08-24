@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { FakeCollaborationRepository, FakeInboxNotifier } from '../../../test-fixtures/collaboration/fake-adapters.mjs'
-import { AuthenticationService, type HumanEndpointActor, type UserActor } from './auth.js'
+import { AuthenticationService, type HumanEndpointActor, type OidcUserActor, type UserActor } from './auth.js'
 import { toInboxMessage } from './contracts.js'
 import { CollaborationService, providerIdentityInboxId } from './service.js'
 import { stableDigest } from './crypto.js'
@@ -159,13 +159,17 @@ describe('CollaborationService canonical transactions', () => {
       payload: 'opaque-host-signed-proof'
     }
     const verifierInputs: Array<Record<string, unknown>> = []
+    let actorPrincipalDigestOverride: string | undefined
     const service = new CollaborationService({ repository, now,
       verifyContentSpaceAuthorization: async (input) => {
         verifierInputs.push(structuredClone(input))
         return {
           proofId: 'csp_HostProof0001', issuer: proof.issuer, proofDigest: stableDigest(proof),
+          actorPrincipalDigest: actorPrincipalDigestOverride ?? stableDigest(input.actorPrincipal),
           principal: { authority: 'sciforge.oidc', subject: alice.user.userId,
-            deviceId: input.actorCredentialId, identityVersion: 1 },
+            deviceId: input.actorPrincipal.kind === 'credential'
+              ? input.actorPrincipal.credentialId
+              : input.actorPrincipal.identityId, identityVersion: 1 },
           principalUserId: alice.userId, rootLocatorDigest: stableDigest(rootLocator),
           scopes: ['content-space.read', 'content-space.upload-new'],
           issuedAt: '2026-08-15T01:59:00.000Z', expiresAt: '2026-08-15T03:00:00.000Z'
@@ -182,8 +186,19 @@ describe('CollaborationService canonical transactions', () => {
       idempotencyKey: 'idem_contentspace_binding' })
     expect(verifierInputs).toHaveLength(1)
     expect(verifierInputs[0]).toMatchObject({ actorUserId: alice.userId,
-      actorCredentialId: alice.user.credentialId, rootLocator, authorizationProof: proof })
+      actorPrincipal: { kind: 'credential', credentialId: alice.user.credentialId },
+      rootLocator, authorizationProof: proof })
+    expect(binding.authorization.actorPrincipalDigest).toBe(stableDigest(verifierInputs[0]!.actorPrincipal))
     expect(JSON.stringify(binding)).not.toContain(proof.payload)
+
+    actorPrincipalDigestOverride = '0'.repeat(64)
+    const mismatchedProject = await service.createProject(alice.user, { displayName: 'Wrong Principal Project',
+      goal: 'Reject a proof issued for another Principal', memberUserIds: [alice.userId],
+      coordinatorAgentId: aliceAgent.agent.agentId, idempotencyKey: 'idem_contentspace_wrong_principal_project' })
+    await expect(service.bindProjectContentSpace(alice.user, { projectId: mismatchedProject.projectId,
+      expectedRevision: mismatchedProject.revision, rootLocator, authorizationProof: proof,
+      idempotencyKey: 'idem_contentspace_wrong_principal_binding' })).rejects.toMatchObject({ code: 'permission_denied' })
+    actorPrincipalDigestOverride = undefined
 
     const task = await service.createTask(aliceDevice, { projectId: project.projectId,
       assigneeAgentId: bobAgent.agent.agentId, title: 'Analyze authorized input', objective: 'Produce a new result',
@@ -839,6 +854,30 @@ describe('CollaborationService canonical transactions', () => {
       requestRevision: request.revision, answer: '继续', sourceLocator: movedProjectLocator,
       idempotencyKey: 'idem_human_answer_bob' })
     expect(repeatedAnswer.humanAnswerId).toBe(answer.humanAnswerId)
+    const confirmableRequest = await service.createHumanNeeded(bobDevice, { projectId: project.projectId,
+      taskId: task.taskId, executionId: running.executionFence.executionId,
+      expectedTaskRevision: running.revision + 1, targetUserId: bob.userId, requiredAssurance: 'verified',
+      prompt: '是否删除已生成的输出？', confirmableAction: {
+        actionType: 'workspace.delete_output', safeSummary: '删除已生成的输出文件。',
+        effect: 'destructive', actionDigest: 'a'.repeat(64)
+      }, expiresAt: '2026-08-15T03:30:00.000Z', idempotencyKey: 'idem_human_confirmable_bob' })
+    await expect(service.answerHumanNeeded(bob.endpoint, { humanRequestId: confirmableRequest.humanRequestId,
+      requestRevision: confirmableRequest.revision, answer: '批准', decision: 'approve',
+      idempotencyKey: 'idem_human_confirmable_provider' })).rejects.toMatchObject({ code: 'permission_denied' })
+    const bobOidc: OidcUserActor = { kind: 'user', authentication: 'oidc', actorKey: `oidc:${bob.userId}`,
+      userId: bob.userId, identityId: 'oid_TargetIdentity01', issuer: 'https://identity.sciforge.test',
+      subject: 'target-user', authTime: Math.floor(at.getTime() / 1_000), expiresAt: Math.floor(at.getTime() / 1_000) + 600,
+      assurance: 'verified' }
+    await expect(service.answerHumanNeeded(bobOidc, { humanRequestId: confirmableRequest.humanRequestId,
+      requestRevision: confirmableRequest.revision, answer: '批准',
+      idempotencyKey: 'idem_human_confirmable_missing_decision' }))
+      .rejects.toMatchObject({ code: 'validation_failed' })
+    const confirmation = await service.answerHumanNeeded(bobOidc, { humanRequestId: confirmableRequest.humanRequestId,
+      requestRevision: confirmableRequest.revision, answer: '批准', decision: 'approve',
+      idempotencyKey: 'idem_human_confirmable_oidc' })
+    expect(confirmation).toMatchObject({ answeredByUserId: bob.userId, answeredFromHumanEndpointId: null,
+      answeredFromOidcIdentityId: bobOidc.identityId, decision: 'approve' })
+    expect(confirmation.confirmationId).toMatch(/^cfm_/u)
     const expiringRequest = await service.createHumanNeeded(bobDevice, { projectId: project.projectId, taskId: task.taskId,
       executionId: running.executionFence.executionId, expectedTaskRevision: running.revision + 1,
       targetUserId: bob.userId, requiredAssurance: 'verified',

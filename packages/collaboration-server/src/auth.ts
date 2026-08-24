@@ -1,16 +1,32 @@
 import { digestSecret } from './crypto.js'
-import { fail } from './errors.js'
+import { CollaborationServiceError, fail } from './errors.js'
+import type { IdentityService } from './identity-service.js'
 import type { Assurance, InboxRecipient, StoredEndpoint } from './model.js'
+import { OidcVerificationError, type OidcAccessTokenVerifier } from './oidc.js'
 import type { CollaborationReadRepository } from './repository.js'
 
 export type SystemActor = { kind: 'system'; actorKey: string }
-export type UserActor = {
+export type LegacyUserActor = {
   kind: 'user'
+  authentication?: 'credential'
   actorKey: string
   userId: string
   credentialId: string
   assurance: 'verified' | 'strong'
 }
+export type OidcUserActor = {
+  kind: 'user'
+  authentication: 'oidc'
+  actorKey: string
+  userId: string
+  identityId: string
+  issuer: string
+  subject: string
+  authTime: number
+  expiresAt: number
+  assurance: 'verified' | 'strong'
+}
+export type UserActor = LegacyUserActor | OidcUserActor
 export type HumanEndpointActor = {
   kind: 'human_endpoint'
   actorKey: string
@@ -23,10 +39,45 @@ export type AgentActor = {
   actorKey: string
   userId: string
   agentId: string
+  deviceId?: string
   credentialId: string
+  credentialGeneration?: number
   assurance: 'device'
 }
 export type AuthContext = SystemActor | UserActor | HumanEndpointActor | AgentActor
+
+export type OidcUserResolver = Readonly<{
+  isCandidate(token: string): boolean
+  resolve(token: string): Promise<OidcUserActor>
+}>
+
+export class StrictOidcUserResolver implements OidcUserResolver {
+  constructor(private readonly verifier: OidcAccessTokenVerifier, private readonly identities: IdentityService) {}
+
+  isCandidate(token: string): boolean { return token.split('.').length === 3 }
+
+  async resolve(token: string): Promise<OidcUserActor> {
+    try {
+      return await this.identities.resolveOidcUser(await this.verifier.verifyAccessToken(token))
+    } catch (error) {
+      if (error instanceof CollaborationServiceError) throw error
+      if (error instanceof OidcVerificationError) {
+        if (error.code === 'oidc_discovery_unavailable' || error.code === 'oidc_jwks_unavailable') {
+          fail('resource_offline', 'The configured OIDC authentication dependency is unavailable.', { retryable: true })
+        }
+        fail('authentication_required', 'The OIDC access token is not valid.')
+      }
+      fail('authentication_required', 'The OIDC access token could not be verified.')
+    }
+  }
+}
+
+export function requireOidcUserActor(actor: AuthContext): OidcUserActor {
+  if (actor.kind !== 'user' || actor.authentication !== 'oidc') {
+    fail('permission_denied', 'This operation requires an OIDC User actor.')
+  }
+  return actor
+}
 
 export type PermissionOperation =
   | 'personal_message'
@@ -134,10 +185,21 @@ export function authorize(facts: PermissionFacts): void {
 }
 
 export class AuthenticationService {
-  constructor(private readonly repository: CollaborationReadRepository, private readonly now: () => Date = () => new Date()) {}
+  constructor(
+    private readonly repository: CollaborationReadRepository,
+    private readonly now: () => Date = () => new Date(),
+    private readonly oidc?: OidcUserResolver
+  ) {}
 
   async resolveBearer(token: string | undefined): Promise<UserActor | AgentActor> {
-    if (!token || token.length < 24 || token.length > 512) fail('authentication_required', 'A valid bearer credential is required.')
+    if (!token || token.length < 16 || token.length > 16 * 1024 || /\s/u.test(token)) {
+      fail('authentication_required', 'A valid bearer credential is required.')
+    }
+    if (token.split('.').length === 3) {
+      if (!this.oidc || !this.oidc.isCandidate(token)) fail('authentication_required', 'OIDC User authentication is not configured.')
+      return this.oidc.resolve(token)
+    }
+    if (token.length > 512) fail('authentication_required', 'The bearer credential is not recognized.')
     const credential = await this.repository.getCredentialByDigest(digestSecret(token))
     if (!credential) fail('authentication_required', 'The bearer credential is not recognized.')
     if (credential.revokedAt || (credential.expiresAt && credential.expiresAt <= this.now().toISOString())) {
@@ -160,12 +222,22 @@ export class AuthenticationService {
     if (!agent || agent.status !== 'active' || agent.ownerUserId !== user.userId || agent.credentialGeneration !== credential.generation) {
       fail('credential_revoked', 'The Agent device identity is no longer active.')
     }
+    let deviceId: string | undefined
+    if (agent.deviceId) {
+      const device = await this.repository.getDevice(agent.deviceId)
+      if (!device || device.status !== 'active' || device.userId !== user.userId) {
+        fail('credential_revoked', 'The Agent Device is no longer active.')
+      }
+      deviceId = device.deviceId
+    }
     return {
       kind: 'agent_device',
       actorKey: `agent:${agent.agentId}:credential:${credential.credentialId}`,
       userId: user.userId,
       agentId: agent.agentId,
+      ...(deviceId ? { deviceId } : {}),
       credentialId: credential.credentialId,
+      credentialGeneration: credential.generation,
       assurance: 'device'
     }
   }

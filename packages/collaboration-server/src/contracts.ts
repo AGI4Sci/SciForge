@@ -72,7 +72,8 @@ export function toEndpoint(endpoint: StoredEndpoint): HumanEndpointBinding {
 
 export function toAgent(agent: StoredAgent): AgentNode {
   return agentNodeSchema.parse({ schemaVersion: 1, type: 'agent_node', agentId: agent.agentId,
-    ownerUserId: agent.ownerUserId, installationId: agent.installationId, displayName: agent.displayName,
+    deviceId: agent.deviceId ?? null, ownerUserId: agent.ownerUserId, installationId: agent.installationId,
+    displayName: agent.displayName,
     nodeType: agent.nodeType, capabilities: agent.capabilities,
     lifecycleStatus: agent.status === 'revoked' ? 'revoked' : 'active', connectionStatus: agent.connectionStatus,
     credentialVersion: agent.credentialGeneration, ...(agent.lastSeenAt ? { lastSeenAt: agent.lastSeenAt } : {}),

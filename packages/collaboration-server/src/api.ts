@@ -3,6 +3,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import {
   createCollaborationError,
+  deviceCreateRequestSchema,
+  deviceEnrollmentCreateRequestSchema,
+  deviceRevokeRequestSchema,
   restRequestSchema,
   restResponseSchema,
   type HumanEndpointProviderContract,
@@ -12,7 +15,7 @@ import {
 } from '@sciforge/collaboration-contracts'
 import { ZodError } from 'zod'
 
-import { AuthenticationService, type AgentActor, type AuthContext, type HumanEndpointActor, type UserActor } from './auth.js'
+import { AuthenticationService, requireOidcUserActor, type AgentActor, type AuthContext, type HumanEndpointActor, type OidcUserActor, type UserActor } from './auth.js'
 import {
   toAgent,
   toEndpoint,
@@ -33,6 +36,7 @@ import {
 } from './contracts.js'
 import { stableDigest } from './crypto.js'
 import { CollaborationServiceError } from './errors.js'
+import type { IdentityService } from './identity-service.js'
 import type { CollaborationService } from './service.js'
 
 export const COLLABORATION_SERVER_ID = 'sciforge.collaboration-server'
@@ -53,6 +57,7 @@ export interface ProviderDirectory {
 export type CollaborationHttpOptions = {
   service: CollaborationService
   authentication: AuthenticationService
+  identities?: IdentityService
   readiness: () => Promise<boolean>
   providers?: ProviderDirectory
   resolveProviderActor?: (request: IncomingMessage, command: RestRequest) => Promise<HumanEndpointActor | null>
@@ -86,6 +91,7 @@ async function handle(
     const ready = await options.readiness().catch(() => false)
     return sendJson(response, ready ? 200 : 503, { ok: ready })
   }
+  if (await handleIdentityRoute(request, response, url, options, basePath, maxBodyBytes)) return
   if (request.method !== 'POST' || url.pathname !== `${basePath}/v1/commands`) {
     return sendJson(response, 404, { ok: false })
   }
@@ -113,6 +119,82 @@ async function handle(
   sendJson(response, 200, validated)
 }
 
+async function handleIdentityRoute(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+  options: CollaborationHttpOptions,
+  basePath: string,
+  maxBodyBytes: number
+): Promise<boolean> {
+  const path = url.pathname.slice(basePath.length)
+  const isIdentityPath = path === '/v1/me' || path === '/v1/device-enrollments' ||
+    path === '/v1/devices' || path === '/v1/me/devices' || /^\/v1\/me\/devices\/[^/]+$/u.test(path)
+  if (!isIdentityPath) return false
+  if (!options.identities) {
+    throw new CollaborationServiceError('resource_offline', 'The A identity service is not configured.', { retryable: true })
+  }
+  const actor = await resolveOidcUserRequest(request, options.authentication)
+  try {
+    if (request.method === 'GET' && path === '/v1/me') {
+      sendJson(response, 200, await options.identities.me(actor))
+      return true
+    }
+    if (request.method === 'POST' && path === '/v1/device-enrollments') {
+      requireJson(request)
+      const body = deviceEnrollmentCreateRequestSchema.parse(await readJson(request, maxBodyBytes))
+      requireMatchingIdempotencyKey(request, body.idempotencyKey)
+      sendJson(response, 200, await options.identities.createDeviceEnrollment(actor, body))
+      return true
+    }
+    if (request.method === 'POST' && path === '/v1/devices') {
+      requireJson(request)
+      const body = deviceCreateRequestSchema.parse(await readJson(request, maxBodyBytes))
+      requireMatchingIdempotencyKey(request, body.idempotencyKey)
+      sendJson(response, 200, await options.identities.createDevice(actor, body))
+      return true
+    }
+    if (request.method === 'GET' && path === '/v1/me/devices') {
+      sendJson(response, 200, await options.identities.listDevices(actor))
+      return true
+    }
+    const deviceMatch = /^\/v1\/me\/devices\/([^/]+)$/u.exec(path)
+    if (request.method === 'DELETE' && deviceMatch) {
+      requireJson(request)
+      const body = deviceRevokeRequestSchema.parse(await readJson(request, maxBodyBytes))
+      if (body.deviceId !== deviceMatch[1]) {
+        throw new CollaborationServiceError('validation_failed', 'Device path and body IDs must match.')
+      }
+      requireMatchingIdempotencyKey(request, body.idempotencyKey)
+      sendJson(response, 200, await options.identities.revokeDevice(actor, body.deviceId, body.idempotencyKey))
+      return true
+    }
+    sendJson(response, 405, { ok: false })
+    return true
+  } catch (error) {
+    if (error instanceof CollaborationServiceError && !error.auditRecorded) {
+      await options.identities.recordRejectedBoundary(actor, `http.${request.method?.toLowerCase() ?? 'unknown'}${path}`, error)
+        .catch(() => undefined)
+    }
+    throw error
+  }
+}
+
+async function resolveOidcUserRequest(
+  request: IncomingMessage,
+  authentication: AuthenticationService
+): Promise<OidcUserActor> {
+  const authorization = firstHeader(request.headers.authorization)
+  const token = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : undefined
+  return requireOidcUserActor(await authentication.resolveBearer(token))
+}
+
+function requireMatchingIdempotencyKey(request: IncomingMessage, bodyKey: string): void {
+  if (firstHeader(request.headers['idempotency-key']) !== bodyKey) {
+    throw new CollaborationServiceError('validation_failed', 'Idempotency-Key header must match the strict request body.')
+  }
+}
+
 async function resolveActor(
   request: IncomingMessage,
   command: RestRequest,
@@ -122,7 +204,12 @@ async function resolveActor(
   if (command.type === 'pairing.verify' || command.type === 'project.input.create' || command.type === 'human.answer') {
     const providerActor = await options.resolveProviderActor?.(request, command)
     if (providerActor) return providerActor
-    throw new CollaborationServiceError('permission_denied', 'This command is accepted only from the verified provider gateway.')
+    if (command.type !== 'human.answer') {
+      throw new CollaborationServiceError('permission_denied', 'This command is accepted only from the verified provider gateway.')
+    }
+    const authorization = firstHeader(request.headers.authorization)
+    const token = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : undefined
+    return requireOidcUserActor(await options.authentication.resolveBearer(token))
   }
   const authorization = firstHeader(request.headers.authorization)
   const token = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : undefined
@@ -177,7 +264,9 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     case 'endpoint.transfer': return entityResponse(command, toEndpoint(await service.transferEndpoint(requiredUser(actor), command)))
     case 'agent.register': {
       const user = requiredUser(actor)
-      if (user.userId !== command.ownerUserId) throw new CollaborationServiceError('permission_denied', 'Cannot register an Agent for another user.')
+      if (command.ownerUserId && user.userId !== command.ownerUserId) {
+        throw new CollaborationServiceError('permission_denied', 'Cannot register an Agent for another user.')
+      }
       const result = await service.registerAgent(user, command)
       if (!result.deviceCredential) throw new CollaborationServiceError('idempotency_conflict', 'The one-time Agent credential was already returned.')
       return response(command, { type: 'agent.registered', agent: toAgent(result.agent), deviceCredential: result.deviceCredential })
@@ -350,7 +439,9 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
         acknowledgedAt: new Date().toISOString(), createdAt: new Date().toISOString() } })
     }
     case 'human.answer': {
-      if (actor?.kind !== 'human_endpoint') throw new CollaborationServiceError('permission_denied', 'HumanAnswer requires a verified human endpoint.')
+      if (actor?.kind !== 'human_endpoint' && actor?.kind !== 'user') {
+        throw new CollaborationServiceError('permission_denied', 'HumanAnswer requires its target OIDC User or verified human endpoint.')
+      }
       return entityResponse(command, toHumanAnswer(await service.answerHumanNeeded(actor, command)))
     }
     case 'human.needed.create': return entityResponse(command, toHumanNeeded(await service.createHumanNeeded(requiredAgent(actor), command)))

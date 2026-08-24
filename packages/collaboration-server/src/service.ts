@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import {
+  confirmableHumanActionSchema,
   taskFileIntentSchema,
   portableContentSpaceLocatorSchema,
   verifiedContentSpaceAuthorizationSchema,
@@ -59,7 +60,10 @@ export type CollaborationServiceOptions = {
   remoteApprovalReference?: () => string
   verifyContentSpaceAuthorization?: (input: Readonly<{
     actorUserId: string
-    actorCredentialId: string
+    actorPrincipal: Readonly<
+      | { kind: 'oidc'; identityId: string; issuer: string; subject: string }
+      | { kind: 'credential'; credentialId: string }
+    >
     actorAssurance: 'verified' | 'strong'
     rootLocator: PortableContentSpaceLocator
     authorizationProof: ContentSpaceAuthorizationProof
@@ -895,26 +899,39 @@ export class CollaborationService {
   }
 
   async registerAgent(actor: UserActor, input: {
-    installationId: string
+    deviceId?: string
+    installationId?: string
     displayName: string
     nodeType: string
     capabilities: string[]
     idempotencyKey: string
   }): Promise<{ agent: StoredAgent; deviceCredential?: string; replayed?: boolean }> {
-    assertText(input.installationId, 'installationId', 8, 300)
+    if (!input.deviceId && actor.authentication === 'oidc') {
+      fail('permission_denied', 'OIDC Users must register Agents through an active enrolled Device.')
+    }
+    if (!input.deviceId && !input.installationId) fail('validation_failed', 'Agent registration requires a Device.')
+    if (input.installationId) assertText(input.installationId, 'installationId', 8, 300)
     assertText(input.displayName, 'displayName', 1, 200)
     assertText(input.nodeType, 'nodeType', 1, 100)
     const capabilities = uniqueTexts(input.capabilities, 100, 200)
     const deviceCredential = issueSecret('agent')
     return this.commit(actor, 'agent.register', input.idempotencyKey, { ...input, capabilities }, async (tx, at) => {
-      const existing = await tx.getAgentByInstallation(input.installationId)
+      const device = input.deviceId ? required(await tx.getDeviceForUpdate(input.deviceId), 'Device') : null
+      if (device && (device.userId !== actor.userId || device.status !== 'active')) {
+        fail('permission_denied', 'The Agent Device is not active for this User.')
+      }
+      const installationId = device?.installationId ?? input.installationId!
+      const existing = await tx.getAgentByInstallation(installationId)
       if (existing) {
         if (existing.ownerUserId !== actor.userId) fail('identity_conflict', 'This installation belongs to another user.')
+        if (device && existing.deviceId !== device.deviceId) {
+          fail('identity_conflict', 'The Device is linked to a different Agent identity.')
+        }
         return { response: { protocolVersion: '1.0', type: 'agent.registered', agent: existing, replayed: true },
           resourceKind: 'agent', resourceId: existing.agentId }
       }
       const agent: StoredAgent = {
-        agentId: newId('agt'), installationId: input.installationId, ownerUserId: actor.userId,
+        agentId: newId('agt'), installationId, ...(device ? { deviceId: device.deviceId } : {}), ownerUserId: actor.userId,
         displayName: input.displayName, nodeType: input.nodeType, capabilities, status: 'active',
         connectionStatus: 'offline', credentialGeneration: 1, revision: 1, updatedAt: at
       }
@@ -947,6 +964,15 @@ export class CollaborationService {
   }): Promise<StoredAgent> {
     return this.commit(actor, 'agent.heartbeat', input.idempotencyKey, input, async (tx, at) => {
       const agent = required(await tx.getAgent(actor.agentId), 'Agent')
+      if (actor.deviceId) {
+        if (agent.deviceId !== actor.deviceId || actor.credentialGeneration !== agent.credentialGeneration) {
+          fail('credential_revoked', 'The Agent Device credential is no longer current.')
+        }
+        const device = required(await tx.getDeviceForUpdate(actor.deviceId), 'Agent Device')
+        if (device.userId !== actor.userId || device.status !== 'active') {
+          fail('credential_revoked', 'The Agent Device is no longer active.')
+        }
+      }
       expectRevision(agent.revision, input.expectedRevision)
       const capabilities = input.capabilities ? uniqueTexts(input.capabilities, 256, 128) : agent.capabilities
       const updated: StoredAgent = { ...agent, connectionStatus: input.connectionStatus ?? 'online', capabilities, lastSeenAt: at,
@@ -977,6 +1003,12 @@ export class CollaborationService {
     return this.commit(actor, 'agent.credential.rotate', input.idempotencyKey, input, async (tx, at) => {
       const agent = required(await tx.getAgent(input.agentId), 'Agent')
       if (agent.ownerUserId !== actor.userId) fail('permission_denied', 'The Agent belongs to another user.')
+      if (agent.deviceId) {
+        const device = required(await tx.getDeviceForUpdate(agent.deviceId), 'Agent Device')
+        if (device.userId !== actor.userId || device.status !== 'active') {
+          fail('credential_revoked', 'The Agent Device is no longer active.')
+        }
+      }
       expectRevision(agent.revision, input.expectedRevision)
       await tx.revokeCredentials('agent_device', agent.agentId, at)
       const updated: StoredAgent = { ...agent, credentialGeneration: agent.credentialGeneration + 1,
@@ -1048,6 +1080,9 @@ export class CollaborationService {
     return this.commit(actor, 'agent.owner.transfer', input.idempotencyKey, input, async (tx, at) => {
       const agent = required(await tx.getAgent(input.agentId), 'Agent')
       if (agent.ownerUserId !== actor.userId) fail('permission_denied', 'Only the current Agent owner may transfer it.')
+      if (agent.deviceId) {
+        fail('invalid_state_transition', 'A Device-bound Agent cannot transfer independently of its Device owner.')
+      }
       expectRevision(agent.revision, input.expectedRevision)
       const target = required(await tx.getUser(input.targetUserId), 'Target user')
       if (target.status !== 'active') fail('credential_revoked', 'The target user is not active.')
@@ -1527,29 +1562,35 @@ export class CollaborationService {
   async createHumanNeeded(actor: AgentActor, input: {
     projectId: string
     taskId: string
-    executionId: string
+    executionId?: string
     expectedTaskRevision: number
     targetUserId: string
     requiredAssurance: 'basic' | 'verified' | 'strong'
     prompt: string
+    confirmableAction?: import('@sciforge/collaboration-contracts').ConfirmableHumanAction | null
     expiresAt: string
     idempotencyKey: string
   }): Promise<StoredHumanRequest> {
     assertText(input.prompt, 'prompt', 1, 32_000)
+    const confirmableAction = input.confirmableAction == null
+      ? null
+      : confirmableHumanActionSchema.parse(input.confirmableAction)
     return this.commit(actor, 'human.needed.create', input.idempotencyKey, input, async (tx, at) => {
       const task = required(await tx.getTask(input.taskId), 'Task')
       const project = required(await tx.getProject(input.projectId), 'Project')
       if (task.projectId !== project.projectId) fail('validation_failed', 'The Task belongs to another Project.')
       expectRevision(task.revision, input.expectedTaskRevision)
-      assertCurrentExecution(task, actor.agentId, input.executionId)
+      const executionId = currentExecutionId(task, input.executionId)
+      assertCurrentExecution(task, actor.agentId, executionId)
       const member = await tx.getProjectMember(project.projectId, input.targetUserId)
       authorize({ actor, operation: 'human_needed', assigneeAgentId: task.assigneeAgentId, projectMember: Boolean(member?.active) })
       if (new Date(input.expiresAt).getTime() <= new Date(at).getTime()) fail('request_expired', 'HumanNeeded expiry must be in the future.')
       if (task.status !== 'in_progress' && task.status !== 'needs_human') fail('invalid_state_transition', 'HumanNeeded requires a running Task.')
       const request: StoredHumanRequest = { humanRequestId: newId('hrq'), projectId: project.projectId,
-        taskId: task.taskId, executionId: input.executionId,
+        taskId: task.taskId, executionId,
         targetUserId: input.targetUserId, requestedByAgentId: actor.agentId,
-        requiredAssurance: input.requiredAssurance, prompt: input.prompt, status: 'pending', revision: 1,
+        requiredAssurance: input.requiredAssurance, prompt: input.prompt, confirmableAction,
+        status: 'pending', revision: 1,
         expiresAt: input.expiresAt, createdAt: at, updatedAt: at }
       await tx.insertHumanRequest(request)
       let taskRevision = task.revision
@@ -1590,19 +1631,26 @@ export class CollaborationService {
     }).then(responseEntity<StoredHumanRequest>)
   }
 
-  async answerHumanNeeded(actor: HumanEndpointActor, input: {
+  async answerHumanNeeded(actor: HumanEndpointActor | UserActor, input: {
     humanRequestId: string
     requestRevision: number
     answer: string
+    decision?: 'approve' | 'reject'
     sourceLocator?: ProviderLocatorValue
     idempotencyKey: string
   }): Promise<StoredHumanAnswer> {
     assertText(input.answer, 'answer', 1, 32_000)
+    if (actor.kind === 'user' && actor.authentication !== 'oidc') {
+      fail('permission_denied', 'Direct HumanNeeded decisions require the target User OIDC identity.')
+    }
     return this.commit(actor, 'human.answer', input.idempotencyKey, input, async (tx, at) => {
       const request = required(await tx.getHumanRequest(input.humanRequestId), 'HumanNeeded request')
       authorize({ actor, operation: 'human_answer', targetUserId: request.targetUserId,
         requiredAssurance: request.requiredAssurance })
       if (input.sourceLocator) {
+        if (actor.kind !== 'human_endpoint') {
+          fail('validation_failed', 'OIDC HumanNeeded decisions cannot claim a provider locator.')
+        }
         const [endpoint, binding] = await Promise.all([
           tx.getEndpoint(actor.humanEndpointId),
           tx.getProjectBindingByLocator(input.sourceLocator.provider, input.sourceLocator.realmId,
@@ -1616,6 +1664,20 @@ export class CollaborationService {
       }
       expectRevision(request.revision, input.requestRevision)
       if (request.status !== 'pending' || request.expiresAt <= at) fail('request_expired', 'The HumanNeeded request is no longer current.')
+      if (request.confirmableAction) {
+        if (actor.kind !== 'user' || actor.authentication !== 'oidc') {
+          fail('permission_denied', 'Confirmable actions require the target User OIDC identity.')
+        }
+        const authenticationAge = Math.floor(new Date(at).getTime() / 1_000) - actor.authTime
+        if (!Number.isSafeInteger(actor.authTime) || authenticationAge < 0 || authenticationAge > 300) {
+          fail('assurance_insufficient', 'Recent OIDC authentication is required for a confirmable action.')
+        }
+        if (input.decision !== 'approve' && input.decision !== 'reject') {
+          fail('validation_failed', 'Confirmable actions require an explicit approve or reject decision.')
+        }
+      } else if (input.decision !== undefined) {
+        fail('validation_failed', 'A free-form HumanNeeded answer cannot include an approval decision.')
+      }
       const task = required(await tx.getTask(request.taskId), 'Task')
       if (task.executionFence.executionId !== request.executionId ||
           task.executionFence.assigneeAgentId !== request.requestedByAgentId ||
@@ -1628,8 +1690,12 @@ export class CollaborationService {
       const answer: StoredHumanAnswer = { humanAnswerId: newId('han'), humanRequestId: request.humanRequestId,
         projectId: request.projectId, taskId: request.taskId, executionId: request.executionId,
         requestRevision: request.revision,
-        answeredByUserId: actor.userId, answeredFromHumanEndpointId: actor.humanEndpointId,
-        assurance: actor.assurance, answer: input.answer, revision: 1, answeredAt: at, createdAt: at, updatedAt: at }
+        answeredByUserId: actor.userId,
+        answeredFromHumanEndpointId: actor.kind === 'human_endpoint' ? actor.humanEndpointId : null,
+        answeredFromOidcIdentityId: actor.kind === 'user' && actor.authentication === 'oidc' ? actor.identityId : null,
+        assurance: actor.assurance, answer: input.answer, decision: request.confirmableAction ? input.decision! : null,
+        confirmationId: request.confirmableAction ? newId('cfm') : null,
+        revision: 1, answeredAt: at, createdAt: at, updatedAt: at }
       await tx.insertHumanAnswer(answer)
       await tx.updateHumanRequest({ ...request, status: 'answered', revision: request.revision + 1, updatedAt: at }, request.revision)
       const project = required(await tx.getProject(request.projectId), 'Project')
@@ -1749,10 +1815,13 @@ export class CollaborationService {
       if (!this.verifyContentSpaceAuthorization) {
         fail('resource_offline', 'No trusted E/Host ContentSpace authorization verifier is configured.')
       }
+      const actorPrincipal = actor.authentication === 'oidc'
+        ? { kind: 'oidc' as const, identityId: actor.identityId, issuer: actor.issuer, subject: actor.subject }
+        : { kind: 'credential' as const, credentialId: actor.credentialId }
       const parsed = verifiedContentSpaceAuthorizationSchema.safeParse(
         await this.verifyContentSpaceAuthorization({
           actorUserId: actor.userId,
-          actorCredentialId: actor.credentialId,
+          actorPrincipal,
           actorAssurance: actor.assurance,
           rootLocator,
           authorizationProof: input.authorizationProof,
@@ -1764,6 +1833,7 @@ export class CollaborationService {
       const rootLocatorDigest = stableDigest(rootLocator)
       if (
         verified.principalUserId !== actor.userId ||
+        verified.actorPrincipalDigest !== stableDigest(actorPrincipal) ||
         verified.issuer !== input.authorizationProof.issuer ||
         verified.proofDigest !== stableDigest(input.authorizationProof) ||
         verified.rootLocatorDigest !== rootLocatorDigest ||
@@ -1790,6 +1860,7 @@ export class CollaborationService {
           proofId: verified.proofId,
           issuer: verified.issuer,
           proofDigest: verified.proofDigest,
+          actorPrincipalDigest: verified.actorPrincipalDigest,
           principal: verified.principal,
           scopes: [...verified.scopes],
           issuedAt: verified.issuedAt,
@@ -1932,7 +2003,7 @@ export class CollaborationService {
 
   async transitionTask(actor: AgentActor, input: {
     taskId: string
-    executionId: string
+    executionId?: string
     status: 'accepted' | 'rejected' | 'in_progress' | 'needs_human' | 'completed' | 'failed'
     expectedRevision: number
     resultSummary?: string
@@ -1950,7 +2021,7 @@ export class CollaborationService {
       const project = required(await tx.getProject(task.projectId), 'Project')
       authorize({ actor, operation: 'task_update', assigneeAgentId: task.assigneeAgentId })
       expectRevision(task.revision, input.expectedRevision)
-      assertCurrentExecution(task, actor.agentId, input.executionId)
+      assertCurrentExecution(task, actor.agentId, currentExecutionId(task, input.executionId))
       if (!TASK_TRANSITIONS[task.status].includes(input.status)) {
         fail('invalid_state_transition', `Task cannot transition from ${task.status} to ${input.status}.`)
       }
@@ -2648,6 +2719,16 @@ function expectRevision(current: number, expected: number): void {
   if (current !== expected) fail('revision_conflict', 'The resource revision is stale.', { details: { currentRevision: current } })
 }
 
+function currentExecutionId(task: StoredTask, supplied: string | undefined): string {
+  if (supplied) return supplied
+  // Wire commands always require executionId. This compatibility path is only
+  // for pre-v11 in-process metadata Tasks; file-bearing work can never infer it.
+  if (task.fileIntent !== null) {
+    fail('validation_failed', 'File Task operations require an explicit executionId.')
+  }
+  return task.executionFence.executionId
+}
+
 function assertCurrentExecution(task: StoredTask, actorAgentId: string, executionId: string): void {
   if (
     task.executionFence.executionId !== executionId ||
@@ -2793,11 +2874,17 @@ function toHumanNeededEntity(request: StoredHumanRequest): Record<string, unknow
     projectId: request.projectId, taskId: request.taskId, executionId: request.executionId,
     targetUserId: request.targetUserId,
     requestedByAgentId: request.requestedByAgentId, requiredAssurance: request.requiredAssurance,
-    prompt: request.prompt, status: request.status, expiresAt: request.expiresAt,
+    prompt: request.prompt, confirmableAction: request.confirmableAction,
+    status: request.status, expiresAt: request.expiresAt,
     revision: request.revision, createdAt: request.createdAt, updatedAt: request.updatedAt }
 }
 
 function humanNeededProviderText(request: StoredHumanRequest): string {
+  if (request.confirmableAction) {
+    const instruction = '\n\n此操作需要目标用户在 OIDC 认证界面中明确批准或拒绝。'
+    const summary = `\n${request.confirmableAction.safeSummary}`
+    return `${request.prompt.slice(0, Math.max(0, 32_000 - summary.length - instruction.length))}${summary}${instruction}`
+  }
   const replyInstruction = `\n\n回复命令：sciforge-answer ${request.humanRequestId} ${request.revision} <answer>`
   return `${request.prompt.slice(0, Math.max(0, 32_000 - replyInstruction.length))}${replyInstruction}`
 }
@@ -2807,8 +2894,10 @@ function toHumanAnswerEntity(answer: StoredHumanAnswer): Record<string, unknown>
     humanRequestId: answer.humanRequestId, projectId: answer.projectId, taskId: answer.taskId,
     executionId: answer.executionId,
     requestRevision: answer.requestRevision, answeredByUserId: answer.answeredByUserId,
-    answeredFromHumanEndpointId: answer.answeredFromHumanEndpointId, assurance: answer.assurance,
-    answer: answer.answer, answeredAt: answer.answeredAt, revision: answer.revision,
+    answeredFromHumanEndpointId: answer.answeredFromHumanEndpointId,
+    answeredFromOidcIdentityId: answer.answeredFromOidcIdentityId, assurance: answer.assurance,
+    answer: answer.answer, decision: answer.decision, confirmationId: answer.confirmationId,
+    answeredAt: answer.answeredAt, revision: answer.revision,
     createdAt: answer.createdAt, updatedAt: answer.updatedAt }
 }
 
