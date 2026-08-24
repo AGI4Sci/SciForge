@@ -40,4 +40,4 @@
 
 - [x] 5.1 Record provenance and withdraw isolated staging revision `910ef7e...` from candidate eligibility.
 - [x] 5.2 Push the A-owned contract checkpoint and open PR #83 without deploying public infrastructure.
-- [ ] 5.3 Give B the fixed contract commit SHA after the final contract checkpoint is published.
+- [x] 5.3 Give B the fixed contract commit SHA after the final contract checkpoint is published.
