@@ -133,6 +133,13 @@ export function resolveOpenContentDeploymentConfiguration(
         bytesRead > maxBytes || BigInt(bytesRead) !== before.size) {
         return undefined
       }
+      // Rebind the verified descriptor to the configured pathname after the
+      // read. A rename-and-replace race leaves the descriptor valid but must
+      // not make a stale deployment configuration authoritative.
+      const currentPath = lstatSync(sidecarPath, { bigint: true })
+      if (currentPath.isSymbolicLink() || !sameFileSnapshot(after, currentPath)) {
+        return undefined
+      }
       const parsed = openContentDeploymentConfigurationSchema.parse(
         JSON.parse(buffer.toString('utf8', 0, bytesRead))
       )

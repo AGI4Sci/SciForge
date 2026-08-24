@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { atomicWriteFile } from './atomic-write-file'
 import {
   applyLocalRuntimePatch,
@@ -52,7 +52,11 @@ import {
   type AppSettingsPatch,
   type AppSettingsV1
 } from '../shared/app-settings'
-import { APP_SETTINGS_FILE_NAME } from '../shared/app-brand'
+import {
+  APP_PACKAGE_NAME,
+  APP_SETTINGS_FILE_NAME,
+  APP_USER_DATA_DIR_NAME
+} from '../shared/app-brand'
 import { createInternalHttpSecret } from './internal-http-secret'
 
 export type { AppSettingsV1 }
@@ -297,13 +301,36 @@ async function loadDefaultSettings(): Promise<AppSettingsV1> {
   return defaults
 }
 
+function compatibleSettingsPaths(currentPath: string): string[] {
+  const currentUserDataDir = dirname(currentPath)
+  const currentDirName = basename(currentUserDataDir)
+  const parentDir = dirname(currentUserDataDir)
+  return [APP_PACKAGE_NAME, APP_USER_DATA_DIR_NAME]
+    .filter((dirName) => dirName !== currentDirName)
+    .map((dirName) => join(parentDir, dirName, SETTINGS_FILE_NAME))
+}
+
 async function readSettingsFile(
   currentPath: string
-): Promise<string | null> {
+): Promise<{ raw: string, sourcePath: string } | null> {
   try {
-    return await readFile(currentPath, 'utf8')
+    return {
+      raw: await readFile(currentPath, 'utf8'),
+      sourcePath: currentPath
+    }
   } catch (error) {
     if (!isErrnoException(error) || error.code !== 'ENOENT') throw error
+  }
+
+  for (const candidatePath of compatibleSettingsPaths(currentPath)) {
+    try {
+      return {
+        raw: await readFile(candidatePath, 'utf8'),
+        sourcePath: candidatePath
+      }
+    } catch (error) {
+      if (!isErrnoException(error) || error.code !== 'ENOENT') throw error
+    }
   }
   return null
 }
@@ -328,7 +355,8 @@ export class JsonSettingsStore {
         await this.save(defaults)
         return defaults
       }
-      raw = loaded
+      raw = loaded.raw
+      sourcePath = loaded.sourcePath
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       throw new Error(`Failed to read settings file ${sourcePath}: ${message}`, { cause: error })
@@ -362,7 +390,8 @@ export class JsonSettingsStore {
       !('agentCapabilities' in parsed) ||
       !hasOwn(parsed, 'skills') ||
       hasOwn(parsed, 'remoteChannel') ||
-      hasOwn(parsed, 'connectPhone')
+      hasOwn(parsed, 'connectPhone') ||
+      sourcePath !== this.path
     ) {
       await this.save(normalized)
     }
