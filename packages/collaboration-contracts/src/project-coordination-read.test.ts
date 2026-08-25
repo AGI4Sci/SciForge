@@ -418,8 +418,7 @@ describe('Project Coordinator authoritative read protocol', () => {
     const providerInstance = {
       schemaVersion: 1,
       type: 'provider_instance_reference',
-      authority: 'provider.instance.alpha',
-      instanceId: 'instance-alpha'
+      providerInstanceRef: 'provider-instance-alpha'
     } as const
     const principal = {
       schemaVersion: 1,

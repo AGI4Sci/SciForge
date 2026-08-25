@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/collaboration-contracts",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": false,
   "license": "MIT",
   "type": "module",
@@ -25,6 +25,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@sciforge/domain-sdk": "^0.3.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

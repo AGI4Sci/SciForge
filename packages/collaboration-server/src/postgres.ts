@@ -816,9 +816,8 @@ class PostgresReadRepository implements CollaborationReadRepository {
     const result = await this.sql.query(
       `SELECT * FROM sciforge_collaboration.provider_directory_principal_facts
        WHERE user_id=$1
-         AND provider_principal->'providerInstance'->>'authority'=$2
-         AND provider_principal->'providerInstance'->>'instanceId'=$3`,
-      [userId, providerInstance.authority, providerInstance.instanceId]
+         AND provider_principal->'providerInstance'->>'providerInstanceRef'=$2`,
+      [userId, providerInstance.providerInstanceRef]
     )
     return result.rows[0] ? mapProviderDirectoryPrincipalFact(result.rows[0]) : null
   }
@@ -829,14 +828,12 @@ class PostgresReadRepository implements CollaborationReadRepository {
     const result = await this.sql.query(
       `SELECT * FROM sciforge_collaboration.provider_directory_principal_facts
        WHERE user_id=ANY($1::text[])
-         AND ($2::text IS NULL OR provider_principal->'providerInstance'->>'authority'=$2)
-         AND ($3::text IS NULL OR provider_principal->'providerInstance'->>'instanceId'=$3)
-         AND ($4::boolean OR readiness='ready')
-         AND ($5::text IS NULL OR provider_principal_fact_id>$5)
-       ORDER BY provider_principal_fact_id LIMIT $6`,
-      [input.userIds, input.providerInstance?.authority ?? null,
-        input.providerInstance?.instanceId ?? null, input.includeDegraded,
-        input.afterFactId, input.limit]
+         AND ($2::text IS NULL OR provider_principal->'providerInstance'->>'providerInstanceRef'=$2)
+         AND ($3::boolean OR readiness='ready')
+         AND ($4::text IS NULL OR provider_principal_fact_id>$4)
+       ORDER BY provider_principal_fact_id LIMIT $5`,
+      [input.userIds, input.providerInstance?.providerInstanceRef ?? null,
+        input.includeDegraded, input.afterFactId, input.limit]
     )
     return result.rows.map(mapProviderDirectoryPrincipalFact)
   }
@@ -1514,9 +1511,8 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     const result = await this.sql.query(
       `SELECT * FROM sciforge_collaboration.provider_directory_principal_facts
        WHERE user_id=$1
-         AND provider_principal->'providerInstance'->>'authority'=$2
-         AND provider_principal->'providerInstance'->>'instanceId'=$3
-       FOR UPDATE`, [userId, providerInstance.authority, providerInstance.instanceId]
+         AND provider_principal->'providerInstance'->>'providerInstanceRef'=$2
+       FOR UPDATE`, [userId, providerInstance.providerInstanceRef]
     )
     return result.rows[0] ? mapProviderDirectoryPrincipalFact(result.rows[0]) : null
   }
@@ -2163,10 +2159,8 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
            provider_binding_attestation_digest=$4,published_by_device_id=$5,
            readiness=$6,readiness_reason=$7,observed_at=$8,revision=$9,updated_at=$10
        WHERE provider_principal_fact_id=$1 AND user_id=$11 AND revision=$12
-         AND provider_principal->'providerInstance'->>'authority'=
-             ($2::jsonb)->'providerInstance'->>'authority'
-         AND provider_principal->'providerInstance'->>'instanceId'=
-             ($2::jsonb)->'providerInstance'->>'instanceId'
+         AND provider_principal->'providerInstance'->>'providerInstanceRef'=
+             ($2::jsonb)->'providerInstance'->>'providerInstanceRef'
          AND $9=$12+1`,
       [fact.providerPrincipalFactId, JSON.stringify(fact.providerPrincipal),
         fact.principalIdentityRevision, fact.providerBindingAttestationDigest,

@@ -245,16 +245,14 @@ CREATE TABLE sciforge_collaboration.provider_directory_principal_facts (
     (readiness = 'ready') = (readiness_reason IS NULL)
   ),
   CONSTRAINT provider_directory_principal_facts_instance_shape CHECK (
-    provider_principal #>> '{providerInstance,authority}' IS NOT NULL
-    AND provider_principal #>> '{providerInstance,instanceId}' IS NOT NULL
+    provider_principal #>> '{providerInstance,providerInstanceRef}' IS NOT NULL
   )
 );
 
 CREATE UNIQUE INDEX provider_directory_principal_facts_user_instance
   ON sciforge_collaboration.provider_directory_principal_facts(
     user_id,
-    (provider_principal #>> '{providerInstance,authority}'),
-    (provider_principal #>> '{providerInstance,instanceId}')
+    (provider_principal #>> '{providerInstance,providerInstanceRef}')
   );
 
 CREATE TABLE sciforge_collaboration.task_authorities (

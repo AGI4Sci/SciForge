@@ -211,7 +211,7 @@ describe('PostgreSQL production transaction path', () => {
     await repository.transaction((tx) => tx.upsertProjectContentSpaceBinding({
       projectContentBindingId: 'pcb_Binding000001', projectId: 'prj_Binding000001',
       contentOwnerUserId: 'usr_BindingOwner01', providerInstance: {
-        schemaVersion: 1, type: 'provider_instance_reference', authority: 'opencontent.run0', instanceId: 'run0'
+        schemaVersion: 1, type: 'provider_instance_reference', providerInstanceRef: 'opencontent.run0'
       },
       rootLocator: {
         contractVersion: 1, kind: 'content-space.container-reference', authority: 'opencontent.run0',
@@ -248,7 +248,7 @@ describe('PostgreSQL production transaction path', () => {
     const at = '2026-08-24T05:00:00.000Z'
     const providerInstance = {
       schemaVersion: 1 as const, type: 'provider_instance_reference' as const,
-      authority: 'opencontent.run0', instanceId: 'run0'
+      providerInstanceRef: 'opencontent.run0'
     }
     await repository.transaction((tx) => tx.insertProviderDirectoryPrincipalFact({
       providerPrincipalFactId: 'ppf_Global0000001', userId: 'usr_Global0000001',
@@ -267,10 +267,10 @@ describe('PostgreSQL production transaction path', () => {
     expect(write?.text).toContain('provider_principal_fact_id')
     expect(write?.text).not.toMatch(/project_id|authorization|credential|secret|scope/u)
     const list = queries.find(({ text }) => text.includes('user_id=ANY'))
-    expect(list?.text).toContain("provider_principal->'providerInstance'->>'authority'")
+    expect(list?.text).toContain("provider_principal->'providerInstance'->>'providerInstanceRef'")
     expect(list?.text).toContain("readiness='ready'")
     expect(list?.values).toEqual([
-      ['usr_Global0000001'], 'opencontent.run0', 'run0', false, null, 25
+      ['usr_Global0000001'], 'opencontent.run0', false, null, 25
     ])
   })
 
@@ -384,7 +384,7 @@ describe('PostgreSQL production transaction path', () => {
     const at = '2026-08-24T05:00:00.000Z'
     const providerInstance = {
       schemaVersion: 1 as const, type: 'provider_instance_reference' as const,
-      authority: 'opencontent.run0', instanceId: 'run0'
+      providerInstanceRef: 'opencontent.run0'
     }
     const locator = {
       contractVersion: 1 as const, kind: 'content-space.file-reference' as const,

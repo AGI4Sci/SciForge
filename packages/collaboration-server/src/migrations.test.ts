@@ -223,6 +223,13 @@ describe('collaboration forward-only migration lineage', () => {
     await expect(isCollaborationDatabaseReady(legacy.pool)).resolves.toBe(false)
   })
 
+  it('indexes the one canonical opaque Provider Instance Ref without legacy split identity', async () => {
+    const migration = await migrationSource('0013_full_multi_user_loop.sql')
+    expect(migration).toContain("provider_principal #>> '{providerInstance,providerInstanceRef}'")
+    expect(migration).not.toContain("provider_principal #>> '{providerInstance,authority}'")
+    expect(migration).not.toContain("provider_principal #>> '{providerInstance,instanceId}'")
+  })
+
   it('persists exactly the public visible recovery action vocabulary without authority material', async () => {
     const migration = await migrationSource('0013_full_multi_user_loop.sql')
     const start = migration.indexOf('CREATE TABLE sciforge_collaboration.visible_recovery_actions')

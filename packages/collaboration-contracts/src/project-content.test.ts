@@ -16,8 +16,7 @@ import { TEST_HASH, TEST_IDS, TEST_LATER_TIMESTAMP, TEST_TIMESTAMP, projectFixtu
 const providerInstance = {
   schemaVersion: 1 as const,
   type: 'provider_instance_reference' as const,
-  authority: 'provider.instance.alpha',
-  instanceId: 'instance-alpha'
+  providerInstanceRef: 'provider-instance-alpha'
 }
 const ownerPrincipal = {
   schemaVersion: 1 as const,
@@ -89,6 +88,20 @@ const attestation = {
 }
 
 describe('Project content provisioning facts', () => {
+  it('uses the canonical opaque Provider Instance Ref as its single non-authorizing identity', () => {
+    expect(providerDirectoryPrincipalReferenceSchema.parse(ownerPrincipal).providerInstance)
+      .toEqual(providerInstance)
+    expect(providerDirectoryPrincipalReferenceSchema.safeParse({
+      ...ownerPrincipal,
+      providerInstance: {
+        schemaVersion: 1,
+        type: 'provider_instance_reference',
+        authority: 'provider.instance.alpha',
+        instanceId: 'instance-alpha'
+      }
+    }).success).toBe(false)
+  })
+
   it('publishes one global non-authoritative User + Provider Instance principal fact before Project creation', () => {
     const fact = providerDirectoryPrincipalFactSchema.parse({
       schemaVersion: 1,
@@ -314,7 +327,7 @@ describe('Project content provisioning facts', () => {
     const second = canonicalProvisionedMemberSetBytes([...members].reverse())
     expect(first).toEqual(second)
     expect(new TextDecoder().decode(first)).toBe(
-      `[{"observationDigest":"${TEST_HASH}","observedAt":"${TEST_LATER_TIMESTAMP}","presence":"present","principal":{"principalId":"principal-owner-alpha","principalKind":"user","providerInstance":{"authority":"provider.instance.alpha","instanceId":"instance-alpha","schemaVersion":1,"type":"provider_instance_reference"},"schemaVersion":1,"type":"provider_directory_principal_reference"},"providerPrincipalFactId":"${TEST_IDS.providerPrincipalFactId}","snapshottedFactRevision":1,"userId":"${TEST_IDS.userId}"},{"observationDigest":"${TEST_HASH}","observedAt":"${TEST_LATER_TIMESTAMP}","presence":"absent","principal":{"principalId":"principal-worker-alpha","principalKind":"user","providerInstance":{"authority":"provider.instance.alpha","instanceId":"instance-alpha","schemaVersion":1,"type":"provider_instance_reference"},"schemaVersion":1,"type":"provider_directory_principal_reference"},"providerPrincipalFactId":"ppf_Principal00002","snapshottedFactRevision":2,"userId":"${TEST_IDS.secondUserId}"}]`
+      `[{"observationDigest":"${TEST_HASH}","observedAt":"${TEST_LATER_TIMESTAMP}","presence":"present","principal":{"principalId":"principal-owner-alpha","principalKind":"user","providerInstance":{"providerInstanceRef":"provider-instance-alpha","schemaVersion":1,"type":"provider_instance_reference"},"schemaVersion":1,"type":"provider_directory_principal_reference"},"providerPrincipalFactId":"${TEST_IDS.providerPrincipalFactId}","snapshottedFactRevision":1,"userId":"${TEST_IDS.userId}"},{"observationDigest":"${TEST_HASH}","observedAt":"${TEST_LATER_TIMESTAMP}","presence":"absent","principal":{"principalId":"principal-worker-alpha","principalKind":"user","providerInstance":{"providerInstanceRef":"provider-instance-alpha","schemaVersion":1,"type":"provider_instance_reference"},"schemaVersion":1,"type":"provider_directory_principal_reference"},"providerPrincipalFactId":"ppf_Principal00002","snapshottedFactRevision":2,"userId":"${TEST_IDS.secondUserId}"}]`
     )
     expect(() => canonicalProvisionedMemberSetBytes([
       ownerObservation,

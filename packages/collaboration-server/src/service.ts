@@ -2203,7 +2203,7 @@ export class CollaborationService {
         }
       }
 
-      const terminal = input.status === 'completed' || input.status === 'cancelled'
+      const terminal = input.status === 'cancelled'
       const fencesExecutions = input.status === 'paused' || terminal
       const nextExecutionAuthorityEpoch = fencesExecutions
         ? project.executionAuthorityEpoch + 1
@@ -3298,6 +3298,126 @@ export class CollaborationService {
     }))
   }
 
+  async abandonProjectContentRecovery(
+    actor: UserActor,
+    input: CloudCommand<'project.content.recovery.abandon'>
+  ): Promise<Readonly<{
+    project: StoredProject
+    provisioningIntent: StoredProjectContentProvisioningIntent
+    journal: StoredExternalOperationJournal
+    recoveryAction: StoredVisibleRecoveryAction
+  }>> {
+    return this.commit(actor, 'project.content.recovery.abandon', input.idempotencyKey, input, async (tx, at) => {
+      const project = required(await tx.getProjectForUpdate(input.projectId), 'Project')
+      requireProjectOwner(project, actor)
+      expectRevision(project.revision, input.expectedProjectRevision)
+      const intent = required(
+        await tx.getProjectContentProvisioningIntentForUpdate(input.provisioningIntentId),
+        'Project Content provisioning intent'
+      )
+      expectRevision(intent.provisioningRevision, input.expectedProvisioningRevision)
+      expectRevision(intent.revision, input.expectedProvisioningIntentRevision)
+      const action = required(
+        await tx.getVisibleRecoveryActionForUpdate(input.recoveryActionId),
+        'Visible recovery action'
+      )
+      expectRevision(action.revision, input.expectedRecoveryActionRevision)
+      const journal = required(
+        await tx.getExternalOperationJournalByIdForUpdate(input.journalEntryId),
+        'Recovery journal entry'
+      )
+      expectRevision(journal.revision, input.expectedJournalRevision)
+      requireExactProjectRecoveryTuple(action, journal, project, intent)
+      if (
+        intent.state !== 'manual_recovery_required' ||
+        action.status !== 'available' ||
+        (journal.state !== 'outcome_unknown' && journal.state !== 'observed_failure')
+      ) {
+        fail(
+          'invalid_state_transition',
+          'Only one available unresolved or observed-failure Project recovery action may be abandoned.'
+        )
+      }
+
+      const abandonedJournal: StoredExternalOperationJournal = journal.state === 'outcome_unknown'
+        ? {
+            ...journal,
+            state: 'abandoned',
+            safeFailureCode: null,
+            resolvedAt: at,
+            revision: journal.revision + 1,
+            updatedAt: at
+          }
+        : journal
+      if (journal.state === 'outcome_unknown') {
+        await tx.updateExternalOperationJournal(abandonedJournal, journal.revision)
+      }
+      const completedAction: StoredVisibleRecoveryAction = {
+        ...action,
+        status: 'completed',
+        completedAt: at,
+        revision: action.revision + 1,
+        updatedAt: at
+      }
+      await tx.updateVisibleRecoveryAction(completedAction, action.revision)
+      const cancelledIntent: StoredProjectContentProvisioningIntent = {
+        ...intent,
+        state: 'cancelled',
+        revision: intent.revision + 1,
+        updatedAt: at
+      }
+      await tx.updateProjectContentProvisioningIntent(cancelledIntent, intent.revision)
+
+      const intentMessage = await this.appendInbox(
+        tx,
+        { kind: 'agent', id: project.coordinatorAgentId },
+        'project.content.provisioning_intent.changed',
+        {
+          protocolVersion: '1.0',
+          type: 'project.content.provisioning_intent.changed',
+          projectId: project.projectId,
+          provisioningIntentId: cancelledIntent.provisioningIntentId,
+          provisioningRevision: cancelledIntent.provisioningRevision,
+          state: cancelledIntent.state,
+          revision: cancelledIntent.revision
+        },
+        at
+      )
+      const actionMessage = await this.appendInbox(
+        tx,
+        { kind: 'agent', id: project.coordinatorAgentId },
+        'project.recovery.action.changed',
+        {
+          protocolVersion: '1.0',
+          type: 'project.recovery.action.changed',
+          projectId: project.projectId,
+          recoveryActionId: completedAction.recoveryActionId,
+          revision: completedAction.revision
+        },
+        at
+      )
+      return {
+        response: {
+          project,
+          provisioningIntent: cancelledIntent,
+          journal: abandonedJournal,
+          recoveryAction: completedAction
+        },
+        resourceKind: 'visible_recovery_action',
+        resourceId: completedAction.recoveryActionId,
+        notifications: [
+          { recipient: intentMessage.recipient, sequence: intentMessage.sequence },
+          { recipient: actionMessage.recipient, sequence: actionMessage.sequence }
+        ]
+      }
+    }).then((response) => ({
+      project: response.project as StoredProject,
+      provisioningIntent: response.provisioningIntent as StoredProjectContentProvisioningIntent,
+      journal: response.journal as StoredExternalOperationJournal,
+      recoveryAction: response.recoveryAction as StoredVisibleRecoveryAction
+    }))
+  }
+
   async linkObservedRecoveryOutput(
     actor: UserActor,
     input: CloudCommand<'task.recovery.link_observed_output'>
@@ -3902,7 +4022,13 @@ export class CollaborationService {
       const task = required(await tx.getTaskForUpdate(input.taskId), 'Task')
       expectRevision(task.revision, input.expectedTaskRevision)
       const project = required(await tx.getProjectForUpdate(task.projectId), 'Project')
-      requireCoordinatorCommand(project, actor, project.revision, input.expectedCoordinatorAuthorityEpoch)
+      requireCoordinatorCommand(
+        project,
+        actor,
+        input.expectedProjectRevision,
+        input.expectedCoordinatorAuthorityEpoch
+      )
+      expectRevision(project.executionAuthorityEpoch, input.expectedExecutionAuthorityEpoch)
       const previous = required(await tx.getTaskExecutionForUpdate(input.previousExecutionId), 'Previous Task execution')
       expectRevision(previous.revision, input.expectedExecutionRevision)
       if (task.currentExecutionId !== previous.executionId || previous.taskId !== task.taskId) {
@@ -5534,11 +5660,44 @@ function requireExactRecoveryTuple(
   }
 }
 
+function requireExactProjectRecoveryTuple(
+  action: StoredVisibleRecoveryAction,
+  journal: StoredExternalOperationJournal,
+  project: StoredProject,
+  intent: StoredProjectContentProvisioningIntent
+): void {
+  const projectScoped = journal.scope === 'project_provisioning' || journal.scope === 'project_membership'
+  const expectedAction = journal.scope === 'project_membership'
+    ? 'reconcile_provider_membership'
+    : 'resume_provisioning'
+  if (
+    !projectScoped ||
+    intent.projectId !== project.projectId ||
+    action.projectId !== project.projectId ||
+    action.taskId !== null ||
+    action.executionId !== null ||
+    action.audience !== 'owner' ||
+    action.action !== expectedAction ||
+    action.journalEntryId !== journal.contentRecoveryJournalEntryId ||
+    action.requiresFreshObservation !== (journal.state === 'outcome_unknown') ||
+    journal.projectId !== project.projectId ||
+    journal.taskId !== null ||
+    journal.executionId !== null ||
+    journal.provisioningIntentId !== intent.provisioningIntentId ||
+    journal.provisioningRevision !== intent.provisioningRevision
+  ) {
+    fail(
+      'revision_conflict',
+      'The recovery action, journal, Project and provisioning intent do not form one exact recovery tuple.'
+    )
+  }
+}
+
 function sameProviderInstanceReference(
-  left: Readonly<{ authority: string; instanceId: string }>,
-  right: Readonly<{ authority: string; instanceId: string }>
+  left: Readonly<{ providerInstanceRef: string }>,
+  right: Readonly<{ providerInstanceRef: string }>
 ): boolean {
-  return left.authority === right.authority && left.instanceId === right.instanceId
+  return left.providerInstanceRef === right.providerInstanceRef
 }
 
 function deriveTaskAuthorityTransition(input: Readonly<{

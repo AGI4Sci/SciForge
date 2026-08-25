@@ -69,8 +69,7 @@ function providerFactCommand(
       providerInstance: {
         schemaVersion: 1,
         type: 'provider_instance_reference',
-        authority: 'opencontent.sciforge.test',
-        instanceId: 'run0-instance'
+        providerInstanceRef: 'opencontent.run0'
       },
       principalKind: 'user',
       principalId
@@ -129,6 +128,202 @@ function signProvisioningAttestation(
         key.privateKey
       ).toString('base64url')
     }
+  }
+}
+
+async function contentRecoveryProjectFixture(suffix: string) {
+  const repository = new FakeCollaborationRepository()
+  const service = new CollaborationService({ repository, now })
+  const owner = await seedOidcUserDevice(repository, `${suffix}-owner`, at)
+  const worker = await seedOidcUserDevice(repository, `${suffix}-worker`, at)
+  const coordinator = await registeredAgent(service, owner.user, owner.deviceId, `${suffix}-owner`)
+  const ownerFact = await service.publishProviderDirectoryPrincipalFact(
+    owner.user,
+    providerFactCommand(owner.user, owner.deviceId, `${suffix}-provider-owner`, `idem_${suffix}_owner_fact`)
+  )
+  const workerFact = await service.publishProviderDirectoryPrincipalFact(
+    worker.user,
+    providerFactCommand(worker.user, worker.deviceId, `${suffix}-provider-worker`, `idem_${suffix}_worker_fact`)
+  )
+  const created = await service.createProject(owner.user, {
+    protocolVersion: '1.0',
+    type: 'project.create',
+    requestId: `req_${suffix}_project`,
+    idempotencyKey: `idem_${suffix}_project`,
+    displayName: `${suffix} Project`,
+    goal: 'Exercise exact Project Content recovery semantics.',
+    coordinatorAgentId: coordinator.agentId,
+    expectedCoordinatorAgentRevision: 1,
+    budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 },
+    content: {
+      mode: 'required',
+      contentOwnerUserId: owner.userId,
+      providerInstance: ownerFact.providerPrincipal.providerInstance,
+      containerDisplayName: `${suffix} Content`,
+      members: [
+        {
+          userId: owner.userId,
+          providerPrincipalFactId: ownerFact.providerPrincipalFactId,
+          expectedFactRevision: ownerFact.revision
+        },
+        {
+          userId: worker.userId,
+          providerPrincipalFactId: workerFact.providerPrincipalFactId,
+          expectedFactRevision: workerFact.revision
+        }
+      ]
+    }
+  })
+  return { repository, service, owner, worker, created }
+}
+
+async function activeTextOfferFixture(suffix: string) {
+  const repository = new FakeCollaborationRepository()
+  const service = new CollaborationService({ repository, now })
+  const owner = await seedOidcUserDevice(repository, `${suffix}-owner`, at)
+  const firstWorker = await seedOidcUserDevice(repository, `${suffix}-first-worker`, at)
+  const nextCoordinator = await seedOidcUserDevice(repository, `${suffix}-next-coordinator`, at)
+  const coordinator = await registeredAgent(service, owner.user, owner.deviceId, `${suffix}-owner`)
+  const firstWorkerAgent = await registeredAgent(
+    service,
+    firstWorker.user,
+    firstWorker.deviceId,
+    `${suffix}-first-worker`
+  )
+  const nextCoordinatorAgent = await registeredAgent(
+    service,
+    nextCoordinator.user,
+    nextCoordinator.deviceId,
+    `${suffix}-next-coordinator`
+  )
+  const publishAvailability = async (actor: AgentActor, idempotencyKey: string) => (
+    service.publishWorkerAvailability(actor, {
+      protocolVersion: '1.0',
+      type: 'worker.availability.publish',
+      requestId: `req_${idempotencyKey}`,
+      idempotencyKey,
+      agentId: actor.agentId,
+      expectedAgentRevision: 1,
+      connectionStatus: 'online',
+      lastHeartbeatAt: at.toISOString(),
+      runtimeReadiness: 'ready',
+      runtimeCapabilityTags: ['research.execute'],
+      acceptsNewOffers: true,
+      activeTaskCount: 0,
+      observedAt: at.toISOString()
+    })
+  )
+  const firstAvailability = await publishAvailability(
+    firstWorkerAgent,
+    `idem_${suffix}_first_availability`
+  )
+  const nextAvailability = await publishAvailability(
+    nextCoordinatorAgent,
+    `idem_${suffix}_next_availability`
+  )
+  const created = await service.createProject(owner.user, {
+    protocolVersion: '1.0',
+    type: 'project.create',
+    requestId: `req_${suffix}_project`,
+    idempotencyKey: `idem_${suffix}_project`,
+    displayName: `${suffix} workflow`,
+    goal: 'Exercise exact workflow authority and execution fencing.',
+    coordinatorAgentId: coordinator.agentId,
+    expectedCoordinatorAgentRevision: 1,
+    budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 2, maxCoordinationRounds: 2 },
+    content: {
+      mode: 'none',
+      members: [
+        { userId: owner.userId },
+        { userId: firstWorker.userId },
+        { userId: nextCoordinator.userId }
+      ]
+    }
+  })
+  const runtimeProvenance = {
+    runtimeId: `runtime_${suffix}_coordinator`,
+    modelId: null,
+    generatedByCoordinatorAgentId: coordinator.agentId,
+    generatedAt: at.toISOString()
+  }
+  const tasks = [{
+    planItemId: 'item_workflow_task',
+    title: 'Exercise workflow authority',
+    objective: 'Produce one bounded result through the exact current execution.',
+    completionCriteria: ['The current Coordinator can review the immutable result.'],
+    dependencyPlanItemIds: [],
+    requiredCapabilityTags: ['research.execute'],
+    fileIntent: null
+  }]
+  const planFacts = {
+    projectId: created.project.projectId,
+    expectedProjectRevision: created.project.revision,
+    expectedCoordinatorAuthorityEpoch: created.project.coordinatorAuthorityEpoch,
+    supersedesProjectPlanId: null,
+    sourceInputLocators: [],
+    tasks,
+    rationale: 'One exact Worker execution is sufficient.',
+    runtimeProvenance
+  }
+  const submittedPlan = await service.submitProjectPlan(coordinator, {
+    protocolVersion: '1.0',
+    type: 'project.plan.submit',
+    requestId: `req_${suffix}_plan_submit`,
+    idempotencyKey: `idem_${suffix}_plan_submit`,
+    ...planFacts,
+    planDigest: stableDigest(planFacts)
+  })
+  const confirmedPlan = await service.confirmProjectPlan(owner.user, {
+    protocolVersion: '1.0',
+    type: 'project.plan.confirm',
+    requestId: `req_${suffix}_plan_confirm`,
+    idempotencyKey: `idem_${suffix}_plan_confirm`,
+    projectId: created.project.projectId,
+    projectPlanId: submittedPlan.projectPlanId,
+    expectedProjectRevision: created.project.revision + 1,
+    expectedCoordinatorAuthorityEpoch: created.project.coordinatorAuthorityEpoch,
+    expectedPlanRevision: submittedPlan.revision,
+    planDigest: submittedPlan.planDigest
+  })
+  const activeProject = await service.transitionProject(owner.user, {
+    protocolVersion: '1.0',
+    type: 'project.transition',
+    requestId: `req_${suffix}_activate`,
+    idempotencyKey: `idem_${suffix}_activate`,
+    projectId: created.project.projectId,
+    expectedRevision: created.project.revision + 2,
+    expectedCoordinatorAuthorityEpoch: created.project.coordinatorAuthorityEpoch,
+    expectedExecutionAuthorityEpoch: created.project.executionAuthorityEpoch,
+    status: 'active'
+  })
+  const offered = await service.createTaskOffer(coordinator, {
+    protocolVersion: '1.0',
+    type: 'task.offer.create',
+    requestId: `req_${suffix}_offer`,
+    idempotencyKey: `idem_${suffix}_offer`,
+    projectId: activeProject.projectId,
+    expectedProjectRevision: activeProject.revision,
+    expectedCoordinatorAuthorityEpoch: activeProject.coordinatorAuthorityEpoch,
+    expectedExecutionAuthorityEpoch: activeProject.executionAuthorityEpoch,
+    projectPlanId: confirmedPlan.projectPlanId,
+    expectedPlanRevision: confirmedPlan.revision,
+    planItemId: tasks[0]!.planItemId,
+    assigneeAgentId: firstWorkerAgent.agentId,
+    expectedAvailabilityRevision: firstAvailability.revision,
+    offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
+  })
+  return {
+    service,
+    owner,
+    firstWorker,
+    nextCoordinator,
+    coordinator,
+    firstWorkerAgent,
+    nextCoordinatorAgent,
+    nextAvailability,
+    confirmedPlan,
+    activeProject,
+    offered
   }
 }
 
@@ -241,6 +436,142 @@ describe('vNext Cloud application service', () => {
     ]))
     expect(await repository.listProjectContentReadiness(created.project.projectId)).toHaveLength(2)
     expect(await repository.listTaskAuthorities(created.project.projectId)).toHaveLength(4)
+  })
+
+  it('lets only the Owner abandon one exact outcome-unknown Project provisioning tuple', async () => {
+    const { repository, service, owner, worker, created } =
+      await contentRecoveryProjectFixture('recovery-provisioning')
+    const intent = created.provisioningIntent!
+    const prepared = await service.prepareExternalOperation(owner.user, {
+      protocolVersion: '1.0', type: 'external_operation.prepare', requestId: 'req_recovery_prepare_01',
+      idempotencyKey: 'idem_recovery_prepare_01', scope: 'project_provisioning',
+      projectId: created.project.projectId, taskId: null, executionId: null,
+      preparedTaskRevision: null, preparedExecutionRevision: null,
+      provisioningIntentId: intent.provisioningIntentId,
+      provisioningRevision: intent.provisioningRevision,
+      logicalInvocationId: 'recovery-create-root-01', operation: 'create_shared_container',
+      requestDigest: 'b'.repeat(64)
+    })
+    const dispatched = await service.dispatchExternalOperation(owner.user, {
+      protocolVersion: '1.0', type: 'external_operation.dispatch', requestId: 'req_recovery_dispatch_01',
+      idempotencyKey: 'idem_recovery_dispatch_01', journalEntryId: prepared.contentRecoveryJournalEntryId,
+      expectedJournalRevision: prepared.revision
+    })
+    const observed = await service.observeExternalOperation(owner.user, {
+      protocolVersion: '1.0', type: 'external_operation.observe', requestId: 'req_recovery_unknown_01',
+      idempotencyKey: 'idem_recovery_unknown_01', journalEntryId: dispatched.contentRecoveryJournalEntryId,
+      expectedJournalRevision: dispatched.revision, outcome: 'outcome_unknown',
+      receiptDigest: null, observationDigest: null, safeFailureCode: 'provider_outcome_unknown'
+    })
+    const action = observed.recoveryAction!
+    const recoveringIntent = observed.provisioningIntent!
+    expect(action).toMatchObject({ audience: 'owner', action: 'resume_provisioning',
+      status: 'available', requiresFreshObservation: true })
+    expect(recoveringIntent.state).toBe('manual_recovery_required')
+    const readinessBefore = await repository.listProjectContentReadiness(created.project.projectId)
+
+    const command = {
+      protocolVersion: '1.0' as const,
+      type: 'project.content.recovery.abandon' as const,
+      requestId: 'req_recovery_abandon_01',
+      idempotencyKey: 'idem_recovery_abandon_01',
+      projectId: created.project.projectId,
+      provisioningIntentId: recoveringIntent.provisioningIntentId,
+      recoveryActionId: action.recoveryActionId,
+      journalEntryId: observed.journal.contentRecoveryJournalEntryId,
+      expectedProjectRevision: created.project.revision,
+      expectedProvisioningRevision: recoveringIntent.provisioningRevision,
+      expectedProvisioningIntentRevision: recoveringIntent.revision,
+      expectedRecoveryActionRevision: action.revision,
+      expectedJournalRevision: observed.journal.revision,
+      reason: 'Stop this exact uncertain provisioning attempt.'
+    }
+    await expect(service.abandonProjectContentRecovery(worker.user, {
+      ...command,
+      requestId: 'req_recovery_non_owner',
+      idempotencyKey: 'idem_recovery_non_owner'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+
+    const abandoned = await service.abandonProjectContentRecovery(owner.user, command)
+    expect(abandoned.project.revision).toBe(created.project.revision)
+    expect(abandoned.journal).toMatchObject({ state: 'abandoned', safeFailureCode: null,
+      revision: observed.journal.revision + 1, resolvedAt: at.toISOString() })
+    expect(abandoned.recoveryAction).toMatchObject({ status: 'completed',
+      revision: action.revision + 1, completedAt: at.toISOString() })
+    expect(abandoned.provisioningIntent).toMatchObject({ state: 'cancelled',
+      revision: recoveringIntent.revision + 1 })
+    expect(await repository.listProjectContentReadiness(created.project.projectId)).toEqual(readinessBefore)
+    expect(await repository.getProjectContentSpaceBinding(created.project.projectId)).toBeNull()
+    await expect(service.observeExternalOperation(owner.user, {
+      protocolVersion: '1.0', type: 'external_operation.observe', requestId: 'req_recovery_after_abandon',
+      idempotencyKey: 'idem_recovery_after_abandon', journalEntryId: abandoned.journal.contentRecoveryJournalEntryId,
+      expectedJournalRevision: abandoned.journal.revision, outcome: 'observed_success',
+      receiptDigest: 'c'.repeat(64), observationDigest: 'd'.repeat(64), safeFailureCode: null
+    })).rejects.toMatchObject({ code: 'invalid_state_transition' })
+  })
+
+  it('abandons observed-failure membership recovery without rolling back removal fences or factual state', async () => {
+    const { repository, service, owner, worker, created } =
+      await contentRecoveryProjectFixture('recovery-membership')
+    const membership = created.memberships.find(({ userId }) => userId === worker.userId)!
+    const removal = await service.removeProjectMembership(owner.user, {
+      protocolVersion: '1.0', type: 'project.membership.remove', requestId: 'req_recovery_member_remove',
+      idempotencyKey: 'idem_recovery_member_remove', projectId: created.project.projectId,
+      projectMembershipId: membership.projectMembershipId,
+      expectedProjectRevision: created.project.revision, expectedMembershipRevision: membership.revision
+    })
+    const intent = removal.provisioningIntent!
+    expect(removal.membership.state).toBe('membership_removal_pending')
+    expect(removal.taskAuthorities.every(({ state, reason }) =>
+      state === 'fenced' && reason === 'membership_removal_pending')).toBe(true)
+    const prepared = await service.prepareExternalOperation(owner.user, {
+      protocolVersion: '1.0', type: 'external_operation.prepare', requestId: 'req_recovery_member_prepare',
+      idempotencyKey: 'idem_recovery_member_prepare', scope: 'project_membership',
+      projectId: created.project.projectId, taskId: null, executionId: null,
+      preparedTaskRevision: null, preparedExecutionRevision: null,
+      provisioningIntentId: intent.provisioningIntentId, provisioningRevision: intent.provisioningRevision,
+      logicalInvocationId: 'recovery-remove-member-01', operation: 'remove_member',
+      requestDigest: 'e'.repeat(64)
+    })
+    const dispatched = await service.dispatchExternalOperation(owner.user, {
+      protocolVersion: '1.0', type: 'external_operation.dispatch', requestId: 'req_recovery_member_dispatch',
+      idempotencyKey: 'idem_recovery_member_dispatch', journalEntryId: prepared.contentRecoveryJournalEntryId,
+      expectedJournalRevision: prepared.revision
+    })
+    const observed = await service.observeExternalOperation(owner.user, {
+      protocolVersion: '1.0', type: 'external_operation.observe', requestId: 'req_recovery_member_failure',
+      idempotencyKey: 'idem_recovery_member_failure', journalEntryId: dispatched.contentRecoveryJournalEntryId,
+      expectedJournalRevision: dispatched.revision, outcome: 'observed_failure',
+      receiptDigest: null, observationDigest: null, safeFailureCode: 'provider_member_remove_failed'
+    })
+    const action = observed.recoveryAction!
+    const recoveringIntent = observed.provisioningIntent!
+    expect(action).toMatchObject({ audience: 'owner', action: 'reconcile_provider_membership',
+      status: 'available', requiresFreshObservation: false })
+    const readinessBefore = await repository.listProjectContentReadiness(created.project.projectId)
+
+    const abandoned = await service.abandonProjectContentRecovery(owner.user, {
+      protocolVersion: '1.0', type: 'project.content.recovery.abandon', requestId: 'req_recovery_member_abandon',
+      idempotencyKey: 'idem_recovery_member_abandon', projectId: created.project.projectId,
+      provisioningIntentId: recoveringIntent.provisioningIntentId,
+      recoveryActionId: action.recoveryActionId,
+      journalEntryId: observed.journal.contentRecoveryJournalEntryId,
+      expectedProjectRevision: removal.project.revision,
+      expectedProvisioningRevision: recoveringIntent.provisioningRevision,
+      expectedProvisioningIntentRevision: recoveringIntent.revision,
+      expectedRecoveryActionRevision: action.revision,
+      expectedJournalRevision: observed.journal.revision,
+      reason: 'Stop this failed membership reconciliation attempt.'
+    })
+    expect(abandoned.journal).toEqual(observed.journal)
+    expect(abandoned.recoveryAction.status).toBe('completed')
+    expect(abandoned.provisioningIntent.state).toBe('cancelled')
+    expect(await repository.getProjectMember(created.project.projectId, worker.userId))
+      .toMatchObject({ state: 'membership_removal_pending', revision: removal.membership.revision })
+    expect(await repository.listTaskAuthoritiesForUser(created.project.projectId, worker.userId))
+      .toEqual(removal.taskAuthorities)
+    expect(await repository.listProjectContentReadiness(created.project.projectId)).toEqual(readinessBefore)
+    expect(await repository.getProjectContentSpaceBinding(created.project.projectId)).toBeNull()
   })
 
   it('activates Project Content only after exact journal observations and a current Owner Device signature', async () => {
@@ -509,6 +840,251 @@ describe('vNext Cloud application service', () => {
     })).rejects.toMatchObject({ code: 'validation_failed' })
   })
 
+  it('reassigns only from the caller-observed Project and execution authority epochs after transfer', async () => {
+    const fixture = await activeTextOfferFixture('reassign-fence')
+    const rejected = await fixture.service.rejectTaskOffer(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.offer.reject',
+      requestId: 'req_reassign_reject',
+      idempotencyKey: 'idem_reassign_reject',
+      taskOfferId: fixture.offered.offer.taskOfferId,
+      taskId: fixture.offered.task.taskId,
+      executionId: fixture.offered.execution.executionId,
+      expectedTaskRevision: fixture.offered.task.revision,
+      expectedExecutionRevision: fixture.offered.execution.revision,
+      expectedOfferRevision: fixture.offered.offer.revision,
+      reason: 'human_rejected',
+      safeReasonDetail: null
+    })
+    const projectAfterOffer = (
+      await fixture.service.getProject(fixture.owner.user, fixture.activeProject.projectId)
+    ).project
+    const transferred = await fixture.service.transferCoordinator(fixture.owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.transfer_coordinator',
+      requestId: 'req_reassign_transfer',
+      idempotencyKey: 'idem_reassign_transfer',
+      projectId: projectAfterOffer.projectId,
+      expectedRevision: projectAfterOffer.revision,
+      expectedCoordinatorAuthorityEpoch: projectAfterOffer.coordinatorAuthorityEpoch,
+      coordinatorAgentId: fixture.nextCoordinatorAgent.agentId,
+      expectedCoordinatorAvailabilityRevision: fixture.nextAvailability.revision
+    })
+    const command = {
+      protocolVersion: '1.0' as const,
+      type: 'task.offer.reassign' as const,
+      taskId: rejected.task.taskId,
+      previousExecutionId: rejected.execution.executionId,
+      expectedProjectRevision: transferred.revision,
+      expectedTaskRevision: rejected.task.revision,
+      expectedExecutionRevision: rejected.execution.revision,
+      expectedCoordinatorAuthorityEpoch: transferred.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: transferred.executionAuthorityEpoch,
+      assigneeAgentId: fixture.nextCoordinatorAgent.agentId,
+      expectedAvailabilityRevision: fixture.nextAvailability.revision,
+      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
+    }
+
+    await expect(fixture.service.reassignTaskOffer(fixture.nextCoordinatorAgent, {
+      ...command,
+      requestId: 'req_reassign_stale_project',
+      idempotencyKey: 'idem_reassign_stale_project',
+      expectedProjectRevision: projectAfterOffer.revision
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+    await expect(fixture.service.reassignTaskOffer(fixture.nextCoordinatorAgent, {
+      ...command,
+      requestId: 'req_reassign_stale_coordinator_epoch',
+      idempotencyKey: 'idem_reassign_stale_coordinator_epoch',
+      expectedCoordinatorAuthorityEpoch: transferred.coordinatorAuthorityEpoch - 1
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+    await expect(fixture.service.reassignTaskOffer(fixture.nextCoordinatorAgent, {
+      ...command,
+      requestId: 'req_reassign_stale_execution_epoch',
+      idempotencyKey: 'idem_reassign_stale_execution_epoch',
+      expectedExecutionAuthorityEpoch: transferred.executionAuthorityEpoch + 1
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+    await expect(fixture.service.reassignTaskOffer(fixture.coordinator, {
+      ...command,
+      requestId: 'req_reassign_old_coordinator',
+      idempotencyKey: 'idem_reassign_old_coordinator'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+
+    const reassigned = await fixture.service.reassignTaskOffer(fixture.nextCoordinatorAgent, {
+      ...command,
+      requestId: 'req_reassign_current',
+      idempotencyKey: 'idem_reassign_current'
+    })
+    expect(reassigned.execution.executionId).not.toBe(rejected.execution.executionId)
+    expect(reassigned.offer.executionId).toBe(reassigned.execution.executionId)
+
+    const fresh = await fixture.service.readProjectCoordination(fixture.owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.coordination.read',
+      requestId: 'req_reassign_fresh_read',
+      projectId: transferred.projectId,
+      collections: [
+        { collection: 'tasks', limit: 10 },
+        { collection: 'executions', limit: 10 },
+        { collection: 'offers', limit: 10 }
+      ]
+    })
+    const tasks = fresh.pages.flatMap((page) => page.collection === 'tasks' ? page.items : [])
+    const executions = fresh.pages.flatMap((page) => page.collection === 'executions' ? page.items : [])
+    const oldExecution = executions.find(({ executionId }) => (
+      executionId === rejected.execution.executionId
+    ))!
+    expect(oldExecution).toMatchObject({
+      state: 'superseded',
+      fence: { status: 'fenced', reason: 'reassigned' }
+    })
+    await expect(fixture.service.startTaskExecution(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.execution.start',
+      requestId: 'req_reassign_late_start',
+      idempotencyKey: 'idem_reassign_late_start',
+      taskId: rejected.task.taskId,
+      executionId: rejected.execution.executionId,
+      expectedTaskRevision: tasks[0]!.revision,
+      expectedExecutionRevision: oldExecution.revision,
+      startedAt: at.toISOString()
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+  })
+
+  it('request_revision creates a fresh offered execution while preserving the reviewed result provenance', async () => {
+    const fixture = await activeTextOfferFixture('review-revision')
+    const accepted = await fixture.service.acceptTaskOffer(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.offer.accept',
+      requestId: 'req_review_revision_accept',
+      idempotencyKey: 'idem_review_revision_accept',
+      taskOfferId: fixture.offered.offer.taskOfferId,
+      taskId: fixture.offered.task.taskId,
+      executionId: fixture.offered.execution.executionId,
+      expectedTaskRevision: fixture.offered.task.revision,
+      expectedExecutionRevision: fixture.offered.execution.revision,
+      expectedOfferRevision: fixture.offered.offer.revision
+    })
+    const running = await fixture.service.startTaskExecution(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.execution.start',
+      requestId: 'req_review_revision_start',
+      idempotencyKey: 'idem_review_revision_start',
+      taskId: accepted.task.taskId,
+      executionId: accepted.execution.executionId,
+      expectedTaskRevision: accepted.task.revision,
+      expectedExecutionRevision: accepted.execution.revision,
+      startedAt: at.toISOString()
+    })
+    const resultFacts = {
+      taskId: running.task.taskId,
+      executionId: running.execution.executionId,
+      expectedTaskRevision: running.task.revision,
+      expectedExecutionRevision: running.execution.revision,
+      summary: 'The first result requires one bounded revision.',
+      runtimeProvenance: {
+        runtimeId: 'runtime_review_revision_worker',
+        modelId: null,
+        startedAt: at.toISOString(),
+        completedAt: at.toISOString()
+      },
+      outputs: [],
+      recoveryJournalEntryIds: []
+    }
+    const result = await fixture.service.submitTaskResult(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.result.submit',
+      requestId: 'req_review_revision_submit',
+      idempotencyKey: 'idem_review_revision_submit',
+      ...resultFacts,
+      submissionDigest: stableDigest(resultFacts)
+    })
+    const project = (
+      await fixture.service.getProject(fixture.owner.user, fixture.activeProject.projectId)
+    ).project
+    const reviewed = await fixture.service.reviewTaskResult(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.result.review',
+      requestId: 'req_review_revision_decide',
+      idempotencyKey: 'idem_review_revision_decide',
+      projectId: project.projectId,
+      taskId: result.task.taskId,
+      executionId: result.execution.executionId,
+      resultSubmissionId: result.submission.resultSubmissionId,
+      expectedProjectRevision: project.revision,
+      expectedTaskRevision: result.task.revision,
+      expectedExecutionRevision: result.execution.revision,
+      expectedResultRevision: result.submission.revision,
+      expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+      decision: 'request_revision',
+      instruction: 'Address the missing exact authority evidence.',
+      nextAssigneeAgentId: fixture.nextCoordinatorAgent.agentId,
+      expectedNextAssigneeAvailabilityRevision: fixture.nextAvailability.revision,
+      nextOfferExpiresAt: new Date(at.getTime() + 60_000).toISOString(),
+      nextFileIntent: null
+    })
+    expect(reviewed).toMatchObject({
+      task: { status: 'offered' },
+      execution: { executionId: result.execution.executionId, state: 'superseded' },
+      review: { decision: 'request_revision' },
+      offer: { state: 'pending' }
+    })
+
+    const fresh = await fixture.service.readProjectCoordination(fixture.owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.coordination.read',
+      requestId: 'req_review_revision_read',
+      projectId: project.projectId,
+      collections: [
+        { collection: 'tasks', limit: 10 },
+        { collection: 'executions', limit: 10 },
+        { collection: 'offers', limit: 10 },
+        { collection: 'result_submissions', limit: 10 },
+        { collection: 'review_decisions', limit: 10 },
+        { collection: 'project_records', limit: 10 }
+      ]
+    })
+    const tasks = fresh.pages.flatMap((page) => page.collection === 'tasks' ? page.items : [])
+    const executions = fresh.pages.flatMap((page) => page.collection === 'executions' ? page.items : [])
+    const offers = fresh.pages.flatMap((page) => page.collection === 'offers' ? page.items : [])
+    const submissions = fresh.pages.flatMap((page) => (
+      page.collection === 'result_submissions' ? page.items : []
+    ))
+    const reviews = fresh.pages.flatMap((page) => (
+      page.collection === 'review_decisions' ? page.items : []
+    ))
+    const records = fresh.pages.flatMap((page) => (
+      page.collection === 'project_records' ? page.items : []
+    ))
+    expect(tasks).toEqual([expect.objectContaining({
+      status: 'offered',
+      currentExecutionId: reviewed.review.nextExecutionId
+    })])
+    expect(executions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        executionId: result.execution.executionId,
+        state: 'superseded',
+        fence: expect.objectContaining({ status: 'fenced', reason: 'reassigned' })
+      }),
+      expect.objectContaining({
+        executionId: reviewed.review.nextExecutionId,
+        state: 'offered',
+        fence: expect.objectContaining({ status: 'open' })
+      })
+    ]))
+    expect(offers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ executionId: reviewed.review.nextExecutionId, state: 'pending' })
+    ]))
+    expect(submissions).toEqual([expect.objectContaining({
+      resultSubmissionId: result.submission.resultSubmissionId
+    })])
+    expect(reviews).toEqual([expect.objectContaining({
+      resultSubmissionId: result.submission.resultSubmissionId,
+      decision: 'request_revision',
+      nextExecutionId: reviewed.review.nextExecutionId
+    })])
+    expect(records).toEqual([])
+  })
+
   it('keeps Worker HumanNeeded execution-bound and runs review before Coordinator decision/completion', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
@@ -621,12 +1197,43 @@ describe('vNext Cloud application service', () => {
     expect(workerRequest.context).toEqual({
       scope: 'worker_execution', taskId: running.task.taskId, executionId: running.execution.executionId
     })
+    await expect(service.answerHumanNeeded(worker.user, {
+      protocolVersion: '1.0', type: 'human.answer', requestId: 'req_worker_human_answer_non_owner',
+      idempotencyKey: 'idem_worker_human_answer_non_owner',
+      humanRequestId: workerRequest.humanRequestId,
+      requestRevision: workerRequest.revision,
+      answer: 'A non-Owner must not answer this request.'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+    const stillPending = await service.readProjectCoordination(owner.user, {
+      protocolVersion: '1.0', type: 'project.coordination.read', requestId: 'req_worker_human_pending_read',
+      projectId: activeProject.projectId,
+      collections: [{ collection: 'pending_human_needed', limit: 10 }]
+    })
+    expect(stillPending.pages.flatMap((page) => (
+      page.collection === 'pending_human_needed' ? page.items : []
+    ))).toEqual([expect.objectContaining({ humanRequestId: workerRequest.humanRequestId })])
     const workerAnswer = await service.answerHumanNeeded(owner.user, {
       protocolVersion: '1.0', type: 'human.answer', requestId: 'req_worker_human_answer_1',
       idempotencyKey: 'idem_worker_human_answer_1', humanRequestId: workerRequest.humanRequestId,
       requestRevision: workerRequest.revision, answer: 'Interpret it using the frozen baseline.'
     })
     expect(workerAnswer.context).toEqual(workerRequest.context)
+    const afterAnswer = await service.readProjectCoordination(owner.user, {
+      protocolVersion: '1.0', type: 'project.coordination.read', requestId: 'req_worker_human_answer_read',
+      projectId: activeProject.projectId,
+      collections: [
+        { collection: 'pending_human_needed', limit: 10 },
+        { collection: 'tasks', limit: 10 },
+        { collection: 'executions', limit: 10 }
+      ]
+    })
+    expect(afterAnswer.pages.flatMap((page) => (
+      page.collection === 'pending_human_needed' ? page.items : []
+    ))).toEqual([])
+    expect(afterAnswer.pages.flatMap((page) => page.collection === 'tasks' ? page.items : []))
+      .toEqual([expect.objectContaining({ status: 'in_progress' })])
+    expect(afterAnswer.pages.flatMap((page) => page.collection === 'executions' ? page.items : []))
+      .toEqual([expect.objectContaining({ state: 'running' })])
     const resumedTask = (await repository.getTask(running.task.taskId))!
     const resumedExecution = (await repository.getTaskExecution(running.execution.executionId))!
     expect(resumedTask.status).toBe('in_progress')
@@ -730,6 +1337,29 @@ describe('vNext Cloud application service', () => {
       idempotencyKey: 'idem_project_decision_duplicate_answer',
       expectedProjectRevision: decision.project.revision
     })).rejects.toMatchObject({ code: 'idempotency_conflict' })
+    const acceptedRead = await service.readProjectCoordination(owner.user, {
+      protocolVersion: '1.0', type: 'project.coordination.read', requestId: 'req_result_accept_read',
+      projectId: activeProject.projectId,
+      collections: [
+        { collection: 'tasks', limit: 10 },
+        { collection: 'executions', limit: 10 },
+        { collection: 'result_submissions', limit: 10 },
+        { collection: 'review_decisions', limit: 10 },
+        { collection: 'project_records', limit: 10 }
+      ]
+    })
+    expect(acceptedRead.pages.flatMap((page) => (
+      page.collection === 'review_decisions' ? page.items : []
+    ))).toEqual([expect.objectContaining({
+      resultSubmissionId: result.submission.resultSubmissionId,
+      decision: 'accept'
+    })])
+    expect(acceptedRead.pages.flatMap((page) => (
+      page.collection === 'project_records' ? page.items : []
+    ))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'observation', projectRecordId: observation!.projectRecordId }),
+      expect.objectContaining({ kind: 'decision', projectRecordId: decision.record.projectRecordId })
+    ]))
     const finalSummaryCommand = {
       protocolVersion: '1.0', type: 'project.final_summary.submit', requestId: 'req_final_summary_001',
       idempotencyKey: 'idem_final_summary_001', projectId: activeProject.projectId,
@@ -757,5 +1387,22 @@ describe('vNext Cloud application service', () => {
     expect(final.record.sourceTaskId).toBeUndefined()
     expect((await repository.listProjectRecords(activeProject.projectId, true)).map((record) => record.kind))
       .toEqual(['observation', 'decision', 'summary'])
+    const completedRead = await service.readProjectCoordination(owner.user, {
+      protocolVersion: '1.0', type: 'project.coordination.read', requestId: 'req_final_summary_read',
+      projectId: activeProject.projectId,
+      collections: [
+        { collection: 'plans', limit: 10 },
+        { collection: 'tasks', limit: 10 },
+        { collection: 'executions', limit: 10 },
+        { collection: 'result_submissions', limit: 10 },
+        { collection: 'review_decisions', limit: 10 },
+        { collection: 'project_records', limit: 10 }
+      ]
+    })
+    expect(completedRead.project.status).toBe('completed')
+    expect(completedRead.finalSummary).toMatchObject({
+      projectRecordId: final.record.projectRecordId,
+      acceptedResultSubmissionIds: [result.submission.resultSubmissionId]
+    })
   })
 })

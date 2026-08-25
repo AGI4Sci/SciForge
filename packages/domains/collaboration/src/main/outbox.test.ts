@@ -439,9 +439,11 @@ function coordinatorReassignCommand(): RestRequest {
     type: 'task.offer.reassign',
     taskId: TEST_IDS.taskId,
     previousExecutionId: TEST_IDS.executionId,
+    expectedProjectRevision: 1,
     expectedTaskRevision: 1,
     expectedExecutionRevision: 1,
     expectedCoordinatorAuthorityEpoch: 1,
+    expectedExecutionAuthorityEpoch: 1,
     assigneeAgentId: TEST_IDS.secondAgentId,
     expectedAvailabilityRevision: 1,
     offerExpiresAt: TEST_LATER_TIMESTAMP

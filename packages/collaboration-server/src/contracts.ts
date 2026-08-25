@@ -314,10 +314,11 @@ export function toVisibleRecoveryAction(action: StoredVisibleRecoveryAction): Vi
 }
 
 export function toProjectFinalSummary(summary: StoredProjectFinalSummary): ProjectFinalSummary {
+  const { coordinatorAuthorityEpoch: _coordinatorAuthorityEpoch, ...publicSummary } = summary
   return projectFinalSummarySchema.parse({
     schemaVersion: 1,
     type: 'project_final_summary',
-    ...summary
+    ...publicSummary
   })
 }
 

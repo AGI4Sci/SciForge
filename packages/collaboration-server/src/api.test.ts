@@ -112,6 +112,88 @@ describe('production HTTP OIDC-only boundary', () => {
     expect(oversizedText).not.toContain('x'.repeat(64))
   })
 
+  it('preserves parsed command request IDs across validation, actor, and service errors only', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const identity = await seedOidcUserDevice(repository, 'http-error-correlation', now())
+    const token = 'header.error-correlation.signature'
+    const authentication = new AuthenticationService(repository, now, {
+      isCandidate: (candidate) => candidate === token,
+      resolve: async () => identity.user
+    })
+    const server = createCollaborationHttpServer({ service, authentication, readiness: async () => true })
+    servers.push(server)
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const challenge = {
+      protocolVersion: '1.0',
+      requestId: 'req_ErrorValidation001',
+      type: 'endpoint.challenge.create',
+      idempotencyKey: 'idem_error_validation_001',
+      expectedIdentity: {
+        provider: 'fake-im',
+        realmId: 'fake-realm',
+        providerUserId: 'provider-error-user'
+      }
+    }
+    const validation = await fetch(`${baseUrl}/v1/commands`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': 'idem_wrong_header_value'
+      },
+      body: JSON.stringify(challenge)
+    })
+    await expect(validation.json()).resolves.toMatchObject({
+      type: 'rest.error',
+      requestId: challenge.requestId,
+      error: { code: 'validation_error' }
+    })
+
+    const actor = await postCommand(baseUrl, {
+      ...challenge,
+      requestId: 'req_ErrorActor000001',
+      idempotencyKey: 'idem_error_actor_001'
+    })
+    await expect(actor.json()).resolves.toMatchObject({
+      type: 'rest.error',
+      requestId: 'req_ErrorActor000001',
+      error: { code: 'authentication_required' }
+    })
+
+    const serviceFailure = await postCommand(baseUrl, {
+      protocolVersion: '1.0',
+      requestId: 'req_ErrorService0001',
+      type: 'project.get',
+      projectId: 'prj_MissingProject01'
+    }, token)
+    await expect(serviceFailure.json()).resolves.toMatchObject({
+      type: 'rest.error',
+      requestId: 'req_ErrorService0001',
+      error: { code: 'not_found' }
+    })
+
+    const unparsedRequestId = 'req_ErrorUnparsed001'
+    const secretMarker = 'must-not-leak-private-command-material'
+    const unparsed = await postCommand(baseUrl, {
+      protocolVersion: '1.0',
+      requestId: unparsedRequestId,
+      type: 'project.get',
+      projectId: 'prj_MissingProject01',
+      privateMaterial: secretMarker
+    }, token)
+    const unparsedBody = await unparsed.json() as {
+      requestId: string
+      error: { message: string }
+    }
+    expect(unparsedBody.requestId).toMatch(/^req_[A-Za-z0-9]{12,64}$/u)
+    expect(unparsedBody.requestId).not.toBe(unparsedRequestId)
+    expect(JSON.stringify(unparsedBody)).not.toContain(secretMarker)
+  })
+
   it('serves the canonical Provider directory and OIDC-derived atomic Project create responses', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
@@ -141,7 +223,7 @@ describe('production HTTP OIDC-only boundary', () => {
       deviceId: identity.deviceId, expectedDeviceRevision: 1,
       providerPrincipal: { schemaVersion: 1, type: 'provider_directory_principal_reference',
         providerInstance: { schemaVersion: 1, type: 'provider_instance_reference',
-          authority: 'opencontent.sciforge.test', instanceId: 'http-run0' },
+          providerInstanceRef: 'opencontent.run0' },
         principalKind: 'user', principalId: 'provider-http-owner' },
       principalIdentityRevision: 1, providerBindingAttestationDigest: 'a'.repeat(64),
       readiness: 'ready', readinessReason: null, observedAt: now().toISOString()

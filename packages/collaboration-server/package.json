@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/collaboration-server",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -58,7 +58,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@sciforge/collaboration-contracts": "1.0.0",
+    "@sciforge/collaboration-contracts": "2.0.0",
     "@sciforge/collaboration-provider-zulip": "0.2.0",
     "pg": "^8.16.3",
     "ws": "8.21.1",

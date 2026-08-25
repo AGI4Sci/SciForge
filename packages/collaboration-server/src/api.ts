@@ -59,7 +59,7 @@ import type { CollaborationRequestActorResolver } from './network-boundary.js'
 import type { CollaborationService } from './service.js'
 
 export const COLLABORATION_SERVER_ID = 'sciforge.collaboration-server'
-export const COLLABORATION_SERVER_VERSION = '0.1.0'
+export const COLLABORATION_SERVER_VERSION = '0.2.0'
 export const DEFAULT_MAX_BODY_BYTES = 64 * 1024
 
 export interface ProviderDirectory {
@@ -113,22 +113,26 @@ async function handle(
   requireJson(request)
   const raw = await readJson(request, maxBodyBytes)
   const command = restRequestSchema.parse(raw)
-  const headerKey = firstHeader(request.headers['idempotency-key'])
-  if ('idempotencyKey' in command && headerKey !== command.idempotencyKey) {
-    throw new CollaborationServiceError('validation_failed', 'Idempotency-Key header must match the strict command body.')
-  }
-  const actor = await resolveActor(request, command, options)
-  let body: RestResponse
   try {
-    body = await dispatch(command, actor, options)
-  } catch (error) {
-    if (actor && error instanceof CollaborationServiceError && !error.auditRecorded) {
-      await options.service.recordRejectedBoundary(actor, command.type, error).catch(() => undefined)
+    const headerKey = firstHeader(request.headers['idempotency-key'])
+    if ('idempotencyKey' in command && headerKey !== command.idempotencyKey) {
+      throw new CollaborationServiceError('validation_failed', 'Idempotency-Key header must match the strict command body.')
     }
-    throw error
+    const actor = await resolveActor(request, command, options)
+    let body: RestResponse
+    try {
+      body = await dispatch(command, actor, options)
+    } catch (error) {
+      if (actor && error instanceof CollaborationServiceError && !error.auditRecorded) {
+        await options.service.recordRejectedBoundary(actor, command.type, error).catch(() => undefined)
+      }
+      throw error
+    }
+    const validated = restResponseSchema.parse(body)
+    sendJson(response, 200, validated)
+  } catch (error) {
+    sendFailure(response, error, command.requestId)
   }
-  const validated = restResponseSchema.parse(body)
-  sendJson(response, 200, validated)
 }
 
 async function handleIdentityRoute(
@@ -454,6 +458,15 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
         ...(result.execution === null ? [] : [toTaskExecution(result.execution)]),
         ...(result.provisioningIntent === null ? [] : [toProjectContentProvisioningIntent(result.provisioningIntent)])])
     }
+    case 'project.content.recovery.abandon': {
+      const result = await service.abandonProjectContentRecovery(requiredUser(actor), command)
+      return collectionResponse(command, [
+        toProject(result.project),
+        toProjectContentProvisioningIntent(result.provisioningIntent),
+        toExternalOperationRecoveryJournalEntry(result.journal),
+        toVisibleRecoveryAction(result.recoveryAction)
+      ])
+    }
     case 'project.plan.submit': return entityResponse(
       command,
       toProjectPlan(await service.submitProjectPlan(requiredAgent(actor), command))
@@ -664,7 +677,7 @@ function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value
 }
 
-function sendFailure(response: ServerResponse, error: unknown): void {
+function sendFailure(response: ServerResponse, error: unknown, requestId?: string): void {
   if (response.headersSent) {
     response.destroy()
     return
@@ -681,7 +694,7 @@ function sendFailure(response: ServerResponse, error: unknown): void {
   const code = codeMap[serviceError.code as keyof typeof codeMap] ?? serviceError.code
   const errorBody = createCollaborationError(code as Parameters<typeof createCollaborationError>[0], serviceError.message)
   sendJson(response, errorBody.httpStatus, { protocolVersion: '1.0', type: 'rest.error',
-    requestId: `req_${randomUUID().replaceAll('-', '').slice(0, 24)}`, error: errorBody })
+    requestId: requestId ?? `req_${randomUUID().replaceAll('-', '').slice(0, 24)}`, error: errorBody })
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {

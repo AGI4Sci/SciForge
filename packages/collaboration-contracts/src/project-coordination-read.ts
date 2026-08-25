@@ -599,12 +599,12 @@ export const restProjectCoordinationResponseSchema = z.object({
   }
 
   const sameProviderInstance = (
-    left: { authority: string, instanceId: string },
-    right: { authority: string, instanceId: string }
-  ): boolean => left.authority === right.authority && left.instanceId === right.instanceId
+    left: { providerInstanceRef: string },
+    right: { providerInstanceRef: string }
+  ): boolean => left.providerInstanceRef === right.providerInstanceRef
   const sameProviderPrincipal = (
-    left: { providerInstance: { authority: string, instanceId: string }, principalKind: string, principalId: string },
-    right: { providerInstance: { authority: string, instanceId: string }, principalKind: string, principalId: string }
+    left: { providerInstance: { providerInstanceRef: string }, principalKind: string, principalId: string },
+    right: { providerInstance: { providerInstanceRef: string }, principalKind: string, principalId: string }
   ): boolean => sameProviderInstance(left.providerInstance, right.providerInstance) &&
     left.principalKind === right.principalKind && left.principalId === right.principalId
 

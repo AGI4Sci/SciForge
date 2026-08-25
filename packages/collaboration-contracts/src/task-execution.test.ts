@@ -249,9 +249,11 @@ describe('Coordinator authority epoch', () => {
       idempotencyKey: 'idem_offer_reassign_001',
       taskId: TEST_IDS.taskId,
       previousExecutionId: TEST_IDS.executionId,
+      expectedProjectRevision: 8,
       expectedTaskRevision: 3,
       expectedExecutionRevision: 2,
       expectedCoordinatorAuthorityEpoch: 4,
+      expectedExecutionAuthorityEpoch: 2,
       assigneeAgentId: TEST_IDS.secondAgentId,
       expectedAvailabilityRevision: 9,
       offerExpiresAt: TEST_LATER_TIMESTAMP
@@ -259,6 +261,10 @@ describe('Coordinator authority epoch', () => {
     expect(restRequestSchema.safeParse(reassign).success).toBe(true)
     const { expectedAvailabilityRevision: _availability, ...withoutAvailability } = reassign
     expect(restRequestSchema.safeParse(withoutAvailability).success).toBe(false)
+    const { expectedProjectRevision: _projectRevision, ...withoutProjectRevision } = reassign
+    expect(restRequestSchema.safeParse(withoutProjectRevision).success).toBe(false)
+    const { expectedExecutionAuthorityEpoch: _executionEpoch, ...withoutExecutionEpoch } = reassign
+    expect(restRequestSchema.safeParse(withoutExecutionEpoch).success).toBe(false)
     expect(restRequestSchema.safeParse({ ...reassign, fileIntent: null }).success).toBe(false)
 
     const review = {

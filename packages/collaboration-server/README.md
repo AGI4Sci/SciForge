@@ -28,6 +28,20 @@ export。公开 service/API 类型只使用不含凭据的 Actor facts。
 
 跨包协议、实体和 wire schema 必须从 `@sciforge/collaboration-contracts` 的公共入口导入；不要依赖本包 `src/` 私有路径。
 
+Cloud 的 Provider Instance identity 只有
+`{ schemaVersion: 1, type: "provider_instance_reference", providerInstanceRef }`。
+其中 `providerInstanceRef` 直接复用 Domain SDK 的 canonical opaque、non-authorizing
+Provider Instance Ref；Cloud 不再维护或推断 `authority + instanceId`，Content Space
+调用必须原值传递该引用。
+
+Project-scoped visible recovery 只有两条 canonical 路径：对
+`outcome_unknown` journal 提交 fresh `external_operation.observe`，或由当前 Owner
+以 `project.content.recovery.abandon` 精确 CAS Project、provisioning intent、recovery
+action 与 journal。abandon 会完成 action、取消当前 intent，并只在 journal 仍为
+`outcome_unknown` 时把它终结为 `abandoned`；既有 `observed_failure` journal 保持事实不变。
+它不会恢复 `membership_removal_pending`、Task fence、binding 或 readiness，也没有
+project resume/link/兼容命令。后续尝试必须创建新的 provisioning/reconcile intent。
+
 ## 前置条件
 
 - Node.js `>=22.12.0`。

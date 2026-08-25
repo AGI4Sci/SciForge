@@ -128,8 +128,7 @@ describe('Project Content Space and Task file I/O contracts', () => {
       providerInstance: {
         schemaVersion: 1,
         type: 'provider_instance_reference',
-        authority: 'provider.instance.alpha',
-        instanceId: 'instance-alpha'
+        providerInstanceRef: 'provider-instance-alpha'
       },
       rootLocator,
       rootLocatorDigest: TEST_HASH,

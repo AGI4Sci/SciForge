@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { providerInstanceRefSchema } from '@sciforge/domain-sdk/provider-composition'
+
 import {
   agentIdSchema,
   contentRecoveryJournalEntryIdSchema,
@@ -39,16 +41,18 @@ const canonicalOpaqueSchema = (maximum: number) => z.string()
     'Opaque values cannot contain control characters.'
   )
 
+export { providerInstanceRefSchema }
+export type { ProviderInstanceRef } from '@sciforge/domain-sdk/provider-composition'
+
 const sameProviderInstance = (
   left: z.infer<typeof providerInstanceReferenceSchema>,
   right: z.infer<typeof providerInstanceReferenceSchema>
-): boolean => left.authority === right.authority && left.instanceId === right.instanceId
+): boolean => left.providerInstanceRef === right.providerInstanceRef
 
 export const providerInstanceReferenceSchema = z.object({
   schemaVersion: z.literal(1),
   type: z.literal('provider_instance_reference'),
-  authority: canonicalOpaqueSchema(256).regex(/^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$/u),
-  instanceId: providerOpaqueIdSchema
+  providerInstanceRef: providerInstanceRefSchema
 }).strict()
 export type ProviderInstanceReference = z.infer<typeof providerInstanceReferenceSchema>
 
@@ -145,7 +149,7 @@ export const projectContentProvisioningIntentSchema = z.object({
     context.addIssue({ code: 'custom', path: ['desiredMembers'], message: 'Desired member Users must be unique.' })
   }
   const principals = intent.desiredMembers.map(({ principal }) => (
-    `${principal.providerInstance.authority}\u0000${principal.providerInstance.instanceId}\u0000${principal.principalId}`
+    `${principal.providerInstance.providerInstanceRef}\u0000${principal.principalId}`
   ))
   if (new Set(principals).size !== principals.length) {
     context.addIssue({ code: 'custom', path: ['desiredMembers'], message: 'Desired Provider principals must be unique.' })

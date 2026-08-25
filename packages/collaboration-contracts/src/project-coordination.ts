@@ -235,10 +235,8 @@ export const projectWorkerAvailabilityViewSchema = z.object({
   }
   if (view.providerPrincipalFact !== null && view.contentReadiness?.providerPrincipal !== null &&
       view.contentReadiness?.providerPrincipal !== undefined && (
-        view.providerPrincipalFact.providerPrincipal.providerInstance.authority !==
-          view.contentReadiness.providerInstance.authority ||
-        view.providerPrincipalFact.providerPrincipal.providerInstance.instanceId !==
-          view.contentReadiness.providerInstance.instanceId
+        view.providerPrincipalFact.providerPrincipal.providerInstance.providerInstanceRef !==
+          view.contentReadiness.providerInstance.providerInstanceRef
       )) {
     context.addIssue({
       code: 'custom',

@@ -163,6 +163,10 @@ describe('Project plan, result review and final summary', () => {
       summary: 'The design review meeting completed.'
     } as const
     expect(projectFinalSummarySubmitCommandSchema.safeParse(command).success).toBe(true)
+    expect(projectFinalSummarySubmitCommandSchema.safeParse({
+      ...command,
+      acceptedResultSubmissionIds: [TEST_IDS.resultSubmissionId, TEST_IDS.resultSubmissionId]
+    }).success).toBe(false)
     expect(projectFinalSummarySubmitCommandSchema.safeParse({ ...command, integrityVerified: true }).success).toBe(false)
   })
 

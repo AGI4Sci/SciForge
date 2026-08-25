@@ -19,8 +19,7 @@ const metadata = {
 const providerInstance = {
   schemaVersion: 1 as const,
   type: 'provider_instance_reference' as const,
-  authority: 'provider.instance.alpha',
-  instanceId: 'instance-alpha'
+  providerInstanceRef: 'provider-instance-alpha'
 }
 
 const activeMembership = projectMembershipSchema.parse({
