@@ -134,6 +134,8 @@ The coordinator renderer consumes strict read projections and emits commands wit
 
 The UI never directly calls Provider or database APIs. Provisioning and recovery commands route to the package's main orchestrator, which uses generic authenticated Cloud and Content Space capability ports.
 
+`HumanNeeded` is one strict contract with an explicit scope discriminator. `worker_execution` binds the request to one current unfenced Task execution and returns the answer to that Worker as well as the current Coordinator. `coordinator_project` binds only the Project and current Coordinator authority epoch; it never invents a Task or execution. Both target the current Project Owner. Cloud persists one `HumanAnswer`, delivers it to the current Coordinator Agent Inbox, and only that Coordinator Agent may turn the answer into an official `decision`, later author `summary`, and complete the Project. An authenticated OIDC Owner may answer directly; a verified Human Endpoint may answer only after Cloud resolves it to the same already-existing OIDC Owner and the exact Project endpoint. Pairing never creates a User, and an unverified IM string is never a HumanAnswer.
+
 Alternative rejected: a single collaboration screen owning Identity, Provider enrollment and Coordinator workflow. It obscures package authority and makes token/provider leakage difficult to audit.
 
 ### 11. Run-0 reuses the existing A test issuer through a reversible blue-green upgrade

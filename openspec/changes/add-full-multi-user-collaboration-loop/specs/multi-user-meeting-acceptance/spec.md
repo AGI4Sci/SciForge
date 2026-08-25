@@ -36,7 +36,7 @@ Run-0 SHALL 使用现有 `login-test` Keycloak issuer 的真实 OIDC/PKCE、JIT 
 
 ### Requirement: 固定验收角色不限制产品动态性
 
-Run-0 验收 SHALL 使用 U0 Project Owner、U0 所有的精确 Coordinator Agent、U1 manual Worker、U2 automatic Worker 且触发 HumanNeeded、U3 reject Worker、U4 replacement Worker 的固定角色脚本。U0-U4 SHALL 是本次证据中的脱敏 fixture label；产品合同和实现 SHALL 支持动态 User、Device、Agent、Membership 和 Worker 选择，不得硬编码这些 label 或数量。
+Run-0 验收 SHALL 使用 U0 Project Owner、U0 所有的精确 Coordinator Agent、U1 manual Worker、U2 automatic Worker、U3 reject Worker、U4 replacement Worker 的固定角色脚本。U0-U4 SHALL 是本次证据中的脱敏 fixture label；产品合同和实现 SHALL 支持动态 User、Device、Agent、Membership 和 Worker 选择，不得硬编码这些 label 或数量。固定 happy path SHALL 由 U0 Coordinator 在接受三个结果后通过 `coordinator_project` 发起一次 HumanNeeded；`worker_execution` scope SHALL 在 focused/recovery tests 中独立覆盖。
 
 #### Scenario: U3 拒绝并由 U4 接替
 
@@ -46,13 +46,20 @@ Run-0 验收 SHALL 使用 U0 Project Owner、U0 所有的精确 Coordinator Agen
 
 ### Requirement: 会议脚本产生三项真实协作产物
 
-验收 Project SHALL 命名为“多用户协作设计评审会”。U0 Coordinator Agent SHALL 读取真实合成 agenda/requirements 文件，通过真实 AgentRuntime 生成由 Human 确认或编辑的 plan，并并行派发生成 `architecture-review.md`、`meeting-minutes.md`、`risk-register.md` 的三个最终 Task。U1 SHALL 手动接单，U2 SHALL 自动接单并向 U0 发起 HumanNeeded，U3 SHALL 拒绝且 U4 SHALL 接替；所有 Worker SHALL 真实下载输入、调用本机 Runtime/模型、上传结果。
+验收 Project SHALL 命名为“多用户协作设计评审会”。U0 Coordinator Agent SHALL 读取真实合成 agenda/requirements 文件，通过真实 AgentRuntime 生成由 Human 确认或编辑的 plan，并并行派发生成 `architecture-review.md`、`meeting-minutes.md`、`risk-register.md` 的三个最终 Task。U1 SHALL 手动接单，U2 SHALL 自动接单，U3 SHALL 拒绝且 U4 SHALL 接替；所有 Worker SHALL 真实下载输入、调用本机 Runtime/模型、上传结果。
 
 #### Scenario: 三个输出完成初稿
 
 - **WHEN** 当前 execution 的三个 Worker 都提交真实 Provider output references
 - **THEN** Coordinator SHALL 在 HCI 中至少接受一个结果并对另一个要求一次修订
 - **AND** 只有通过复审的当前 revisions 才 SHALL 进入最终 Project Record。
+
+#### Scenario: Coordinator 汇总 observations 后请求 Owner 决策
+
+- **WHEN** 三个当前 TaskResult 均通过复审并形成三个 observations
+- **THEN** U0 Coordinator Agent SHALL 以 `coordinator_project` 发起一次 HumanNeeded，且请求不得包含伪造 Task/execution
+- **AND** U0 通过 OIDC HCI 或已绑定到同一 OIDC Owner 的 verified Human Endpoint/手机 IM 提交 HumanAnswer
+- **AND** Cloud SHALL 通知当前 Coordinator Agent，由该 Agent 写入 decision、summary、下一步 Task 或最小会议包并显式完成 Project。
 
 ### Requirement: Project 完成保留 Provider 团队库和内容
 

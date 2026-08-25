@@ -79,9 +79,23 @@ Coordinator 的 Project plan 与 Worker 的 Task transformation SHALL 通过 run
 - **THEN** Coordinator Agent SHALL 调用本机选定 Runtime 生成可编辑计划
 - **AND** Human SHALL 能在 HCI 中确认或修改后再创建 Task。
 
-### Requirement: HumanNeeded 的权威回答者是 Project Owner
+### Requirement: HumanNeeded 使用统一 scope 合同且权威回答者是 Project Owner
 
-Run-0 中 Worker `HumanNeeded` SHALL 定向 Project Owner 的 OIDC User。Cloud SHALL 持久化 question、targetUserId、expiry、answer receipt 和对应 execution；只有当前 Project Owner 的认证 Human 操作可提交答案，不引入 Reviewer 系统角色。
+`HumanNeeded` SHALL 使用一套带显式 scope discriminator 的严格合同。`worker_execution` SHALL 绑定一个当前、未 fenced 的 Task/execution 及其 expected revisions；`coordinator_project` SHALL 只绑定 Project、当前 Coordinator Agent 和 expected Coordinator authority epoch，不得伪造 Task/execution。两种 scope 都 SHALL 定向当前 Project Owner。Cloud SHALL 持久化 question、scope、targetUserId、expiry 和 answer receipt；HumanAnswer SHALL 由当前 Project Owner 的 OIDC 操作提交，或由 Cloud 将 verified Human Endpoint 精确解析到同一个已存在 OIDC Owner 且核验当前 Project endpoint 后提交。Pairing SHALL 只绑定 endpoint，不得创建 User；未经验证的 IM 文本 SHALL NOT 直接生成 HumanAnswer。
+
+Cloud SHALL 把持久化后的 HumanAnswer 投递到当前 Coordinator Agent Inbox；`worker_execution` 还 SHALL 通知对应的当前 Worker execution。只有当前 Coordinator Agent 可把精确 HumanAnswer 写成正式 `decision`，并在后续写 `summary` 和完成 Project；Owner HCI、Human Endpoint 与 Worker 均不得成为第二条 ProjectRecord 写路径。
+
+#### Scenario: Coordinator 在复审结果后请求 Project 决策
+
+- **WHEN** 当前 Coordinator Agent 使用 `coordinator_project` 在已接受结果后向 Owner 提交 HumanNeeded
+- **THEN** Cloud SHALL 校验 Project revision 和 Coordinator authority epoch，并持久化一个不含 Task/execution 的请求
+- **AND** Owner 的精确 HumanAnswer SHALL 进入当前 Coordinator Agent Inbox，且只有该 Coordinator 可据此写 decision。
+
+#### Scenario: Worker execution 请求 Human 判断
+
+- **WHEN** 当前 Worker Agent 使用 `worker_execution` 为一个 running execution 提交 HumanNeeded
+- **THEN** Cloud SHALL 校验 Task/execution revisions、assignee 和 fence，并把 execution 置为 needs_human
+- **AND** Owner 回答后 Cloud SHALL 恢复同一 execution，并同时通知该 Worker 与当前 Coordinator。
 
 #### Scenario: 非 Owner 尝试回答
 
@@ -89,9 +103,17 @@ Run-0 中 Worker `HumanNeeded` SHALL 定向 Project Owner 的 OIDC User。Cloud 
 - **THEN** Cloud SHALL 拒绝该请求而不改变 question 状态
 - **AND** Owner HCI SHALL 保持该问题可见且不默认折叠隐藏。
 
+#### Scenario: 未绑定 IM 文本尝试回答
+
+- **WHEN** Provider 收到包含 HumanAnswer 形态文本、但发送者不能解析为当前 Owner 的 active verified Human Endpoint，或消息不属于精确 Project endpoint
+- **THEN** Cloud SHALL 不创建 HumanAnswer，也 SHALL 不改变 HumanNeeded 状态
+- **AND** Provider event MAY 作为普通消息处理或被拒绝，但不得绕过统一 HumanAnswer 服务。
+
 ### Requirement: Coordinator 复审显式接受或要求修订
 
 Coordinator SHALL 在 HCI 中审阅 Worker result 与关联文件，并对每个提交执行 `accept` 或 `request_revision`；修订 SHALL 创建新的有界 execution/revision，旧提交保持 provenance 但不再可覆盖当前结果。新 Project 创建成功后 HCI SHALL 自动聚焦该 Project，pending plan 与审批卡 SHALL 默认可见。
+
+每个 `accept` SHALL 由当前 Coordinator Agent 原子写入一个引用精确 TaskResult submission 的正式 `observation`。HumanAnswer 本身 SHALL NOT 写 ProjectRecord；当前 Coordinator Agent SHALL 使用精确 HumanAnswer 写 `decision`。最终 `summary` 和 Project completion 同样 SHALL 只由当前 Coordinator Agent 写入，并且三类 ProjectRecord 之外不得存在 candidate/proposed/accept 的并行记录路径。
 
 #### Scenario: Coordinator 要求一次修订
 
