@@ -26,10 +26,11 @@ This directory preserves architectural decisions together with their lifecycle. 
 | 0032 | accepted | Cloud owns provisioning intent/binding; the Owner Desktop orchestrates exact ordinary Content Space operations with no shared Provider credential. |
 | 0033 | accepted | Device-signed provisioning attestation records observed facts and never becomes Provider ACL or persistent authorization scope. |
 | 0034 | accepted | Metadata proves containment only; real Provider DownloadCheck/write operations are the content authorization oracle. |
+| 0035 | accepted | Every Coordinator Agent belongs to the Project Owner; Run-0 initial content ownership also stays with that Owner, while any future transfer is a separate new-owner Desktop saga. |
 
 ## Current authority order
 
-The canonical full-collaboration target is `CONTEXT-MAP.md`, the context glossaries, ADR-0031 through ADR-0034, and `openspec/changes/add-full-multi-user-collaboration-loop/`. `docs/SciForge_New_Cloudcolab.md`, the same-named root document, meeting summaries and donor-branch reports are historical or supporting evidence only; they cannot override the current OpenSpec or delivery gates.
+The canonical full-collaboration target is `CONTEXT-MAP.md`, the context glossaries, ADR-0031 through ADR-0035, and `openspec/changes/add-full-multi-user-collaboration-loop/`. `docs/SciForge_New_Cloudcolab.md`, the same-named root document, meeting summaries and donor-branch reports are historical or supporting evidence only; they cannot override the current OpenSpec or delivery gates.
 
 When documents disagree, use this order:
 

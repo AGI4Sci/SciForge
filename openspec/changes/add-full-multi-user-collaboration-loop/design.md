@@ -1,6 +1,6 @@
 ## Context
 
-See `proposal.md` for motivation. The synchronized baseline already contains C's OIDC/PKCE, canonical `/v1/me`, Device lease and cloud-authenticated Principal path, the 0.1 collaboration contracts/server/domain package, and the provider-neutral Content Space/OpenContent packages. It does not yet compose those pieces into one real file-bearing Project path.
+See `proposal.md` for motivation. The clean recovery baseline is the user's personal Fork `origin/gui@e0038b8c7109390445dccb691052fec74a153c09`. It already contains C's OIDC/PKCE, canonical `/v1/me`, Device lease and cloud-authenticated Principal path, the collaboration contracts/server/domain package, and the provider-neutral Content Space/OpenContent packages, but it does not yet compose those pieces into one real file-bearing Project path.
 
 The donor branches are not merge bases:
 
@@ -9,7 +9,7 @@ The donor branches are not merge bases:
 - C is already integrated in the baseline at `3f5527d1`; its Device revalidation and stable Principal behavior remain canonical.
 - E1 `0d370464` contains useful generic system transfer, Workspace safety and receipt work, but its metadata ancestry observation must not be treated as Provider ACL.
 
-All donor code is therefore reviewed by behavior and rewritten behind final package contracts. The public A deployment is evidence only and remains unchanged.
+All donor code is therefore reviewed by behavior and rewritten behind final package contracts. The previous `codex/full-collaboration-loop` branch and local WIP snapshot are read-only audit/donor sources, are never merged as integration history, and do not establish implementation progress. The recovery branch `codex/full-collaboration-loop-recovery` is the sole integration mainline. The public A deployment is evidence only and remains unchanged.
 
 ## Goals / Non-Goals
 
@@ -29,6 +29,9 @@ All donor code is therefore reviewed by behavior and rewritten behind final pack
 - Making Cloud Project Membership an OpenContent ACL, synchronizing Provider and Cloud databases, or deleting Provider content on Project lifecycle changes.
 - Introducing a Cloud-hosted LLM, collaboration-specific Agent Runtime, provider-specific Host switch, shared Provider credential, file sync/mount, or second content execution path.
 - Treating the five acceptance users, output names or OpenContent as hard-coded product limits.
+- Implementing provider-neutral Shared Documents or real-time co-editing; this PoC uses Content Space file handoff/review and Provider-native operations only.
+- Refactoring historical architecture or secret findings outside the production paths changed for this collaboration loop.
+- Developing Computer Use TS/Python, Evidence DAG, Project DAG, Create Loop, Remote SSH, or unrelated Worker capabilities; only a minimal generic adapter is allowed if a changed collaboration contract would otherwise fail to compile.
 
 ## Decisions
 
@@ -70,12 +73,14 @@ Alternative rejected: create an Agent immediately after login. An Agent with no 
 
 ### 4. Collaboration server keeps explicit orthogonal state
 
-The database stores separate records instead of a composite “member is authorized” boolean:
+The database stores four independent facts instead of a composite “member is authorized” boolean:
 
 - `project_membership`: `pending_membership | active | membership_removal_pending | removed`.
-- `project_content_readiness`: per User and binding revision, `missing_identity | pending | ready | degraded` plus last Provider observation.
+- `provider_membership_observation`: the latest external member-list or operation fact observed from the Provider, with no Cloud authority.
+- `project_content_readiness`: the derived per-Project, per-User projection `missing_identity | pending | ready | degraded` for one binding revision.
 - `task_authority`: derived at command time from Project/Membership/Device/Agent/execution facts; live executions carry a durable fence.
-- `project_content_binding`: `provisioning | active | degraded | closed` with a portable root, provisioning revision and attestation digest.
+
+`project_content_binding` separately tracks `provisioning | active | degraded | closed` with a portable root, provisioning revision and attestation digest. Project lifecycle status and binding status are separate fields; neither is encoded as a slash-composite status.
 
 Task rows point to the current `executionId`; every offer/reoffer inserts an immutable execution attempt. Old executions remain audit facts but all writes check the current execution/fence and expected revision. Outbox/Inbox and the state transition commit in one database transaction. WSS only signals availability.
 
@@ -91,11 +96,11 @@ Alternative rejected: A Cloud `acceptancePolicy` field. It would become a cross-
 
 Before a file-bearing Project exists, each authenticated User publishes one current global `ProviderDirectoryPrincipalFact` for an exact Provider Instance from that User's ACTIVE Device. The fact wraps only a non-authorizing Provider Directory Principal Reference plus User/Device provenance, readiness and compare-and-set revision. One exact User and Provider Instance has one current stable fact; conflicting replacement is explicit and never inferred from email, display name, OIDC subject or Agent ownership.
 
-Cloud then creates the Project, explicit Memberships and exact provisioning intent at revision N in one transaction. The Owner comes from the authenticated OIDC actor rather than a caller-authored field, and the create command selects the content owner and every desired Provider member by exact ready fact ID and expected fact revision. Stale, degraded, cross-User or cross-Provider facts fail closed. The Owner Desktop's coordinator package obtains one Human confirmation for the complete, immutable revision-N operation plan. The Broker turns that confirmation into finite, one-use approval proofs for each enumerated Content Space create/list/add/list operation; it is not a standing administration grant, and any changed member/root/request requires new confirmation.
+Cloud then creates the Project, explicit Memberships and exact provisioning intent at revision N in one transaction. The Owner comes from the authenticated OIDC actor rather than a caller-authored field. For Run-0, Cloud derives `contentOwnerUserId = ownerUserId` and selects that Owner's exact ready Provider fact plus every desired Provider member fact by expected revision; the caller cannot nominate a different initial content owner. Stale, degraded, cross-User or cross-Provider facts fail closed. The Owner Desktop's coordinator package obtains one Human confirmation for the complete, immutable revision-N operation plan. The Broker turns that confirmation into finite, one-use approval proofs for each enumerated Content Space create/list/add/list operation; it is not a standing administration grant, and any changed member/root/request requires new confirmation.
 
 Each external operation uses the normal Content Space capability and current Owner Provider Connection. The coordinator package journals logical invocation IDs and exact receipts, re-reads the Provider member list, builds a provider-neutral report, and asks Identity/Host to sign the structured digest with the current enrolled Device key. Cloud verifies the Device signature, current Owner/Device, intent revision and report digest before binding and activating the Project.
 
-Failures preserve the journal. Definitive missing operations may continue; uncertain writes require observation. No failure path deletes the external Team/directory. Dynamic add/remove is the same saga with a new revision. Removal first fences Cloud task authority and only then attempts Provider removal.
+Failures preserve the journal. Definitive missing operations may continue; uncertain writes require observation. No failure path deletes the external Team/directory. Dynamic add/remove is the same saga with a new revision. Removal first fences Cloud task authority and only then attempts Provider removal. A future explicit content-owner transfer is a separate saga executed on the new content owner's Desktop with that Human's current Provider Connection; it is not part of Run-0 and never reuses the old Owner's Provider authority.
 
 Alternative rejected: a Cloud backend calling OpenContent. It would require shared Provider credentials and violate execution-node account authority. Also rejected: a Content Space `provisionProject` method, because Content Space must not import Project semantics.
 
@@ -123,6 +128,8 @@ Alternative rejected: retry with the same or a generated idempotency key when th
 
 ### 10. Coordinator HCI is a projection over authoritative commands
 
+Every current Coordinator Agent is owned by the Project Owner. The authenticated Owner Human operates the Coordinator HCI, and Coordinator transfer may select only another exact Agent owned by that same Owner; Workers remain dynamically selected exact Agents owned by Project members.
+
 The coordinator renderer consumes strict read projections and emits commands with expected revision/idempotency. Creating a Project returns and focuses its ID; plan confirmation, HumanNeeded and review cards are visible without entering a collapsed advanced region. Worker candidates are grouped by User but selection values are Agent IDs. Review provides accept/request-revision, and recovery exposes only evidence-backed actions.
 
 The UI never directly calls Provider or database APIs. Provisioning and recovery commands route to the package's main orchestrator, which uses generic authenticated Cloud and Content Space capability ports.
@@ -145,16 +152,16 @@ The receipt uses fixture labels U0-U4 and redacted entity IDs, but records exact
 
 ### 13. Repository architecture principles are a release gate
 
-`Repository architecture principles gate` is a mandatory source and packaged release gate, not advisory review text. The exact frozen requirements are: **不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证。**
+`Repository architecture principles gate` is a mandatory source and packaged release gate for the production paths added or modified by this change, not advisory review text. The exact frozen requirements are: **不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证。**
 
-The gate SHALL fail if a domain package can only be installed by editing Host-private routing, if the Host imports a domain implementation rather than a generic SDK contract, if old and new entrypoints remain registered together, if current acceptance/provider/domain identifiers select production behavior, if one business domain's backend and UI have independent ownership/versioning, or if only source composition is exercised. Passing unit tests cannot override a failed architecture gate.
+The gate SHALL fail this change if one of its changed production paths requires Host-private routing, imports a domain implementation rather than a generic SDK contract, retains old and new entrypoints together, uses acceptance/provider/domain identifiers to select production behavior, splits one business domain's backend and UI ownership/versioning, or lacks source or packaged composition evidence. Repository-wide scans MAY report pre-existing findings, but only findings introduced by or directly blocking the changed collaboration path are release blockers for this change; they SHALL NOT authorize unrelated historical-debt refactors. Passing unit tests cannot override an in-scope architecture failure.
 
 ## Risks / Trade-offs
 
 - [The Provider's DownloadCheck or exact upload observation contract differs from current evidence] → freeze strict Connector schemas and characterize the real provider before admitting live operations; keep affected operation fail-closed rather than add a metadata fallback.
 - [A single Human batch confirmation could become overly broad] → bind it to one immutable provisioning revision and exact ordered operations; issue one-use per-operation proofs and invalidate the batch on any drift.
 - [Device signing expands Identity/Host responsibilities] → expose only canonical digest signing and public-key verification metadata; keep private keys inside native secure storage and prohibit arbitrary data signing by domain packages.
-- [Cloud and Provider membership diverge for extended periods] → display three independent states, fence Task authority first, keep durable pending/degraded recovery and provide explicit Owner reconcile.
+- [Cloud and Provider membership diverge for extended periods] → display Project Membership, Provider observation, derived Content Readiness and command-time Task Authority independently; fence Task authority first and provide explicit Owner reconcile.
 - [A late Provider success occurs after execution fencing] → retain observation in recovery journal but reject Task association until an authorized Human reconciles it.
 - [Donor code embeds obsolete contract assumptions] → port behavior behind new public contracts and tests instead of merging commits wholesale.
 - [Five-device live validation cannot run locally] → complete code/source/packaged gates, produce a packaged artifact and mark final status `awaiting_real_devices` until the real matrix is supplied.
@@ -162,13 +169,13 @@ The gate SHALL fail if a domain package can only be installed by editing Host-pr
 
 ## Migration Plan
 
-1. Freeze Context Map, glossary, ADRs, this OpenSpec and acceptance runbook on the user fork branch.
+1. Create `codex/full-collaboration-loop-recovery` from the personal Fork `origin/gui@e0038b8c7109390445dccb691052fec74a153c09`; freeze Context Map, glossary, ADRs, this OpenSpec and acceptance runbook there. The old integration branch and WIP snapshot remain read-only donors and are never ordinarily merged.
 2. Add token-free Identity transport and Device signing without changing public server APIs; migrate collaboration Desktop to consume them and delete its OIDC/token path.
 3. Evolve collaboration contracts/server with forward-only migrations for execution, membership/readiness and provisioning state; tests start from every prior schema version supported by the isolated stack.
 4. Add Project coordinator package and manifest composition; port B's useful UI/runner behavior behind current contracts and remove production mock/fallback code.
 5. Add Content Space system transfers and OpenContent operation-time checks; port E1 Workspace/receipt behavior while correcting ACL semantics.
 6. Add isolated Run-0 deployment artifacts, deploy only the new stack, verify issuer/database/container separation and record a backup.
 7. Run focused, full, architecture, generated-composition, source and packaged tests; build one exact packaged artifact.
-8. Execute the live device/meeting/recovery matrix and seal the redacted receipt. Only after all gates pass is an upstream PR prepared.
+8. Execute the live device/meeting/recovery matrix and seal the redacted receipt on the recovery branch. Only after all gates pass and the User confirms is an upstream PR prepared from that branch.
 
 Rollback before live data consists of removing the isolated Run-0 Compose project and its explicitly named data after a verified backup; it never touches public services. After Provider provisioning, rollback closes Cloud binding and preserves Provider content for Human cleanup. Database migrations are forward-only; application rollback uses the isolated database backup rather than down-migrations that could discard evidence.

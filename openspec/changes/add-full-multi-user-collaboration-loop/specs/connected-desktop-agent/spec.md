@@ -42,7 +42,7 @@ Desktop SHALL 在 OIDC User 已确认后注册或恢复该安装的 Device；只
 
 ### Requirement: Agent 角色来自 Project 和 Task 关系
 
-Agent SHALL 是一个 User 所有且绑定一个 Agent Host Device 的执行 identity。Coordinator 或 Worker SHALL NOT 是账号、全局 Agent 类型或登录角色；一个 Agent MAY 在一个 Project 中担任 Coordinator，并同时在另一 Project 或 Task 中作为 Worker。
+Agent SHALL 是一个 User 所有且绑定一个 Agent Host Device 的执行 identity。Coordinator 或 Worker SHALL NOT 是账号、全局 Agent 类型或登录角色；一个 Agent MAY 在自己 Owner 创建的 Project 中担任 Coordinator，并同时在另一 Project 或 Task 中作为 Worker。任何 Project 的 Coordinator Agent SHALL 始终由该 Project Owner 所有。
 
 #### Scenario: 同一 Agent 承担不同协作职责
 

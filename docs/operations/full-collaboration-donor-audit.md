@@ -5,15 +5,16 @@
 ## 基线与分支
 
 - 个人 Fork：`SCU-areszhang/SciForge_Loop`
-- 实现分支：`codex/full-collaboration-loop`
-- 创建基线：同步后的个人 Fork `origin/gui@3f5527d1ddd2ad6f56ae294197e137ae6bdd061c`
-- 同步时 `origin/gui` 与 `upstream/gui` 完全相同；分支创建后冻结基线，后续 upstream 变化逐项审查，不自动漂移
+- 唯一集成分支：`codex/full-collaboration-loop-recovery`
+- clean recovery 基线：个人 Fork `origin/gui@e0038b8c7109390445dccb691052fec74a153c09`
+- 旧 `codex/full-collaboration-loop@ac6858110a01cea3bddc9eecd7c2c2762b9a8689` 与本地 WIP snapshot `codex/wip/full-collaboration-loop-snapshot-20260825T064142Z@72c090d58ed030c39bac80012e58efea0b707343` 仅供只读审计和逐文件 donor；不参与普通合并，不继承实现 checkbox 或验收结论
+- recovery 基线创建后冻结；后续 upstream 变化逐项审查，不自动漂移
 - A `292560506896c31900a43339338ef32dc8767212`：未进入基线
 - B `543042e9cd3bbad66f48d8962b49d9a45c6d9033`：未进入基线
 - C `15a45319`：已由 upstream PR #84 进入基线 merge `3f5527d1`
 - E1 `0d3704641f46434b79f92c36302da074060eebea`：本地 donor-only，未进入基线
 
-任何实现都不得整分支 cherry-pick 后再叠加兼容层。应先建立当前 public contract/test，再移植满足该合同的最小行为，并删除旧的重复路径。
+任何实现都不得普通合并旧闭环/WIP/donor 分支，也不得整分支 cherry-pick 后再叠加兼容层。应先建立当前 public contract/test，再逐文件移植满足该合同的最小行为，并删除 changed path 上的旧重复路径。
 
 ## A：Cloud donor
 
@@ -100,7 +101,9 @@
 
 1. C 当前身份路径为起点；A/B 任何匿名 pairing 或 Token duplication 都不得回归。
 2. A 提供 Cloud 数据形状灵感，B 提供 Coordinator/Worker 行为灵感，E1 提供 transfer/Workspace 灵感；最终公共合同由本变更 OpenSpec 决定。
-3. Cloud Project Membership、Provider Membership observation 和 Task authority 分表/分状态，不互相推断。
+3. Cloud Project Membership lifecycle、Provider Membership Observation、derived Project Content Readiness 和 command-time Task Authority 分表/分状态，不互相推断。
 4. Cloud 与 Content Space 是并列模块：Cloud 保存 intent/state，Owner Desktop 编排 Provider 外部写，Content Space 不导入 Project。
 5. source、packaged 和 isolated-live 都必须走 manifest/generated composition 的唯一生产路径；测试 mock 不构成 donor 采纳理由。
 6. 现有公网 A 部署保持不变；所有 deployment/migration/live mutation 只允许指向独立 Run-0 资源。
+7. Coordinator Agent 始终由 Project Owner 所有；Run-0 初始 content owner 同样固定为 Project Owner。Shared Documents/实时共同编辑不在本 PoC。
+8. Architecture/secret 扫描对全仓历史问题仅报告；本次只阻塞新增或修改的闭环生产路径及其最小直接依赖，不扩展为无关模块重构。

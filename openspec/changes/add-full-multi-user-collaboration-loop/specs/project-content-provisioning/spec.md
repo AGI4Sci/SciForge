@@ -22,7 +22,7 @@
 
 ### Requirement: Cloud 创建 Project 和持久 provisioning intent
 
-创建需要文件协作的 Project 时，Cloud SHALL 从当前 OIDC actor 派生 Owner，并原子保存 Project、显式 Membership、唯一 Coordinator、目标 content owner、每个 desired member 的 exact ready fact ID/revision snapshot、provisioning revision 和 durable intent，并将 Project 置为 `provisioning/paused`。Content owner SHALL 是显式 Member，所有 fact SHALL 归属各自 exact User 且固定同一 Provider Instance；stale、degraded、cross-User 或 cross-Provider fact SHALL 使整个 transaction fail closed。在 Device-signed provisioning attestation 被验证和绑定前，Cloud SHALL NOT 将 Project 标记为 active 或派发文件 Task。
+创建需要文件协作的 Project 时，Cloud SHALL 从当前 OIDC actor 派生 `ownerUserId`，要求 `coordinatorAgentId` 属于该 Owner，并派生 `contentOwnerUserId = ownerUserId`；调用方 SHALL NOT 指定其他初始 content owner。Cloud SHALL 原子保存 Project、显式 Membership、唯一 Coordinator、Owner 的 exact ready content fact、每个 desired member 的 exact ready fact ID/revision snapshot、provisioning revision 和 durable intent。Project lifecycle SHALL 进入 `paused`，Project Content Binding lifecycle SHALL 独立进入 `provisioning`，不得编码为 `provisioning/paused` 复合状态。所有 fact SHALL 归属各自 exact User 且固定同一 Provider Instance；stale、degraded、cross-User 或 cross-Provider fact SHALL 使整个 transaction fail closed。在 Device-signed provisioning attestation 被验证和绑定前，Cloud SHALL NOT 激活文件 Task authority。
 
 #### Scenario: Project 创建成功但外部 Provider 尚未写入
 
@@ -50,9 +50,9 @@ Owner Desktop SHALL 把当前 OIDC User、ACTIVE Device、公钥/签名、当前
 - **THEN** Cloud SHALL 拒绝绑定为 stale revision
 - **AND** Owner Desktop SHALL 重新读取最新 intent 和 Provider 事实后再 reconcile。
 
-### Requirement: Binding 激活 Project 但不授予 Provider permission
+### Requirement: Binding 激活文件 authority 但不授予 Provider permission
 
-有效 binding SHALL 只证明 Cloud Project 与一个可移植 Project Content Directory 的权威关联及最近 provisioning 观察。Cloud Project Membership、Provider Membership 和 Task authority SHALL 作为三套独立状态保存和展示；数据库写入成功 SHALL NOT 被描述为 Provider ACL 已改变，Provider ACL SHALL 只由真实 Provider 操作与观察证明。
+有效 binding SHALL 只证明 Cloud Project 与一个可移植 Project Content Directory 的权威关联及最近 provisioning 观察。Cloud SHALL 独立保存和展示 Project Membership lifecycle、Provider Membership Observation、derived Project Content Readiness 和 command-time Task Authority；数据库写入成功 SHALL NOT 被描述为 Provider ACL 已改变，Provider ACL SHALL 只由真实 Provider 操作与观察证明。
 
 #### Scenario: Cloud Member 存在但 Provider member 缺失
 
@@ -92,7 +92,7 @@ Owner 发起 Member 移除时，Cloud SHALL 先把 Project Membership 置为 `me
 
 ### Requirement: 外部失权按真实 Provider 结果降级
 
-如果成员在 Provider 外被人工移除，已知资源的 metadata MAY 仍可见；下一次真实 `DownloadCheck`、upload 或 Owner 显式 reconcile 返回 unauthorized 时，Worker SHALL 立即停止相关 execution，Cloud SHALL 将该 User 在当前 Project Content Directory 的 membership/readiness 标记为 `degraded` 并暂停其所有文件 Task。单个普通成员失权 SHALL 不关闭整个 binding 或阻止其他有效成员。
+如果成员在 Provider 外被人工移除，已知资源的 metadata MAY 仍可见；下一次真实 `DownloadCheck`、upload 或 Owner 显式 reconcile 返回 unauthorized 时，Worker SHALL 立即停止相关 execution，Cloud SHALL 保持该 User 的 Project Membership lifecycle 不变、将其 Project Content Readiness 标记为 `degraded`，并暂停其所有文件 Task。单个普通成员失权 SHALL 不关闭整个 binding 或阻止其他有效成员。
 
 #### Scenario: 普通 Worker 被 Provider 外部移除
 
@@ -102,7 +102,7 @@ Owner 发起 Member 移除时，Cloud SHALL 先把 Project Membership 置为 `me
 
 ### Requirement: Content Owner 失权降级整个文件 binding
 
-如果 Project content owner 对 root 失权，Cloud SHALL 将 Project Content Space Binding 标记为 `degraded`，暂停所有新的和正在执行的文件 Task；纯文本协作 MAY 依据 Task 类型继续。恢复 SHALL 要求 Owner 显式 rebind、重新 provisioning 或更换 content owner，而不得选择其他成员的 Connection 作为隐式管理员。
+如果 Project content owner 对 root 失权，Cloud SHALL 将 Project Content Space Binding 标记为 `degraded`，暂停所有新的和正在执行的文件 Task；纯文本协作 MAY 依据 Task 类型继续。Run-0 的初始 content owner 始终是 Project Owner。恢复 MAY 由该 Owner 显式 rebind/重新 provisioning；未来若产品支持更换 content owner，则 SHALL 建立独立 intent，并由新 content owner 的 Human 在其 Desktop 上用自己的当前 Provider Connection 完成全新 saga，绝不能选择其他成员的 Connection 作为隐式管理员。本次 Run-0 SHALL NOT 把 content-owner transfer 作为闭环门禁。
 
 #### Scenario: Owner 无法再观察 root
 

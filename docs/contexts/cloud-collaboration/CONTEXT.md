@@ -11,8 +11,12 @@ A cloud-authoritative unit with one owning SciForge User, explicit members, one 
 _Avoid_: Workspace, Project DAG, shared folder, OpenContent Team
 
 **Project Owner**:
-The SciForge User identified by a Collaboration Project's `ownerUserId`. Ownership does not imply access to a member's Workspace or external accounts.
+The SciForge User identified by a Collaboration Project's `ownerUserId`. Every current Coordinator Agent belongs to this User, while Workers may belong to any Project Member; ownership does not imply access to another member's Workspace or external accounts.
 _Avoid_: Workspace owner, Coordinator Agent, OpenContent administrator
+
+**Project Content Owner**:
+The SciForge User whose current Provider Connection is authorized to administer the Project Content Directory. In Run-0 the initial Project Content Owner is always the Project Owner; a future explicit change is a separate saga on the new content owner's Desktop.
+_Avoid_: implicit administrator, borrowed Connection, arbitrary initial member
 
 **Project Member**:
 An explicit relationship between a SciForge User and a Collaboration Project carrying that user's Project permissions.
@@ -34,12 +38,16 @@ _Avoid_: Provider mutation receipt, Team ACL, Task offer
 The current global, non-secret Cloud fact that one exact SciForge User published one exact Provider Directory Principal Reference for one Provider Instance from an ACTIVE Device. It has a stable fact identity, compare-and-set revision, current readiness, Device/Principal provenance, and an opaque binding-attestation digest. It can exist before a Project so Project creation can atomically select exact fact revisions; it neither proves Provider membership nor grants Project or Task authority.
 _Avoid_: Provider ACL, Project Content Readiness, inferred email mapping, local Connection, reusable authorization
 
+**Provider Membership Observation**:
+The latest external fact returned by a real Provider member-list, download, upload, or explicit reconcile operation for an exact Project Content Directory. It reports Provider reality but grants no Project Membership or Task Authority.
+_Avoid_: Cloud membership, cached ACL grant, inferred readiness
+
 **Project Content Provisioning Attestation**:
 A Device-signed, non-secret statement of the exact Provider root and member observations made by the Project Owner Desktop for one provisioning intent revision. It proves who observed which facts, not continued Provider permission or reusable authorization.
 _Avoid_: Provider Binding Attestation, access token, Provider ACL grant, persistent authorization scope
 
 **Project Content Readiness**:
-The per-Project, per-User Cloud projection of whether an exact Provider identity has been provisioned and most recently observed ready for file work. It is separate from Project Membership and is invalidated by real Provider denial or reconciliation.
+The derived per-Project, per-User Cloud projection of whether an exact Provider identity has been provisioned and most recently observed ready for file work. `degraded` belongs here, never to Project Membership; readiness is invalidated by real Provider denial or reconciliation.
 _Avoid_: Project role, Provider ACL cache, Worker online status
 
 **Project Content Directory**:
@@ -47,7 +55,7 @@ The shared provider directory selected by a Project Content Space Binding for or
 _Avoid_: Project database, Team root by implication, Workspace, Shared Document
 
 **Coordinator Agent**:
-The one Agent currently authorized to write a Collaboration Project's plan, create Tasks, confirm formal conclusions, and complete the Project.
+The one Project-Owner-owned Agent currently authorized to write a Collaboration Project's plan, create Tasks, confirm formal conclusions, and complete the Project. Transfer may select only another exact Agent owned by the same Project Owner.
 _Avoid_: Project Owner, Coordinator product, cloud model runtime
 
 **Worker Agent**:

@@ -36,7 +36,7 @@ Run-0 SHALL 使用真实 Keycloak OIDC/PKCE、JIT User、真实 Device/Agent 和
 
 ### Requirement: 固定验收角色不限制产品动态性
 
-Run-0 验收 SHALL 使用 U0 Owner+Coordinator、U1 manual Worker、U2 automatic Worker 且触发 HumanNeeded、U3 reject Worker、U4 replacement Worker 的固定角色脚本。U0-U4 SHALL 是本次证据中的脱敏 fixture label；产品合同和实现 SHALL 支持动态 User、Device、Agent、Membership 和 Worker 选择，不得硬编码这些 label 或数量。
+Run-0 验收 SHALL 使用 U0 Project Owner、U0 所有的精确 Coordinator Agent、U1 manual Worker、U2 automatic Worker 且触发 HumanNeeded、U3 reject Worker、U4 replacement Worker 的固定角色脚本。U0-U4 SHALL 是本次证据中的脱敏 fixture label；产品合同和实现 SHALL 支持动态 User、Device、Agent、Membership 和 Worker 选择，不得硬编码这些 label 或数量。
 
 #### Scenario: U3 拒绝并由 U4 接替
 
@@ -86,7 +86,7 @@ Run-0 SHALL 至少验证：Worker accept 后重启并恢复同一 execution、We
 
 ### Requirement: Repository architecture principles gate 是发布硬门禁
 
-本变更在 source、packaged 和 upstream PR 准备前 SHALL 通过独立的 `Repository architecture principles gate`。门禁必须按以下原文执行：**不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证。** 任一项缺少非秘密自动化证据或发现违反时，整体门禁 SHALL fail，不得被 focused test 或人工说明覆盖。
+本变更在 source、packaged 和 upstream PR 准备前 SHALL 对本变更新增或修改的生产路径通过独立的 `Repository architecture principles gate`。门禁必须按以下原文执行：**不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证。** 任一 in-scope 项缺少非秘密自动化证据或发现违反时，整体门禁 SHALL fail，不得被 focused test 或人工说明覆盖。全仓扫描 MAY 报告历史发现，但除非该发现直接阻断 changed collaboration path，否则 SHALL 作为后续债务而不是本次重构授权或阻塞项。
 
 #### Scenario: 新增 Coordinator 包
 

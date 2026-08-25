@@ -6,7 +6,7 @@
 
 ### Requirement: Project 恰有一个精确 Coordinator Agent
 
-每个非终态 Project SHALL 有且仅有一个 `coordinatorAgentId`，该 Agent SHALL 属于 Project Member User 且其 Device/Agent 状态满足当前 authority。Project Owner SHALL 是 User；Owner 与 Coordinator SHALL 是独立概念，Owner 可选择自己或其他合格 User 的精确 Agent 作为 Coordinator。
+每个非终态 Project SHALL 有且仅有一个 `coordinatorAgentId`，且该 Agent SHALL 始终由 `ownerUserId` 指向的 Project Owner 所有，并满足当前 Device/Agent authority。Project Owner SHALL 是 User；Coordinator SHALL 是该 Owner 的精确 Agent，而不是另一个账号、全局角色或其他 Member 的 Agent。
 
 #### Scenario: Owner 创建 Project
 
@@ -101,7 +101,7 @@ Coordinator SHALL 在 HCI 中审阅 Worker result 与关联文件，并对每个
 
 ### Requirement: Coordinator 转交由 Owner 显式执行并立即 fencing
 
-Project Owner SHALL 能把 Coordinator 转交给一个合格的精确 Agent。Cloud SHALL 在同一权威提交中更新 Coordinator revision、立即 fence 旧 Coordinator 的 coordinator-only 写权限并通知双方；系统 SHALL NOT 自动选主或因心跳离线转交。
+Project Owner SHALL 能把 Coordinator 转交给自己拥有的另一个合格精确 Agent。Cloud SHALL 在同一权威提交中验证新 Agent 的 `ownerUserId`、更新 Coordinator revision、立即 fence 旧 Coordinator 的 coordinator-only 写权限并通知相关 Device；系统 SHALL NOT 转交给其他 User 的 Agent、自动选主或因心跳离线转交。
 
 #### Scenario: 旧 Coordinator 在转交后提交计划
 

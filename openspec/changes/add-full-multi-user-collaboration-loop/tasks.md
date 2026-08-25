@@ -1,10 +1,11 @@
 ## 1. 冻结架构与验收基线
 
 - [x] 1.1 修正根 Context Map 的 OIDC/Device/Agent 当前事实、上下文关系和 Project Content provisioning ownership。
-- [x] 1.2 更新 Identity、Cloud Collaboration、Content Space 和 Provider Integration 词汇，冻结 User/Device/Agent、三套 membership/authority 状态、attestation 与 operation-time ACL 术语。
+- [x] 1.2 更新 Identity、Cloud Collaboration、Content Space 和 Provider Integration 词汇，冻结 User/Device/Agent、四项 membership/observation/readiness/authority 事实、attestation 与 operation-time ACL 术语。
 - [x] 1.3 新增 ADR，记录 token-free Cloud transport、client-orchestrated provisioning saga、Device-signed fact attestation 和 metadata-not-ACL 决策。
 - [x] 1.4 新增真实多用户会议验收文档，冻结角色、设备矩阵、会议脚本、恢复矩阵、状态门禁和脱敏回执 schema。
 - [x] 1.5 记录 A/B/C/E donor commit 的逐项采纳/拒绝结论，确认当前公网部署不可变且新分支只基于个人 Fork 同步点。
+- [x] 1.6 从个人 Fork `origin/gui@e0038b8c7109390445dccb691052fec74a153c09` 建立唯一 recovery integration mainline，冻结 Owner-owned Coordinator、初始 Owner-owned content、Shared Documents 延后和 changed-path gate；旧闭环分支/WIP 仅作 donor。
 
 ## 2. Identity 与通用安全边界
 
@@ -18,9 +19,9 @@
 
 - [ ] 3.1 升级 collaboration contracts，增加 Worker availability、Project Membership/content readiness、content provisioning intent/attestation/binding、Task execution/file intent/review/recovery 的 strict versioned schemas。
 - [ ] 3.2 保持 OIDC JIT 为唯一 User 创建路径并使 pairing 仅绑定 endpoint；删除匿名 pairing 与 first-pairing user creation。
-- [ ] 3.3 实现每 Project 唯一 Coordinator Agent、动态 User/精确 Worker Agent 选择、Coordinator transfer 和权限 fencing。
+- [ ] 3.3 实现每 Project 唯一且始终由 Project Owner 所有的 Coordinator Agent、动态 User/精确 Worker Agent 选择、Owner-owned Agent 间 Coordinator transfer 和权限 fencing。
 - [ ] 3.4 实现 offer/accept/reject/timeout/revoke/reassign、每次新 executionId、expected revision/idempotency 和旧 execution 全写入 fencing。
-- [ ] 3.5 实现 Project Membership、Provider observation/content readiness、Task authority 三套独立状态及普通成员/Owner 失权降级规则。
+- [ ] 3.5 实现 Project Membership lifecycle、Provider Membership Observation、derived Project Content Readiness、command-time Task Authority 四项独立事实及普通成员/Owner 失权降级规则。
 - [ ] 3.6 实现 provisioning intent/attestation verification/binding saga、dynamic add、removal pending、closed/degraded lifecycle 和 durable recovery journal。
 - [ ] 3.7 实现 Project plan、HumanNeeded to Owner、result review accept/request-revision、Project Record/final summary 与 visible recovery actions。
 - [ ] 3.8 添加 forward-only PostgreSQL migrations、从所有受支持旧 schema 的升级测试、transactional Inbox/receipt 和 restart recovery。
@@ -65,8 +66,8 @@
 ## 8. 自动化、packaged 与真机验收
 
 - [ ] 8.1 完成 contracts、server、identity、collaboration、coordinator、Content Space/OpenContent focused tests 和 changed-file lint/typecheck。
-- [ ] 8.2 执行 `Repository architecture principles gate`：不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证。
-- [ ] 8.3 运行 package boundary、private-import、generated composition freshness、capability governance、secret audit 和 full regression tests。
+- [ ] 8.2 对本变更新增/修改的生产路径执行 `Repository architecture principles gate`：不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证；全仓历史发现只报告，不扩展本任务。
+- [ ] 8.3 运行与 changed collaboration path 相关的 package boundary、private-import、generated composition freshness、capability governance、secret audit 和 full regression tests；只有直接阻断该路径的既有问题才允许最小通用适配。
 - [ ] 8.4 验证 source app 的真实生产 composition，并构建同一 exact commit 的 packaged artifact；验证 packaged app 无 mock/fallback 和 Run-0 配置漂移。
 - [ ] 8.5 准备 U0-U4 合成账号/议程/需求、三文件 Task、HumanNeeded、reject/reassign、review/revision 和 completion 验收脚本。
 - [ ] 8.6 在至少三台机器/独立 VM 的五个 packaged profiles 上完成真实 OIDC、Device/Agent、OpenContent provisioning 与并发会议 happy path。
