@@ -303,7 +303,7 @@
   "composerFileReadFailed": "Could not read {{path}}: {{message}}",
   "composerWorkspaceFilePathRequired": "Could not reference {{name}}. Pick a PDF inside the current workspace.",
   "composerReferenceWorkspaceMismatch": "This reference belongs to a different workspace. Open that workspace's task before attaching it.",
-  "composerPdfImportFailed": "Could not import {{name}} into the current workspace.",
+  "composerFileImportFailed": "Could not import {{name}} into the current workspace.",
   "composerImageOnlyPrompt": "Please respond to the attached image.",
   "composerCommentOnlyPrompt": "Please use the selected anchored comment(s) as context.",
   "composerCommentOnlyDisplay": "Attached {{count}} comment(s) as context",

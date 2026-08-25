@@ -303,7 +303,7 @@
   "composerFileReadFailed": "无法读取 {{path}}：{{message}}",
   "composerWorkspaceFilePathRequired": "无法引用 {{name}}。请选择当前工作区内的 PDF。",
   "composerReferenceWorkspaceMismatch": "该引用属于其他工作区。请先打开对应工作区的任务，再添加引用。",
-  "composerPdfImportFailed": "无法将 {{name}} 导入当前工作区。",
+  "composerFileImportFailed": "无法将 {{name}} 导入当前工作区。",
   "composerImageOnlyPrompt": "请根据已附加的图片继续处理。",
   "composerCommentOnlyPrompt": "请基于已选择的锚定评论继续处理。",
   "composerCommentOnlyDisplay": "已加入 {{count}} 条评论作为上下文",

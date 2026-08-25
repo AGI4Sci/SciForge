@@ -118,6 +118,7 @@ import {
   type WorkspaceReferenceDragDataSource
 } from '../../lib/workspace-reference-drag'
 import { registerVisibleContextComponent } from '../../lib/visible-context'
+import { COMPOSER_ATTACHMENT_ACCEPT } from '../../lib/composer-attachment-policy'
 
 export type { ComposerFileReference } from '../../lib/composer-file-references'
 
@@ -2529,7 +2530,7 @@ export function FloatingComposer({
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/png,image/jpeg,image/webp,application/pdf,.pdf,.fasta,.fa,.faa,.fna,.ffn,.frn,.fastq,.fq,.smi,.smiles,.mol,.mol2,.sdf,.mgf,.pdb,.cif,.gb,.gbk,.gff,.gff3,.gtf,.vcf,.bed,.nwk,.seq"
+              accept={COMPOSER_ATTACHMENT_ACCEPT}
               multiple
               className="hidden"
               onChange={handleAttachmentInput}

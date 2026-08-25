@@ -118,6 +118,8 @@ import { buildImageGenerationWorkflowPrompt } from '../lib/image-generation-chat
 import { useKeyboardShortcutSettings } from '../lib/keyboard-shortcut-settings'
 import { providerSupportsCapability } from '../store/chat-store-provider-capabilities'
 import { collectComposerChangeSummary } from '../lib/composer-change-summary'
+import { composerPickedAttachmentKind } from '../lib/composer-attachment-policy'
+import { importComposerWorkspaceAttachment } from '../lib/composer-workspace-attachment'
 import {
   WORKSPACE_FILE_PREVIEW_EVENT,
   type WorkspaceFilePreviewDetail
@@ -383,11 +385,6 @@ type PendingSddPlanTarget = {
   workspaceRoot: string
 }
 
-const PDF_ATTACHMENT_MAX_BYTES = 64 * 1024 * 1024
-const SCIENTIFIC_ATTACHMENT_MAX_BYTES = 256 * 1024
-const SCIENTIFIC_ATTACHMENT_EXTENSIONS =
-  /\.(?:fasta|fa|faa|fna|ffn|frn|fastq|fq|smi|smiles|mol|mol2|sdf|mgf|pdb|cif|gb|gbk|gff|gff3|gtf|vcf|bed|nwk|seq)$/i
-
 const DESKTOP_SHORTCUT_COMMANDS: Partial<Record<KeyboardShortcutCommandId, DesktopCommand>> = {
   quit: 'quit',
   undo: 'undo',
@@ -411,164 +408,19 @@ function fileNameFromPath(path: string): string {
 }
 
 function isPickedPdfAttachment(input: ComposerImageAttachmentInput): boolean {
-  return input.file.type.toLowerCase() === 'application/pdf' || input.file.name.toLowerCase().endsWith('.pdf')
+  return composerPickedAttachmentKind(input.file) === 'pdf'
 }
 
 function isPickedImageAttachment(input: ComposerImageAttachmentInput): boolean {
-  return input.file.type.toLowerCase().startsWith('image/')
+  return composerPickedAttachmentKind(input.file) === 'image'
 }
 
 function isPickedScientificAttachment(input: ComposerImageAttachmentInput): boolean {
-  return SCIENTIFIC_ATTACHMENT_EXTENSIONS.test(input.file.name || pathForPickedAttachment(input))
+  return composerPickedAttachmentKind(input.file) === 'scientific'
 }
 
-function normalizeAttachmentPathForCompare(path: string): string {
-  return path.trim().replaceAll('\\', '/').replace(/\/+$/g, '').toLowerCase()
-}
-
-function attachmentPathInsideWorkspace(path: string, workspaceRoot: string): boolean {
-  const filePath = normalizeAttachmentPathForCompare(path)
-  const root = normalizeAttachmentPathForCompare(workspaceRoot)
-  return Boolean(root && (filePath === root || filePath.startsWith(`${root}/`)))
-}
-
-function pathForPickedAttachment(input: ComposerImageAttachmentInput): string {
-  if (input.path?.trim()) return input.path.trim()
-  if (typeof window === 'undefined' || typeof window.sciforge?.getPathForFile !== 'function') return ''
-  try {
-    return window.sciforge.getPathForFile(input.file)?.trim() || ''
-  } catch {
-    return ''
-  }
-}
-
-function pickedWorkspaceFileReference(
-  input: ComposerImageAttachmentInput,
-  workspaceRoot: string
-): ComposerFileReference | null {
-  const path = pathForPickedAttachment(input)
-  if (!path || !attachmentPathInsideWorkspace(path, workspaceRoot)) return null
-  const relativePath = relativeWorkspacePath(path, workspaceRoot)
-  const isPdf = isPickedPdfAttachment(input)
-  return {
-    path: relativePath,
-    relativePath,
-    name: input.file.name || fileNameFromPath(path),
-    workspaceRoot,
-    ...(isPdf
-      ? {
-          kind: 'pdf' as const,
-          mimeType: 'application/pdf'
-        }
-      : {})
-  }
-}
-
-function safeUploadSegment(value: string, fallback: string): string {
-  const normalized = value.trim().replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '')
-  return normalized.slice(0, 80) || fallback
-}
-
-function safeUploadFileName(input: ComposerImageAttachmentInput, fallback: string): string {
-  const name = input.file.name || fileNameFromPath(pathForPickedAttachment(input))
-  const safe = name.replaceAll('\\', '/').split('/').filter(Boolean).pop() ?? fallback
-  return safeUploadSegment(safe, fallback).replace(/^\.+/g, '') || fallback
-}
-
-function safeScientificUploadFileName(input: ComposerImageAttachmentInput): string {
-  return safeUploadFileName(input, 'scientific-data')
-}
-
-function scientificAttachmentMimeType(input: ComposerImageAttachmentInput): string {
-  const browserType = input.file.type.trim()
-  if (browserType && !browserType.startsWith('image/')) return browserType
-  return 'text/plain'
-}
-
-function uploadRelativePath(input: ComposerImageAttachmentInput, threadId: string | null, fallbackName: string): string {
-  const owner = safeUploadSegment(threadId ?? 'draft', 'draft')
-  const stamp = new Date().toISOString().replace(/[^0-9A-Za-z]+/g, '').slice(0, 15)
-  const random =
-    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID().slice(0, 8)
-      : Math.random().toString(36).slice(2, 10)
-  const name = safeUploadFileName(input, fallbackName)
-  return `.sciforge/uploads/${owner}/${stamp}-${random}-${name}`
-}
-
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer)
-  const chunkSize = 0x8000
-  let binary = ''
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize))
-  }
-  return btoa(binary)
-}
-
-async function copyPdfAttachmentToWorkspace(
-  input: ComposerImageAttachmentInput,
-  workspaceRoot: string,
-  threadId: string | null
-): Promise<ComposerFileReference> {
-  if (typeof window === 'undefined' || typeof window.sciforge?.writeWorkspaceFile !== 'function') {
-    throw new Error('Workspace file writing is unavailable.')
-  }
-  if (input.file.size > PDF_ATTACHMENT_MAX_BYTES) {
-    throw new Error(`PDF attachment is larger than ${PDF_ATTACHMENT_MAX_BYTES} bytes.`)
-  }
-  const relativePath = uploadRelativePath(input, threadId, 'document.pdf')
-  const contentBase64 = arrayBufferToBase64(await input.file.arrayBuffer())
-  const result = await window.sciforge.writeWorkspaceFile({
-    workspaceRoot,
-    path: relativePath,
-    contentBase64
-  })
-  if (!result.ok) throw new Error(result.message)
-  return {
-    path: relativePath,
-    relativePath,
-    name: safeUploadFileName(input, 'document.pdf'),
-    workspaceRoot,
-    kind: 'pdf',
-    mimeType: 'application/pdf'
-  }
-}
-
-async function copyScientificAttachmentToWorkspace(
-  input: ComposerImageAttachmentInput,
-  workspaceRoot: string,
-  threadId: string | null
-): Promise<ComposerFileReference> {
-  if (typeof window === 'undefined' || typeof window.sciforge?.writeWorkspaceFile !== 'function') {
-    throw new Error('Workspace file writing is unavailable.')
-  }
-  if (input.file.size > SCIENTIFIC_ATTACHMENT_MAX_BYTES) {
-    throw new Error(`Scientific attachment is larger than ${SCIENTIFIC_ATTACHMENT_MAX_BYTES} bytes.`)
-  }
-  const content = await input.file.text()
-  if (content.includes('\0')) {
-    throw new Error('Scientific attachment looks binary and cannot be copied as text.')
-  }
-  const encodedBytes = new TextEncoder().encode(content).byteLength
-  if (encodedBytes > SCIENTIFIC_ATTACHMENT_MAX_BYTES) {
-    throw new Error(`Scientific attachment is larger than ${SCIENTIFIC_ATTACHMENT_MAX_BYTES} bytes.`)
-  }
-  const name = safeScientificUploadFileName(input)
-  const relativePath = uploadRelativePath(input, threadId, 'scientific-data')
-  const result = await window.sciforge.writeWorkspaceFile({
-    workspaceRoot,
-    path: relativePath,
-    content
-  })
-  if (!result.ok) throw new Error(result.message)
-  return {
-    path: relativePath,
-    relativePath,
-    name,
-    workspaceRoot,
-    mimeType: scientificAttachmentMimeType(input)
-  }
+function isPickedWebDocumentAttachment(input: ComposerImageAttachmentInput): boolean {
+  return composerPickedAttachmentKind(input.file) === 'web-document'
 }
 
 function sddDraftPlanRelativePath(draft: SddDraft): string {
@@ -1897,6 +1749,14 @@ export function Workbench(): ReactElement {
       threads.find((thread) => thread.id === activeThreadId)?.workspace ||
       workspaceRoot
     )
+    const importWorkspaceAttachment = workspace
+      ? (input: ComposerImageAttachmentInput) => importComposerWorkspaceAttachment(input, {
+          workspaceRoot: workspace,
+          threadId: activeThreadId,
+          getPathForFile: window.sciforge.getPathForFile,
+          writeWorkspaceFile: window.sciforge.writeWorkspaceFile
+        })
+      : null
     const pdfInputs = inputs.filter(isPickedPdfAttachment)
     const scientificInputs = inputs.filter((input) => !isPickedPdfAttachment(input) && isPickedScientificAttachment(input))
     const imageInputs = inputs.filter((input) =>
@@ -1904,43 +1764,58 @@ export function Workbench(): ReactElement {
       !isPickedScientificAttachment(input) &&
       isPickedImageAttachment(input)
     )
+    const webDocumentInputs = inputs.filter((input) =>
+      !isPickedPdfAttachment(input) &&
+      !isPickedScientificAttachment(input) &&
+      !isPickedImageAttachment(input) &&
+      isPickedWebDocumentAttachment(input)
+    )
     const unsupportedInputs = inputs.filter((input) =>
       !isPickedPdfAttachment(input) &&
       !isPickedScientificAttachment(input) &&
-      !isPickedImageAttachment(input)
+      !isPickedImageAttachment(input) &&
+      !isPickedWebDocumentAttachment(input)
     )
-    const pdfReferences: ComposerFileReference[] = []
-    const failedPdfNames: string[] = []
+    const importedReferences: ComposerFileReference[] = []
+    const failedImportNames: string[] = []
     for (const input of pdfInputs) {
-      const reference = workspace ? pickedWorkspaceFileReference(input, workspace) : null
-      if (reference) {
-        pdfReferences.push(reference)
-      } else if (workspace) {
+      if (importWorkspaceAttachment) {
         try {
-          pdfReferences.push(await copyPdfAttachmentToWorkspace(input, workspace, activeThreadId))
+          importedReferences.push(await importWorkspaceAttachment(input))
         } catch {
-          failedPdfNames.push(input.file.name || fileNameFromPath(pathForPickedAttachment(input)))
+          failedImportNames.push(input.file.name || 'document.pdf')
         }
       } else {
-        failedPdfNames.push(input.file.name || fileNameFromPath(pathForPickedAttachment(input)))
+        failedImportNames.push(input.file.name || 'document.pdf')
       }
     }
-    if (pdfReferences.length > 0) {
+    for (const input of webDocumentInputs) {
+      if (importWorkspaceAttachment) {
+        try {
+          importedReferences.push(await importWorkspaceAttachment(input))
+        } catch {
+          failedImportNames.push(input.file.name || 'web-document.html')
+        }
+      } else {
+        failedImportNames.push(input.file.name || 'web-document.html')
+      }
+    }
+    if (importedReferences.length > 0) {
       setComposerFileReferences((current) => {
         let next = current
-        for (const reference of pdfReferences) {
+        for (const reference of importedReferences) {
           next = mergeComposerFileReferences(next, reference)
         }
         return next
       })
-      previewComposerFileReference(pdfReferences[0])
+      previewComposerFileReference(importedReferences[0])
     }
-    if (failedPdfNames.length > 0) {
-      setAttachmentUploadError(t('composerPdfImportFailed', {
-        name: failedPdfNames[0],
-        count: failedPdfNames.length
+    if (failedImportNames.length > 0) {
+      setAttachmentUploadError(t('composerFileImportFailed', {
+        name: failedImportNames[0],
+        count: failedImportNames.length
       }))
-    } else if (pdfReferences.length > 0) {
+    } else if (importedReferences.length > 0) {
       setAttachmentUploadError(null)
     }
     if (unsupportedInputs.length > 0) {
@@ -1951,14 +1826,14 @@ export function Workbench(): ReactElement {
         setAttachmentUploadError(t('composerAttachmentUnavailable'))
         return
       }
-      if (!workspace) {
+      if (!importWorkspaceAttachment) {
         setAttachmentUploadError(t('workspaceRequiredToCreateThread'))
         return
       }
       try {
         const scientificReferences: ComposerFileReference[] = []
         for (const input of scientificInputs) {
-          scientificReferences.push(await copyScientificAttachmentToWorkspace(input, workspace, activeThreadId))
+          scientificReferences.push(await importWorkspaceAttachment(input))
         }
         setComposerFileReferences((current) => {
           let next = current
@@ -1967,7 +1842,7 @@ export function Workbench(): ReactElement {
           }
           return next
         })
-        if (failedPdfNames.length === 0 && unsupportedInputs.length === 0) setAttachmentUploadError(null)
+        if (failedImportNames.length === 0 && unsupportedInputs.length === 0) setAttachmentUploadError(null)
       } catch (error) {
         setAttachmentUploadError(error instanceof Error ? error.message : String(error))
         return
@@ -1984,7 +1859,7 @@ export function Workbench(): ReactElement {
       return
     }
     setAttachmentUploadBusy(true)
-    if (failedPdfNames.length === 0) setAttachmentUploadError(null)
+    if (failedImportNames.length === 0 && unsupportedInputs.length === 0) setAttachmentUploadError(null)
     try {
       const attachmentCapabilities = runtimeInfo?.capabilities.attachments
       if (!attachmentCapabilities) {
