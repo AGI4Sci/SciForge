@@ -18,6 +18,7 @@ export const installedMainSourcePackageNames = Object.freeze([
   '@sciforge/domain-opencontent-connector',
   '@sciforge/domain-opencontent-content-space-provider',
   '@sciforge/domain-paper-radar',
+  '@sciforge/domain-project-coordinator',
   '@sciforge/domain-project-dag',
   '@sciforge/domain-remote-ssh',
   '@sciforge/domain-research-checkpoints',
