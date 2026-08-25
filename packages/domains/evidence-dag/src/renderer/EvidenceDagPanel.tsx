@@ -34,6 +34,7 @@ import {
   EvidenceDagProgressiveView
 } from './evidence-dag-progressive-view'
 import { handleEvidenceDagPreviewMessage } from './evidence-dag-preview-bridge'
+import { DagWorkbenchFrame } from './dag-workbench-ui'
 
 export type EvidenceDagPanelProps = Readonly<{
   active: boolean
@@ -362,40 +363,27 @@ export function EvidenceDagPanel({
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 bg-ds-main">
-        {loading && !view ? (
-          <div className="flex h-full items-center justify-center gap-2 text-sm text-ds-muted">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            {t('evidenceDagLoading')}
-          </div>
-        ) : frameUrl && view ? (
-          <iframe
-            ref={iframeRef}
-            key={evidenceDagCommittedFrameKey(frameUrl, committedDigest)}
-            src={frameUrl}
-            title={t('rightPanelEvidenceDag')}
-            className="ds-no-drag block h-full w-full border-0 bg-ds-main"
-            data-dag-layer="committed"
-            sandbox="allow-forms allow-same-origin allow-scripts"
-            referrerPolicy="no-referrer"
-          />
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-ds-muted">
-            <Network className="h-8 w-8 text-ds-faint" />
-            <span>{error ? t('evidenceDagUnavailable') : t('evidenceDagEmpty')}</span>
-            {target.runtimeId && target.threadId ? (
-              <button
-                type="button"
-                onClick={() => submitUpdate('update')}
-                disabled={submitting}
-                className="rounded-lg border border-ds-border bg-ds-surface px-3 py-1.5 text-xs text-ds-ink hover:bg-ds-hover disabled:opacity-50"
-              >
-                {t('evidenceDagUpdate')}
-              </button>
-            ) : null}
-          </div>
-        )}
-      </div>
+      <DagWorkbenchFrame
+        loading={loading}
+        hasView={Boolean(view)}
+        frameRef={iframeRef}
+        frameUrl={frameUrl ?? undefined}
+        frameKey={evidenceDagCommittedFrameKey(frameUrl ?? '', committedDigest)}
+        title={t('rightPanelEvidenceDag')}
+        sandbox="allow-forms allow-same-origin allow-scripts"
+        loadingLabel={t('evidenceDagLoading')}
+        emptyIcon={<Network className="h-8 w-8 text-ds-faint" />}
+        emptyLabel={error ? t('evidenceDagUnavailable') : t('evidenceDagEmpty')}
+        {...(target.runtimeId && target.threadId
+          ? {
+              action: {
+                disabled: submitting,
+                label: t('evidenceDagUpdate'),
+                onClick: () => submitUpdate('update')
+              }
+            }
+          : {})}
+      />
 
       {target.runtimeId && target.threadId ? (
         <details className="shrink-0 border-t border-ds-border bg-ds-sidebar px-3 py-2 text-[11px] text-ds-muted">

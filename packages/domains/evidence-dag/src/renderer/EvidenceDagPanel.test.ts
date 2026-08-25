@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import {
   evidenceDagCommittedFrameKey,
@@ -50,6 +51,12 @@ test('keys the iframe only by URL and committed snapshot digest', () => {
     evidenceDagViewUrlWithNode('http://127.0.0.1:8000/', 'source-1', true),
     'http://127.0.0.1:8000/?node=source-1&preview=trusted'
   )
+  const source = readFileSync(
+    new URL('./EvidenceDagPanel.tsx', import.meta.url),
+    'utf8'
+  )
+  assert.match(source, /<DagWorkbenchFrame/u)
+  assert.match(source, /sandbox="allow-forms allow-same-origin allow-scripts"/u)
 })
 
 test('polls visible active and failed attempts without inventing progress', () => {

@@ -186,12 +186,12 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
     let binding = bindings.get(key)
     if (!binding) {
       if (bindings.size >= MAX_BROWSER_RESOURCE_BINDINGS) {
-        throw new Error('Browser Preview resource capacity is exhausted.')
+        throw new Error('Web Preview resource capacity is exhausted.')
       }
       binding = {
         observe: async (observerCaller) => {
           if (reservationEpoch !== lifecycleEpoch) {
-            throw new Error('Browser Preview resource binding is retired.')
+            throw new Error('Web Preview resource binding is retired.')
           }
           // The contribution can be disposed and reactivated with a replacement
           // service. Resolve it at observation time instead of pinning the service
@@ -230,7 +230,7 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
       binding,
       assertCurrent: () => {
         if (reservationEpoch !== lifecycleEpoch) {
-          throw new Error('Browser Preview resource binding lifecycle changed.')
+          throw new Error('Web Preview resource binding lifecycle changed.')
         }
       },
       commit: () => settle(true),

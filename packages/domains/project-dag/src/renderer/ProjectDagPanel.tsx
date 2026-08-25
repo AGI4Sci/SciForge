@@ -25,6 +25,7 @@ import { evidenceDagActivationPayloadSchema } from '@sciforge/domain-evidence-da
 import {
   EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION
 } from '@sciforge/domain-evidence-dag/definition'
+import { DagWorkbenchFrame } from '@sciforge/domain-evidence-dag/renderer'
 import {
   projectDagActivationPayloadSchema,
   type ProjectDagActivationPayload,
@@ -463,38 +464,23 @@ export function ProjectDagPanel({
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 bg-ds-main">
-        {loading && !view ? (
-          <div className="flex h-full items-center justify-center gap-2 text-sm text-ds-muted">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            {t('projectDagLoading')}
-          </div>
-        ) : frameUrl && view ? (
-          <iframe
-            ref={iframeRef}
-            key={projectDagCommittedFrameKey(frameUrl, committedDigest)}
-            src={frameUrl}
-            title={t('rightPanelProjectDag')}
-            className="ds-no-drag block h-full w-full border-0 bg-ds-main"
-            data-dag-layer="committed"
-            sandbox="allow-downloads allow-forms allow-same-origin allow-scripts"
-            referrerPolicy="no-referrer"
-          />
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-ds-muted">
-            <GitMerge className="h-8 w-8 text-ds-faint" />
-            <span>{error ? t('projectDagUnavailable') : t('projectDagEmpty')}</span>
-            <button
-              type="button"
-              onClick={updateProject}
-              disabled={submitting}
-              className="rounded-lg border border-ds-border bg-ds-surface px-3 py-1.5 text-xs text-ds-ink hover:bg-ds-hover disabled:opacity-50"
-            >
-              {t('projectDagUpdate')}
-            </button>
-          </div>
-        )}
-      </div>
+      <DagWorkbenchFrame
+        loading={loading}
+        hasView={Boolean(view)}
+        frameRef={iframeRef}
+        frameUrl={frameUrl ?? undefined}
+        frameKey={projectDagCommittedFrameKey(frameUrl ?? '', committedDigest)}
+        title={t('rightPanelProjectDag')}
+        sandbox="allow-downloads allow-forms allow-same-origin allow-scripts"
+        loadingLabel={t('projectDagLoading')}
+        emptyIcon={<GitMerge className="h-8 w-8 text-ds-faint" />}
+        emptyLabel={error ? t('projectDagUnavailable') : t('projectDagEmpty')}
+        action={{
+          disabled: submitting,
+          label: t('projectDagUpdate'),
+          onClick: updateProject
+        }}
+      />
 
       <details className="shrink-0 border-t border-ds-border bg-ds-sidebar px-3 py-2 text-[11px] text-ds-muted">
         <summary className="cursor-pointer select-none">{t('projectDagGoal')}</summary>

@@ -233,7 +233,7 @@
   "shortcutConflict": "Already used by \"{{command}}\".",
   "shortcutTogglePlanMode": "Toggle Plan mode",
   "shortcutTogglePlanModeDesc": "Switch the composer between Agent and Plan mode.",
-  "shortcutNewChat": "New chat",
+  "shortcutNewChat": "New conversation",
   "shortcutNewChatDesc": "Start a new chat in the current workspace.",
   "shortcutChooseWorkspace": "Choose workspace",
   "shortcutChooseWorkspaceDesc": "Open the workspace picker.",

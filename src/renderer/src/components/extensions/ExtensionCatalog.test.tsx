@@ -33,7 +33,7 @@ describe('extensionCatalogItemsFromDefinitions', () => {
 
     expect(item).toEqual(expect.objectContaining({
       id: 'sciforge.browser-preview',
-      displayName: 'Browser Preview',
+      displayName: 'Web Preview',
       packageName: '@sciforge/domain-browser-preview',
       version: definition!.module.version,
       contributionCount: definition!.entrypoints.reduce(

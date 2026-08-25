@@ -1,5 +1,5 @@
-import { AlertTriangle, CheckCircle2, CircleDashed } from 'lucide-react'
 import type { ReactElement } from 'react'
+import { DagWorkbenchProgressiveLayer } from '@sciforge/domain-evidence-dag/renderer'
 import type { ProjectDagPendingStatus, ProjectDagStatus } from '../contract'
 
 type Translate = (key: string, values?: Record<string, unknown>) => string
@@ -27,44 +27,22 @@ export function ProjectDagProgressiveView({
 }): ReactElement {
   const pending = status.pending
   return (
-    <section
-      className="shrink-0 border-b border-ds-border-muted bg-ds-sidebar px-3 py-2"
-      aria-label={t('projectDagCommittedLayer')}
-      data-dag-progressive-view="true"
-    >
-      <div className="flex flex-wrap items-center gap-1.5 text-[10.5px]">
-        <span
-          className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700"
-          data-dag-layer="committed"
-        >
-          <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
-          {status.committed
-            ? t('projectDagCommitted', { version: status.committed.version })
-            : t('projectDagCommittedLayer')}
-        </span>
-        {pending ? (
-          <span
-            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-medium ${
-              pending.state === 'failed'
-                ? 'border-rose-300 bg-rose-50 text-rose-700'
-                : 'border-sky-300 bg-sky-50 text-sky-700'
-            }`}
-            data-dag-layer="staging"
-            data-dag-attempt-state={pending.state}
-          >
-            {pending.state === 'failed'
-              ? <AlertTriangle className="h-3 w-3" aria-hidden="true" />
-              : <CircleDashed className="h-3 w-3" aria-hidden="true" />}
-            {projectDagPendingLabel(pending, t)}
-          </span>
-        ) : null}
-      </div>
-      {pending ? (
-        <div className="mt-1.5 text-[10.5px] leading-4 text-amber-800">
-          {t('projectDagAuditWarning')}
-        </div>
-      ) : null}
-    </section>
+    <DagWorkbenchProgressiveLayer
+      ariaLabel={t('projectDagCommittedLayer')}
+      committedLabel={status.committed
+        ? t('projectDagCommitted', { version: status.committed.version })
+        : t('projectDagCommittedLayer')}
+      auditWarning={t('projectDagAuditWarning')}
+      {...(pending
+        ? {
+            pending: {
+              failed: pending.state === 'failed',
+              label: projectDagPendingLabel(pending, t),
+              state: pending.state
+            }
+          }
+        : {})}
+    />
   )
 }
 

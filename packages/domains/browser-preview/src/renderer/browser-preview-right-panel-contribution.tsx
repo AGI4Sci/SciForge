@@ -45,7 +45,7 @@ export function createBrowserPreviewRightPanelContribution(
   host: DomainRendererHost
 ): BrowserPreviewRightPanelContribution {
   if (!host.visibleContext) {
-    throw new Error('Browser Preview requires the renderer visible-context host contract.')
+    throw new Error('Web Preview requires the renderer visible-context host contract.')
   }
   const client = createBrowserPreviewCapabilityClient(host.capabilityInvoker)
   const visibleContext = host.visibleContext

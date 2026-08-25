@@ -45,7 +45,7 @@ function contributionFor(process: 'main' | 'renderer', kind: string) {
     .find((entrypoint) => entrypoint.process === process)
     ?.contributions.find((candidate) => candidate.kind === kind)
   if (!contribution) {
-    throw new Error(`Browser Preview manifest is missing ${process}:${kind}.`)
+    throw new Error(`Web Preview manifest is missing ${process}:${kind}.`)
   }
   return contribution
 }

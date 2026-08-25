@@ -1,4 +1,5 @@
 export * from './EvidenceDagPanel'
+export * from './dag-workbench-ui'
 export * from './evidence-dag-capability-client'
 export * from './evidence-dag-messages'
 export * from './evidence-dag-preview-bridge'
