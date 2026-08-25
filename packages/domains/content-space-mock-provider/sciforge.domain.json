@@ -10,7 +10,7 @@
   "module": {
     "id": "sciforge.content-space-mock-provider",
     "displayName": "Content Space local mock Provider",
-    "version": "2.0.3",
+    "version": "2.0.4",
     "hostApi": {
       "minimum": "1.3.0",
       "maximumExclusive": "2.0.0"

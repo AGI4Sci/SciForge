@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { describe, it } from 'node:test'
 import {
+  canonicalizeDomainMainFiniteCapabilityBatchPlan,
   domainArtifactEventScope,
   defineDomainMainInternalServiceDescriptor,
   defineDomainMainSystemCapabilityGrant,
@@ -131,6 +133,40 @@ describe('domain host contracts', () => {
     assert.equal(Object.isFrozen(plan), true)
     assert.equal(Object.isFrozen(plan.operations), true)
     assert.equal(Object.isFrozen(plan.operations[0]), true)
+    const digest = (value: unknown) => createHash('sha256')
+      .update(canonicalizeDomainMainFiniteCapabilityBatchPlan(value))
+      .digest('hex')
+    const planDigest = digest(plan)
+    assert.match(planDigest, /^[a-f0-9]{64}$/u)
+    assert.equal(
+      canonicalizeDomainMainFiniteCapabilityBatchPlan(plan),
+      canonicalizeDomainMainFiniteCapabilityBatchPlan({
+        operations: plan.operations,
+        revision: plan.revision,
+        requiredSystemCapabilityGrant: plan.requiredSystemCapabilityGrant
+      })
+    )
+    assert.notEqual(digest({ ...plan, revision: 'project-content:project-1:8' }), planDigest)
+    assert.notEqual(digest({ ...plan, workspaceId: '/workspace/project-1' }), planDigest)
+    assert.notEqual(digest({
+      ...plan,
+      operations: plan.operations.map((operation, index) => index === 0
+        ? { ...operation, input: { providerInstanceRef: 'provider-instance-2' } }
+        : operation)
+    }), planDigest)
+    assert.notEqual(digest({
+      ...plan,
+      operations: plan.operations.map((operation, index) => index === 1
+        ? {
+            ...operation,
+            resource: {
+              kind: 'operation-output',
+              operationId: 'authorize-provider',
+              path: ['alternateResource']
+            }
+          }
+        : operation)
+    }), planDigest)
     assert.throws(() => domainMainFiniteCapabilityBatchPlanSchema.parse({
       ...plan,
       operations: [plan.operations[1], plan.operations[0]]

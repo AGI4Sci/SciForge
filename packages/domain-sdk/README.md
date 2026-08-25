@@ -251,6 +251,12 @@ resource revision/ancestry, Principal, Workspace, or outer invocation invalidate
 proofs; the same confirmation cannot create a corrected or replacement batch. `planDigest` is
 audit identity only and is never authority.
 
+Host API `1.8.0` additionally binds that complete canonical plan to the exact confirmation input.
+The outer confirmed capability input must carry the lowercase SHA-256 as `confirmedPlanDigest`;
+the Host recomputes it over the full parsed plan before minting any proof. A missing/mismatched
+digest consumes and rejects that confirmation, so a package cannot confirm plan A and capture
+plan B first, nor retry the originally confirmed plan after a replacement attempt.
+
 ## Execution provenance and reproducibility
 
 `@sciforge/domain-sdk/reproducibility` is the process-neutral contract shared by executable

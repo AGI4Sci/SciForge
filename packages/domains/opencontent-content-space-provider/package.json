@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-opencontent-content-space-provider",
-  "version": "4.0.4",
+  "version": "4.0.5",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -16,9 +16,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sciforge/domain-content-space": "4.4.0",
+    "@sciforge/domain-content-space": "4.4.1",
     "@sciforge/domain-opencontent-connector": "4.0.1",
-    "@sciforge/domain-sdk": "^0.2.5",
+    "@sciforge/domain-sdk": "^0.2.6",
     "react": "^19.0.0",
     "zod": "^4.4.3"
   },

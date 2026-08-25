@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-content-space",
-  "version": "4.4.0",
+  "version": "4.4.1",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -27,7 +27,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sciforge/domain-sdk": "^0.2.5",
+    "@sciforge/domain-sdk": "^0.2.6",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

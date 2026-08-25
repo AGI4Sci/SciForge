@@ -6,7 +6,7 @@ import { domainPackageDefinition } from './definition.js'
 
 describe('Content Space domain package definition', () => {
   it('requires the Host API that enforces finite Human-confirmed batches', () => {
-    expect(domainPackageDefinition.module.hostApi.minimum).toBe('1.7.0')
+    expect(domainPackageDefinition.module.hostApi.minimum).toBe('1.8.0')
     expect(isDomainPackageHostApiCompatible(
       domainPackageDefinition.module.hostApi,
       '1.6.0'
@@ -14,6 +14,10 @@ describe('Content Space domain package definition', () => {
     expect(isDomainPackageHostApiCompatible(
       domainPackageDefinition.module.hostApi,
       '1.7.0'
+    )).toBe(false)
+    expect(isDomainPackageHostApiCompatible(
+      domainPackageDefinition.module.hostApi,
+      '1.8.0'
     )).toBe(true)
   })
 

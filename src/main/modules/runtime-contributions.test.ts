@@ -10,7 +10,10 @@ import {
   MAIN_EXTENSION_CONTRIBUTION_KIND,
   MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
   MAIN_SYSTEM_CAPABILITY_GRANT_CONTRIBUTION_KIND,
+  canonicalizeDomainMainFiniteCapabilityBatchPlan,
   defineDomainMainSystemCapabilityGrant,
+  domainMainFiniteCapabilityBatchPlanDigestSchema,
+  domainMainFiniteCapabilityBatchPlanSchema,
   type DomainArtifactConsumer,
   type DomainMainRuntimeLifecycleContext
 } from '@sciforge/domain-sdk/host'
@@ -20,7 +23,7 @@ import {
 } from '@sciforge/domain-sdk/workflow-template'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { CapabilityBroker } from '../capabilities/broker'
+import { CapabilityBroker, CapabilityBrokerError } from '../capabilities/broker'
 import { CapabilityRegistry, defineCapability } from '../capabilities/registry'
 import { DomainModuleCatalog } from './catalog'
 import {
@@ -1152,6 +1155,47 @@ describe('main runtime contributions', () => {
       inputSchema: add.inputSchema,
       outputSchema: add.outputSchema
     }
+    const plan = domainMainFiniteCapabilityBatchPlanSchema.parse({
+      requiredSystemCapabilityGrant: grantId,
+      revision: 'project-1:7',
+      operations: [
+        {
+          operationId: 'authorize',
+          actionId: authorize.descriptor.id,
+          idempotencyKey: 'authorize-7',
+          input: { provider: 'provider-1' }
+        },
+        {
+          operationId: 'create',
+          actionId: create.descriptor.id,
+          idempotencyKey: 'create-7',
+          input: { label: 'Project 1' },
+          resource: { kind: 'operation-output', operationId: 'authorize', path: ['resource'] }
+        },
+        {
+          operationId: 'list-before',
+          actionId: list.descriptor.id,
+          input: { phase: 'before' },
+          resource: { kind: 'operation-output', operationId: 'create', path: ['resource'] }
+        },
+        {
+          operationId: 'add',
+          actionId: add.descriptor.id,
+          idempotencyKey: 'add-7-member-1',
+          input: { member: 'provider-user-1' },
+          resource: { kind: 'operation-output', operationId: 'create', path: ['resource'] }
+        },
+        {
+          operationId: 'list-after',
+          actionId: list.descriptor.id,
+          input: { phase: 'after' },
+          resource: { kind: 'operation-output', operationId: 'create', path: ['resource'] }
+        }
+      ]
+    })
+    const confirmedPlanDigest = createHash('sha256')
+      .update(canonicalizeDomainMainFiniteCapabilityBatchPlan(plan))
+      .digest('hex')
     let replayRejected = false
     let secondBatchRejected = false
     let planDigest = ''
@@ -1165,47 +1209,13 @@ describe('main runtime contributions', () => {
       effect: 'external-write',
       approval: 'confirmation',
       concurrency: { revision: 'none', idempotency: 'required' },
-      inputSchema: z.object({ revision: z.literal(7) }).strict(),
+      inputSchema: z.object({
+        revision: z.literal(7),
+        confirmedPlanDigest: domainMainFiniteCapabilityBatchPlanDigestSchema
+      }).strict(),
       outputSchema: z.object({ completed: z.boolean() }).strict(),
       handler: async () => {
-        const batch = invoker.createApprovedBatch({
-          requiredSystemCapabilityGrant: grantId,
-          revision: 'project-1:7',
-          operations: [
-            {
-              operationId: 'authorize',
-              actionId: authorize.descriptor.id,
-              idempotencyKey: 'authorize-7',
-              input: { provider: 'provider-1' }
-            },
-            {
-              operationId: 'create',
-              actionId: create.descriptor.id,
-              idempotencyKey: 'create-7',
-              input: { label: 'Project 1' },
-              resource: { kind: 'operation-output', operationId: 'authorize', path: ['resource'] }
-            },
-            {
-              operationId: 'list-before',
-              actionId: list.descriptor.id,
-              input: { phase: 'before' },
-              resource: { kind: 'operation-output', operationId: 'create', path: ['resource'] }
-            },
-            {
-              operationId: 'add',
-              actionId: add.descriptor.id,
-              idempotencyKey: 'add-7-member-1',
-              input: { member: 'provider-user-1' },
-              resource: { kind: 'operation-output', operationId: 'create', path: ['resource'] }
-            },
-            {
-              operationId: 'list-after',
-              actionId: list.descriptor.id,
-              input: { phase: 'after' },
-              resource: { kind: 'operation-output', operationId: 'create', path: ['resource'] }
-            }
-          ]
-        })
+        const batch = invoker.createApprovedBatch(plan)
         planDigest = batch.planDigest
         await batch.invoke('authorize', authorizeContract)
         await batch.invoke('create', createContract)
@@ -1247,7 +1257,7 @@ describe('main runtime contributions', () => {
     }, {
       actionId: outer.descriptor.id,
       invocationId: 'outer-project-1-revision-7',
-      input: { revision: 7 }
+      input: { revision: 7, confirmedPlanDigest }
     })).resolves.toMatchObject({ output: { completed: true } })
 
     expect(calls).toEqual([
@@ -1257,7 +1267,7 @@ describe('main runtime contributions', () => {
       'add:provider-user-1:root-1',
       'list:after:root-1'
     ])
-    expect(planDigest).toMatch(/^[a-f0-9]{64}$/u)
+    expect(planDigest).toBe(confirmedPlanDigest)
     expect(replayRejected).toBe(true)
     expect(secondBatchRejected).toBe(true)
     expect(providerChange).toBeTypeOf('function')
@@ -1323,6 +1333,33 @@ describe('main runtime contributions', () => {
       retryRejected: z.boolean(),
       replacementRejected: z.boolean()
     }).strict()
+    const confirmedPlanDigest = (plan: unknown) => createHash('sha256')
+      .update(canonicalizeDomainMainFiniteCapabilityBatchPlan(plan))
+      .digest('hex')
+    const orderPlan = domainMainFiniteCapabilityBatchPlanSchema.parse({
+      requiredSystemCapabilityGrant: grantId,
+      revision: 'reconcile:1',
+      operations: [1, 2].map((step) => ({
+        operationId: `read-${step}`,
+        actionId: read.descriptor.id,
+        input: { step },
+        resource: { kind: 'fixed' as const, resource }
+      }))
+    })
+    const revisionPlan = domainMainFiniteCapabilityBatchPlanSchema.parse({
+      requiredSystemCapabilityGrant: grantId,
+      revision: 'reconcile:resource-1',
+      operations: [{
+        operationId: 'read-1',
+        actionId: read.descriptor.id,
+        input: { step: 1 },
+        resource: { kind: 'fixed' as const, resource }
+      }]
+    })
+    const confirmationInputSchema = z.object({
+      revision: z.literal(1),
+      confirmedPlanDigest: domainMainFiniteCapabilityBatchPlanDigestSchema
+    }).strict()
     const orderOuter = defineCapability({
       id: 'fixture.reconcile.order',
       version: '1.0.0',
@@ -1333,26 +1370,16 @@ describe('main runtime contributions', () => {
       effect: 'external-write',
       approval: 'confirmation',
       concurrency: { revision: 'none', idempotency: 'required' },
-      inputSchema: z.object({ revision: z.literal(1) }).strict(),
+      inputSchema: confirmationInputSchema,
       outputSchema: resultSchema,
       handler: async () => {
-        const plan = {
-          requiredSystemCapabilityGrant: grantId,
-          revision: 'reconcile:1',
-          operations: [1, 2].map((step) => ({
-            operationId: `read-${step}`,
-            actionId: read.descriptor.id,
-            input: { step },
-            resource: { kind: 'fixed' as const, resource }
-          }))
-        }
-        const batch = invoker.createApprovedBatch(plan)
+        const batch = invoker.createApprovedBatch(orderPlan)
         let firstRejected = false
         let retryRejected = false
         let replacementRejected = false
         try { await batch.invoke('read-2', contract) } catch { firstRejected = true }
         try { await batch.invoke('read-1', contract) } catch { retryRejected = true }
-        try { invoker.createApprovedBatch({ ...plan, revision: 'reconcile:2' }) } catch {
+        try { invoker.createApprovedBatch({ ...orderPlan, revision: 'reconcile:2' }) } catch {
           replacementRejected = true
         }
         return { output: { firstRejected, retryRejected, replacementRejected } }
@@ -1368,48 +1395,96 @@ describe('main runtime contributions', () => {
       effect: 'external-write',
       approval: 'confirmation',
       concurrency: { revision: 'none', idempotency: 'required' },
-      inputSchema: z.object({ revision: z.literal(1) }).strict(),
+      inputSchema: confirmationInputSchema,
       outputSchema: resultSchema,
       handler: async () => {
-        const plan = {
-          requiredSystemCapabilityGrant: grantId,
-          revision: 'reconcile:resource-1',
-          operations: [{
-            operationId: 'read-1',
-            actionId: read.descriptor.id,
-            input: { step: 1 },
-            resource: { kind: 'fixed' as const, resource }
-          }]
-        }
-        const batch = invoker.createApprovedBatch(plan)
+        const batch = invoker.createApprovedBatch(revisionPlan)
         publishProviderChange?.({ semanticRevision: 'root-revision-2' })
         let firstRejected = false
         let retryRejected = false
         let replacementRejected = false
         try { await batch.invoke('read-1', contract) } catch { firstRejected = true }
         try { await batch.invoke('read-1', contract) } catch { retryRejected = true }
-        try { invoker.createApprovedBatch({ ...plan, revision: 'reconcile:resource-2' }) } catch {
+        try { invoker.createApprovedBatch({ ...revisionPlan, revision: 'reconcile:resource-2' }) } catch {
           replacementRejected = true
         }
         return { output: { firstRejected, retryRejected, replacementRejected } }
       }
     })
-    registry.registerAll([orderOuter, revisionOuter])
+    const replacementOuter = defineCapability({
+      id: 'fixture.reconcile.confirmed-plan-replacement',
+      version: '1.0.0',
+      title: 'Reject confirmed plan replacement',
+      description: 'Rejects a first batch whose full plan differs from the confirmed plan digest.',
+      audiences: ['ui'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: confirmationInputSchema,
+      outputSchema: z.object({
+        replacementCode: z.string(),
+        confirmedRetryCode: z.string()
+      }).strict(),
+      handler: async () => {
+        let replacementCode = ''
+        let confirmedRetryCode = ''
+        try {
+          invoker.createApprovedBatch({
+            ...orderPlan,
+            operations: orderPlan.operations.map((operation, index) => index === 0
+              ? { ...operation, input: { step: 99 } }
+              : operation)
+          })
+        } catch (error) {
+          replacementCode = error instanceof CapabilityBrokerError ? error.code : 'unexpected'
+        }
+        try {
+          invoker.createApprovedBatch(orderPlan)
+        } catch (error) {
+          confirmedRetryCode = error instanceof CapabilityBrokerError ? error.code : 'unexpected'
+        }
+        return { output: { replacementCode, confirmedRetryCode } }
+      }
+    })
+    registry.registerAll([orderOuter, revisionOuter, replacementOuter])
 
-    const invokeOuter = (definition: typeof orderOuter, invocationId: string) => broker.invoke({
+    const invokeOuter = (
+      definition: Readonly<{ descriptor: Readonly<{ id: string }> }>,
+      invocationId: string,
+      planDigest: string
+    ) => broker.invoke({
       audience: 'ui',
       callerId: 'window:2',
       approvals: [{ actionId: definition.descriptor.id, invocationId, mode: 'confirmation' }]
     }, {
       actionId: definition.descriptor.id,
       invocationId,
-      input: { revision: 1 }
+      input: { revision: 1, confirmedPlanDigest: planDigest }
     })
-    await expect(invokeOuter(orderOuter, 'order-confirmation-1')).resolves.toMatchObject({
+    await expect(invokeOuter(
+      orderOuter,
+      'order-confirmation-1',
+      confirmedPlanDigest(orderPlan)
+    )).resolves.toMatchObject({
       output: { firstRejected: true, retryRejected: true, replacementRejected: true }
     })
-    await expect(invokeOuter(revisionOuter, 'revision-confirmation-1')).resolves.toMatchObject({
+    await expect(invokeOuter(
+      revisionOuter,
+      'revision-confirmation-1',
+      confirmedPlanDigest(revisionPlan)
+    )).resolves.toMatchObject({
       output: { firstRejected: true, retryRejected: true, replacementRejected: true }
+    })
+    await expect(invokeOuter(
+      replacementOuter,
+      'replacement-confirmation-1',
+      confirmedPlanDigest(orderPlan)
+    )).resolves.toMatchObject({
+      output: {
+        replacementCode: 'delegated_batch_confirmation_drift',
+        confirmedRetryCode: 'delegated_batch_already_created'
+      }
     })
   })
 })

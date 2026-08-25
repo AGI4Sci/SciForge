@@ -64,9 +64,15 @@ Ordinary shared-container creation SHALL continue to accept only the shared-cont
 
 #### Scenario: Project orchestrator creates and verifies a shared container
 
-- **WHEN** the Project-owning integration has a current Owner Principal, exact Cloud intent, Human confirmation and Broker invocation identities for the ordinary operations
+- **WHEN** the Project-owning integration has a current Owner Principal, exact Cloud intent, Human confirmation bound to the Host-canonical digest of the complete operation plan, and Broker invocation identities for the ordinary operations
 - **THEN** Content Space SHALL execute each create/member/list operation independently through the canonical path
 - **AND** SHALL return only provider-neutral references and receipts, without importing or asserting Project state.
+
+#### Scenario: Confirmed provisioning plan is replaced before first operation
+
+- **WHEN** a package confirms the digest of plan A but asks the Broker to capture any different revision, operation, input, order or resource ancestry as plan B
+- **THEN** the Broker SHALL reject plan B before minting an operation proof
+- **AND** SHALL consume that confirmation so neither plan B nor plan A can execute under the same approval.
 
 #### Scenario: Agent creates an ordinary shared container
 

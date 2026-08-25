@@ -6,7 +6,12 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 
-import type { DomainMainHost } from '@sciforge/domain-sdk/host'
+import {
+  canonicalizeDomainMainFiniteCapabilityBatchPlan,
+  domainMainFiniteCapabilityBatchPlanDigestSchema,
+  domainMainFiniteCapabilityBatchPlanSchema,
+  type DomainMainHost
+} from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import { samePrincipalSnapshot, type PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import {
@@ -508,6 +513,55 @@ describe('Content Space Agent discovery integration', () => {
       )).rejects.toMatchObject({ code: 'delegated_batch_proof_denied' })
       expect(bind).not.toHaveBeenCalled()
 
+      const plan = domainMainFiniteCapabilityBatchPlanSchema.parse({
+        requiredSystemCapabilityGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
+        revision: 'project-content:project-11:11',
+        operations: [
+          {
+            operationId: 'authorize',
+            actionId: CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
+            idempotencyKey: 'project-11-revision-11-authorize',
+            input: { providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF }
+          },
+          {
+            operationId: 'create',
+            actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace,
+            idempotencyKey: 'project-11-revision-11-create',
+            input: { label: 'Project 11 Team' },
+            resource: {
+              kind: 'operation-output', operationId: 'authorize', path: ['value', 'resource']
+            }
+          },
+          {
+            operationId: 'list-before',
+            actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers,
+            input: { page: { limit: 200 } },
+            resource: {
+              kind: 'operation-output', operationId: 'create', path: ['value', 'resource']
+            }
+          },
+          {
+            operationId: 'add-member',
+            actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
+            idempotencyKey: 'project-11-revision-11-add-worker',
+            input: { member },
+            resource: {
+              kind: 'operation-output', operationId: 'create', path: ['value', 'resource']
+            }
+          },
+          {
+            operationId: 'list-after',
+            actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers,
+            input: { page: { limit: 200 } },
+            resource: {
+              kind: 'operation-output', operationId: 'create', path: ['value', 'resource']
+            }
+          }
+        ]
+      })
+      const confirmedPlanDigest = createHash('sha256')
+        .update(canonicalizeDomainMainFiniteCapabilityBatchPlan(plan))
+        .digest('hex')
       const outer = defineCapability({
         id: 'fixture.project-content.provision',
         version: '1.0.0',
@@ -518,55 +572,13 @@ describe('Content Space Agent discovery integration', () => {
         effect: 'external-write',
         approval: 'confirmation',
         concurrency: { revision: 'none', idempotency: 'required' },
-        inputSchema: z.object({ revision: z.literal(11) }).strict(),
+        inputSchema: z.object({
+          revision: z.literal(11),
+          confirmedPlanDigest: domainMainFiniteCapabilityBatchPlanDigestSchema
+        }).strict(),
         outputSchema: z.object({ memberCount: z.number().int() }).strict(),
         handler: async () => {
-          const batch = invoker.createApprovedBatch({
-            requiredSystemCapabilityGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
-            revision: 'project-content:project-11:11',
-            operations: [
-              {
-                operationId: 'authorize',
-                actionId: CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
-                idempotencyKey: 'project-11-revision-11-authorize',
-                input: { providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF }
-              },
-              {
-                operationId: 'create',
-                actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace,
-                idempotencyKey: 'project-11-revision-11-create',
-                input: { label: 'Project 11 Team' },
-                resource: {
-                  kind: 'operation-output', operationId: 'authorize', path: ['value', 'resource']
-                }
-              },
-              {
-                operationId: 'list-before',
-                actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers,
-                input: { page: { limit: 200 } },
-                resource: {
-                  kind: 'operation-output', operationId: 'create', path: ['value', 'resource']
-                }
-              },
-              {
-                operationId: 'add-member',
-                actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
-                idempotencyKey: 'project-11-revision-11-add-worker',
-                input: { member },
-                resource: {
-                  kind: 'operation-output', operationId: 'create', path: ['value', 'resource']
-                }
-              },
-              {
-                operationId: 'list-after',
-                actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers,
-                input: { page: { limit: 200 } },
-                resource: {
-                  kind: 'operation-output', operationId: 'create', path: ['value', 'resource']
-                }
-              }
-            ]
-          })
+          const batch = invoker.createApprovedBatch(plan)
           const controller = new AbortController()
           await batch.invoke(
             'authorize',
@@ -611,7 +623,7 @@ describe('Content Space Agent discovery integration', () => {
       }, {
         actionId: outer.descriptor.id,
         invocationId: 'project-11-revision-11-human-confirmation',
-        input: { revision: 11 }
+        input: { revision: 11, confirmedPlanDigest }
       })).resolves.toMatchObject({ output: { memberCount: 1 } })
       expect(providerCalls).toEqual([
         'create:Project 11 Team',

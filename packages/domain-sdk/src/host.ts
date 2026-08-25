@@ -14,9 +14,10 @@ import {
   type DomainPackageContributionPublicReleasePolicy,
   type DomainPackageJsonValue
 } from './contract.js'
-import type {
-  DomainExecutionEventInput,
-  DomainExecutionEventV1
+import {
+  canonicalizeReproValue,
+  type DomainExecutionEventInput,
+  type DomainExecutionEventV1
 } from './reproducibility.js'
 import type { DomainMainPowerHost } from './power.js'
 import type { DomainMainRemoteCapabilityApprovalHost } from './remote-approval.js'
@@ -444,6 +445,12 @@ const domainMainFiniteCapabilityBatchOutputPathSegmentSchema = z.union([
   z.number().int().nonnegative().max(10_000)
 ])
 
+export const DOMAIN_MAIN_FINITE_CAPABILITY_BATCH_CONFIRMED_PLAN_DIGEST_FIELD =
+  'confirmedPlanDigest' as const
+
+export const domainMainFiniteCapabilityBatchPlanDigestSchema = z.string()
+  .regex(/^[a-f0-9]{64}$/u, 'Expected a lowercase SHA-256 finite batch plan digest.')
+
 export const domainMainFiniteCapabilityBatchResourceSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('fixed'),
@@ -502,6 +509,18 @@ export const domainMainFiniteCapabilityBatchPlanSchema = z.object({
 export type DomainMainFiniteCapabilityBatchPlan = z.infer<
   typeof domainMainFiniteCapabilityBatchPlanSchema
 >
+
+/**
+ * Canonical bytes for the complete finite batch plan confirmed by a Human.
+ * Hashing remains in the Node-owning package or Host; callers cannot use the
+ * resulting digest as authority without the matching active confirmation.
+ */
+export function canonicalizeDomainMainFiniteCapabilityBatchPlan(
+  input: unknown
+): string {
+  const plan = domainMainFiniteCapabilityBatchPlanSchema.parse(input)
+  return canonicalizeReproValue(domainPackageJsonValueSchema.parse(plan))
+}
 
 export type DomainMainApprovedCapabilityBatch = Readonly<{
   revision: string

@@ -2,6 +2,8 @@ import { createHash, randomBytes } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { z } from 'zod'
 import {
+  DOMAIN_MAIN_FINITE_CAPABILITY_BATCH_CONFIRMED_PLAN_DIGEST_FIELD,
+  canonicalizeDomainMainFiniteCapabilityBatchPlan,
   domainMainFiniteCapabilityBatchPlanSchema,
   type DomainMainFiniteCapabilityBatchPlan
 } from '@sciforge/domain-sdk/host'
@@ -201,6 +203,7 @@ export type CapabilityResourceInvocationBinding = Readonly<{
 type ActiveCapabilityInvocationState = {
   active: boolean
   approvedBatchCreated: boolean
+  confirmedInput: CapabilityJsonValue
   invocation: ActiveCapabilityInvocation
   resourceTransaction: InvocationResourceTransaction
 }
@@ -922,13 +925,6 @@ export class CapabilityBroker {
         }
       }
     ).parse(rawCaller.capabilityGrants ?? [])
-    if (!capabilityGrants.includes(plan.requiredSystemCapabilityGrant)) {
-      throw new CapabilityBrokerError(
-        'delegated_batch_grant_denied',
-        `The package does not hold system capability grant ${plan.requiredSystemCapabilityGrant}.`
-      )
-    }
-
     const outerState = this.#activeInvocation.getStore()
     const outer = outerState?.invocation
     if (
@@ -945,6 +941,36 @@ export class CapabilityBroker {
       throw new CapabilityBrokerError(
         'delegated_batch_already_created',
         'The active Human confirmation has already been bound to a finite batch.'
+      )
+    }
+    // The first structurally valid plan attempt consumes this confirmation.
+    // Binding therefore precedes grant, Workspace, Principal and descriptor
+    // validation so no replacement or correction can reuse the approval.
+    outerState.approvedBatchCreated = true
+    const planDigest = createHash('sha256')
+      .update(canonicalizeDomainMainFiniteCapabilityBatchPlan(plan))
+      .digest('hex')
+    const confirmedPlanDigest = !Array.isArray(outerState.confirmedInput) &&
+      outerState.confirmedInput !== null &&
+      typeof outerState.confirmedInput === 'object' &&
+      Object.hasOwn(
+        outerState.confirmedInput,
+        DOMAIN_MAIN_FINITE_CAPABILITY_BATCH_CONFIRMED_PLAN_DIGEST_FIELD
+      )
+      ? outerState.confirmedInput[
+          DOMAIN_MAIN_FINITE_CAPABILITY_BATCH_CONFIRMED_PLAN_DIGEST_FIELD
+        ]
+      : undefined
+    if (confirmedPlanDigest !== planDigest) {
+      throw new CapabilityBrokerError(
+        'delegated_batch_confirmation_drift',
+        'The complete finite batch plan does not match the exact Human-confirmed plan digest.'
+      )
+    }
+    if (!capabilityGrants.includes(plan.requiredSystemCapabilityGrant)) {
+      throw new CapabilityBrokerError(
+        'delegated_batch_grant_denied',
+        `The package does not hold system capability grant ${plan.requiredSystemCapabilityGrant}.`
       )
     }
     if (outer.caller.workspaceId !== plan.workspaceId) {
@@ -969,10 +995,6 @@ export class CapabilityBroker {
       ...baseCaller,
       capabilityGrants: Object.freeze(capabilityGrants)
     })
-
-    // Binding happens before descriptor validation so an operation/contract
-    // correction cannot reuse the same Human confirmation.
-    outerState.approvedBatchCreated = true
     const operationStates = plan.operations.map((operation) => ({
       plan: operation,
       consumed: false
@@ -1065,7 +1087,6 @@ export class CapabilityBroker {
       }
     }
 
-    const planDigest = canonicalDigest(capabilityJsonValueSchema.parse(plan))
     const outputLineages = new Map<string, HostApprovedBatchResourceLineage>()
     let status: 'active' | 'executing' | 'completed' | 'invalidated' = 'active'
     let nextIndex = 0
@@ -1714,6 +1735,7 @@ export class CapabilityBroker {
       const activeState: ActiveCapabilityInvocationState = {
         active: true,
         approvedBatchCreated: false,
+        confirmedInput: request.input,
         resourceTransaction,
         invocation: Object.freeze({
           caller,
