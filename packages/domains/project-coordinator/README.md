@@ -14,7 +14,10 @@ This package owns only the Human-facing coordination surfaces for:
 - creating a Cloud-authoritative Project as the current OIDC User;
 - generating, editing, submitting, and confirming a Project Plan;
 - grouping Worker candidates by User while selecting an exact Agent;
-- observing Project Tasks, result review, and Project Content provisioning facts.
+- reviewing immutable Task results, asking/answering Project HumanNeeded, and
+  completing a Project with its final summary;
+- observing Project Tasks, ProjectRecord memory, and Project Content
+  provisioning facts.
 
 It does **not** own OIDC login, Device enrollment, Agent registration,
 connection settings, Agent presence, Inbox delivery, local Worker execution,
@@ -35,10 +38,15 @@ factual payload digest, provisioning revision and observation time; it never
 receives a Device key, performs signing itself, or exposes signing to the
 renderer.
 
-Coordinator Agent Plan submission acquires Collaboration's versioned,
-main-only command service. Collaboration binds the active local Agent and owns
-durable delivery; this package cannot provide an Agent identity, route, header,
-or credential. OIDC material never enters this package. Local Plan drafts are
+Coordinator Agent Plan submission, HumanNeeded, result review, decision, and
+final completion acquire Collaboration's versioned, main-only command service.
+Collaboration binds the active local Agent and owns durable delivery plus the
+single Coordinator Agent Inbox subscription; this package cannot provide an
+Agent identity, route, header, or credential. A `coordinator_project`
+HumanAnswer is consumed here and becomes a Coordinator-authored decision with a
+stable idempotency key. The OIDC Owner answer itself uses Identity's token-free
+User transport and never becomes a second ProjectRecord writer. OIDC material
+never enters this package. Local Plan drafts are
 non-secret package settings guarded by revision compare-and-set. Plan generation
 uses the Host-provided Agent Runtime only after the runtime lifecycle has
 activated; missing Runtime, identity, Device, Cloud, or exact Project facts fail
@@ -51,7 +59,9 @@ recovery records; it adds only UI-specific grouping, exact selection and focus
 wrappers rather than redefining those state machines.
 `./ports` contains the narrow package-owned workspace and Plan workflow ports
 used by the capability factory plus the closed Collaboration
-Coordinator-Agent command port. The renderer invokes seven governed
+Coordinator-Agent command port. The renderer invokes eleven governed
 capabilities: workspace read, Project create, Plan-draft read/generate/edit,
-Plan submit, and Owner confirm-and-activate. There is no renderer transport,
-HTTP client, Provider adapter, or second Cloud DTO.
+Plan submit, Owner confirm-and-activate, Project HumanNeeded create/answer,
+result review, and atomic final completion. Pending confirmation, HumanNeeded,
+review, and completion cards are default-visible. There is no renderer
+transport, HTTP client, Provider adapter, or second Cloud DTO.

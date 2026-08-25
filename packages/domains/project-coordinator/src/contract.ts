@@ -3,18 +3,25 @@ import {
   agentIdSchema,
   deviceIdSchema,
   displayNameSchema,
+  humanAnswerCommandSchema,
+  humanNeededSchema,
+  humanNeededCreateCommandSchema,
   projectContentProvisioningAttestationSchema,
   projectContentProvisioningIntentSchema,
   projectContentReadinessSchema,
   projectContentSpaceBindingSchema,
   projectCreateCommandSchema,
+  projectFinalSummarySchema,
+  projectFinalSummarySubmitCommandSchema,
   projectIdSchema,
   projectPlanSchema,
   projectPlanRuntimeProvenanceSchema,
   projectPlanTaskSchema,
+  projectRecordSchema,
   projectSchema,
   projectWorkerAvailabilityViewSchema,
   taskExecutionSchema,
+  taskResultReviewFactsSchema,
   taskResultSubmissionSchema,
   taskReviewDecisionSchema,
   taskSchema,
@@ -33,7 +40,11 @@ export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   planDraftGenerate: 'project-coordinator.plan-draft.generate',
   planDraftEdit: 'project-coordinator.plan-draft.edit',
   planSubmit: 'project-coordinator.plan.submit',
-  planConfirmActivate: 'project-coordinator.plan.confirm-activate'
+  planConfirmActivate: 'project-coordinator.plan.confirm-activate',
+  humanNeededCreate: 'project-coordinator.human-needed.create',
+  humanAnswer: 'project-coordinator.human-needed.answer',
+  resultReview: 'project-coordinator.result.review',
+  projectComplete: 'project-coordinator.project.complete'
 } as const)
 
 export const projectCoordinatorProjectCreateInputSchema = projectCreateCommandSchema.omit({
@@ -146,6 +157,33 @@ export const projectCoordinatorPlanConfirmActivateInputSchema = z.object({
   planDigest: projectPlanSchema.shape.planDigest
 }).strict().readonly()
 
+export const projectCoordinatorHumanNeededCreateInputSchema = z.object({
+  projectId: humanNeededCreateCommandSchema.shape.projectId,
+  expectedProjectRevision: projectSchema.shape.revision,
+  expectedCoordinatorAuthorityEpoch: projectSchema.shape.coordinatorAuthorityEpoch,
+  requiredAssurance: humanNeededCreateCommandSchema.shape.requiredAssurance.exclude(['basic']),
+  prompt: humanNeededCreateCommandSchema.shape.prompt,
+  expiresAt: humanNeededCreateCommandSchema.shape.expiresAt
+}).strict().readonly()
+
+export const projectCoordinatorHumanAnswerInputSchema = humanAnswerCommandSchema.omit({
+  protocolVersion: true,
+  requestId: true,
+  type: true,
+  idempotencyKey: true
+}).extend({
+  projectId: projectIdSchema
+}).strict().readonly()
+
+export const projectCoordinatorResultReviewInputSchema = taskResultReviewFactsSchema.readonly()
+
+export const projectCoordinatorCompleteInputSchema = projectFinalSummarySubmitCommandSchema.omit({
+  protocolVersion: true,
+  requestId: true,
+  type: true,
+  idempotencyKey: true
+}).strict().readonly()
+
 export const projectCoordinatorPlanViewSchema = z.object({
   plan: projectPlanSchema,
   assignments: z.array(projectCoordinatorPlanAssignmentSchema).max(1_000)
@@ -250,6 +288,9 @@ export const projectCoordinatorProjectSchema = z.object({
   workerGroups: z.array(projectCoordinatorWorkerGroupSchema).max(1_000),
   tasks: z.array(projectCoordinatorTaskViewSchema).max(10_000),
   reviews: z.array(projectCoordinatorReviewViewSchema).max(10_000),
+  pendingHumanNeeded: z.array(humanNeededSchema).max(10_000),
+  records: z.array(projectRecordSchema).max(10_000),
+  finalSummary: projectFinalSummarySchema.nullable(),
   provisioning: projectCoordinatorProvisioningViewSchema
 }).strict().superRefine((view, context) => {
   const projectId = view.project.projectId
@@ -297,6 +338,29 @@ export const projectCoordinatorProjectSchema = z.object({
     if (review.submission.projectId === projectId) return
     context.addIssue({ code: 'custom', path: ['reviews', index], message: 'Review must belong to this Project.' })
   })
+  view.pendingHumanNeeded.forEach((request, index) => {
+    if (request.projectId === projectId && request.targetUserId === view.project.ownerUserId) return
+    context.addIssue({
+      code: 'custom',
+      path: ['pendingHumanNeeded', index],
+      message: 'Pending HumanNeeded must belong to this Project Owner.'
+    })
+  })
+  view.records.forEach((record, index) => {
+    if (record.projectId === projectId) return
+    context.addIssue({
+      code: 'custom',
+      path: ['records', index],
+      message: 'Project Record must belong to this Project.'
+    })
+  })
+  if (view.finalSummary && view.finalSummary.projectId !== projectId) {
+    context.addIssue({
+      code: 'custom',
+      path: ['finalSummary'],
+      message: 'Final summary must belong to this Project.'
+    })
+  }
   const { intent, attestation, binding, recoveryActions } = view.provisioning
   if (intent && intent.projectId !== projectId) {
     context.addIssue({ code: 'custom', path: ['provisioning', 'intent'], message: 'Intent must belong to this Project.' })
@@ -433,5 +497,17 @@ export type ProjectCoordinatorPlanSubmitResult = z.infer<
 >
 export type ProjectCoordinatorPlanConfirmActivateInput = z.infer<
   typeof projectCoordinatorPlanConfirmActivateInputSchema
+>
+export type ProjectCoordinatorHumanNeededCreateInput = z.infer<
+  typeof projectCoordinatorHumanNeededCreateInputSchema
+>
+export type ProjectCoordinatorHumanAnswerInput = z.infer<
+  typeof projectCoordinatorHumanAnswerInputSchema
+>
+export type ProjectCoordinatorResultReviewInput = z.infer<
+  typeof projectCoordinatorResultReviewInputSchema
+>
+export type ProjectCoordinatorCompleteInput = z.infer<
+  typeof projectCoordinatorCompleteInputSchema
 >
 export type ProjectCoordinatorActivation = z.infer<typeof projectCoordinatorActivationSchema>

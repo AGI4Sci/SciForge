@@ -21,9 +21,14 @@ import { useTranslation } from 'react-i18next'
 import type { DomainWorkbenchRightPanelSession } from '@sciforge/domain-sdk/host'
 
 import type {
+  ProjectCoordinatorCompleteInput,
+  ProjectCoordinatorHumanAnswerInput,
+  ProjectCoordinatorHumanNeededCreateInput,
   ProjectCoordinatorPlanDraft,
+  ProjectCoordinatorPlanDraftEditInput,
   ProjectCoordinatorProjectCreateResult,
   ProjectCoordinatorProject,
+  ProjectCoordinatorResultReviewInput,
   ProjectCoordinatorWorkspace
 } from '../contract.js'
 import type { ProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
@@ -197,28 +202,18 @@ export function ProjectCoordinatorPanel({
     }), setDraft)
   }, [client, project, runAction])
 
-  const editDraftAssignment = useCallback((planItemId: string, selectedAgentId: string) => {
+  const editDraft = useCallback((content: Pick<
+    ProjectCoordinatorPlanDraftEditInput,
+    'tasks' | 'rationale' | 'assignments'
+  >) => {
     if (!draft) return
-    const nextAssignments = draft.assignments.map((assignment) => (
-      assignment.planItemId === planItemId
-        ? {
-            ...assignment,
-            selectedAgentId: selectedAgentId || null,
-            recommendationReason: selectedAgentId
-              ? t('projectCoordinatorOwnerSelectedExactAgent')
-              : null
-          }
-        : assignment
-    ))
     void runAction('plan-edit', () => client.editPlanDraft({
       projectId: draft.projectId,
       draftId: draft.draftId,
       expectedDraftRevision: draft.draftRevision,
-      tasks: draft.tasks,
-      rationale: draft.rationale,
-      assignments: nextAssignments
+      ...content
     }), setDraft)
-  }, [client, draft, runAction, t])
+  }, [client, draft, runAction])
 
   const submitDraft = useCallback(() => {
     if (!draft) return
@@ -248,6 +243,27 @@ export function ProjectCoordinatorPanel({
       setSelectedProjectId(project.project.projectId)
     })
   }, [client, project, runAction])
+
+  const applyProjectWorkspace = useCallback((next: ProjectCoordinatorWorkspace) => {
+    setWorkspace(next)
+    if (next.focusedProjectId) setSelectedProjectId(next.focusedProjectId)
+  }, [])
+
+  const createHumanNeeded = useCallback((input: ProjectCoordinatorHumanNeededCreateInput) => {
+    void runAction('human-needed-create', () => client.createHumanNeeded(input), applyProjectWorkspace)
+  }, [applyProjectWorkspace, client, runAction])
+
+  const answerHumanNeeded = useCallback((input: ProjectCoordinatorHumanAnswerInput) => {
+    void runAction('human-answer', () => client.answerHumanNeeded(input), applyProjectWorkspace)
+  }, [applyProjectWorkspace, client, runAction])
+
+  const reviewResult = useCallback((input: ProjectCoordinatorResultReviewInput) => {
+    void runAction('result-review', () => client.reviewResult(input), applyProjectWorkspace)
+  }, [applyProjectWorkspace, client, runAction])
+
+  const completeProject = useCallback((input: ProjectCoordinatorCompleteInput) => {
+    void runAction('project-complete', () => client.completeProject(input), applyProjectWorkspace)
+  }, [applyProjectWorkspace, client, runAction])
 
   return (
     <aside
@@ -337,13 +353,22 @@ export function ProjectCoordinatorPanel({
           draft={draft}
           busy={Boolean(busyAction?.startsWith('plan-'))}
           onGenerate={generateDraft}
-          onEditDraft={editDraftAssignment}
+          onEditDraft={editDraft}
           onSubmitDraft={submitDraft}
           onConfirmActivate={confirmActivate}
         />
         <WorkersSection project={project} />
         <TasksSection project={project} />
-        <ReviewsSection project={project} />
+        <ProjectCoordinatorDecisionSection
+          project={project}
+          canAnswer={workspace?.connection.state === 'ready' &&
+            workspace.connection.userId === project?.project.ownerUserId}
+          busy={Boolean(busyAction && !busyAction.startsWith('plan-'))}
+          onCreateHumanNeeded={createHumanNeeded}
+          onAnswerHumanNeeded={answerHumanNeeded}
+          onReviewResult={reviewResult}
+          onComplete={completeProject}
+        />
         <ProvisioningSection project={project} />
       </div>
     </aside>
@@ -427,7 +452,10 @@ export function ProjectCoordinatorPlanSection({
   draft: ProjectCoordinatorPlanDraft | null
   busy: boolean
   onGenerate(): void
-  onEditDraft(planItemId: string, selectedAgentId: string): void
+  onEditDraft(content: Pick<
+    ProjectCoordinatorPlanDraftEditInput,
+    'tasks' | 'rationale' | 'assignments'
+  >): void
   onSubmitDraft(): void
   onConfirmActivate(): void
 }>): ReactElement {
@@ -445,18 +473,66 @@ export function ProjectCoordinatorPlanSection({
           </button>
         </div>
       ) : draft ? (
-        <div className="space-y-2" data-default-visible-card="plan-draft">
+        <div className="space-y-2" data-default-visible-card="plan-draft" key={draft.draftRevision}>
           <Status value="draft" />
-          {draft.tasks.map((item) => {
-            const assignment = draft.assignments.find(({ planItemId }) => planItemId === item.planItemId)
-            return (
-              <label key={item.planItemId} className="block rounded border border-ds-border p-2 text-xs">
-                <span className="font-medium">{item.title}</span>
+          <form
+            className="space-y-2"
+            onSubmit={(event) => {
+              event.preventDefault()
+              const values = new FormData(event.currentTarget)
+              onEditDraft({
+                rationale: String(values.get('plan-rationale') ?? ''),
+                tasks: draft.tasks.map((item) => ({
+                  ...item,
+                  title: String(values.get(`plan-item-title-${item.planItemId}`) ?? ''),
+                  objective: String(values.get(`plan-item-objective-${item.planItemId}`) ?? ''),
+                  completionCriteria: splitLines(
+                    String(values.get(`plan-item-criteria-${item.planItemId}`) ?? '')
+                  ),
+                  requiredCapabilityTags: splitCommaSeparated(
+                    String(values.get(`plan-item-capabilities-${item.planItemId}`) ?? '')
+                  )
+                })),
+                assignments: draft.assignments.map((assignment) => {
+                  const selectedAgentId = String(
+                    values.get(`plan-item-agent-${assignment.planItemId}`) ?? ''
+                  )
+                  return {
+                    ...assignment,
+                    selectedAgentId: selectedAgentId || null,
+                    recommendationReason: selectedAgentId
+                      ? t('projectCoordinatorOwnerSelectedExactAgent')
+                      : null
+                  }
+                })
+              })
+            }}
+          >
+            <label className="block text-xs">
+              <span className="text-ds-muted">{t('projectCoordinatorPlanRationale')}</span>
+              <textarea
+                required
+                name="plan-rationale"
+                defaultValue={draft.rationale}
+                className="mt-1 w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+              />
+            </label>
+            {draft.tasks.map((item) => {
+              const assignment = draft.assignments.find(({ planItemId }) => (
+                planItemId === item.planItemId
+              ))
+              return (
+              <fieldset key={item.planItemId} className="block space-y-1.5 rounded border border-ds-border p-2 text-xs">
+                <legend className="px-1 font-mono text-[10px] text-ds-faint">{item.planItemId}</legend>
+                <input required name={`plan-item-title-${item.planItemId}`} defaultValue={item.title} aria-label={t('projectCoordinatorTaskTitle')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+                <textarea required name={`plan-item-objective-${item.planItemId}`} defaultValue={item.objective} aria-label={t('projectCoordinatorTaskObjective')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+                <textarea required name={`plan-item-criteria-${item.planItemId}`} defaultValue={item.completionCriteria.join('\n')} aria-label={t('projectCoordinatorCompletionCriteria')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+                <input required name={`plan-item-capabilities-${item.planItemId}`} defaultValue={item.requiredCapabilityTags.join(', ')} aria-label={t('projectCoordinatorCapabilityTags')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
                 <select
+                  name={`plan-item-agent-${item.planItemId}`}
                   className="mt-1 w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
-                  value={assignment?.selectedAgentId ?? ''}
+                  defaultValue={assignment?.selectedAgentId ?? ''}
                   disabled={busy}
-                  onChange={(event) => onEditDraft(item.planItemId, event.currentTarget.value)}
                 >
                   <option value="">{t('projectCoordinatorChooseExactAgent')}</option>
                   {visibleAgents.map((agent) => (
@@ -465,9 +541,13 @@ export function ProjectCoordinatorPlanSection({
                     </option>
                   ))}
                 </select>
-              </label>
-            )
-          })}
+              </fieldset>
+              )
+            })}
+            <button type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1.5 text-xs disabled:opacity-50">
+              {t('projectCoordinatorSavePlanEdits')}
+            </button>
+          </form>
           <button
             type="button"
             disabled={busy || draft.assignments.some(({ selectedAgentId }) => selectedAgentId === null)}
@@ -574,27 +654,259 @@ function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProjec
   )
 }
 
-function ReviewsSection({ project }: Readonly<{ project?: ProjectCoordinatorProject }>): ReactElement {
+export function ProjectCoordinatorDecisionSection({
+  project,
+  canAnswer,
+  busy,
+  onCreateHumanNeeded,
+  onAnswerHumanNeeded,
+  onReviewResult,
+  onComplete
+}: Readonly<{
+  project?: ProjectCoordinatorProject
+  canAnswer: boolean
+  busy: boolean
+  onCreateHumanNeeded(input: ProjectCoordinatorHumanNeededCreateInput): void
+  onAnswerHumanNeeded(input: ProjectCoordinatorHumanAnswerInput): void
+  onReviewResult(input: ProjectCoordinatorResultReviewInput): void
+  onComplete(input: ProjectCoordinatorCompleteInput): void
+}>): ReactElement {
   const { t } = useTranslation('common')
+  const pendingReviews = project?.reviews.filter(({ decision }) => decision === null) ?? []
+  const acceptedCurrentResults = project ? acceptedCurrentResultIds(project) : null
+  const mayAskOwner = project?.project.status === 'active' &&
+    acceptedCurrentResults !== null &&
+    !project.records.some(({ kind }) => kind === 'decision') &&
+    project.pendingHumanNeeded.length === 0
+  const completionInput = project ? projectCoordinatorCompletionInput(project, '') : null
   return (
     <Section id="reviews" title={t('projectCoordinatorReviews')} icon={<ClipboardCheck className="h-4 w-4" />}>
-      {!project?.reviews.length ? <Empty message={project ? t('projectCoordinatorNoReviews') : undefined} /> : (
+      {!project ? <Empty /> : (
         <div className="space-y-2 text-xs">
-          {project.reviews.map((review) => (
-            <div key={review.submission.resultSubmissionId} className="rounded border border-ds-border p-2">
+          {project.pendingHumanNeeded.map((request) => (
+            <form
+              key={request.humanRequestId}
+              className="space-y-2 rounded border border-amber-500/40 p-2"
+              data-default-visible-card="human-needed"
+              onSubmit={(event) => {
+                event.preventDefault()
+                const values = new FormData(event.currentTarget)
+                const decision = String(values.get('decision') ?? '')
+                onAnswerHumanNeeded({
+                  projectId: request.projectId,
+                  humanRequestId: request.humanRequestId,
+                  requestRevision: request.revision,
+                  answer: String(values.get('answer') ?? ''),
+                  ...(decision === 'approve' || decision === 'reject' ? { decision } : {})
+                })
+              }}
+            >
+              <Status value="human_needed" />
+              <p className="whitespace-pre-wrap text-[11px] text-ds-muted">{request.prompt}</p>
+              <textarea required name="answer" disabled={!canAnswer || busy} aria-label={t('projectCoordinatorHumanAnswer')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+              {request.confirmableAction ? (
+                <div className="flex gap-2">
+                  <button name="decision" value="approve" type="submit" disabled={!canAnswer || busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorApprove')}</button>
+                  <button name="decision" value="reject" type="submit" disabled={!canAnswer || busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorReject')}</button>
+                </div>
+              ) : (
+                <button type="submit" disabled={!canAnswer || busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorSubmitHumanAnswer')}</button>
+              )}
+            </form>
+          ))}
+          {pendingReviews.map((review) => (
+            <form
+              key={review.submission.resultSubmissionId}
+              className="space-y-2 rounded border border-amber-500/40 p-2"
+              data-default-visible-card="result-review"
+              onSubmit={(event) => {
+                event.preventDefault()
+                const values = new FormData(event.currentTarget)
+                const decision = String(values.get('decision') ?? '')
+                const selectedAgentId = String(values.get('next-agent') ?? '')
+                const input = projectCoordinatorResultReviewInput(
+                  project,
+                  review.submission.resultSubmissionId,
+                  decision === 'accept' ? 'accept' : 'request_revision',
+                  {
+                    instruction: String(values.get('instruction') ?? ''),
+                    nextAssigneeAgentId: selectedAgentId,
+                    nextOfferExpiresAt: String(values.get('offer-expires-at') ?? '')
+                  }
+                )
+                if (input) onReviewResult(input)
+              }}
+            >
               <div className="flex items-start justify-between gap-2">
                 <span className="break-all font-mono text-[10px]">{review.submission.taskId}</span>
-                <Status value={review.decision?.decision ?? 'awaiting_review'} />
+                <Status value="awaiting_review" />
               </div>
               <p className="mt-1 whitespace-pre-wrap text-[11px] text-ds-muted">
                 {review.submission.summary}
               </p>
-            </div>
+              <textarea name="instruction" aria-label={t('projectCoordinatorRevisionInstruction')} placeholder={t('projectCoordinatorRevisionInstruction')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+              <select name="next-agent" defaultValue="" aria-label={t('projectCoordinatorNextAgent')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs">
+                <option value="">{t('projectCoordinatorChooseExactAgent')}</option>
+                {project.workerGroups.flatMap(({ agents }) => agents).map((agent) => (
+                  <option key={agent.projectAvailability.agentId} value={agent.projectAvailability.agentId}>
+                    {agent.displayName} · {agent.projectAvailability.agentId}
+                  </option>
+                ))}
+              </select>
+              <input name="offer-expires-at" aria-label={t('projectCoordinatorOfferExpiresAt')} placeholder="2026-08-26T01:08:00.000Z" className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+              <div className="flex gap-2">
+                <button name="decision" value="accept" type="submit" disabled={busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorAcceptResult')}</button>
+                <button name="decision" value="request_revision" type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorRequestRevision')}</button>
+              </div>
+            </form>
           ))}
+          {mayAskOwner ? (
+            <form
+              className="space-y-2 rounded border border-ds-border p-2"
+              data-default-visible-card="human-needed-create"
+              onSubmit={(event) => {
+                event.preventDefault()
+                const values = new FormData(event.currentTarget)
+                onCreateHumanNeeded({
+                  projectId: project.project.projectId,
+                  expectedProjectRevision: project.project.revision,
+                  expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
+                  requiredAssurance: 'verified',
+                  prompt: String(values.get('prompt') ?? ''),
+                  expiresAt: String(values.get('expires-at') ?? '')
+                })
+              }}
+            >
+              <textarea required name="prompt" aria-label={t('projectCoordinatorHumanPrompt')} placeholder={t('projectCoordinatorHumanPrompt')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+              <input required name="expires-at" aria-label={t('projectCoordinatorHumanExpiresAt')} placeholder="2026-08-26T01:08:00.000Z" className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+              <button type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorAskOwner')}</button>
+            </form>
+          ) : null}
+          {completionInput ? (
+            <form
+              className="space-y-2 rounded border border-emerald-500/40 p-2"
+              data-default-visible-card="project-completion"
+              onSubmit={(event) => {
+                event.preventDefault()
+                const summary = String(new FormData(event.currentTarget).get('summary') ?? '')
+                const input = projectCoordinatorCompletionInput(project, summary)
+                if (input) onComplete(input)
+              }}
+            >
+              <textarea required name="summary" aria-label={t('projectCoordinatorFinalSummary')} placeholder={t('projectCoordinatorFinalSummary')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+              <button type="submit" disabled={busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorCompleteProject')}</button>
+            </form>
+          ) : null}
+          {project.finalSummary ? (
+            <div className="rounded border border-ds-border p-2" data-default-visible-card="final-summary">
+              <Status value="completed" />
+              <p className="mt-1 whitespace-pre-wrap text-[11px] text-ds-muted">{project.finalSummary.summary}</p>
+            </div>
+          ) : null}
+          {project.pendingHumanNeeded.length === 0 && pendingReviews.length === 0 &&
+            !mayAskOwner && !completionInput && !project.finalSummary ? (
+              <Empty message={t('projectCoordinatorNoReviews')} />
+            ) : null}
         </div>
       )}
     </Section>
   )
+}
+
+export function projectCoordinatorResultReviewInput(
+  project: ProjectCoordinatorProject,
+  resultSubmissionId: string,
+  decision: 'accept' | 'request_revision',
+  revision: Readonly<{
+    instruction: string
+    nextAssigneeAgentId: string
+    nextOfferExpiresAt: string
+  }>
+): ProjectCoordinatorResultReviewInput | null {
+  const review = project.reviews.find(({ submission }) => (
+    submission.resultSubmissionId === resultSubmissionId
+  ))
+  if (!review || review.decision) return null
+  const task = project.tasks.find(({ task }) => task.taskId === review.submission.taskId)
+  const execution = task?.executions.find(({ executionId }) => (
+    executionId === review.submission.executionId
+  ))
+  if (!task || !execution) return null
+  const nextAgent = project.workerGroups.flatMap(({ agents }) => agents).find(
+    ({ projectAvailability }) => (
+      projectAvailability.agentId === revision.nextAssigneeAgentId
+    )
+  )
+  const base = {
+    projectId: project.project.projectId,
+    taskId: task.task.taskId,
+    executionId: execution.executionId,
+    resultSubmissionId: review.submission.resultSubmissionId,
+    expectedProjectRevision: project.project.revision,
+    expectedTaskRevision: task.task.revision,
+    expectedExecutionRevision: execution.revision,
+    expectedResultRevision: review.submission.revision,
+    expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch
+  }
+  return decision === 'accept' ? {
+    ...base,
+    decision,
+    instruction: null,
+    nextAssigneeAgentId: null,
+    expectedNextAssigneeAvailabilityRevision: null,
+    nextOfferExpiresAt: null,
+    nextFileIntent: null
+  } : revision.instruction.trim() && nextAgent && revision.nextOfferExpiresAt ? {
+        ...base,
+        decision,
+        instruction: revision.instruction,
+        nextAssigneeAgentId: revision.nextAssigneeAgentId,
+        expectedNextAssigneeAvailabilityRevision:
+          nextAgent.projectAvailability.availability.revision,
+        nextOfferExpiresAt: revision.nextOfferExpiresAt,
+        nextFileIntent: task.task.fileIntent
+      } : null
+}
+
+export function projectCoordinatorCompletionInput(
+  project: ProjectCoordinatorProject,
+  summary: string
+): ProjectCoordinatorCompleteInput | null {
+  if (
+    project.project.status !== 'active' ||
+    project.finalSummary !== null ||
+    project.plan?.plan.state !== 'confirmed' ||
+    !project.records.some(({ kind }) => kind === 'decision') ||
+    project.tasks.length === 0
+  ) return null
+  const acceptedResultSubmissionIds = acceptedCurrentResultIds(project)
+  if (acceptedResultSubmissionIds === null) return null
+  return {
+    projectId: project.project.projectId,
+    expectedProjectRevision: project.project.revision,
+    expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
+    expectedExecutionAuthorityEpoch: project.project.executionAuthorityEpoch,
+    projectPlanId: project.plan.plan.projectPlanId,
+    confirmedPlanRevision: project.plan.plan.revision,
+    acceptedResultSubmissionIds,
+    summary: summary || project.project.goal
+  }
+}
+
+function acceptedCurrentResultIds(project: ProjectCoordinatorProject): string[] | null {
+  if (project.tasks.length === 0) return null
+  const resultSubmissionIds = project.tasks.map(({ task }) => (
+    task.status === 'completed'
+      ? project.reviews.find(({ submission, decision }) => (
+          submission.taskId === task.taskId &&
+          submission.executionId === task.currentExecutionId &&
+          decision?.decision === 'accept'
+        ))?.submission.resultSubmissionId
+      : undefined
+  ))
+  return resultSubmissionIds.some((id) => id === undefined)
+    ? null
+    : resultSubmissionIds as string[]
 }
 
 function ProvisioningSection({ project }: Readonly<{ project?: ProjectCoordinatorProject }>): ReactElement {
@@ -683,6 +995,14 @@ function Status({ value }: Readonly<{ value: string }>): ReactElement {
       {value.replaceAll('_', ' ')}
     </span>
   )
+}
+
+function splitLines(value: string): string[] {
+  return value.split(/\r?\n/u).map((entry) => entry.trim()).filter(Boolean)
+}
+
+function splitCommaSeparated(value: string): string[] {
+  return [...new Set(value.split(',').map((entry) => entry.trim()).filter(Boolean))]
 }
 
 function connectionMessageKey(

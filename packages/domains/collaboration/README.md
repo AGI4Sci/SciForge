@@ -36,10 +36,12 @@ AgentRuntime/Capability Broker 路径负责。普通手机身份不会生成桌�
 自动接单、本地 journal、execution fence 与重启恢复继续由本包拥有，不形成第二条 Cloud
 认证或 Task 执行路径。
 
-本包还发布唯一的 main-only `sciforge.collaboration.coordinator-cloud-command@1.0.0`
-internal service，仅授权 `sciforge.project-coordinator` 消费。它的闭集只有
-`project.plan.submit`、`task.offer.create`、`task.offer.withdraw` 与
-`task.offer.reassign` 四类 Coordinator Agent 命令；调用者不能传入 Agent、route、header
-或 credential。服务把命令绑定到当前本机 Agent，并复用同一个 durable outbox 和 Identity
-Agent Cloud Runtime。严格 Cloud revision/fence 错误会随该 outbox entry 持久化并幂等返回；
-非严格 upstream body 不会写入 journal。
+本包还发布唯一的 main-only `sciforge.collaboration.coordinator-cloud-command@2.0.0`
+internal service，仅授权 `sciforge.project-coordinator` 消费。其闭集包含 Plan/Offer、统一
+HumanNeeded、TaskResult review、Project decision 与 final summary 命令；不包含 Owner
+`human.answer`，调用者也不能传入 Agent、route、header 或 credential。服务把命令绑定到当前
+本机 Agent，并复用同一个 durable outbox 和 Identity Agent Cloud Runtime。它还提供唯一、
+严格的 Coordinator Agent Inbox package-owner subscription：`coordinator_project` HumanAnswer
+只投递给 Project Coordinator，`worker_execution` HumanAnswer 仍只进入 Worker adapter；没有
+owner 时 Inbox 处理 fail closed，消息不会被静默 ACK。严格 Cloud revision/fence 错误会随该
+outbox entry 持久化并幂等返回；非严格 upstream body 不会写入 journal。

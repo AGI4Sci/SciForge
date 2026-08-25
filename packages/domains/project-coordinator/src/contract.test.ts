@@ -159,6 +159,9 @@ const fixture = {
     }],
     tasks: [],
     reviews: [],
+    pendingHumanNeeded: [],
+    records: [],
+    finalSummary: null,
     provisioning: {
       intent: null,
       attestation: null,

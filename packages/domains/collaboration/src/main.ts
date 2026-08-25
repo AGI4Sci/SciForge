@@ -78,7 +78,8 @@ import {
 import {
   COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION,
   COORDINATOR_CLOUD_COMMAND_SERVICE_ID,
-  defineCoordinatorCloudCommandService
+  defineCoordinatorCloudCommandService,
+  type CoordinatorAgentInboxHandler
 } from './coordinator-cloud-command.js'
 import {
   CollaborationRuntime,
@@ -160,13 +161,23 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
   const createRuntime = host.createCollaborationRuntime ?? ((options) => new CollaborationRuntime(options))
   let owned: OwnedRuntime | null = null
   let activation: Promise<OwnedRuntime> | null = null
+  let coordinatorInboxHandler: CoordinatorAgentInboxHandler | null = null
 
   const requireRuntime = (): CollaborationRuntime => {
     if (!owned || owned.disposed) throw new Error('Collaboration runtime is not active.')
     return owned.runtime
   }
   const coordinatorCloudCommandService = defineCoordinatorCloudCommandService({
-    execute: (command) => requireRuntime().executeCoordinatorCloudCommand(command)
+    execute: (command) => requireRuntime().executeCoordinatorCloudCommand(command),
+    subscribe: (handler) => {
+      if (coordinatorInboxHandler) {
+        throw new Error('The Coordinator Agent Inbox already has its package owner.')
+      }
+      coordinatorInboxHandler = handler
+      return () => {
+        if (coordinatorInboxHandler === handler) coordinatorInboxHandler = null
+      }
+    }
   })
   internalServices.register({
     serviceId: COORDINATOR_CLOUD_COMMAND_SERVICE_ID,
@@ -198,6 +209,7 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
           packageSettings,
           authenticatedCloudTransport,
           agentCloudRuntime,
+          coordinatorInboxHandler: () => coordinatorInboxHandler,
           sanitizeText: host.textSanitizer?.sanitizeText
         })
         try {

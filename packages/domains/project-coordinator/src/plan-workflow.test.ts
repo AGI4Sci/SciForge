@@ -110,7 +110,8 @@ test('immutable Plan submit uses Coordinator Agent authority before Owner confir
         requestId: command.requestId,
         entity: submittedPlan
       }
-    }
+    },
+    subscribe: () => () => undefined
   }
   const transport: AuthenticatedCloudTransport = {
     status: () => ({
@@ -316,6 +317,9 @@ function workspaceFixture() {
       }],
       tasks: [],
       reviews: [],
+      pendingHumanNeeded: [],
+      records: [],
+      finalSummary: null,
       provisioning: {
         intent: null,
         attestation: null,

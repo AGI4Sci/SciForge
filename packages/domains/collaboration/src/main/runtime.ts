@@ -37,6 +37,7 @@ import type {
 } from '../contract.js'
 import {
   coordinatorCloudCommandSchema,
+  type CoordinatorAgentInboxHandler,
   type CoordinatorCloudCommand
 } from '../coordinator-cloud-command.js'
 import { CollaborationConnection, type CollaborationInboxHandler } from './connection.js'
@@ -62,6 +63,7 @@ export type CollaborationRuntimeOptions = Readonly<{
   packageSettings: DomainMainPackageSettingsHost
   authenticatedCloudTransport: AuthenticatedCloudTransport
   agentCloudRuntime: AgentCloudRuntime
+  coordinatorInboxHandler?: () => CoordinatorAgentInboxHandler | null
   stateBackend?: CollaborationStateBackend
   sanitizeText?: (value: string) => string
   now?: () => Date
@@ -138,11 +140,22 @@ export class CollaborationRuntime {
           await projections.acceptPersonalInbox(message)
           return
         }
+        if (message.payload.type === 'human.answer.received') {
+          if (message.payload.answer.context.scope === 'coordinator_project') {
+            const handler = this.options.coordinatorInboxHandler?.()
+            if (!handler) {
+              throw new Error('The Project Coordinator Inbox owner is unavailable.')
+            }
+            await handler(message)
+          } else {
+            await tasks.handleInbox(message)
+          }
+          return
+        }
         if (
           message.payload.type === 'task.offered' ||
           message.payload.type === 'task.cancelled' ||
           message.payload.type === 'task.updated' ||
-          message.payload.type === 'human.answer.received' ||
           message.payload.type === 'collaboration.state.changed'
         ) {
           await tasks.handleInbox(message)

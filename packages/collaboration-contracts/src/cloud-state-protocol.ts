@@ -574,9 +574,7 @@ export const taskResultSubmitCommandSchema = z.object({
   submissionDigest: sha256Schema
 }).strict()
 
-export const taskResultReviewCommandSchema = z.object({
-  ...writeCommandShape,
-  type: z.literal('task.result.review'),
+const taskResultReviewFactsShape = {
   projectId: projectIdSchema,
   taskId: taskIdSchema,
   executionId: executionIdSchema,
@@ -592,7 +590,12 @@ export const taskResultReviewCommandSchema = z.object({
   expectedNextAssigneeAvailabilityRevision: revisionSchema.nullable(),
   nextOfferExpiresAt: timestampSchema.nullable(),
   nextFileIntent: taskFileIntentSchema.nullable()
-}).strict().superRefine((command, context) => {
+} as const
+
+function validateTaskResultReview(
+  command: z.infer<z.ZodObject<typeof taskResultReviewFactsShape>>,
+  context: z.RefinementCtx
+): void {
   if (command.decision === 'accept') {
     if (
       command.instruction !== null ||
@@ -619,7 +622,18 @@ export const taskResultReviewCommandSchema = z.object({
       message: 'Request-revision requires bounded instruction, exact next Agent availability and offer expiry.'
     })
   }
-})
+}
+
+export const taskResultReviewFactsSchema = z.object(taskResultReviewFactsShape)
+  .strict()
+  .superRefine(validateTaskResultReview)
+export type TaskResultReviewFacts = z.infer<typeof taskResultReviewFactsSchema>
+
+export const taskResultReviewCommandSchema = z.object({
+  ...writeCommandShape,
+  type: z.literal('task.result.review'),
+  ...taskResultReviewFactsShape
+}).strict().superRefine(validateTaskResultReview)
 export type TaskResultReviewCommand = z.infer<typeof taskResultReviewCommandSchema>
 
 export const taskRecoveryLinkObservedOutputCommandSchema = z.object({

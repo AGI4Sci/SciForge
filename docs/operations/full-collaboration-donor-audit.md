@@ -62,6 +62,7 @@
 - `0b1e8043` 的 Agent outbox/WSS recovery characterization 已适配到 5.5 的 token-free Agent Inbox：WSS 只提示，connect/reconnect 有界 drain durable sequence；handler 完成后，cursor 与稳定 ACK 在同一本地事务落盘，崩溃前未提交的消息由幂等 handler 重放，重复页不产生重复业务事实或 ACK；其中 Coordinator planner characterization 由当前 Coordinator package 独立承接。
 - `42d1d9ee` 新增的 `collaboration-identity` Token/session ownership 与最终 Identity 合同冲突，已拒绝；它不作为 Worker runner 的认证入口。
 - 当前唯一 Worker runner 是 recovery commit `b9e34cf7` 写入 `domain-collaboration` 的 canonical task adapter。它消费 runtime-neutral Agent execution Host、当前 execution journal 和 generic Content Space system contracts。旧 `task.transition`、`resource.create`、专用 ContentSpacePort 与 `project-coordinator/worker-runner` 均不迁移，也不保留 shim。
+- Stage 2 / 6.3 选择性适配 `79200c70` 的默认可见 Coordinator workbench 行为、`f23c6788` 的完成入口和 `32be3a74` 的 approval recovery 意图：当前 renderer 只调用 governed capability，支持完整 Plan 内容编辑、精确 Agent 选择、Owner HumanAnswer、accept/request-revision 与原子 `project.final_summary.submit`；Collaboration durable Agent Inbox 依据 `coordinator_project` scope 投递到唯一 Project Coordinator package owner，并以已存在的 decision ProjectRecord 作为重放恢复证据。donor 的旧 `sourceKind`/`targetUserId`、直接 Owner ProjectRecord 写入、legacy `project.transition completed`、旧 store/runtime 路径均拒绝且未保留 shim。
 
 ## C：Identity donor
 

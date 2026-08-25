@@ -10,14 +10,20 @@ import {
   CURRENT_PROTOCOL_VERSION,
   PROJECT_COORDINATION_COLLECTIONS,
   PROJECT_COORDINATION_MAX_PAGE_SIZE,
+  agentInboxMessageSchema,
   projectPlanSchema,
   projectPlanTaskSchema,
+  humanAnswerSchema,
+  humanNeededSchema,
   type Project,
+  type AgentInboxMessage,
   type ProjectAgentLabelFact,
   type ProjectCoordinationCollection,
   type ProjectContentReadiness,
+  type ProjectFinalSummary,
   type ProjectMembership,
   type ProjectPlan,
+  type ProjectRecord,
   type ProjectUserLabelFact,
   type ProjectWorkerAvailabilityView,
   type ProviderDirectoryPrincipalFact,
@@ -40,6 +46,10 @@ import type {
 import {
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateResultSchema,
+  projectCoordinatorHumanAnswerInputSchema,
+  projectCoordinatorHumanNeededCreateInputSchema,
+  projectCoordinatorCompleteInputSchema,
+  projectCoordinatorResultReviewInputSchema,
   projectCoordinatorPlanDraftEditInputSchema,
   projectCoordinatorPlanDraftGenerateInputSchema,
   projectCoordinatorPlanDraftReadInputSchema,
@@ -52,6 +62,10 @@ import {
   type ProjectCoordinatorProject,
   type ProjectCoordinatorProjectCreateInput,
   type ProjectCoordinatorProjectCreateResult,
+  type ProjectCoordinatorHumanAnswerInput,
+  type ProjectCoordinatorHumanNeededCreateInput,
+  type ProjectCoordinatorCompleteInput,
+  type ProjectCoordinatorResultReviewInput,
   type ProjectCoordinatorPlanAssignment,
   type ProjectCoordinatorPlanDraft,
   type ProjectCoordinatorPlanDraftEditInput,
@@ -90,6 +104,26 @@ export type ProjectCoordinatorPlanPort = Readonly<{
   ): Promise<ProjectCoordinatorWorkspace>
 }>
 
+export type ProjectCoordinatorActionPort = Readonly<{
+  createHumanNeeded(
+    input: ProjectCoordinatorHumanNeededCreateInput,
+    idempotencyKey: string
+  ): Promise<ProjectCoordinatorWorkspace>
+  answerHumanNeeded(
+    input: ProjectCoordinatorHumanAnswerInput,
+    idempotencyKey: string
+  ): Promise<ProjectCoordinatorWorkspace>
+  reviewResult(
+    input: ProjectCoordinatorResultReviewInput,
+    idempotencyKey: string
+  ): Promise<ProjectCoordinatorWorkspace>
+  completeProject(
+    input: ProjectCoordinatorCompleteInput,
+    idempotencyKey: string
+  ): Promise<ProjectCoordinatorWorkspace>
+  handleInbox(message: AgentInboxMessage): Promise<void>
+}>
+
 export type ProjectContentProvisioningAttestationSigningPort = Readonly<{
   signFactualPayload(
     input: Omit<DeviceFactSigningRequest, 'purpose'>
@@ -101,6 +135,7 @@ export type ProjectCoordinatorMainPorts = Readonly<{
   plan: ProjectCoordinatorPlanPort
   provisioningAttestationSigning: ProjectContentProvisioningAttestationSigningPort
   coordinatorCloudCommands: CoordinatorCloudCommandService
+  actions: ProjectCoordinatorActionPort
 }>
 
 export function defineProjectCoordinatorWorkspacePort(
@@ -435,6 +470,220 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
   })
 }
 
+export function createProjectCoordinatorActionPort(options: Readonly<{
+  workspace: ProjectCoordinatorWorkspacePort
+  coordinatorCloudCommands: CoordinatorCloudCommandService
+  transport: AuthenticatedCloudTransport
+  requestId?: () => `req_${string}`
+}>): ProjectCoordinatorActionPort {
+  const requestId = options.requestId ?? (() => `req_${randomUUID().replaceAll('-', '')}`)
+  return Object.freeze({
+    createHumanNeeded: async (rawInput, idempotencyKey) => {
+      const input = projectCoordinatorHumanNeededCreateInputSchema.parse(rawInput)
+      const response = await options.coordinatorCloudCommands.execute({
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        requestId: requestId(),
+        type: 'human.needed.create',
+        idempotencyKey,
+        projectId: input.projectId,
+        context: {
+          scope: 'coordinator_project',
+          expectedProjectRevision: input.expectedProjectRevision,
+          expectedCoordinatorAuthorityEpoch: input.expectedCoordinatorAuthorityEpoch
+        },
+        requiredAssurance: input.requiredAssurance,
+        prompt: input.prompt,
+        confirmableAction: null,
+        expiresAt: input.expiresAt
+      })
+      if (response.type === 'rest.error') {
+        throw new Error(`HumanNeeded create failed: ${response.error.code}: ${response.error.message}`)
+      }
+      if (response.type !== 'rest.entity') {
+        throw new Error(`HumanNeeded create returned ${response.type}.`)
+      }
+      const needed = humanNeededSchema.parse(response.entity)
+      if (
+        needed.projectId !== input.projectId ||
+        needed.context.scope !== 'coordinator_project' ||
+        needed.context.coordinatorAuthorityEpoch !== input.expectedCoordinatorAuthorityEpoch
+      ) {
+        throw new Error('HumanNeeded create did not return the exact Coordinator Project request.')
+      }
+      return options.workspace.readWorkspace({ projectId: input.projectId })
+    },
+    answerHumanNeeded: async (rawInput, idempotencyKey) => {
+      const input = projectCoordinatorHumanAnswerInputSchema.parse(rawInput)
+      const response = await executeUserCloud(options.transport, {
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        requestId: requestId(),
+        type: 'human.answer',
+        idempotencyKey,
+        humanRequestId: input.humanRequestId,
+        requestRevision: input.requestRevision,
+        answer: input.answer,
+        ...(input.decision ? { decision: input.decision } : {})
+      })
+      if (response.type !== 'rest.entity') {
+        throw new Error(`HumanAnswer returned ${response.type}.`)
+      }
+      const answer = humanAnswerSchema.parse(response.entity)
+      if (answer.projectId !== input.projectId || answer.humanRequestId !== input.humanRequestId) {
+        throw new Error('HumanAnswer did not return the exact Project request answer.')
+      }
+      return options.workspace.readWorkspace({ projectId: input.projectId })
+    },
+    reviewResult: async (rawInput, idempotencyKey) => {
+      const input = projectCoordinatorResultReviewInputSchema.parse(rawInput)
+      const response = await options.coordinatorCloudCommands.execute({
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        requestId: requestId(),
+        type: 'task.result.review',
+        idempotencyKey,
+        ...input
+      })
+      if (response.type === 'rest.error') {
+        throw new Error(`Task result review failed: ${response.error.code}: ${response.error.message}`)
+      }
+      if (response.type !== 'rest.collection') {
+        throw new Error(`Task result review returned ${response.type}.`)
+      }
+      const review = response.items.find((item): item is TaskReviewDecision => (
+        item.type === 'task_review_decision'
+      ))
+      if (
+        !review ||
+        review.projectId !== input.projectId ||
+        review.taskId !== input.taskId ||
+        review.executionId !== input.executionId ||
+        review.resultSubmissionId !== input.resultSubmissionId ||
+        review.decision !== input.decision
+      ) {
+        throw new Error('Task result review did not return the exact immutable submission decision.')
+      }
+      return options.workspace.readWorkspace({ projectId: input.projectId })
+    },
+    completeProject: async (rawInput, idempotencyKey) => {
+      const input = projectCoordinatorCompleteInputSchema.parse(rawInput)
+      const response = await options.coordinatorCloudCommands.execute({
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        requestId: requestId(),
+        type: 'project.final_summary.submit',
+        idempotencyKey,
+        ...input
+      })
+      if (response.type === 'rest.error') {
+        throw new Error(`Project completion failed: ${response.error.code}: ${response.error.message}`)
+      }
+      if (response.type !== 'rest.collection') {
+        throw new Error(`Project completion returned ${response.type}.`)
+      }
+      const project = response.items.find((item): item is Project => (
+        item.type === 'project' && item.projectId === input.projectId
+      ))
+      const finalSummary = response.items.find((item): item is ProjectFinalSummary => (
+        item.type === 'project_final_summary'
+      ))
+      if (
+        project?.status !== 'completed' ||
+        !finalSummary ||
+        finalSummary.projectId !== input.projectId ||
+        finalSummary.projectPlanId !== input.projectPlanId ||
+        finalSummary.confirmedPlanRevision !== input.confirmedPlanRevision ||
+        finalSummary.summary !== input.summary ||
+        finalSummary.acceptedResultSubmissionIds.length !== input.acceptedResultSubmissionIds.length ||
+        finalSummary.acceptedResultSubmissionIds.some((id, index) => (
+          id !== input.acceptedResultSubmissionIds[index]
+        ))
+      ) {
+        throw new Error('Project completion did not return the exact final summary and terminal Project.')
+      }
+      const workspace = await options.workspace.readWorkspace({ projectId: input.projectId })
+      const observed = requireReadyProject(workspace, input.projectId)
+      if (
+        observed.project.status !== 'completed' ||
+        observed.finalSummary?.projectRecordId !== finalSummary.projectRecordId
+      ) {
+        throw new Error('Project completion was not observed in fresh Cloud facts.')
+      }
+      return workspace
+    },
+    handleInbox: async (rawMessage) => {
+      const message = agentInboxMessageSchema.parse(rawMessage)
+      if (message.payload.type !== 'human.answer.received') {
+        throw new Error('Project Coordinator received an unsupported Agent Inbox message.')
+      }
+      const answer = message.payload.answer
+      if (answer.context.scope !== 'coordinator_project') {
+        throw new Error('Project Coordinator received an unsupported Agent Inbox message.')
+      }
+      const workspace = await options.workspace.readWorkspace({ projectId: answer.projectId })
+      const project = requireReadyProject(workspace, answer.projectId)
+      if (
+        message.recipientAgentId !== project.project.coordinatorAgentId ||
+        answer.answeredByUserId !== project.project.ownerUserId ||
+        answer.context.coordinatorAuthorityEpoch !== project.project.coordinatorAuthorityEpoch
+      ) {
+        throw new Error('HumanAnswer does not match the current Project Coordinator authority.')
+      }
+      const existing = project.records.find((record) => (
+        record.kind === 'decision' && record.sourceHumanAnswerId === answer.humanAnswerId
+      ))
+      if (existing) {
+        if (
+          existing.authorAgentId !== project.project.coordinatorAgentId ||
+          existing.authorUserId !== project.project.ownerUserId ||
+          existing.body !== answer.answer
+        ) {
+          throw new Error('The existing Project decision does not match this HumanAnswer.')
+        }
+        return
+      }
+      if (project.project.status === 'completed' || project.project.status === 'cancelled') {
+        throw new Error('A terminal Project cannot consume an unrecorded HumanAnswer.')
+      }
+      const idempotencyKey = `idem_project-decision.${stableDigest({
+        projectId: answer.projectId,
+        humanRequestId: answer.humanRequestId,
+        humanAnswerId: answer.humanAnswerId
+      }).slice(0, 48)}`
+      const response = await options.coordinatorCloudCommands.execute({
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        requestId: requestId(),
+        type: 'project.decision.submit',
+        idempotencyKey,
+        projectId: answer.projectId,
+        humanRequestId: answer.humanRequestId,
+        humanAnswerId: answer.humanAnswerId,
+        expectedProjectRevision: project.project.revision,
+        expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
+        expectedHumanRequestRevision: answer.requestRevision + 1,
+        expectedHumanAnswerRevision: answer.revision,
+        decision: answer.answer
+      })
+      if (response.type === 'rest.error') {
+        throw new Error(`Project decision failed: ${response.error.code}: ${response.error.message}`)
+      }
+      if (response.type !== 'rest.collection') {
+        throw new Error(`Project decision returned ${response.type}.`)
+      }
+      const decision = response.items.find((item): item is ProjectRecord => (
+        item.type === 'project_record' && item.kind === 'decision'
+      ))
+      if (
+        !decision ||
+        decision.projectId !== answer.projectId ||
+        decision.sourceHumanAnswerId !== answer.humanAnswerId ||
+        decision.authorAgentId !== project.project.coordinatorAgentId ||
+        decision.authorUserId !== project.project.ownerUserId ||
+        decision.body !== answer.answer
+      ) {
+        throw new Error('Project decision did not return the exact Coordinator-authored HumanAnswer record.')
+      }
+    }
+  })
+}
+
 async function executeUserCloud(
   transport: AuthenticatedCloudTransport,
   payload: Parameters<AuthenticatedCloudTransport['execute']>[0]['payload']
@@ -566,6 +815,9 @@ function projectCoordinatorProjectView(
         resultSubmissionId === submission.resultSubmissionId
       )) ?? null
     })),
+    pendingHumanNeeded: factItems(snapshot, 'pending_human_needed'),
+    records: factItems(snapshot, 'project_records'),
+    finalSummary: snapshot?.finalSummary ?? null,
     provisioning: {
       intent: intents.at(-1) ?? null,
       attestation: attestations.at(-1) ?? null,

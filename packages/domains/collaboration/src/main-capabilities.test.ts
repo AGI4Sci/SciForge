@@ -290,6 +290,11 @@ test('the Collaboration entry publishes one Coordinator command service backed b
     reason: 'Coordinator changed the synthetic assignment.'
   }
   await assert.rejects(coordinatorService.execute(command), /runtime is not active/u)
+  const disposeCoordinatorInbox = coordinatorService.subscribe(async () => undefined)
+  assert.throws(
+    () => coordinatorService.subscribe(async () => undefined),
+    /already has its package owner/u
+  )
 
   const descriptorContribution = entry.contributions.find(({ id }) => (
     id === COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRIBUTION.id
@@ -326,11 +331,14 @@ test('the Collaboration entry publishes one Coordinator command service backed b
   assert.equal(runtimeOptions?.packageSettings, packageSettings)
   assert.equal(runtimeOptions?.agentCloudRuntime, agentCloudRuntime)
   assert.equal(runtimeOptions?.statePath, collaborationStatePath(userDataDir))
+  assert.equal(typeof runtimeOptions?.coordinatorInboxHandler?.(), 'function')
   assert.deepEqual(await coordinatorService.execute(command), fenceResponse)
   assert.deepEqual(coordinatorCommand, command)
   assert.equal(typeof deactivate, 'function')
   await deactivate?.()
   assert.equal(deactivationCount, 1)
+  disposeCoordinatorInbox()
+  assert.equal(runtimeOptions?.coordinatorInboxHandler?.(), null)
   await lifecycleContribution.onDispose?.()
   assert.equal(deactivationCount, 1)
 })

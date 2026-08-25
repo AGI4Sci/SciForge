@@ -5,6 +5,11 @@ import type {
   AuthenticatedCloudResponse,
   AuthenticatedCloudTransport
 } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
+import {
+  TEST_IDS,
+  humanNeededFixture,
+  projectRecordFixture
+} from '@sciforge/collaboration-contracts/testing'
 
 import {
   createProjectCoordinatorCloudWorkspacePort
@@ -280,6 +285,83 @@ test('Project read selects the one non-superseded Plan instead of relying on pag
   const workspace = await port.readWorkspace({ projectId: project.projectId })
 
   assert.equal(workspace.projects[0]?.plan?.plan.projectPlanId, currentPlan.projectPlanId)
+})
+
+test('Project read projects pending Owner HumanNeeded and accepted Coordinator decisions', async () => {
+  const project = {
+    ...projectFixture('prj_ProjectCreated01', 'Created meeting'),
+    status: 'active' as const
+  }
+  const humanNeeded = {
+    ...humanNeededFixture,
+    projectId: project.projectId,
+    context: {
+      scope: 'coordinator_project' as const,
+      coordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch
+    },
+    targetUserId: project.ownerUserId,
+    requestedByAgentId: project.coordinatorAgentId
+  }
+  const decision = {
+    ...projectRecordFixture,
+    projectId: project.projectId,
+    kind: 'decision' as const,
+    body: 'Proceed with the Owner-confirmed direction.',
+    authorUserId: project.ownerUserId,
+    authorAgentId: project.coordinatorAgentId,
+    sourceTaskId: null,
+    sourceResultSubmissionId: null,
+    sourceHumanAnswerId: TEST_IDS.humanAnswerId,
+    acceptedByUserId: project.ownerUserId,
+    acceptedByAgentId: project.coordinatorAgentId
+  }
+  const responses = [
+    response(200, {
+      protocolVersion: '1.0',
+      type: 'rest.project_page',
+      requestId: 'req_ListHumanFacts01',
+      limit: 250,
+      projects: [project],
+      observedAt: updatedAt
+    }),
+    response(200, {
+      protocolVersion: '1.0',
+      type: 'rest.project_coordination',
+      requestId: 'req_ReadHumanFacts01',
+      project,
+      observedAt: updatedAt,
+      pages: [{
+        collection: 'pending_human_needed',
+        limit: 250,
+        items: [humanNeeded]
+      }, {
+        collection: 'project_records',
+        limit: 250,
+        items: [decision]
+      }],
+      finalSummary: null
+    })
+  ]
+  const transport: AuthenticatedCloudTransport = {
+    status: () => ({
+      state: 'ready',
+      baseUrl: 'https://cloud.run0.invalid/',
+      userId: project.ownerUserId,
+      deviceId: 'dev_Device0000001'
+    }),
+    execute: async () => {
+      const next = responses.shift()
+      if (!next) throw new Error('Unexpected Cloud request.')
+      return next
+    }
+  }
+  const port = createProjectCoordinatorCloudWorkspacePort({ transport })
+
+  const workspace = await port.readWorkspace({ projectId: project.projectId })
+  const projected = workspace.projects[0] as unknown as Record<string, unknown>
+
+  assert.deepEqual(projected.pendingHumanNeeded, [humanNeeded])
+  assert.deepEqual(projected.records, [decision])
 })
 
 function response(

@@ -519,6 +519,18 @@ export const humanAnswerCommandSchema = z.object({
 }).strict()
 export type HumanAnswerCommand = z.infer<typeof humanAnswerCommandSchema>
 
+export const humanNeededCreateCommandSchema = z.object({
+  ...writeCommandShape,
+  type: z.literal('human.needed.create'),
+  projectId: projectIdSchema,
+  context: humanNeededCreateContextSchema,
+  requiredAssurance: assuranceLevelSchema,
+  prompt: nonEmptyTextSchema,
+  confirmableAction: confirmableHumanActionSchema.nullable().optional(),
+  expiresAt: timestampSchema
+}).strict()
+export type HumanNeededCreateCommand = z.infer<typeof humanNeededCreateCommandSchema>
+
 export const restRequestSchema = z.discriminatedUnion('type', [
   ...cloudStateCommandSchemas,
   z.object({
@@ -585,7 +597,7 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...protocolEnvelopeShape, type: z.literal('inbox.pull'), recipientType: z.enum(['user', 'agent']), afterSequence: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), limit: z.number().int().min(1).max(1_000) }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('inbox.ack'), inboxMessageId: inboxMessageIdSchema, sequence: sequenceSchema }).strict(),
   humanAnswerCommandSchema,
-  z.object({ ...writeCommandShape, type: z.literal('human.needed.create'), projectId: projectIdSchema, context: humanNeededCreateContextSchema, requiredAssurance: assuranceLevelSchema, prompt: nonEmptyTextSchema, confirmableAction: confirmableHumanActionSchema.nullable().optional(), expiresAt: timestampSchema }).strict(),
+  humanNeededCreateCommandSchema,
   z.object({ ...protocolEnvelopeShape, type: z.literal('receipt.get'), receiptId: receiptIdSchema }).strict()
 ])
 export type RestRequest = z.infer<typeof restRequestSchema>

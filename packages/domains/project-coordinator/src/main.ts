@@ -24,6 +24,9 @@ import {
 
 import {
   PROJECT_COORDINATOR_CAPABILITY_IDS,
+  projectCoordinatorCompleteInputSchema,
+  projectCoordinatorHumanAnswerInputSchema,
+  projectCoordinatorHumanNeededCreateInputSchema,
   projectCoordinatorPlanConfirmActivateInputSchema,
   projectCoordinatorPlanDraftEditInputSchema,
   projectCoordinatorPlanDraftGenerateInputSchema,
@@ -33,6 +36,7 @@ import {
   projectCoordinatorPlanSubmitResultSchema,
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateResultSchema,
+  projectCoordinatorResultReviewInputSchema,
   projectCoordinatorWorkspaceReadInputSchema,
   projectCoordinatorWorkspaceSchema,
   type ProjectCoordinatorWorkspaceReadInput
@@ -45,6 +49,7 @@ import {
 } from './definition.js'
 import {
   createProjectCoordinatorCloudWorkspacePort,
+  createProjectCoordinatorActionPort,
   createProjectCoordinatorPlanPort,
   createProjectContentProvisioningAttestationSigningPort,
   type ProjectCoordinatorMainPorts
@@ -237,6 +242,90 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
           ),
           changed: true
         })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
+        version: '1.0.0',
+        title: 'Ask the Project Owner',
+        description: 'Creates one Project-scoped HumanNeeded through the current Coordinator Agent.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'coordinator', 'human-needed'],
+        inputSchema: projectCoordinatorHumanNeededCreateInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.actions.createHumanNeeded(
+            projectCoordinatorHumanNeededCreateInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate, context)
+          ),
+          changed: true
+        })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
+        version: '1.0.0',
+        title: 'Answer Project HumanNeeded',
+        description: 'Submits the current Project Owner answer through the OIDC User path.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'owner', 'human-answer'],
+        inputSchema: projectCoordinatorHumanAnswerInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.actions.answerHumanNeeded(
+            projectCoordinatorHumanAnswerInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer, context)
+          ),
+          changed: true
+        })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
+        version: '1.0.0',
+        title: 'Review Task result',
+        description: 'Accepts one immutable result or requests a fresh fenced revision execution.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'coordinator', 'review'],
+        inputSchema: projectCoordinatorResultReviewInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.actions.reviewResult(
+            projectCoordinatorResultReviewInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview, context)
+          ),
+          changed: true
+        })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete,
+        version: '1.0.0',
+        title: 'Complete Project with final summary',
+        description: 'Submits the Coordinator final summary and atomically completes the Project.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'coordinator', 'summary', 'completion'],
+        inputSchema: projectCoordinatorCompleteInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.actions.completeProject(
+            projectCoordinatorCompleteInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete, context)
+          ),
+          changed: true
+        })
       })
     ]
   })
@@ -291,9 +380,18 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     coordinatorCloudCommands,
     transport
   })
+  const actions = createProjectCoordinatorActionPort({
+    workspace,
+    coordinatorCloudCommands,
+    transport
+  })
+  const disposeCoordinatorInbox = coordinatorCloudCommands.subscribe((message) => (
+    actions.handleInbox(message)
+  ))
   const ports: ProjectCoordinatorMainPorts = Object.freeze({
     workspace,
     plan,
+    actions,
     provisioningAttestationSigning:
       createProjectContentProvisioningAttestationSigningPort(signingService),
     coordinatorCloudCommands
@@ -320,7 +418,8 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
       },
       {
         ...PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION,
-        value: lifecycle
+        value: lifecycle,
+        onDispose: disposeCoordinatorInbox
       }
     ]
   }

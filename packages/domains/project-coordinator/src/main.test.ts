@@ -50,7 +50,8 @@ test('workspace read remains a strict non-writing coordination capability', asyn
       provisioningAttestationSigning: {
         signFactualPayload: async () => { throw new Error('unused') }
       },
-      coordinatorCloudCommands: coordinatorCloudCommandService()
+      coordinatorCloudCommands: coordinatorCloudCommandService(),
+      actions: coordinatorActionPort()
     }
   })
   const definitions = factory.createDefinitions()
@@ -88,7 +89,14 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
       throw new Error('A read capability must not request a Device signature.')
     }
   }
-  const coordinatorService = coordinatorCloudCommandService()
+  let coordinatorInboxSubscribed = false
+  const coordinatorService: CoordinatorCloudCommandService = {
+    execute: async () => { throw new Error('No Coordinator write is expected.') },
+    subscribe: () => {
+      coordinatorInboxSubscribed = true
+      return () => { coordinatorInboxSubscribed = false }
+    }
+  }
   const host: DomainMainHost = {
     getUserDataDir: () => '/tmp/sciforge-project-coordinator-test',
     defineCapability: (input) => input,
@@ -134,16 +142,24 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftEdit,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planSubmit,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate
+    PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete
   ])
+  assert.equal(coordinatorInboxSubscribed, true)
   assert.equal(executeCalls, 0)
+  await entry.contributions[1]?.onDispose?.()
+  assert.equal(coordinatorInboxSubscribed, false)
 })
 
 function coordinatorCloudCommandService(): CoordinatorCloudCommandService {
   return Object.freeze({
     execute: async () => {
       throw new Error('No write capability invoked this test service.')
-    }
+    },
+    subscribe: () => () => undefined
   })
 }
 
@@ -206,7 +222,8 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
     provisioningAttestationSigning: {
       signFactualPayload: async () => { throw new Error('unused') }
     },
-    coordinatorCloudCommands: coordinatorCloudCommandService()
+    coordinatorCloudCommands: coordinatorCloudCommandService(),
+    actions: coordinatorActionPort()
   }
   const factory = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
     defineCapability: (input) => input,
@@ -221,7 +238,11 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftEdit,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planSubmit,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate
+    PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete
   ])
   const create = definitions.find(({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate)!
   assert.equal(create.effect, 'external-write')
@@ -248,3 +269,13 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
     changed: true
   })
 })
+
+function coordinatorActionPort() {
+  return Object.freeze({
+    createHumanNeeded: async () => { throw new Error('unused') },
+    answerHumanNeeded: async () => { throw new Error('unused') },
+    reviewResult: async () => { throw new Error('unused') },
+    completeProject: async () => { throw new Error('unused') },
+    handleInbox: async () => { throw new Error('unused') }
+  })
+}
