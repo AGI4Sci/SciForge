@@ -273,6 +273,7 @@ async function loadApplicationCapabilityModel() {
       getUserDataDir: () => {
         throw new GovernanceError('Governance must not instantiate a domain service.')
       },
+      getDeviceId: () => 'capability-governance-device',
       capabilityInvokerFor: () => Object.freeze({
         invoke: async () => {
           throw new GovernanceError('Governance must not invoke a package system capability.')
