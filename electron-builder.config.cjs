@@ -210,6 +210,7 @@ module.exports = {
   },
   linux: {
     category: 'Development',
+    executableName: 'sciforge',
     icon: './src/asset/img/sciforge.png',
     target: [{ target: 'AppImage', arch: ['x64'] }]
   },

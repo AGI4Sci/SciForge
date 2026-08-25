@@ -541,6 +541,11 @@ test('after-pack rechecks public release composition immediately before packaged
   assert.doesNotMatch(builderSource, /afterPack:\s*['"]\.\/scripts\/after-pack\.cjs/u)
 })
 
+test('Linux packaging uses a stable unscoped executable name', () => {
+  const builderConfig = require(resolve('electron-builder.config.cjs'))
+  assert.equal(builderConfig.linux.executableName, 'sciforge')
+})
+
 test('after-pack verifies the same generic deployment composition in packaged resources', () => {
   const composition = emptyDeploymentComposition()
   let verified
