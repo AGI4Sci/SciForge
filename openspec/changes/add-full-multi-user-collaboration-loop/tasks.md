@@ -18,7 +18,7 @@
 
 ## 3. Cloud 合同、状态机与数据库
 
-- [ ] 3.1 升级 collaboration contracts，增加 Worker availability、Project Membership/content readiness、content provisioning intent/attestation/binding、Task execution/file intent/review/recovery 的 strict versioned schemas。
+- [x] 3.1 升级 collaboration contracts，增加 Worker availability、Project Membership/content readiness、content provisioning intent/attestation/binding、Task execution/file intent/review/recovery 的 strict versioned schemas。
 - [ ] 3.2 保持 OIDC JIT 为唯一 User 创建路径并使 pairing 仅绑定 endpoint；删除匿名 pairing 与 first-pairing user creation。
 - [ ] 3.3 实现每 Project 唯一且始终由 Project Owner 所有的 Coordinator Agent、动态 User/精确 Worker Agent 选择、Owner-owned Agent 间 Coordinator transfer 和权限 fencing。
 - [ ] 3.4 实现 offer/accept/reject/timeout/revoke/reassign、每次新 executionId、expected revision/idempotency 和旧 execution 全写入 fencing。

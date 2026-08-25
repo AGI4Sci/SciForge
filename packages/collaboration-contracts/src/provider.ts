@@ -4,7 +4,6 @@ import {
   challengeIdSchema,
   displayNameSchema,
   humanEndpointIdSchema,
-  humanRequestIdSchema,
   nonEmptyTextSchema,
   protocolVersionSchema,
   providerCursorSchema,
@@ -12,7 +11,6 @@ import {
   providerMessageIdSchema,
   providerOpaqueIdSchema,
   redactedJsonSchema,
-  revisionSchema,
   timestampSchema,
   userIdSchema
 } from './core.js'
@@ -189,18 +187,6 @@ export const providerChallengeInvalidEventSchema = z.object({
   identity: providerIdentitySchema
 }).strict()
 
-export const providerHumanAnswerRespondedEventSchema = z.object({
-  ...providerEventEnvelopeShape,
-  type: z.literal('provider.human_answer.responded'),
-  identity: providerIdentitySchema,
-  locator: providerLocatorSchema,
-  providerMessageId: providerMessageIdSchema,
-  humanRequestId: humanRequestIdSchema,
-  requestRevision: revisionSchema,
-  answer: nonEmptyTextSchema
-}).strict()
-export type ProviderHumanAnswerRespondedEvent = z.infer<typeof providerHumanAnswerRespondedEventSchema>
-
 export const providerRemoteApprovalRespondedEventSchema = z.object({
   ...providerEventEnvelopeShape,
   type: z.literal('provider.remote_approval.responded'),
@@ -229,7 +215,6 @@ export const providerEventSchema = z.discriminatedUnion('type', [
   providerLocatorChangedEventSchema,
   providerChallengeRespondedEventSchema,
   providerChallengeInvalidEventSchema,
-  providerHumanAnswerRespondedEventSchema,
   providerRemoteApprovalRespondedEventSchema,
   providerLifecycleEventSchema
 ])
@@ -451,24 +436,6 @@ export interface HumanEndpointProvider {
   diagnose(): Promise<ProviderDiagnostic>
 }
 
-export interface HumanEndpointProviderSecretReader {
-  readSecret(secretReference: string): Promise<string>
-}
-
-export interface HumanEndpointProviderHttpRequest {
-  readonly url: string
-  readonly method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
-  readonly headers: Readonly<Record<string, string>>
-  readonly body?: string
-  readonly timeoutMs: number
-}
-
-export interface HumanEndpointProviderHttpResponse {
-  readonly status: number
-  readonly headers: Readonly<Record<string, string>>
-  readonly body: string
-}
-
 export interface HumanEndpointProviderServices {
   resolveLocator(input: Readonly<{
     provider: string
@@ -487,14 +454,14 @@ export interface HumanEndpointProviderServices {
   reconcileDelivery(request: ProviderSendRequest): Promise<ProviderSendResult | undefined>
   recordDelivery(clientMessageId: string, result: ProviderSendResult): Promise<void>
   verifyChallenge(request: ProviderVerifyIdentityRequest): Promise<ProviderVerifyIdentityResult>
-  http(request: HumanEndpointProviderHttpRequest): Promise<HumanEndpointProviderHttpResponse>
   reportDiagnostic(diagnostic: ProviderDiagnostic): void
 }
 
 export interface HumanEndpointProviderFactoryContext {
   readonly provider: string
   readonly configuration: Readonly<Record<string, string | number | boolean>>
-  readonly secretReader: HumanEndpointProviderSecretReader
+  /** Non-secret root containing provider-owned secret files named by configuration references. */
+  readonly secretFileDirectory: string
   readonly services: HumanEndpointProviderServices
   readonly now: () => string
 }

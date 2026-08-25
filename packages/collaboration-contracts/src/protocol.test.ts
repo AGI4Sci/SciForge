@@ -23,20 +23,18 @@ import {
 } from './provider.js'
 import {
   REDACTED_VALUE,
-  redactedJsonSchema,
-  redactCredentials
+  redactedJsonSchema
 } from './core.js'
 import {
   TEST_IDS,
   TEST_TIMESTAMP,
-  agentOwnerTransferredResponseFixture,
+  agentRegisteredResponseFixture,
   agentInboxMessageFixture,
   chineseProviderLocatorFixture,
   collaborationFixtures,
   invalidTestOnlyValue,
   providerIdentityFixture,
   providerEventFixture,
-  providerHumanAnswerEventFixture,
   projectionUpdatedPayloadFixture,
   remoteSessionProjectionFixture,
   restRequestFixture,
@@ -150,28 +148,25 @@ describe('canonical pairing and bidirectional Session commands', () => {
       policy: { ...policy, visibility: 'public' }
     }).success).toBe(false)
   })
-  it('supports unauthenticated pairing begin without bootstrap identity', () => {
+  it('binds an endpoint challenge to the authenticated User and exact provider identity', () => {
     const request = restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: TEST_IDS.requestId,
-      type: 'pairing.begin',
+      type: 'endpoint.challenge.create',
       idempotencyKey: 'idem_pairing_begin_0001',
-      provider: 'example-im',
-      realmId: 'realm-hong-kong',
-      requestedDisplayName: '测试用户'
+      expectedIdentity: { provider: 'example-im', realmId: 'realm-hong-kong', providerUserId: 'provider-user-01' }
     })
     expect(request).not.toHaveProperty('userId')
     expect(request).not.toHaveProperty('bootstrapToken')
   })
 
-  it('models one-time pairing material only in dedicated wire variants', () => {
+  it('returns only a challenge code and never a polling or User credential', () => {
     expect(restResponseSchema.safeParse({
       protocolVersion: '1.0',
       requestId: TEST_IDS.requestId,
-      type: 'pairing.begun',
+      type: 'endpoint.challenge.created',
       challengeId: TEST_IDS.challengeId,
       challengeCode: invalidTestOnlyValue('CODE'),
-      pollSecret: invalidTestOnlyValue('POLL_VALUE').padEnd(40, '0'),
       expiresAt: TEST_TIMESTAMP
     }).success).toBe(true)
     expect(JSON.stringify(collaborationFixtures)).not.toContain('pollSecret')
@@ -196,43 +191,25 @@ describe('canonical pairing and bidirectional Session commands', () => {
     expect(restRequestSchema.safeParse({ ...base, kind: 'stream_delta' }).success).toBe(false)
   })
 
-  it('transfers Agent ownership with optimistic concurrency and a one-time rotated credential', () => {
+  it('requires a Device and public bootstrap key, then returns only a sealed Agent credential', () => {
     expect(restRequestSchema.safeParse({
       protocolVersion: '1.0',
       requestId: TEST_IDS.requestId,
-      type: 'agent.owner.transfer',
-      idempotencyKey: 'idem_agent_owner_transfer_01',
-      agentId: TEST_IDS.agentId,
-      targetUserId: TEST_IDS.secondUserId,
-      expectedRevision: 1
+      type: 'agent.register',
+      idempotencyKey: 'idem_agent_register_01',
+      deviceId: TEST_IDS.deviceId,
+      displayName: 'Desktop Agent',
+      nodeType: 'desktop',
+      capabilities: ['agent.execute'],
+      credentialBootstrapPublicKey: { kty: 'OKP', crv: 'X25519',
+        x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }
     }).success).toBe(true)
-    expect(restResponseSchema.safeParse(agentOwnerTransferredResponseFixture).success).toBe(true)
-    const sanitized = JSON.stringify(redactCredentials(agentOwnerTransferredResponseFixture))
-    expect(sanitized).not.toContain(['INVALID', 'TEST', 'ONLY'].join('_'))
+    expect(restResponseSchema.safeParse(agentRegisteredResponseFixture).success).toBe(true)
+    expect(JSON.stringify(agentRegisteredResponseFixture)).not.toMatch(/deviceCredential|userCredential|privateKey/u)
   })
 })
 
 describe('provider-neutral contract', () => {
-  it('normalizes a bounded HumanAnswer with its verified source locator and no guessed target identity', () => {
-    expect(providerEventSchema.parse(providerHumanAnswerEventFixture)).toMatchObject({
-      type: 'provider.human_answer.responded',
-      humanRequestId: TEST_IDS.humanRequestId,
-      requestRevision: 1
-    })
-    expect(providerEventSchema.safeParse({
-      ...providerHumanAnswerEventFixture,
-      locator: undefined
-    }).success).toBe(false)
-    expect(providerEventSchema.safeParse({
-      ...providerHumanAnswerEventFixture,
-      targetUserId: TEST_IDS.secondUserId
-    }).success).toBe(false)
-    expect(providerEventSchema.safeParse({
-      ...providerHumanAnswerEventFixture,
-      answer: ''
-    }).success).toBe(false)
-  })
-
   it('accepts stable Chinese locators and append-only unsupported provider events', () => {
     expect(chineseProviderLocatorFixture.topicDisplayName).toBe('蛋白质结构分析（上海样本）')
     expect(providerEventSchema.safeParse({

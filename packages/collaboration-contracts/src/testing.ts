@@ -1,5 +1,4 @@
 import type { z } from 'zod'
-export * from './identity-testing.js'
 import { redactCredentials } from './core.js'
 import {
   agentNodeSchema,
@@ -42,7 +41,22 @@ export const TEST_IDS = Object.freeze({
   projectionId: 'rsp_Proj00000001',
   projectInputId: 'pin_Input0000001',
   projectId: 'prj_Proj00000001',
+  projectMembershipId: 'pmb_Member000001',
+  taskAuthorityId: 'tau_Authority0001',
+  providerPrincipalFactId: 'ppf_Principal00001',
+  providerObservationId: 'pob_Observe000001',
+  provisioningIntentId: 'pci_Provision00001',
+  provisioningAttestationId: 'pca_Attest0000001',
+  projectContentBindingId: 'pcb_Binding000001',
+  contentRecoveryJournalEntryId: 'crj_Journal000001',
+  recoveryActionId: 'rca_Recovery00001',
   taskId: 'tsk_Task00000001',
+  executionId: 'exe_Exec00000001',
+  taskOfferId: 'ofr_Offer00000001',
+  projectPlanId: 'pln_ProjectPlan01',
+  resultSubmissionId: 'rsu_Result000001',
+  reviewDecisionId: 'rvw_Review000001',
+  resourceRefId: 'rrf_Reso00000001',
   projectRecordId: 'rec_Rec000000001',
   inboxMessageId: 'ibx_Inbox0000001',
   receiptId: 'rcp_Receip000001',
@@ -52,6 +66,7 @@ export const TEST_IDS = Object.freeze({
   requestId: 'req_Reque0000001',
   localItemId: 'lit_Local0000001',
   turnId: 'trn_Turn00000001',
+  deviceId: 'dev_Device000001',
   installationId: 'ins_Insta0000001'
 })
 
@@ -117,8 +132,8 @@ export const agentNodeFixture = agentNodeSchema.parse({
   schemaVersion: 1,
   type: 'agent_node',
   agentId: TEST_IDS.agentId,
+  deviceId: TEST_IDS.deviceId,
   ownerUserId: TEST_IDS.userId,
-  installationId: TEST_IDS.installationId,
   displayName: '实验室桌面机',
   nodeType: 'desktop',
   capabilities: ['agent.execute', 'workspace.read'],
@@ -185,8 +200,10 @@ export const projectFixture = projectSchema.parse({
   ownerUserId: TEST_IDS.userId,
   displayName: '联合研究项目',
   goal: '完成样本分析并形成可审查结论。',
-  memberUserIds: [TEST_IDS.userId, TEST_IDS.secondUserId],
   coordinatorAgentId: TEST_IDS.agentId,
+  coordinatorAuthorityEpoch: 1,
+  executionAuthorityEpoch: 1,
+  contentMode: 'none',
   status: 'active',
   budget: {
     maxTasks: 20,
@@ -205,14 +222,17 @@ export const taskFixture = taskSchema.parse({
   taskId: TEST_IDS.taskId,
   projectId: TEST_IDS.projectId,
   createdByCoordinatorAgentId: TEST_IDS.agentId,
-  assigneeAgentId: TEST_IDS.secondAgentId,
   title: '分析样本',
   objective: '验证样本质量并总结异常。',
   completionCriteria: ['提交结果摘要', '标记异常样本'],
   dependencyTaskIds: [],
+  fileIntent: null,
+  currentExecutionId: TEST_IDS.executionId,
+  currentExecutionState: 'offered',
   status: 'offered',
-  attempt: 0,
+  executionCount: 1,
   maxRetries: 2,
+  completedAt: null,
   revision: 1,
   createdAt: TEST_TIMESTAMP,
   updatedAt: TEST_TIMESTAMP
@@ -244,10 +264,12 @@ export const humanNeededFixture = humanNeededSchema.parse({
   humanRequestId: TEST_IDS.humanRequestId,
   projectId: TEST_IDS.projectId,
   taskId: TEST_IDS.taskId,
+  executionId: TEST_IDS.executionId,
   targetUserId: TEST_IDS.userId,
   requestedByAgentId: TEST_IDS.agentId,
   requiredAssurance: 'verified',
   prompt: '是否继续处理异常样本？',
+  confirmableAction: null,
   status: 'pending',
   expiresAt: TEST_LATER_TIMESTAMP,
   revision: 1,
@@ -262,11 +284,14 @@ export const humanAnswerFixture = humanAnswerSchema.parse({
   humanRequestId: TEST_IDS.humanRequestId,
   projectId: TEST_IDS.projectId,
   taskId: TEST_IDS.taskId,
+  executionId: TEST_IDS.executionId,
   requestRevision: 1,
   answeredByUserId: TEST_IDS.userId,
-  answeredFromHumanEndpointId: TEST_IDS.humanEndpointId,
+  answeredFromOidcIdentityId: 'oid_TestIdentity001',
   assurance: 'verified',
   answer: '继续，但请保留原始结果。',
+  decision: null,
+  confirmationId: null,
   answeredAt: TEST_LATER_TIMESTAMP,
   revision: 1,
   createdAt: TEST_TIMESTAMP,
@@ -285,21 +310,6 @@ export const providerEventFixture = providerEventSchema.parse({
   providerMessageId: 'provider-message-1',
   text: '从手机发送的测试消息',
   isSelfEcho: false
-})
-
-export const providerHumanAnswerEventFixture = providerEventSchema.parse({
-  protocolVersion: '1.0',
-  type: 'provider.human_answer.responded',
-  provider: 'example-im',
-  eventId: 'provider-event-answer-1',
-  eventCursor: 'cursor-answer-1',
-  occurredAt: TEST_TIMESTAMP,
-  identity: providerIdentityFixture,
-  locator: chineseProviderLocatorFixture,
-  providerMessageId: 'provider-message-answer-1',
-  humanRequestId: TEST_IDS.humanRequestId,
-  requestRevision: 1,
-  answer: '继续处理，并保留原始结果。'
 })
 
 export const projectionUpdatedPayloadFixture = agentInboxPayloadSchema.parse({
@@ -382,18 +392,25 @@ export const INVALID_TEST_ONLY_CREDENTIAL_FIXTURE = Object.freeze({
 
 export const redactedCredentialFixture = redactCredentials(INVALID_TEST_ONLY_CREDENTIAL_FIXTURE)
 
-export const agentOwnerTransferredResponseFixture = {
+export const agentRegisteredResponseFixture = {
   protocolVersion: '1.0' as const,
-  type: 'agent.owner_transferred' as const,
+  type: 'agent.registered' as const,
   requestId: TEST_IDS.requestId,
-  agent: agentNodeSchema.parse({
-    ...agentNodeFixture,
-    ownerUserId: TEST_IDS.secondUserId,
-    credentialVersion: 2,
-    revision: 2,
-    updatedAt: TEST_LATER_TIMESTAMP
-  }),
-  deviceCredential: invalidTestOnlyValue('DEVICE_CREDENTIAL').padEnd(40, '0')
+  agent: agentNodeFixture,
+  sealedCredential: {
+    schemaVersion: 1 as const,
+    algorithm: 'X25519-HKDF-SHA256+A256GCM' as const,
+    agentId: TEST_IDS.agentId,
+    deviceId: TEST_IDS.deviceId,
+    credentialGeneration: 1,
+    issuedAt: TEST_TIMESTAMP,
+    ephemeralPublicKey: { kty: 'OKP' as const, crv: 'X25519' as const,
+      x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' },
+    salt: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    iv: 'AAAAAAAAAAAAAAAA',
+    ciphertext: 'AQID',
+    authenticationTag: 'AAAAAAAAAAAAAAAAAAAAAA'
+  }
 }
 
 export const collaborationFixtures = Object.freeze({
@@ -410,7 +427,6 @@ export const collaborationFixtures = Object.freeze({
   humanNeeded: humanNeededFixture,
   humanAnswer: humanAnswerFixture,
   providerEvent: providerEventFixture,
-  providerHumanAnswerEvent: providerHumanAnswerEventFixture,
   projectionUpdatedPayload: projectionUpdatedPayloadFixture,
   agentInboxMessage: agentInboxMessageFixture,
   operationReceipt: operationReceiptFixture,
