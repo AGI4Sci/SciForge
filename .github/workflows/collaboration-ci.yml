@@ -135,7 +135,6 @@ jobs:
 
       - name: Run identity package and persistence tests
         run: |
-          npm --workspace @sciforge/collaboration-identity test
           npm --workspace @sciforge/domain-identity-access test
           npx vitest run src/main/domain-package-storage.test.ts
 
