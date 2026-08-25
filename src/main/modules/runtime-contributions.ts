@@ -213,7 +213,9 @@ function createSystemCapabilityInvoker(
         contract.inputSchema.parse(input)
       )
       const invocationId = contract.effect === 'read'
-        ? undefined
+        ? invokeOptions?.systemExecutionContext !== undefined
+          ? createInvocationId()
+          : undefined
         : invokeOptions?.idempotencyKey?.trim() || createInvocationId()
       const approval = definition.descriptor.approval
       const inherited = invokeOptions?.authorization?.mode === 'inherit-current-action'
@@ -248,6 +250,13 @@ function createSystemCapabilityInvoker(
           : {}),
         ...(invokeOptions?.workspaceId?.trim()
           ? { workspaceId: invokeOptions.workspaceId.trim() }
+          : {}),
+        ...(invokeOptions?.systemExecutionContext !== undefined
+          ? {
+              systemExecutionContext: domainPackageJsonValueSchema.parse(
+                invokeOptions.systemExecutionContext
+              )
+            }
           : {}),
         ...(approval === 'none' || !inherited || !invocationId
           ? {}

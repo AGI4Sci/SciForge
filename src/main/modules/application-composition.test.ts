@@ -25,6 +25,7 @@ describe('application domain composition', () => {
     const packageInvokerOwners: Array<{ moduleId: string; moduleVersion: string }> = []
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => '/tmp/sciforge-domain-composition-test',
+      getDeviceId: () => 'device-composition-test',
       packageStorageFor: createNonSecretPackageStorageForTest(),
       capabilityInvokerFor: (owner) => {
         packageInvokerOwners.push(owner)

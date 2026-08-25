@@ -199,6 +199,7 @@ type HostSystemCapabilityCaller = Readonly<{
   callerId: string
   workspaceId?: string
   capabilityGrants?: readonly string[]
+  systemExecutionContext?: CapabilityJsonValue
   approvals?: CapabilityCallerContextInput['approvals']
 }>
 
@@ -213,6 +214,10 @@ function stableJson(value: CapabilityJsonValue): string {
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
     .join(',')}}`
+}
+
+function canonicalDigest(value: CapabilityJsonValue): string {
+  return createHash('sha256').update(stableJson(value)).digest('hex')
 }
 
 /**
@@ -732,9 +737,26 @@ export class CapabilityBroker {
         }
       }
     ).parse(rawCaller.capabilityGrants ?? [])
+    const systemExecutionContext = rawCaller.systemExecutionContext === undefined
+      ? undefined
+      : capabilityJsonValueSchema.parse(rawCaller.systemExecutionContext)
+    if (systemExecutionContext !== undefined && !baseCaller.principal) {
+      throw new CapabilityBrokerError(
+        'invalid_caller',
+        'A system execution context requires a current Host Principal.'
+      )
+    }
+    const principalSnapshotDigest = systemExecutionContext === undefined
+      ? undefined
+      : canonicalDigest(capabilityJsonValueSchema.parse(baseCaller.principal))
+    const executionContextDigest = systemExecutionContext === undefined
+      ? undefined
+      : canonicalDigest(systemExecutionContext)
     const caller: CapabilityCallerContext = Object.freeze({
       ...baseCaller,
-      ...(capabilityGrants.length > 0 ? { capabilityGrants: Object.freeze(capabilityGrants) } : {})
+      ...(capabilityGrants.length > 0 ? { capabilityGrants: Object.freeze(capabilityGrants) } : {}),
+      ...(principalSnapshotDigest ? { principalSnapshotDigest } : {}),
+      ...(executionContextDigest ? { executionContextDigest } : {})
     })
     return this.#invokeAs(caller, rawRequest, options)
   }
@@ -791,6 +813,8 @@ export class CapabilityBroker {
       const fingerprint = stableJson({
         actionId: request.actionId,
         capabilityGrants: [...(caller.capabilityGrants ?? [])].sort(),
+        principalSnapshotDigest: caller.principalSnapshotDigest ?? null,
+        executionContextDigest: caller.executionContextDigest ?? null,
         ...(principalScopedIdempotency ? { principalLease: callerLease } : {}),
         ...(principalScopedIdempotency ? { workspaceScope: workspaceInvocationScope(caller) } : {}),
         resourceRef: resource?.resourceRef ?? null,

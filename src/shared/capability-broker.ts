@@ -252,6 +252,10 @@ export type CapabilityCallerContext = z.infer<typeof capabilityCallerContextSche
   principalContextVersion?: number
   /** Host-issued package authority; this is intentionally absent from the public raw schema. */
   capabilityGrants?: readonly string[]
+  /** Host-derived digest of the exact Principal captured for a system execution. */
+  principalSnapshotDigest?: string
+  /** Host-derived digest of package execution facts; the raw facts never reach the handler. */
+  executionContextDigest?: string
 }>
 export type CapabilityCallerContextInput = z.input<typeof capabilityCallerContextSchema>
 

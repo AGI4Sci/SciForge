@@ -36,6 +36,18 @@ const principalV1 = Object.freeze({
 })
 
 const principalV2 = Object.freeze({ ...principalV1, identityVersion: 2 })
+const systemWorkspaceTransferGrant = 'fixture.system-workspace-transfer'
+const systemWorkspaceTransferAuthorization = Object.freeze({
+  requiredSystemCapabilityGrant: systemWorkspaceTransferGrant
+})
+const systemPrincipalSnapshotDigest = createHash('sha256').update(
+  '{"assurance":"local-selection","authority":"sciforge.local-identity",' +
+  '"deviceId":"installation-1","identityVersion":1,"subject":"person-1"}'
+).digest('hex')
+const systemExecutionContextDigest = createHash('sha256').update(
+  '{"contractVersion":1,"executionId":"execution-1",' +
+  '"projectId":"project-1","taskId":"task-1"}'
+).digest('hex')
 
 describe('Host-owned file transfers', () => {
   it('snapshots upload bytes and binds the opaque handle to owner, caller, and Principal', async () => {
@@ -1873,6 +1885,340 @@ describe('Host-owned file transfers', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('uses the canonical data plane for Broker-approved system Workspace transfers', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const workspace = join(root, 'workspace')
+    const temporary = join(root, 'temporary')
+    await Promise.all([
+      mkdir(workspace, { recursive: true }),
+      mkdir(temporary, { recursive: true })
+    ])
+    await writeFile(join(workspace, 'system-upload.txt'), 'system upload bytes')
+    const service = createService(temporary, () => principalV1)
+    const caller = grantCaller('runtime:background-1', principalV1)
+    let invocation = systemWorkspaceTransferInvocation(caller, workspace, 'upload-source')
+    const port = service.forOwner('domain.fixture', () => invocation)
+    try {
+      const source = await port.openWorkspaceUploadSource({
+        relativePath: 'system-upload.txt',
+        maxBytes: 1024,
+        systemAuthorization: systemWorkspaceTransferAuthorization
+      })
+      expect(source.size).toBe(Buffer.byteLength('system upload bytes'))
+      expect(source.sha256).toBe(
+        createHash('sha256').update('system upload bytes').digest('hex')
+      )
+      expect(Buffer.from(await source.read({ offset: 0, length: source.size })).toString())
+        .toBe('system upload bytes')
+      await source.close()
+
+      invocation = systemWorkspaceTransferInvocation(
+        caller,
+        workspace,
+        'download-destination'
+      )
+      const destinationPath = join(workspace, 'system-download.txt')
+      const destination = await port.openWorkspaceDownloadDestination({
+        relativePath: 'system-download.txt',
+        maxBytes: 1024,
+        systemAuthorization: systemWorkspaceTransferAuthorization
+      })
+      await destination.write(new TextEncoder().encode('system download bytes'))
+      await destination.commit()
+      await expect(readFile(destinationPath, 'utf8')).resolves.toBe('system download bytes')
+
+      const conflictPath = join(workspace, 'system-conflict.txt')
+      const conflict = await port.openWorkspaceDownloadDestination({
+        relativePath: 'system-conflict.txt',
+        maxBytes: 1024,
+        systemAuthorization: systemWorkspaceTransferAuthorization
+      })
+      await conflict.write(new TextEncoder().encode('must not overwrite'))
+      await writeFile(conflictPath, 'existing winner')
+      await expect(conflict.commit()).rejects.toMatchObject({
+        code: 'destination_conflict'
+      })
+      await expect(readFile(conflictPath, 'utf8')).resolves.toBe('existing winner')
+      await conflict.abort()
+      expect((await readdir(workspace))
+        .some((name) => name.startsWith('.sciforge-download-'))).toBe(false)
+    } finally {
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects incomplete or forged system Workspace authority before opening a file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const workspace = join(root, 'workspace')
+    const temporary = join(root, 'temporary')
+    await Promise.all([
+      mkdir(workspace, { recursive: true }),
+      mkdir(temporary, { recursive: true })
+    ])
+    await writeFile(join(workspace, 'protected.txt'), 'protected bytes')
+    const openUploadFile = vi.fn((path: string) => open(path, constants.O_RDONLY))
+    const service = new HostFileTransferService({
+      temporaryRoot: temporary,
+      isPrincipalCurrent: (principal) => samePrincipalSnapshot(principal, principalV1),
+      openUploadFile
+    })
+    const caller = grantCaller('runtime:background-1', principalV1)
+    const valid = systemWorkspaceTransferInvocation(caller, workspace, 'upload-source')
+    const principalMissing: HostResourceGrantInvocation = {
+      ...valid,
+      caller: {
+        callerId: caller.callerId,
+        audience: 'system',
+        workspaceId: workspace,
+        capabilityGrants: [systemWorkspaceTransferGrant],
+        principalSnapshotDigest: systemPrincipalSnapshotDigest,
+        executionContextDigest: systemExecutionContextDigest
+      }
+    }
+    const stalePrincipal = systemWorkspaceTransferInvocation(
+      grantCaller(caller.callerId, principalV2),
+      workspace,
+      'upload-source'
+    )
+    const cases: readonly Readonly<{
+      name: string
+      invocation: HostResourceGrantInvocation
+      code: 'grant_unavailable' | 'principal_changed'
+    }>[] = [
+      {
+        name: 'missing exact grant',
+        invocation: { ...valid, caller: { ...valid.caller, capabilityGrants: [] } },
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'wrong grant',
+        invocation: {
+          ...valid,
+          caller: { ...valid.caller, capabilityGrants: ['fixture.other-grant'] }
+        },
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'wrong audience',
+        invocation: { ...valid, caller: { ...valid.caller, audience: 'agent' } },
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'missing Principal digest',
+        invocation: {
+          ...valid,
+          caller: { ...valid.caller, principalSnapshotDigest: undefined }
+        },
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'missing execution digest',
+        invocation: {
+          ...valid,
+          caller: { ...valid.caller, executionContextDigest: undefined }
+        },
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'malformed execution digest',
+        invocation: {
+          ...valid,
+          caller: { ...valid.caller, executionContextDigest: 'caller-authored' }
+        },
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'wrong effect',
+        invocation: { ...valid, effect: 'workspace-write' },
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'missing invocation ID',
+        invocation: { ...valid, invocationId: '' },
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'non-canonical invocation ID',
+        invocation: { ...valid, invocationId: ' caller-selected ' },
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'missing Workspace',
+        invocation: { ...valid, caller: { ...valid.caller, workspaceId: '' } },
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'wrong scope',
+        invocation: { ...valid, scope: 'resource' },
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'confirmation approval',
+        invocation: { ...valid, approval: 'confirmation' },
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'not approved',
+        invocation: { ...valid, approved: false },
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'non-canonical action ID',
+        invocation: { ...valid, actionId: ' fixture.system-upload ' },
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'missing invocation Principal',
+        invocation: principalMissing,
+        code: 'grant_unavailable'
+      },
+      {
+        name: 'stale live Principal',
+        invocation: stalePrincipal,
+        code: 'principal_changed'
+      }
+    ]
+    let invocation: HostResourceGrantInvocation | undefined = valid
+    const port = service.forOwner('domain.fixture', () => invocation)
+    try {
+      for (const testCase of cases) {
+        invocation = testCase.invocation
+        await expect(port.openWorkspaceUploadSource({
+          relativePath: 'protected.txt',
+          maxBytes: 1024,
+          systemAuthorization: systemWorkspaceTransferAuthorization
+        }), testCase.name).rejects.toMatchObject({ code: testCase.code })
+      }
+      invocation = valid
+      await expect(port.openWorkspaceUploadSource({
+        relativePath: 'protected.txt',
+        maxBytes: 1024
+      })).rejects.toMatchObject({ code: 'principal_changed' })
+      expect(openUploadFile).not.toHaveBeenCalled()
+      expect(await readdir(temporary)).toEqual([])
+    } finally {
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('contains system Workspace transfers across traversal and symlink attempts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const workspace = join(root, 'workspace')
+    const outside = join(root, 'outside')
+    const temporary = join(root, 'temporary')
+    await Promise.all([
+      mkdir(workspace, { recursive: true }),
+      mkdir(outside, { recursive: true }),
+      mkdir(temporary, { recursive: true })
+    ])
+    await writeFile(join(outside, 'secret.txt'), 'outside secret')
+    await symlink(outside, join(workspace, 'escaped'), 'dir')
+    const service = createService(temporary, () => principalV1)
+    const caller = grantCaller('runtime:background-1', principalV1)
+    let invocation = systemWorkspaceTransferInvocation(caller, workspace, 'upload-source')
+    const port = service.forOwner('domain.fixture', () => invocation)
+    try {
+      await expect(port.openWorkspaceUploadSource({
+        relativePath: '../outside/secret.txt',
+        maxBytes: 1024,
+        systemAuthorization: systemWorkspaceTransferAuthorization
+      })).rejects.toMatchObject({ code: 'invalid_request' })
+      await expect(port.openWorkspaceUploadSource({
+        relativePath: 'escaped/secret.txt',
+        maxBytes: 1024,
+        systemAuthorization: systemWorkspaceTransferAuthorization
+      })).rejects.toMatchObject({ code: 'source_unavailable' })
+
+      invocation = systemWorkspaceTransferInvocation(
+        caller,
+        workspace,
+        'download-destination'
+      )
+      await expect(port.openWorkspaceDownloadDestination({
+        relativePath: '../outside/new.txt',
+        maxBytes: 1024,
+        systemAuthorization: systemWorkspaceTransferAuthorization
+      })).rejects.toMatchObject({ code: 'invalid_request' })
+      await expect(port.openWorkspaceDownloadDestination({
+        relativePath: 'escaped/new.txt',
+        maxBytes: 1024,
+        systemAuthorization: systemWorkspaceTransferAuthorization
+      })).rejects.toMatchObject({ code: 'destination_unavailable' })
+      await expect(readFile(join(outside, 'secret.txt'), 'utf8')).resolves.toBe('outside secret')
+      await expect(readFile(join(outside, 'new.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(await readdir(temporary)).toEqual([])
+    } finally {
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('retires exact system transfer resources after Principal or grant-lease changes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const workspace = join(root, 'workspace')
+    const temporary = join(root, 'temporary')
+    await Promise.all([
+      mkdir(workspace, { recursive: true }),
+      mkdir(temporary, { recursive: true })
+    ])
+    await writeFile(join(workspace, 'leased.txt'), 'leased bytes')
+    let currentPrincipal: PrincipalSnapshot | undefined = principalV1
+    const service = createService(temporary, () => currentPrincipal)
+    const caller = grantCaller('runtime:background-1', principalV1)
+    let invocation: HostResourceGrantInvocation = systemWorkspaceTransferInvocation(
+      caller,
+      workspace,
+      'upload-source'
+    )
+    const port = service.forOwner('domain.fixture', () => invocation)
+    try {
+      const source = await port.openWorkspaceUploadSource({
+        relativePath: 'leased.txt',
+        maxBytes: 1024,
+        systemAuthorization: systemWorkspaceTransferAuthorization
+      })
+      expect((await readdir(temporary))
+        .some((name) => name.startsWith('sciforge-upload-'))).toBe(true)
+      currentPrincipal = principalV2
+      await expect(source.read({ offset: 0, length: 1 }))
+        .rejects.toMatchObject({ code: 'principal_changed' })
+      await source.close()
+      expect((await readdir(temporary))
+        .some((name) => name.startsWith('sciforge-upload-'))).toBe(false)
+
+      currentPrincipal = principalV1
+      const capabilityGrants = [systemWorkspaceTransferGrant]
+      const destinationInvocation = systemWorkspaceTransferInvocation(
+        caller,
+        workspace,
+        'download-destination'
+      )
+      invocation = {
+        ...destinationInvocation,
+        caller: { ...destinationInvocation.caller, capabilityGrants }
+      }
+      const targetPath = join(workspace, 'grant-retired.txt')
+      const destination = await port.openWorkspaceDownloadDestination({
+        relativePath: 'grant-retired.txt',
+        maxBytes: 1024,
+        systemAuthorization: systemWorkspaceTransferAuthorization
+      })
+      await destination.write(new TextEncoder().encode('must remain private'))
+      capabilityGrants.splice(0)
+      await expect(destination.commit())
+        .rejects.toMatchObject({ code: 'grant_unavailable' })
+      await destination.abort()
+      await expect(readFile(targetPath)).rejects.toMatchObject({ code: 'ENOENT' })
+      expect((await readdir(workspace))
+        .some((name) => name.startsWith('.sciforge-download-'))).toBe(false)
+    } finally {
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
 
 function createService(
@@ -1946,6 +2292,33 @@ function workspaceTransferInvocation(
       workspaceId,
       semanticRevision
     })
+  })
+}
+
+function systemWorkspaceTransferInvocation(
+  caller: HostResourceGrantCaller,
+  workspaceId: string,
+  direction: 'upload-source' | 'download-destination'
+): HostResourceGrantInvocation {
+  return Object.freeze({
+    caller: Object.freeze({
+      ...caller,
+      audience: 'system' as const,
+      workspaceId,
+      capabilityGrants: Object.freeze([systemWorkspaceTransferGrant]),
+      principalSnapshotDigest: systemPrincipalSnapshotDigest,
+      executionContextDigest: systemExecutionContextDigest
+    }),
+    actionId: direction === 'upload-source'
+      ? 'fixture.system-upload'
+      : 'fixture.system-download',
+    invocationId: direction === 'upload-source'
+      ? 'fixture-system-upload-1'
+      : 'fixture-system-download-1',
+    effect: direction === 'upload-source' ? 'external-write' : 'workspace-write',
+    approval: 'none',
+    approved: true,
+    scope: 'workspace'
   })
 }
 

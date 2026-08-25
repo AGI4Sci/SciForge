@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import {
   DOMAIN_PACKAGE_CONTRACT_VERSION,
   type DomainPackageJsonValue,
@@ -378,6 +379,136 @@ describe('main runtime contributions', () => {
         invocationId: 'stable-invocation'
       }
     ])
+  })
+
+  it('projects only canonical Principal and execution-context digests to system handlers', async () => {
+    const principal = Object.freeze({
+      authority: 'sciforge.local-identity',
+      subject: 'person-1',
+      assurance: 'local-selection' as const,
+      deviceId: 'device-1',
+      identityVersion: 7
+    })
+    const capability = defineCapability({
+      id: 'fixture.runtime.execution-context',
+      version: '1.0.0',
+      title: 'Inspect system execution binding',
+      description: 'Returns only Host-derived digests for a system execution.',
+      audiences: ['system'],
+      scope: 'workspace',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({
+        principalSnapshotDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+        executionContextDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+        rawExecutionContextPresent: z.boolean()
+      }).strict(),
+      handler: async (_input, context) => {
+        const caller = context.caller as typeof context.caller & Readonly<{
+          principalSnapshotDigest?: string
+          executionContextDigest?: string
+          systemExecutionContext?: unknown
+        }>
+        return {
+          output: {
+            principalSnapshotDigest: caller.principalSnapshotDigest ?? '',
+            executionContextDigest: caller.executionContextDigest ?? '',
+            rawExecutionContextPresent: Object.hasOwn(caller, 'systemExecutionContext')
+          }
+        }
+      }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([capability]), {
+      resolveCurrentPrincipal: () => principal
+    })
+    const invoker = createMainSystemCapabilityInvokerFactory(broker)
+      .forDomain({ moduleId: 'fixture.runtime', moduleVersion: '1.0.0' })
+    const contract = {
+      actionId: capability.descriptor.id,
+      effect: 'compute' as const,
+      inputSchema: z.object({}).strict(),
+      outputSchema: capability.outputSchema
+    }
+    const executionContext = {
+      taskId: 'task-1',
+      contractVersion: 1,
+      executionId: 'execution-1',
+      projectId: 'project-1'
+    }
+    const options = {
+      workspaceId: '/workspace',
+      idempotencyKey: 'fixture-execution-context-1',
+      systemExecutionContext: executionContext
+    }
+
+    await expect(invoker.invoke(contract, {}, options)).resolves.toEqual({
+      principalSnapshotDigest: createHash('sha256').update(
+        '{"assurance":"local-selection","authority":"sciforge.local-identity",' +
+        '"deviceId":"device-1","identityVersion":7,"subject":"person-1"}'
+      ).digest('hex'),
+      executionContextDigest: createHash('sha256').update(
+        '{"contractVersion":1,"executionId":"execution-1",' +
+        '"projectId":"project-1","taskId":"task-1"}'
+      ).digest('hex'),
+      rawExecutionContextPresent: false
+    })
+    await expect(invoker.invoke(contract, {}, {
+      ...options,
+      systemExecutionContext: { ...executionContext, executionId: 'execution-2' }
+    })).rejects.toMatchObject({ code: 'idempotency_conflict' })
+    expect(JSON.stringify(broker.listAuditRecords())).not.toContain('execution-1')
+  })
+
+  it('issues a fresh Host invocation identity for execution-bound system reads', async () => {
+    const principal = Object.freeze({
+      authority: 'sciforge.local-identity',
+      subject: 'person-1',
+      assurance: 'local-selection' as const,
+      deviceId: 'device-1',
+      identityVersion: 1
+    })
+    const capability = defineCapability({
+      id: 'fixture.runtime.execution-read',
+      version: '1.0.0',
+      title: 'Read system execution state',
+      description: 'Binds each fresh system read to one Host invocation identity.',
+      audiences: ['system'],
+      scope: 'workspace',
+      effect: 'read',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ invocationId: z.string().min(1) }).strict(),
+      handler: async (_input, context) => ({
+        output: { invocationId: context.invocationId ?? '' }
+      })
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([capability]), {
+      resolveCurrentPrincipal: () => principal
+    })
+    let sequence = 0
+    const invoker = createMainSystemCapabilityInvokerFactory(broker, {
+      createInvocationId: () => `generated-system-read-${++sequence}`
+    }).forDomain({ moduleId: 'fixture.runtime', moduleVersion: '1.0.0' })
+    const contract = {
+      actionId: capability.descriptor.id,
+      effect: 'read' as const,
+      inputSchema: z.object({}).strict(),
+      outputSchema: capability.outputSchema
+    }
+    const options = {
+      workspaceId: '/workspace',
+      systemExecutionContext: { contractVersion: 1, executionId: 'execution-1' }
+    }
+
+    await expect(invoker.invoke(contract, {}, options)).resolves.toEqual({
+      invocationId: 'generated-system-read-1'
+    })
+    await expect(invoker.invoke(contract, {}, options)).resolves.toEqual({
+      invocationId: 'generated-system-read-2'
+    })
   })
 
   it('projects a package-scoped caller and only its declared lifecycle grants', async () => {

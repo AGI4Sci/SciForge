@@ -69,25 +69,30 @@ test('sorts packages by packageName and omits undeclared process imports', async
   )
 })
 
-test('generates the main bundle list from public TypeScript workspace dependency closure', async (context) => {
+test('generates the main bundle list from the public workspace source dependency closure', async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
   context.after(() => rm(root, { recursive: true, force: true }))
   await writeFile(path.join(root, 'package.json'), JSON.stringify({
     name: '@fixture/host',
     workspaces: [
       'packages/domains/*',
+      'packages/runtimes/compiled-leaf',
       'packages/runtimes/compiled-runtime',
       'packages/runtimes/host-runtime',
       'packages/runtimes/renderer-runtime',
       'packages/runtimes/transitive-runtime'
     ],
     dependencies: {
+      '@fixture/compiled-leaf': '1.0.0',
       '@fixture/host-runtime': '1.0.0',
       '@fixture/non-workspace-runtime': '1.0.0'
     }
   }))
   await createSourcePackage(root, 'host-runtime', '@fixture/host-runtime')
   await createSourcePackage(root, 'transitive-runtime', '@fixture/transitive-runtime')
+  await createSourcePackage(root, 'compiled-leaf', '@fixture/compiled-leaf', {
+    entrypoint: './dist/index.js'
+  })
   await createSourcePackage(root, 'compiled-runtime', '@fixture/compiled-runtime', {
     entrypoint: './dist/index.js',
     dependencies: { '@fixture/transitive-runtime': '1.0.0' }
@@ -118,6 +123,7 @@ test('generates the main bundle list from public TypeScript workspace dependency
   ]
 
   assert.deepEqual(mainBundlePackageNames, [
+    '@fixture/compiled-runtime',
     '@fixture/host-runtime',
     '@fixture/main-domain',
     '@fixture/transitive-runtime'
@@ -125,7 +131,8 @@ test('generates the main bundle list from public TypeScript workspace dependency
   assert.match(generated, /@fixture\/host-runtime/)
   assert.match(generated, /@fixture\/main-domain/)
   assert.match(generated, /@fixture\/transitive-runtime/)
-  assert.doesNotMatch(generated, /@fixture\/compiled-runtime/)
+  assert.match(generated, /@fixture\/compiled-runtime/)
+  assert.doesNotMatch(generated, /@fixture\/compiled-leaf/)
   assert.doesNotMatch(generated, /@fixture\/non-workspace-runtime/)
   assert.doesNotMatch(generated, /@fixture\/renderer-runtime/)
   assert.throws(
