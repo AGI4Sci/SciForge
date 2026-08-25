@@ -18,6 +18,7 @@ import type {
 import { ZulipProviderError } from './errors.js'
 import type { ZulipProviderDiagnostic } from './http-client.js'
 import { redactZulipDiagnostic } from './redaction.js'
+import { createZulipCredentialResolver } from './secret-file.js'
 
 class InMemoryDeliveryLedger implements ZulipDeliveryLedger {
   private readonly records = new Map<string, ZulipDeliveryRecord>()
@@ -134,6 +135,16 @@ export const createHumanEndpointProvider: HumanEndpointProviderFactory = async (
   }
   const deliveryRequests = new Map<string, ProviderSendRequest>()
   const deliveryLedger = new InMemoryDeliveryLedger()
+  const resolveCredential = await createZulipCredentialResolver(
+    context.secretFileDirectory,
+    credentialSecretReference
+  )
+  const resolveProvisioningCredential = provisioningCredentialSecretReference
+    ? await createZulipCredentialResolver(
+        context.secretFileDirectory,
+        provisioningCredentialSecretReference
+      )
+    : undefined
 
   const reconcileDelivery = async (record: ZulipDeliveryRecord): Promise<ZulipDeliveryReconciliation> => {
     const existing = await context.services.readDelivery(record.idempotencyKey)
@@ -155,35 +166,10 @@ export const createHumanEndpointProvider: HumanEndpointProviderFactory = async (
     botEmail,
     ...(provisioningEmail ? { provisioningEmail } : {})
   }, {
-    resolveCredential: async () => ({
-      apiKey: await context.secretReader.readSecret(credentialSecretReference)
-    }),
-    ...(provisioningCredentialSecretReference
-      ? {
-          resolveProvisioningCredential: async () => ({
-            apiKey: await context.secretReader.readSecret(provisioningCredentialSecretReference)
-          })
-        }
+    resolveCredential,
+    ...(resolveProvisioningCredential
+      ? { resolveProvisioningCredential }
       : {}),
-    fetch: async (input, init) => {
-      const headers = Object.fromEntries(new Headers(init?.headers).entries())
-      const body = init?.body instanceof URLSearchParams
-        ? init.body.toString()
-        : typeof init?.body === 'string'
-          ? init.body
-          : undefined
-      const response = await context.services.http({
-        url: input,
-        method: (init?.method ?? 'GET') as 'GET' | 'POST' | 'PATCH' | 'DELETE',
-        headers,
-        ...(body === undefined ? {} : { body }),
-        timeoutMs: 75_000
-      })
-      return new Response(response.body, {
-        status: response.status,
-        headers: response.headers
-      })
-    },
     deliveryLedger,
     reconcileDelivery,
     resolveLocator: async (coordinates) => {

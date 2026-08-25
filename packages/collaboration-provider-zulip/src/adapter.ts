@@ -284,7 +284,7 @@ function assertResolvedLocator(
 
 const BIND_COMMAND = /^\/bind (\S+)$/u
 const BIND_COMMAND_PREFIX = /^\/bind(?:\s|$)/u
-const HUMAN_ANSWER_COMMAND = /^sciforge-answer (hrq_[A-Za-z0-9]{12,64}) ([1-9][0-9]{0,15}) ([\s\S]+)$/u
+const HUMAN_ANSWER_CANDIDATE_COMMAND = /^sciforge-answer (hrq_[A-Za-z0-9]{12,64}) ([1-9][0-9]{0,15}) ([\s\S]+)$/u
 const REMOTE_APPROVAL_COMMAND = /^([12])\s+(AP1-[A-Z2-9]{20})$/iu
 
 function bindPairingResponse(text: string): { challengeId: string; challengeResponse: string } | null {
@@ -297,12 +297,12 @@ function bindPairingResponse(text: string): { challengeId: string; challengeResp
   }
 }
 
-function humanAnswerResponse(text: string): {
+function humanAnswerCandidate(text: string): {
   humanRequestId: string
   requestRevision: number
   answer: string
 } | null {
-  const match = HUMAN_ANSWER_COMMAND.exec(text)
+  const match = HUMAN_ANSWER_CANDIDATE_COMMAND.exec(text)
   if (!match) return null
   const requestRevision = Number(match[2])
   const answer = match[3]!.trim()
@@ -1357,8 +1357,8 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
     if (!remoteMessageId || !senderId || !streamId || !topic) {
       throw new ZulipProviderError('invalid_payload', 'Zulip stream message lacks a stable identity or locator.')
     }
-    const answer = humanAnswerResponse(text)
-    if (answer) {
+    const answerCandidate = humanAnswerCandidate(text)
+    if (answerCandidate) {
       const locator = await this.resolveLocatorAt({
         provider: 'zulip',
         realmId: this.realmId,
@@ -1368,7 +1368,7 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       return providerEventSchema.parse({
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         provider: 'zulip',
-        type: 'provider.human_answer.responded',
+        type: 'provider.human_answer.candidate',
         eventId,
         eventCursor,
         occurredAt: canonicalOccurredAt(message, receivedAt),
@@ -1381,9 +1381,7 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
         },
         locator,
         providerMessageId: remoteMessageId,
-        humanRequestId: answer.humanRequestId,
-        requestRevision: answer.requestRevision,
-        answer: answer.answer
+        ...answerCandidate
       })
     }
     const approval = remoteApprovalResponse(text)
