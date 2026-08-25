@@ -1085,15 +1085,7 @@ function noContentCapabilities(): DomainMainSystemCapabilityInvoker {
 function capabilityInvoker(
   invoke: DomainMainSystemCapabilityInvoker['invoke']
 ): DomainMainSystemCapabilityInvoker {
-  return {
-    beginApprovedBatch: () => {
-      throw new Error('Approved batch execution is not configured in this test.')
-    },
-    executeApprovedBatchOperation: async () => {
-      throw new Error('Approved batch execution is not configured in this test.')
-    },
-    invoke
-  }
+  return { invoke }
 }
 
 class MemoryBackend implements CollaborationStateBackend {

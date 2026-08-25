@@ -879,10 +879,13 @@ export class CollaborationTaskAdapter {
     const expiresAt = new Date(this.now().getTime() + 7 * 24 * 60 * 60 * 1_000).toISOString()
     const requestFacts = {
       projectId: run.offer.projectId,
-      taskId: run.offer.taskId,
-      executionId: run.offer.executionId,
-      expectedTaskRevision: run.expectedTaskRevision,
-      expectedExecutionRevision: run.expectedExecutionRevision,
+      context: {
+        scope: 'worker_execution' as const,
+        taskId: run.offer.taskId,
+        executionId: run.offer.executionId,
+        expectedTaskRevision: run.expectedTaskRevision,
+        expectedExecutionRevision: run.expectedExecutionRevision
+      },
       requiredAssurance,
       prompt: question,
       confirmableAction: null,
@@ -904,14 +907,20 @@ export class CollaborationTaskAdapter {
   }
 
   private async acceptHumanAnswer(answer: HumanAnswer, recipientAgentId: string): Promise<void> {
-    const run = this.findRun(answer.executionId)
+    if (answer.context.scope !== 'worker_execution') return
+    const executionId = answer.context.executionId
+    const run = this.findRun(executionId)
     if (!run) return
-    if (run.offer.recipientAgentId !== recipientAgentId || run.humanRequestId !== answer.humanRequestId) {
+    if (
+      run.offer.taskId !== answer.context.taskId ||
+      run.offer.recipientAgentId !== recipientAgentId ||
+      run.humanRequestId !== answer.humanRequestId
+    ) {
       throw new Error('Human answer does not match the pending Worker execution.')
     }
     if (run.humanAnswer?.humanAnswerId === answer.humanAnswerId) return
-    await this.updateRun(answer.executionId, { humanAnswer: answer, state: 'running', error: null })
-    this.schedule(answer.executionId)
+    await this.updateRun(executionId, { humanAnswer: answer, state: 'running', error: null })
+    this.schedule(executionId)
   }
 
   private async submitResult(run: CollaborationTaskRun): Promise<void> {
