@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { DomainMainTurnLifecycleEvent } from '@sciforge/domain-sdk/host'
 import type { AgentRuntimeHost } from './runtime/agent-runtime/host'
-import { createDomainAgentExecutionHost } from './domain-agent-execution'
+import {
+  createDomainAgentExecutionHost,
+  resolveDomainAgentRuntimeReadiness
+} from './domain-agent-execution'
+import { getModelRouterSettings, normalizeAppSettings } from '../shared/app-settings'
 
 type ExecutionRuntime = Parameters<typeof createDomainAgentExecutionHost>[0]['runtime']
 type LifecycleListener = Parameters<AgentRuntimeHost['subscribeTurnLifecycle']>[0]
@@ -22,7 +26,10 @@ describe('domain Agent execution Host', () => {
     })
     const execution = createDomainAgentExecutionHost({
       runtime,
-      defaultRuntimeId: () => 'claude'
+      defaultRuntimeId: () => 'claude',
+      runtimeReadiness: () => ({
+        state: 'ready', runtimeId: 'claude', capabilityTags: ['agent-runtime.claude']
+      })
     })
 
     await expect(execution.run({
@@ -52,7 +59,10 @@ describe('domain Agent execution Host', () => {
     })
     const execution = createDomainAgentExecutionHost({
       runtime,
-      defaultRuntimeId: () => 'codex'
+      defaultRuntimeId: () => 'codex',
+      runtimeReadiness: () => ({
+        state: 'ready', runtimeId: 'codex', capabilityTags: ['agent-runtime.codex']
+      })
     })
 
     await expect(execution.run({
@@ -78,7 +88,10 @@ describe('domain Agent execution Host', () => {
     })
     const execution = createDomainAgentExecutionHost({
       runtime,
-      defaultRuntimeId: () => 'codex'
+      defaultRuntimeId: () => 'codex',
+      runtimeReadiness: () => ({
+        state: 'ready', runtimeId: 'codex', capabilityTags: ['agent-runtime.codex']
+      })
     })
 
     await expect(execution.run({ prompt: 'Run once.' })).resolves.toMatchObject({
@@ -86,6 +99,61 @@ describe('domain Agent execution Host', () => {
       threadId: 'thread-fixed',
       turnId: 'turn-1',
       state: 'failed'
+    })
+  })
+
+  it('projects only the exact configured runtime policy and capability tags', async () => {
+    const execution = createDomainAgentExecutionHost({
+      runtime: fakeRuntime(),
+      defaultRuntimeId: () => 'codex',
+      runtimeReadiness: () => ({
+        state: 'not_configured',
+        reason: 'The selected AgentRuntime has no executable model-access configuration.'
+      })
+    })
+
+    await expect(execution.runtimeReadiness!()).resolves.toEqual({
+      state: 'not_configured',
+      reason: 'The selected AgentRuntime has no executable model-access configuration.'
+    })
+  })
+
+  it('requires executable model access before declaring the selected Runtime configured', () => {
+    expect(resolveDomainAgentRuntimeReadiness(normalizeAppSettings({} as never))).toEqual({
+      state: 'not_configured',
+      reason: 'The selected AgentRuntime has no executable canonical model-access configuration.'
+    })
+
+    const configured = normalizeAppSettings({
+      modelAccess: { mode: 'api' },
+      activeAgentRuntime: 'codex',
+      modelRouter: {
+        runtimeApiKey: 'private-runtime-key',
+        profiles: {
+          default: {
+            textReasoner: {
+              baseUrl: 'https://models.example.test/v1',
+              apiKey: 'private-provider-key',
+              model: 'run0-text'
+            }
+          }
+        }
+      }
+    } as never)
+    expect(resolveDomainAgentRuntimeReadiness(configured)).toEqual({
+      state: 'ready',
+      runtimeId: 'codex',
+      capabilityTags: ['agent-runtime.codex', 'model-access.api']
+    })
+    expect(JSON.stringify(resolveDomainAgentRuntimeReadiness(configured)))
+      .not.toContain('private')
+
+    expect(resolveDomainAgentRuntimeReadiness({
+      ...configured,
+      modelRouter: { ...getModelRouterSettings(configured), enabled: false }
+    })).toEqual({
+      state: 'not_configured',
+      reason: 'The selected AgentRuntime has no executable canonical model-access configuration.'
     })
   })
 })

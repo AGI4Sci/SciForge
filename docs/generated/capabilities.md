@@ -16775,16 +16775,6 @@ Registers the active Identity Device as an Agent through Identity-owned private 
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
     "properties": {
-      "capabilities": {
-        "default": [],
-        "items": {
-          "maxLength": 256,
-          "minLength": 1,
-          "type": "string"
-        },
-        "maxItems": 256,
-        "type": "array"
-      },
       "displayName": {
         "maxLength": 256,
         "minLength": 1,
@@ -16801,8 +16791,7 @@ Registers the active Identity Device as an Agent through Identity-owned private 
     },
     "required": [
       "displayName",
-      "nodeType",
-      "capabilities"
+      "nodeType"
     ],
     "type": "object"
   },

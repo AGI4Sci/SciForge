@@ -11,7 +11,7 @@
     "displayName": "Identity and Access",
     "version": "2.0.0",
     "hostApi": {
-      "minimum": "1.5.0",
+      "minimum": "1.6.0",
       "maximumExclusive": "2.0.0"
     },
     "priority": 900
@@ -37,7 +37,7 @@
     "identity-access.agent-cloud-runtime": {
       "location": "main.internal-service-descriptor",
       "serviceId": "sciforge.agent-cloud-runtime",
-      "contractVersion": "1.0.0",
+      "contractVersion": "2.0.0",
       "allowedConsumerModuleIds": [
         "sciforge.collaboration"
       ]
@@ -87,7 +87,7 @@
         {
           "id": "identity-access.agent-cloud-runtime",
           "kind": "main.extension",
-          "version": "1.0.0",
+          "version": "2.0.0",
           "priority": 900
         }
       ]

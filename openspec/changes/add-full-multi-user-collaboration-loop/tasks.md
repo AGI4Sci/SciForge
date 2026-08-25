@@ -13,7 +13,7 @@
 - [x] 2.1 复用 Domain SDK 的 main-only owner-scoped internal-service mediation，由 identity-access 定义 allowlisted、token-free authenticated Cloud transport public contract，并增加 manifest/composition/边界测试。
 - [x] 2.2 由 identity-access 实现唯一 OIDC request broker，私有注入 Token、重验 Device lease、严格返回 token-free response，并删除协作包 OIDC/session broker 路径。
 - [x] 2.3 增加 Device key enrollment、原生安全存储、canonical digest signing 和 Cloud verification metadata；禁止 domain 任意签名与私钥导出。
-- [ ] 2.4 将 Agent bootstrap 改为 OIDC User → ACTIVE Device → Runtime configured → 每 Device 一个 active Agent，并覆盖 logout/revoke/refresh/ownership conflict。
+- [x] 2.4 将 Agent bootstrap 改为 OIDC User → ACTIVE Device → Runtime configured → 每 Device 一个 active Agent，并覆盖 logout/revoke/refresh/ownership conflict。
 - [ ] 2.5 扩展 secret audit，证明 Token、Device/Agent secret 和 Provider credential 不进入跨包合同、IPC、日志、Git 或回执。
 
 ## 3. Cloud 合同、状态机与数据库

@@ -14,7 +14,6 @@ describe('Agent Cloud runtime contract', () => {
     expect(agentCloudRegisterInputSchema.safeParse({
       displayName: 'Worker',
       nodeType: 'desktop',
-      capabilities: ['task.execute'],
       idempotencyKey: 'idem_agent-register_123456789012',
       credentialBootstrapPublicKey: { kty: 'OKP' }
     }).success).toBe(false)
@@ -42,7 +41,9 @@ describe('Agent Cloud runtime contract', () => {
         agentId: AGENT_ID,
         userId: agentNodeFixture.ownerUserId,
         deviceId: agentNodeFixture.deviceId!,
-        generation: agentNodeFixture.credentialVersion
+        generation: agentNodeFixture.credentialVersion,
+        runtimeId: 'codex',
+        capabilityTags: ['agent-runtime.codex', 'model-access.api']
       }),
       registerAgent,
       rotateAgent: async () => agentNodeFixture,
@@ -55,14 +56,12 @@ describe('Agent Cloud runtime contract', () => {
     const result = await runtime.registerAgent({
       displayName: ' Worker ',
       nodeType: 'desktop',
-      capabilities: ['task.execute', 'task.execute'],
       idempotencyKey: 'idem_agent-register_123456789012'
     })
     expect(result).toEqual(agentNodeFixture)
     expect(registerAgent).toHaveBeenCalledWith({
       displayName: 'Worker',
       nodeType: 'desktop',
-      capabilities: ['task.execute'],
       idempotencyKey: 'idem_agent-register_123456789012'
     })
     expect(result).not.toHaveProperty('sealedCredential')

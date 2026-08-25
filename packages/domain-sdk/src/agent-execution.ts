@@ -46,11 +46,44 @@ export const domainMainAgentExecutionResultSchema = z.object({
   text: z.string().max(5_000_000),
 }).strict()
 
+const agentRuntimeCapabilityTagSchema = z.string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[a-z][a-z0-9_.-]*$/)
+
+/**
+ * Token-free Host observation of the canonical local AgentRuntime policy.
+ * This is a configuration/readiness fact only; it carries no model endpoint,
+ * credential, provider response, or executable implementation detail.
+ */
+export const domainMainAgentRuntimeReadinessSchema = z.discriminatedUnion('state', [
+  z.object({
+    state: z.literal('ready'),
+    runtimeId: z.string().trim().min(1).max(128),
+    capabilityTags: z.array(agentRuntimeCapabilityTagSchema).max(128)
+      .refine((values) => new Set(values).size === values.length, {
+        message: 'AgentRuntime capability tags must be unique.'
+      })
+  }).strict().readonly(),
+  z.object({
+    state: z.literal('not_configured'),
+    reason: z.string().trim().min(1).max(512)
+  }).strict().readonly(),
+  z.object({
+    state: z.literal('unavailable'),
+    reason: z.string().trim().min(1).max(512)
+  }).strict().readonly()
+])
+
 export type DomainMainAgentExecutionRequest = z.input<
   typeof domainMainAgentExecutionRequestSchema
 >
 export type DomainMainAgentExecutionResult = z.infer<
   typeof domainMainAgentExecutionResultSchema
+>
+export type DomainMainAgentRuntimeReadiness = z.infer<
+  typeof domainMainAgentRuntimeReadinessSchema
 >
 
 /**
@@ -66,6 +99,8 @@ export type DomainMainAgentExecutionResult = z.infer<
  * Host's canonical directive ledger can reconcile it without a second turn.
  */
 export type DomainMainAgentExecutionHost = Readonly<{
+  /** Optional at the generic SDK boundary; consumers that require execution must fail closed. */
+  runtimeReadiness?: () => Promise<DomainMainAgentRuntimeReadiness>
   run: (
     request: DomainMainAgentExecutionRequest
   ) => Promise<DomainMainAgentExecutionResult>

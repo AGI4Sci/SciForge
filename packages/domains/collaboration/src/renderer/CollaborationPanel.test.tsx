@@ -214,8 +214,7 @@ test('renders controlled first-binding inputs and builds typed commands without 
   })
   assert.deepEqual(buildAgentRegistrationInput(' 桌面 Agent '), {
     displayName: '桌面 Agent',
-    nodeType: 'desktop',
-    capabilities: []
+    nodeType: 'desktop'
   })
   assert.equal(buildEndpointChallengeInput({
     providerKey: ' ',

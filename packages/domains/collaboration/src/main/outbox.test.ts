@@ -143,7 +143,9 @@ test('persists and replays a strict Cloud fence error as a delivered command res
         agentId,
         userId: agentNodeFixture.ownerUserId,
         deviceId: agentNodeFixture.deviceId!,
-        generation: agentNodeFixture.credentialVersion
+        generation: agentNodeFixture.credentialVersion,
+        runtimeId: 'codex',
+        capabilityTags: ['agent-runtime.codex', 'model-access.api']
       }),
       execute: async (agentId, request) => {
         assert.equal(agentId, TEST_IDS.agentId)
@@ -275,7 +277,9 @@ test('does not change existing fire-and-retry outbox error semantics', async () 
         agentId,
         userId: agentNodeFixture.ownerUserId,
         deviceId: agentNodeFixture.deviceId!,
-        generation: agentNodeFixture.credentialVersion
+        generation: agentNodeFixture.credentialVersion,
+        runtimeId: 'codex',
+        capabilityTags: ['agent-runtime.codex', 'model-access.api']
       }),
       execute: async (_agentId, request) => ({
         protocolVersion: '1.0',
@@ -303,7 +307,9 @@ test('rejects a non-strict upstream response without persisting its raw body', a
         agentId,
         userId: agentNodeFixture.ownerUserId,
         deviceId: agentNodeFixture.deviceId!,
-        generation: agentNodeFixture.credentialVersion
+        generation: agentNodeFixture.credentialVersion,
+        runtimeId: 'codex',
+        capabilityTags: ['agent-runtime.codex', 'model-access.api']
       }),
       execute: async (_agentId, request) => ({
         protocolVersion: '1.0',
@@ -339,7 +345,9 @@ class IdempotentAgentAuthority {
           agentId,
           userId: agentNodeFixture.ownerUserId,
           deviceId: agentNodeFixture.deviceId!,
-          generation: agentNodeFixture.credentialVersion
+          generation: agentNodeFixture.credentialVersion,
+          runtimeId: 'codex',
+          capabilityTags: ['agent-runtime.codex', 'model-access.api']
         }
       : { state: 'agent_required', agentId },
     execute: async (agentId, request) => {
@@ -609,7 +617,9 @@ function coordinatorOutbox(
         agentId,
         userId: agentNodeFixture.ownerUserId,
         deviceId: agentNodeFixture.deviceId!,
-        generation: agentNodeFixture.credentialVersion
+        generation: agentNodeFixture.credentialVersion,
+        runtimeId: 'codex',
+        capabilityTags: ['agent-runtime.codex', 'model-access.api']
       }),
       execute
     }),

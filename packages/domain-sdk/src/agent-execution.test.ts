@@ -5,6 +5,7 @@ import { z } from 'zod'
 import {
   domainMainAgentExecutionRequestSchema,
   domainMainAgentExecutionResultSchema,
+  domainMainAgentRuntimeReadinessSchema,
   type DomainMainAgentExecutionHost
 } from './agent-execution.js'
 
@@ -12,6 +13,11 @@ describe('agent execution host contract', () => {
   it('accepts bounded process-neutral execution options and cancellation', async () => {
     const controller = new AbortController()
     const host: DomainMainAgentExecutionHost = {
+      runtimeReadiness: async () => ({
+        state: 'ready',
+        runtimeId: 'codex',
+        capabilityTags: ['agent-runtime.codex', 'model-access.api']
+      }),
       run: async (request) => ({
         runtimeId: request.runtimeId ?? 'codex',
         threadId: request.threadId ?? 'thread-1',
@@ -40,6 +46,34 @@ describe('agent execution host contract', () => {
       state: 'completed',
       text: 'codex:agent',
     })
+    assert.deepEqual(await host.runtimeReadiness?.(), {
+      state: 'ready',
+      runtimeId: 'codex',
+      capabilityTags: ['agent-runtime.codex', 'model-access.api']
+    })
+  })
+
+  it('keeps runtime readiness structured, bounded, and credential-free', () => {
+    assert.deepEqual(domainMainAgentRuntimeReadinessSchema.parse({
+      state: 'ready',
+      runtimeId: 'claude',
+      capabilityTags: ['agent-runtime.claude', 'model-access.coding-plan']
+    }), {
+      state: 'ready',
+      runtimeId: 'claude',
+      capabilityTags: ['agent-runtime.claude', 'model-access.coding-plan']
+    })
+    assert.throws(() => domainMainAgentRuntimeReadinessSchema.parse({
+      state: 'ready',
+      runtimeId: 'codex',
+      capabilityTags: ['agent-runtime.codex'],
+      authorization: 'Bearer private'
+    }), z.ZodError)
+    assert.throws(() => domainMainAgentRuntimeReadinessSchema.parse({
+      state: 'ready',
+      runtimeId: 'codex',
+      capabilityTags: ['agent-runtime.codex', 'agent-runtime.codex']
+    }), z.ZodError)
   })
 
   it('defaults execution mode, permits an unbound new thread, and rejects host-private fields', () => {

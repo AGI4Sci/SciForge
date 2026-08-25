@@ -2,6 +2,7 @@ import type {
   DomainMainHost,
   DomainMainRuntimeLifecycleContribution
 } from '@sciforge/domain-sdk/host'
+import type { DomainMainAgentExecutionHost } from '@sciforge/domain-sdk/agent-execution'
 import { defineDomainMainInternalServiceDescriptor } from '@sciforge/domain-sdk/host'
 import {
   AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
@@ -188,6 +189,8 @@ export function createDomainMainEntry(
   })
   let cloudRuntime: CloudIdentityRuntime | null = null
   let cloudActivation: Promise<CloudIdentityRuntime> | null = null
+  let agentExecutionHost: DomainMainAgentExecutionHost | undefined
+  let invalidateAgentAuthority: (reason: string) => void = () => undefined
   const closedCloudRuntimes = new WeakSet<CloudIdentityRuntime>()
   const installationId = cloudInstallationId(requireDeviceId(host))
   const privateVault = createNativeIdentityPrivateVault({ installationId })
@@ -215,7 +218,19 @@ export function createDomainMainEntry(
   })
   const agentCloudRuntime = createIdentityAgentCloudRuntime({
     getRuntime: () => cloudRuntime,
-    vault: privateVault
+    vault: privateVault,
+    getRuntimeReadiness: async () => {
+      if (!agentExecutionHost?.runtimeReadiness) {
+        return {
+          state: 'unavailable',
+          reason: 'The canonical Agent execution Host does not publish Runtime readiness.'
+        }
+      }
+      return agentExecutionHost.runtimeReadiness()
+    },
+    bindAuthorityInvalidator: (invalidate) => {
+      invalidateAgentAuthority = invalidate
+    }
   })
   host.internalServices.register({
     serviceId: AGENT_CLOUD_RUNTIME_SERVICE_ID,
@@ -227,6 +242,7 @@ export function createDomainMainEntry(
     if (!runtime || closedCloudRuntimes.has(runtime)) return
     closedCloudRuntimes.add(runtime)
     if (cloudRuntime === runtime) cloudRuntime = null
+    agentExecutionHost = undefined
     runtime.close()
   }
   const lifecycle: DomainMainRuntimeLifecycleContribution = Object.freeze({
@@ -235,21 +251,25 @@ export function createDomainMainEntry(
         throw new Error('Cloud identity runtime lifecycle is already active.')
       }
       const pending = (async () => {
-        const appVersion = requireAppVersion(host)
-        const runtime = await CloudIdentityRuntime.create({
-          userDataDir: context.userDataDir,
-          appRoot: context.appRoot,
-          appVersion,
-          environment: context.environment,
-          installationId: requireDeviceId(host),
-          privateVault,
-          externalNavigation: host.externalNavigation
-        })
+        agentExecutionHost = context.agentExecution
+        let runtime: CloudIdentityRuntime | undefined
         try {
+          const appVersion = requireAppVersion(host)
+          runtime = await CloudIdentityRuntime.create({
+            userDataDir: context.userDataDir,
+            appRoot: context.appRoot,
+            appVersion,
+            environment: context.environment,
+            installationId: requireDeviceId(host),
+            privateVault,
+            externalNavigation: host.externalNavigation,
+            onAuthorityInvalidated: invalidateAgentAuthority
+          })
           await runtime.initialize()
           return runtime
         } catch (error) {
-          closeCloudRuntime(runtime)
+          if (runtime) closeCloudRuntime(runtime)
+          else agentExecutionHost = undefined
           throw error
         }
       })()

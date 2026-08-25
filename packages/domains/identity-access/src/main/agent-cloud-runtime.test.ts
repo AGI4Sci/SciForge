@@ -10,7 +10,10 @@ import {
 } from '@sciforge/collaboration-contracts/testing'
 import type { RestRequest } from '@sciforge/collaboration-contracts'
 
-import { createIdentityAgentCloudRuntime } from './agent-cloud-runtime.js'
+import {
+  createIdentityAgentCloudRuntime,
+  type IdentityAgentCloudRuntimeOptions
+} from './agent-cloud-runtime.js'
 import type { IdentityPrivateVault, IdentityPrivateSecretRef } from './private-vault.js'
 
 const AUTHORITY = `agent.${'A'.repeat(32)}`
@@ -27,7 +30,7 @@ describe('Identity Agent Cloud runtime', () => {
         requestId: input.payload.requestId
       }
     }))
-    const service = createIdentityAgentCloudRuntime({
+    const service = createTestIdentityAgentCloudRuntime({
       getRuntime: () => runtimeDouble(executeAuthenticatedCloud) as never,
       vault,
       createBootstrap: () => ({
@@ -39,7 +42,6 @@ describe('Identity Agent Cloud runtime', () => {
     const agent = await service.registerAgent({
       displayName: 'Packaged Worker',
       nodeType: 'desktop',
-      capabilities: ['task.execute'],
       idempotencyKey: 'idem_agent-register_123456789012'
     })
 
@@ -53,6 +55,100 @@ describe('Identity Agent Cloud runtime', () => {
     const stored = vault.value({ kind: 'agent-credential', agentId: agent.agentId })
     expect(stored).toContain(AUTHORITY)
     expect(JSON.stringify(agent)).not.toContain(AUTHORITY)
+  })
+
+  it('guards bootstrap in Device then Runtime order and derives capability facts internally', async () => {
+    const vault = memoryVault()
+    const steps: string[] = []
+    let runtimeReady = false
+    const executeAuthenticatedCloud = vi.fn(async (input: Readonly<{ payload: RestRequest }>) => {
+      steps.push('agent_registered')
+      return {
+        contractVersion: 1 as const,
+        status: 200,
+        body: {
+          ...agentRegisteredResponseFixture,
+          requestId: input.payload.requestId
+        }
+      }
+    })
+    const runtime = {
+      ...runtimeDouble(executeAuthenticatedCloud),
+      revalidateCurrentDevice: async () => {
+        steps.push('device_active')
+        return {
+          state: 'ready' as const,
+          baseUrl: 'https://cloud.example.test',
+          userId: agentNodeFixture.ownerUserId,
+          deviceId: agentNodeFixture.deviceId
+        }
+      }
+    }
+    const service = createIdentityAgentCloudRuntime({
+      getRuntime: () => runtime as never,
+      vault,
+      getRuntimeReadiness: async () => {
+        steps.push('runtime_checked')
+        return runtimeReady
+          ? {
+              state: 'ready' as const,
+              runtimeId: 'codex',
+              capabilityTags: ['agent-runtime.codex', 'model-access.api']
+            }
+          : {
+              state: 'not_configured' as const,
+              reason: 'Configure an AgentRuntime before registering this Device.'
+            }
+      },
+      createBootstrap: () => ({
+        publicKey: agentRegisteredResponseFixture.sealedCredential.ephemeralPublicKey,
+        open: vi.fn(() => AUTHORITY)
+      })
+    })
+    const input = {
+      displayName: 'Packaged Worker',
+      nodeType: 'desktop' as const,
+      idempotencyKey: 'idem_agent-register_runtime_gate_01'
+    }
+
+    await expect(service.registerAgent(input)).rejects.toMatchObject({ code: 'runtime_required' })
+    expect(steps).toEqual(['device_active', 'runtime_checked'])
+    expect(executeAuthenticatedCloud).not.toHaveBeenCalled()
+
+    runtimeReady = true
+    steps.length = 0
+    await expect(service.registerAgent(input)).resolves.toEqual(agentNodeFixture)
+    expect(steps).toEqual(['device_active', 'runtime_checked', 'agent_registered'])
+    expect(executeAuthenticatedCloud.mock.calls[0]?.[0].payload).toMatchObject({
+      type: 'agent.register',
+      deviceId: agentNodeFixture.deviceId,
+      capabilities: ['agent-runtime.codex', 'model-access.api']
+    })
+  })
+
+  it('fails before Runtime inspection when the current Device cannot be revalidated', async () => {
+    const readiness = vi.fn()
+    const executeAuthenticatedCloud = vi.fn()
+    const service = createIdentityAgentCloudRuntime({
+      getRuntime: () => ({
+        ...runtimeDouble(executeAuthenticatedCloud),
+        revalidateCurrentDevice: async () => ({
+          state: 'device_required' as const,
+          baseUrl: 'https://cloud.example.test',
+          reason: 'This Desktop Device belongs to another OIDC User.'
+        })
+      }) as never,
+      vault: memoryVault(),
+      getRuntimeReadiness: readiness
+    })
+
+    await expect(service.registerAgent({
+      displayName: 'Blocked Worker',
+      nodeType: 'desktop',
+      idempotencyKey: 'idem_agent-register_device_gate_01'
+    })).rejects.toMatchObject({ code: 'device_required' })
+    expect(readiness).not.toHaveBeenCalled()
+    expect(executeAuthenticatedCloud).not.toHaveBeenCalled()
   })
 
   it('injects Agent authority only inside the private HTTP request', async () => {
@@ -77,7 +173,7 @@ describe('Identity Agent Cloud runtime', () => {
         entity: agentNodeFixture
       }), { status: 200, headers: { 'content-type': 'application/json' } })
     })
-    const service = createIdentityAgentCloudRuntime({
+    const service = createTestIdentityAgentCloudRuntime({
       getRuntime: () => runtimeDouble() as never,
       vault,
       fetchImpl: fetchImpl as typeof fetch
@@ -113,7 +209,7 @@ describe('Identity Agent Cloud runtime', () => {
         signal.addEventListener('abort', () => reject(signal.reason), { once: true })
       })
     })
-    const service = createIdentityAgentCloudRuntime({
+    const service = createTestIdentityAgentCloudRuntime({
       getRuntime: () => runtimeDouble() as never,
       vault,
       fetchImpl: fetchImpl as typeof fetch
@@ -160,7 +256,7 @@ describe('Identity Agent Cloud runtime', () => {
         sealedCredential: rotatedEnvelope
       }
     }))
-    const service = createIdentityAgentCloudRuntime({
+    const service = createTestIdentityAgentCloudRuntime({
       getRuntime: () => runtimeDouble(executeAuthenticatedCloud) as never,
       vault,
       createBootstrap: () => ({
@@ -216,7 +312,7 @@ describe('Identity Agent Cloud runtime', () => {
       ...agentRegisteredResponseFixture.sealedCredential,
       credentialGeneration: rotatedAgent.credentialVersion
     }
-    const service = createIdentityAgentCloudRuntime({
+    const service = createTestIdentityAgentCloudRuntime({
       getRuntime: () => runtimeDouble(vi.fn(async (input: Readonly<{ payload: RestRequest }>) => ({
         contractVersion: 1 as const,
         status: 200,
@@ -278,7 +374,7 @@ describe('Identity Agent Cloud runtime', () => {
       return bodyBytes.promise
     })
     const fetchImpl = vi.fn(async () => response)
-    const service = createIdentityAgentCloudRuntime({
+    const service = createTestIdentityAgentCloudRuntime({
       getRuntime: () => runtimeDouble() as never,
       vault,
       fetchImpl: fetchImpl as typeof fetch
@@ -323,7 +419,7 @@ describe('Identity Agent Cloud runtime', () => {
       })
     )
     const fetchImpl = vi.fn()
-    const service = createIdentityAgentCloudRuntime({
+    const service = createTestIdentityAgentCloudRuntime({
       getRuntime: () => runtimeDouble() as never,
       vault,
       fetchImpl: fetchImpl as typeof fetch
@@ -373,7 +469,7 @@ describe('Identity Agent Cloud runtime', () => {
         }
       }
     }))
-    const service = createIdentityAgentCloudRuntime({
+    const service = createTestIdentityAgentCloudRuntime({
       getRuntime: () => runtimeDouble(executeAuthenticatedCloud) as never,
       vault
     })
@@ -426,7 +522,7 @@ describe('Identity Agent Cloud runtime', () => {
         }
       }
     })
-    const service = createIdentityAgentCloudRuntime({
+    const service = createTestIdentityAgentCloudRuntime({
       getRuntime: () => runtimeDouble(executeAuthenticatedCloud) as never,
       vault,
       fetchImpl: fetchImpl as typeof fetch,
@@ -490,7 +586,7 @@ describe('Identity Agent Cloud runtime', () => {
     )
     const socket = new FakeWebSocket()
     let handshake: Readonly<{ url: string; headers: Readonly<Record<string, string>> }> | undefined
-    const service = createIdentityAgentCloudRuntime({
+    const service = createTestIdentityAgentCloudRuntime({
       getRuntime: () => runtimeDouble() as never,
       vault,
       webSocketFactory: (url, headers) => {
@@ -532,7 +628,7 @@ describe('Identity Agent Cloud runtime', () => {
       socketCreated.resolve()
       return socket as never
     })
-    const service = createIdentityAgentCloudRuntime({
+    const service = createTestIdentityAgentCloudRuntime({
       getRuntime: () => runtimeDouble() as never,
       vault,
       webSocketFactory
@@ -574,8 +670,27 @@ function runtimeDouble(executeAuthenticatedCloud = vi.fn()) {
       userId: agentNodeFixture.ownerUserId,
       deviceId: agentNodeFixture.deviceId
     }),
-    executeAuthenticatedCloud
+    executeAuthenticatedCloud,
+    revalidateCurrentDevice: async () => ({
+      state: 'ready' as const,
+      baseUrl: 'https://cloud.example.test',
+      userId: agentNodeFixture.ownerUserId,
+      deviceId: agentNodeFixture.deviceId
+    })
   }
+}
+
+function createTestIdentityAgentCloudRuntime(
+  options: Omit<IdentityAgentCloudRuntimeOptions, 'getRuntimeReadiness'>
+) {
+  return createIdentityAgentCloudRuntime({
+    ...options,
+    getRuntimeReadiness: async () => ({
+      state: 'ready',
+      runtimeId: 'codex',
+      capabilityTags: ['agent-runtime.codex', 'model-access.api']
+    })
+  })
 }
 
 function memoryVault(): IdentityPrivateVault & Readonly<{

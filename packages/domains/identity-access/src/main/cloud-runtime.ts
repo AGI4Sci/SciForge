@@ -47,6 +47,7 @@ export type CloudIdentityRuntimeOptions = Readonly<{
   externalNavigation?: DomainMainExternalNavigationHost
   appVersion?: string
   fetchImpl?: typeof fetch
+  onAuthorityInvalidated?: (reason: string) => void
 }>
 
 export class CloudIdentityRuntime {
@@ -59,11 +60,14 @@ export class CloudIdentityRuntime {
   readonly #cloudBaseUrl: string | null
   readonly #transportUnavailableReason: string | null
   readonly #fetch: typeof fetch
+  readonly #onAuthorityInvalidated: (reason: string) => void
   #revision = 1
   #identityError: CloudIdentityRuntimeError | undefined
   #deviceError: CloudIdentityRuntimeError | undefined
   #runtimeError: CloudIdentityRuntimeError | undefined
   #closed = false
+  #authorityIdentityKey: string | null
+  #authorityUserId: string | null
 
   private constructor(input: Readonly<{
     identity: DesktopIdentityService
@@ -72,6 +76,7 @@ export class CloudIdentityRuntime {
     cloudBaseUrl: string | null
     transportUnavailableReason: string | null
     fetchImpl: typeof fetch
+    onAuthorityInvalidated: (reason: string) => void
     runtimeError?: CloudIdentityRuntimeError
   }>) {
     this.#identity = input.identity
@@ -80,13 +85,23 @@ export class CloudIdentityRuntime {
     this.#cloudBaseUrl = input.cloudBaseUrl
     this.#transportUnavailableReason = input.transportUnavailableReason
     this.#fetch = input.fetchImpl
+    this.#onAuthorityInvalidated = input.onAuthorityInvalidated
     this.#runtimeError = input.runtimeError
+    this.#authorityIdentityKey = authorityIdentityKey(
+      this.#identity.getStatus(),
+      this.#device.getStatus()
+    )
+    this.#authorityUserId = authorityUserId(this.#identity.getStatus())
     this.#disposeIdentitySubscription = this.#identity.subscribe((status) => {
       this.#projectAuthenticatedUser(status)
+      this.#invalidateChangedUserAuthority(status)
       this.#publish()
     })
     this.#disposeDeviceSubscription = this.#device.subscribe((status) => {
       if (status.state !== 'active') this.#clearActiveDeviceAuthority()
+      if (authorityUserId(this.#identity.getStatus()) === this.#authorityUserId) {
+        this.#invalidateChangedAuthority('Desktop Device authority changed.')
+      }
       this.#publish()
     })
     this.#projectAuthenticatedUser(this.#identity.getStatus())
@@ -163,6 +178,7 @@ export class CloudIdentityRuntime {
         cloudBaseUrl,
         transportUnavailableReason: configurationError || null,
         fetchImpl: options.fetchImpl ?? fetch,
+        onAuthorityInvalidated: options.onAuthorityInvalidated ?? (() => undefined),
         ...(linkResult.error ? { runtimeError: linkResult.error } : {})
       })
     } catch (error) {
@@ -268,6 +284,15 @@ export class CloudIdentityRuntime {
     return this.snapshot()
   }
 
+  async revalidateCurrentDevice(): Promise<AuthenticatedCloudTransportStatus> {
+    this.#assertOpen()
+    if (this.#identity.getStatus().state !== 'signed-in') {
+      return this.authenticatedCloudTransportStatus()
+    }
+    this.#acceptDeviceResult(await this.#device.refresh())
+    return this.authenticatedCloudTransportStatus()
+  }
+
   async revokeDevice(deviceId: string): Promise<CloudIdentitySnapshot> {
     this.#assertOpen()
     this.#acceptDeviceResult(await this.#device.revoke(deviceId))
@@ -294,6 +319,12 @@ export class CloudIdentityRuntime {
       return { state: 'identity_required', baseUrl: this.#cloudBaseUrl }
     }
     const device = this.#device.getStatus()
+    if (device.state === 'error') {
+      return {
+        state: 'unavailable',
+        reason: 'SciForge Cloud could not confirm this Desktop Device.'
+      }
+    }
     if (device.state !== 'active') {
       return {
         state: 'device_required',
@@ -328,23 +359,17 @@ export class CloudIdentityRuntime {
         'The requested authenticated Cloud operation is not registered.'
       )
     }
-    if (this.#identity.getStatus().state !== 'signed-in') {
+    const revalidated = await this.revalidateCurrentDevice()
+    if (revalidated.state !== 'ready') {
       throw new AuthenticatedCloudTransportError(
-        'identity_required',
-        'Sign in to SciForge Cloud before continuing.'
-      )
-    }
-
-    const refreshedDevice = await this.#device.refresh()
-    this.#acceptDeviceResult(refreshedDevice)
-    if (!refreshedDevice.ok || refreshedDevice.status.state !== 'active') {
-      throw new AuthenticatedCloudTransportError(
-        refreshedDevice.status.state === 'error' ? 'cloud_unavailable' : 'device_required',
-        refreshedDevice.status.state === 'revoked'
-          ? 'This Desktop Device has been revoked.'
-          : refreshedDevice.status.state === 'not-enrolled'
-            ? 'Register this Desktop Device before continuing.'
-            : 'SciForge Cloud could not verify this Desktop Device.'
+        revalidated.state === 'identity_required'
+          ? 'identity_required'
+          : revalidated.state === 'device_required'
+            ? 'device_required'
+            : 'cloud_unavailable',
+        revalidated.state === 'identity_required'
+          ? 'Sign in to SciForge Cloud before continuing.'
+          : revalidated.reason
       )
     }
 
@@ -390,6 +415,9 @@ export class CloudIdentityRuntime {
   close(): void {
     if (this.#closed) return
     this.#closed = true
+    this.#authorityIdentityKey = null
+    this.#authorityUserId = null
+    this.#onAuthorityInvalidated('Cloud identity runtime closed.')
     this.#disposeDeviceSubscription()
     this.#disposeIdentitySubscription()
     this.#device.close()
@@ -427,6 +455,25 @@ export class CloudIdentityRuntime {
     }
   }
 
+  #invalidateChangedAuthority(reason: string): void {
+    const next = authorityIdentityKey(this.#identity.getStatus(), this.#device.getStatus())
+    if (next === this.#authorityIdentityKey) return
+    this.#authorityIdentityKey = next
+    this.#onAuthorityInvalidated(reason)
+  }
+
+  #invalidateChangedUserAuthority(status: DesktopIdentityStatus): void {
+    const nextUserId = authorityUserId(status)
+    const nextIdentityKey = authorityIdentityKey(status, this.#device.getStatus())
+    const userChanged = nextUserId !== this.#authorityUserId
+    const authorityChanged = nextIdentityKey !== this.#authorityIdentityKey
+    this.#authorityUserId = nextUserId
+    this.#authorityIdentityKey = nextIdentityKey
+    if (userChanged && authorityChanged) {
+      this.#onAuthorityInvalidated('OIDC User authority changed.')
+    }
+  }
+
   #acceptIdentityResult(result: DesktopIdentityActionResult): void {
     this.#identityError = result.ok
       ? undefined
@@ -460,6 +507,18 @@ export class CloudIdentityRuntime {
   #assertOpen(): void {
     if (this.#closed) throw new Error('Cloud identity runtime is closed.')
   }
+}
+
+function authorityIdentityKey(
+  identity: DesktopIdentityStatus,
+  device: DesktopDeviceStatus
+): string | null {
+  if (identity.state !== 'signed-in' || device.state !== 'active') return null
+  return `${identity.user.userId}\u0000${device.device.deviceId}`
+}
+
+function authorityUserId(identity: DesktopIdentityStatus): string | null {
+  return identity.state === 'signed-in' ? identity.user.userId : null
 }
 
 function authenticatedCloudIdempotencyHeader(

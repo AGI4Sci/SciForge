@@ -199,6 +199,10 @@ operation:
   plus optional cancellation. A request either starts a thread (with or without a workspace) or
   names an exact runtime/thread pair. Retryable callers reuse one `clientDirectiveId`, which enters
   the same Host directive ledger as desktop messages instead of creating a second execution path.
+  The Host may also publish a strict token-free Runtime readiness observation containing only the
+  selected runtime ID and bounded capability tags. Consumers that require executable Agent work
+  fail closed when that observation is absent, unavailable, or not configured; endpoints, model
+  credentials, and provider responses never enter this contract.
 - `@sciforge/domain-sdk/package-storage` exposes package-owner-scoped non-secret settings with
   optimistic revisions and a main-process-only secret store. Generated composition binds both
   stores to the manifest owner; packages cannot choose another namespace. Renderer code changes

@@ -37,8 +37,7 @@ import { createTestAgentCloudRuntime } from './test-agent-cloud-runtime.js'
 const BASE_URL = 'https://collaboration.example.test'
 const REGISTER_INPUT = {
   displayName: 'Recovery Desktop',
-  nodeType: 'desktop' as const,
-  capabilities: ['task.execute']
+  nodeType: 'desktop' as const
 }
 
 test('a private-vault registration failure leaves Collaboration facts unchanged and is retryable', async () => {
@@ -223,7 +222,9 @@ async function readyAuthority(agentId: string) {
     agentId,
     userId: TEST_IDS.userId,
     deviceId: TEST_IDS.deviceId,
-    generation: agentNodeFixture.credentialVersion
+    generation: agentNodeFixture.credentialVersion,
+    runtimeId: 'codex',
+    capabilityTags: ['agent-runtime.codex', 'model-access.api']
   }
 }
 

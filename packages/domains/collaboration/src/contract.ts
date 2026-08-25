@@ -246,8 +246,7 @@ export const collaborationEndpointChallengePollResultSchema = z.discriminatedUni
 
 export const collaborationAgentRegisterInputSchema = z.object({
   displayName: displayTextSchema,
-  nodeType: z.enum(['desktop', 'server']).default('desktop'),
-  capabilities: z.array(idSchema).max(256).default([])
+  nodeType: z.enum(['desktop', 'server']).default('desktop')
 }).strict()
 export const collaborationAgentRegisterResultSchema = z.object({
   agent: collaborationAgentViewSchema

@@ -19,16 +19,15 @@ import {
 } from '@sciforge/collaboration-contracts'
 
 export const AGENT_CLOUD_RUNTIME_SERVICE_ID = 'sciforge.agent-cloud-runtime' as const
-export const AGENT_CLOUD_RUNTIME_CONTRACT_VERSION = '1.0.0' as const
+export const AGENT_CLOUD_RUNTIME_CONTRACT_VERSION = '2.0.0' as const
 
-const capabilitiesSchema = z.array(
+const capabilityTagsSchema = z.array(
   z.string().regex(/^[a-z][a-z0-9_.-]{0,127}$/u)
 ).max(256).transform((values) => [...new Set(values)].sort()).readonly()
 
 export const agentCloudRegisterInputSchema = z.object({
   displayName: z.string().trim().min(1).max(200),
   nodeType: z.enum(['desktop', 'server']),
-  capabilities: capabilitiesSchema,
   idempotencyKey: idempotencyKeySchema
 }).strict().readonly()
 
@@ -46,10 +45,16 @@ export const agentCloudAuthorityStatusSchema = z.discriminatedUnion('state', [
     agentId: agentIdSchema,
     userId: userIdSchema,
     deviceId: deviceIdSchema,
-    generation: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
+    generation: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+    runtimeId: z.string().trim().min(1).max(128),
+    capabilityTags: capabilityTagsSchema
   }).strict().readonly(),
   z.object({ state: z.literal('identity_required') }).strict().readonly(),
   z.object({ state: z.literal('device_required') }).strict().readonly(),
+  z.object({
+    state: z.literal('runtime_required'),
+    reason: z.string().trim().min(1).max(512)
+  }).strict().readonly(),
   z.object({ state: z.literal('agent_required'), agentId: agentIdSchema }).strict().readonly(),
   z.object({
     state: z.literal('unavailable'),
@@ -112,6 +117,7 @@ export type AgentCloudRuntimeErrorCode =
   | 'runtime_unavailable'
   | 'identity_required'
   | 'device_required'
+  | 'runtime_required'
   | 'agent_required'
   | 'agent_authority_invalid'
   | 'operation_not_allowed'
@@ -187,4 +193,3 @@ export function isAgentInboxMessage(
 ): boolean {
   return message.recipientType === 'agent' && message.recipientAgentId === agentId
 }
-

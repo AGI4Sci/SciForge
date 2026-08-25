@@ -13,7 +13,10 @@ ledger 和 Task adapter；renderer 只通过 Capability Broker 调用公开 capa
 每台 ACTIVE Device 注册一个 active Agent；注册、轮换、撤销、Agent-authenticated HTTP/WSS
 以及私有 authority 的存取都由 identity-access 的 owner-scoped internal service 完成。本包只
 观察非秘密的 Agent facts、authority readiness 与 Cloud events，不接收 bootstrap key、Token、
-私有 authority 或任何通用秘密存储句柄。
+私有 authority 或任何通用秘密存储句柄。Agent 注册输入不含 capability；heartbeat 仅投影
+Identity 从当前可执行 AgentRuntime readiness 派生的 capability tags。OIDC、Device、Runtime
+或 Agent authority 丢失时连接 fail closed，先停止 outbox/WSS 并 fence 本地 execution，再允许
+显式恢复。
 
 Endpoint challenge 由当前 OIDC User 发起并绑定精确 provider/realm/providerUserId；`/bind`
 只证明 provider endpoint 事实，不创建 User、不签发第二种 User credential，也没有匿名 poll

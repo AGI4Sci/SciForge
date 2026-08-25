@@ -1,9 +1,18 @@
 import type {
   DomainMainAgentExecutionHost,
-  DomainMainAgentExecutionRequest
+  DomainMainAgentExecutionRequest,
+  DomainMainAgentRuntimeReadiness
 } from '@sciforge/domain-sdk/agent-execution'
+import { domainMainAgentRuntimeReadinessSchema } from '@sciforge/domain-sdk/agent-execution'
 import type { DomainPackageJsonValue } from '@sciforge/domain-sdk/contract'
 
+import {
+  getActiveAgentRuntime,
+  getModelRouterSettings,
+  isModelRouterTextReasonerConfigured,
+  resolveModelAccessRuntimePolicy,
+  type AppSettingsV1
+} from '../shared/app-settings'
 import type { AgentRuntimeId } from '../shared/agent-runtime-contract'
 import type { AgentRuntimeHost } from './runtime/agent-runtime/host'
 
@@ -18,13 +27,47 @@ type ExecutionRuntimeHost = Pick<
   | 'subscribeTurnLifecycle'
 >
 
+export function resolveDomainAgentRuntimeReadiness(
+  settings: AppSettingsV1
+): DomainMainAgentRuntimeReadiness {
+  const runtimeId = getActiveAgentRuntime(settings)
+  const policy = resolveModelAccessRuntimePolicy(settings)
+  const runtimeAllowed = runtimeId === 'codex' ? policy.codex : policy.claude
+  const router = getModelRouterSettings(settings)
+  const apiConfigured = policy.mode !== 'api' || (
+    router.enabled &&
+    Boolean(router.baseUrl.trim()) &&
+    Boolean(router.runtimeApiKey.trim()) &&
+    Boolean(router.publicModelAlias.trim()) &&
+    isModelRouterTextReasonerConfigured(router)
+  )
+  if (!runtimeAllowed || !apiConfigured || policy.mode === null) {
+    return {
+      state: 'not_configured',
+      reason: 'The selected AgentRuntime has no executable canonical model-access configuration.'
+    }
+  }
+  return {
+    state: 'ready',
+    runtimeId,
+    capabilityTags: [
+      `agent-runtime.${runtimeId}`,
+      `model-access.${policy.mode}`
+    ]
+  }
+}
+
 export function createDomainAgentExecutionHost(input: Readonly<{
   runtime: ExecutionRuntimeHost
   defaultRuntimeId: () => AgentRuntimeId | Promise<AgentRuntimeId>
+  runtimeReadiness: () => DomainMainAgentRuntimeReadiness | Promise<DomainMainAgentRuntimeReadiness>
   pollIntervalMs?: number
 }>): DomainMainAgentExecutionHost {
   const pollIntervalMs = Math.max(10, input.pollIntervalMs ?? 1_000)
   return Object.freeze({
+    runtimeReadiness: async () => domainMainAgentRuntimeReadinessSchema.parse(
+      await input.runtimeReadiness()
+    ),
     run: async (request) => {
       if (request.signal?.aborted) {
         throw request.signal.reason ?? new Error('Agent execution aborted.')

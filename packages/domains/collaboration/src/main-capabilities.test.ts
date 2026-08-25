@@ -136,8 +136,7 @@ test('global collaboration mutations satisfy the production broker contract with
     },
     [COLLABORATION_CAPABILITY_IDS.agentRegister]: {
       displayName: 'Desktop',
-      nodeType: 'desktop',
-      capabilities: []
+      nodeType: 'desktop'
     },
     [COLLABORATION_CAPABILITY_IDS.primaryAgentSelect]: {
       agentId: TEST_IDS.agentId,

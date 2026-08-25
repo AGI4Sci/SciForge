@@ -85,6 +85,42 @@ test('activation fails closed when Collaboration and Identity endpoints differ',
   assert.equal(agentCalls, 0)
 })
 
+test('Runtime authority loss stops delivery and fences local executions before reconnect', async () => {
+  const store = await localStore([agentNodeFixture])
+  let fenced: Readonly<{ agentId: string; reason: string }> | undefined
+  let stopped = false
+  const connection = new CollaborationConnection({
+    store,
+    settings: new CollaborationSettingsService(settingsHost()),
+    outbox: {
+      start: () => undefined,
+      wake: () => undefined,
+      stop: () => { stopped = true }
+    } as unknown as DurableCloudOutbox,
+    authenticatedCloudTransport: unusedUserTransport(),
+    agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: readyAuthority,
+      execute: async () => {
+        throw new AgentCloudRuntimeError(
+          'runtime_required',
+          'Configure an AgentRuntime before connecting collaboration.'
+        )
+      }
+    }),
+    inboxHandler: { handle: async () => undefined },
+    onAuthorityLost: async (agentId, reason) => { fenced = { agentId, reason } }
+  })
+
+  await assert.rejects(connection.connect(), /Configure an AgentRuntime/u)
+
+  assert.deepEqual(fenced, {
+    agentId: TEST_IDS.agentId,
+    reason: 'Configure an AgentRuntime before connecting collaboration.'
+  })
+  assert.equal(stopped, true)
+  assert.equal(connection.state().state, 'error')
+})
+
 test('configuration and endpoint challenge use only OIDC User transport', async () => {
   const store = await localStore([])
   const requests: RestRequest[] = []
@@ -204,8 +240,7 @@ test('registration delegates bootstrap and authority storage to Identity then re
 
   const agent = await connection.registerAgent({
     displayName: 'Desktop',
-    nodeType: 'desktop',
-    capabilities: []
+    nodeType: 'desktop'
   })
 
   assert.equal(agent.agentId, TEST_IDS.agentId)
@@ -215,14 +250,12 @@ test('registration delegates bootstrap and authority storage to Identity then re
   assert.deepEqual(registerInputs, [{
     displayName: 'Desktop',
     nodeType: 'desktop',
-    capabilities: [],
     idempotencyKey: `idem_agent.register.${createHash('sha256')
       .update(JSON.stringify({
         deviceId: TEST_IDS.deviceId,
         ownerUserId: TEST_IDS.userId,
         displayName: 'Desktop',
-        nodeType: 'desktop',
-        capabilities: []
+        nodeType: 'desktop'
       }))
       .digest('hex')
       .slice(0, 48)}`
@@ -288,8 +321,7 @@ test('registration conflict rotates through the bounded Identity lifecycle metho
 
   const result = await connection.registerAgent({
     displayName: 'Desktop',
-    nodeType: 'desktop',
-    capabilities: []
+    nodeType: 'desktop'
   })
 
   assert.equal(result.credentialVersion, 2)
@@ -393,7 +425,9 @@ async function readyAuthority(agentId: string) {
     agentId,
     userId: TEST_IDS.userId,
     deviceId: TEST_IDS.deviceId,
-    generation: agentNodeFixture.credentialVersion
+    generation: agentNodeFixture.credentialVersion,
+    runtimeId: 'codex',
+    capabilityTags: ['agent-runtime.codex', 'model-access.api']
   }
 }
 

@@ -31,6 +31,10 @@ import {
 import { createAgentCredentialBootstrap } from './agent-credential-bootstrap.js'
 import type { CloudIdentityRuntime } from './cloud-runtime.js'
 import type { IdentityPrivateVault } from './private-vault.js'
+import {
+  domainMainAgentRuntimeReadinessSchema,
+  type DomainMainAgentRuntimeReadiness
+} from '@sciforge/domain-sdk/agent-execution'
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 const MAX_QUEUED_EVENTS = 1_000
@@ -58,6 +62,8 @@ type InFlightAgentAuthorityUse = Readonly<{
 export type IdentityAgentCloudRuntimeOptions = Readonly<{
   getRuntime: () => CloudIdentityRuntime | null
   vault: IdentityPrivateVault
+  getRuntimeReadiness: () => Promise<DomainMainAgentRuntimeReadiness>
+  bindAuthorityInvalidator?: (invalidate: (reason: string) => void) => void
   fetchImpl?: typeof fetch
   webSocketFactory?: (url: string, headers: Readonly<Record<string, string>>) => WebSocket
   createBootstrap?: typeof createAgentCredentialBootstrap
@@ -67,6 +73,7 @@ export function createIdentityAgentCloudRuntime(
   options: IdentityAgentCloudRuntimeOptions
 ): AgentCloudRuntime {
   const implementation = new IdentityAgentCloudRuntime(options)
+  options.bindAuthorityInvalidator?.((reason) => implementation.invalidateIdentityAuthority(reason))
   return defineAgentCloudRuntime({
     authorityStatus: (agentId) => implementation.authorityStatus(agentId),
     registerAgent: (input) => implementation.registerAgent(input),
@@ -102,13 +109,44 @@ class IdentityAgentCloudRuntime {
     this.#createBootstrap = options.createBootstrap ?? createAgentCredentialBootstrap
   }
 
+  invalidateIdentityAuthority(reason: string): void {
+    const agentIds = new Set([
+      ...this.#authorityStates.keys(),
+      ...this.#inFlightAuthorityUses.keys()
+    ])
+    const failure = new AgentCloudRuntimeError(
+      'agent_authority_invalid',
+      reason || 'Cloud User or Device authority changed.'
+    )
+    for (const agentId of agentIds) {
+      const current = this.#authorityState(agentId)
+      this.#authorityStates.set(agentId, {
+        epoch: current.epoch + 1,
+        enabled: current.enabled
+      })
+      const uses = this.#inFlightAuthorityUses.get(agentId)
+      this.#inFlightAuthorityUses.delete(agentId)
+      for (const use of uses ?? []) use.abort(failure)
+    }
+  }
+
   async authorityStatus(rawAgentId: string): Promise<AgentCloudAuthorityStatus> {
     const agentId = agentIdSchema.parse(rawAgentId)
-    const status = this.options.getRuntime()?.authenticatedCloudTransportStatus()
-    if (!status) return { state: 'unavailable', reason: 'Cloud identity runtime is not active.' }
-    if (status.state === 'identity_required') return { state: 'identity_required' }
-    if (status.state === 'device_required') return { state: 'device_required' }
-    if (status.state === 'unavailable') return { state: 'unavailable', reason: status.reason }
+    let identity: Extract<
+      ReturnType<CloudIdentityRuntime['authenticatedCloudTransportStatus']>,
+      { state: 'ready' }
+    >
+    try {
+      identity = await this.#requireRevalidatedIdentityAuthority()
+    } catch (error) {
+      return authorityStatusFailure(error)
+    }
+    let readiness: Extract<DomainMainAgentRuntimeReadiness, { state: 'ready' }>
+    try {
+      readiness = await this.#requireRuntimeReady()
+    } catch (error) {
+      return authorityStatusFailure(error)
+    }
     if (!this.#authorityState(agentId).enabled) return { state: 'agent_required', agentId }
     let authority: StoredAgentAuthority | null
     try {
@@ -117,19 +155,23 @@ class IdentityAgentCloudRuntime {
       return { state: 'unavailable', reason: 'Agent authority could not be read securely.' }
     }
     if (!authority) return { state: 'agent_required', agentId }
-    if (authority.userId !== status.userId || authority.deviceId !== status.deviceId) {
+    if (authority.userId !== identity.userId || authority.deviceId !== identity.deviceId) {
       return { state: 'agent_required', agentId }
     }
     return {
       state: 'ready',
       agentId,
-      userId: status.userId,
-      deviceId: status.deviceId,
-      generation: authority.generation
+      userId: identity.userId,
+      deviceId: identity.deviceId,
+      generation: authority.generation,
+      runtimeId: readiness.runtimeId,
+      capabilityTags: readiness.capabilityTags
     }
   }
 
   async registerAgent(input: AgentCloudRegisterInput): Promise<AgentNode> {
+    await this.#requireRevalidatedIdentityAuthority()
+    const readiness = await this.#requireRuntimeReady()
     return this.#withLifecycle(async () => {
       const identity = this.#requireIdentityAuthority()
       const bootstrap = this.#createBootstrap()
@@ -141,7 +183,7 @@ class IdentityAgentCloudRuntime {
         deviceId: identity.deviceId,
         displayName: input.displayName,
         nodeType: input.nodeType,
-        capabilities: input.capabilities,
+        capabilities: readiness.capabilityTags,
         credentialBootstrapPublicKey: bootstrap.publicKey
       }))
       if (response.type !== 'agent.registered') {
@@ -152,6 +194,8 @@ class IdentityAgentCloudRuntime {
   }
 
   async rotateAgent(input: AgentCloudRotateInput): Promise<AgentNode> {
+    await this.#requireRevalidatedIdentityAuthority()
+    await this.#requireRuntimeReady()
     const expectedAuthorityEpoch = this.#authorityState(input.agentId).epoch
     return this.#withLifecycle(async () => {
       const bootstrap = this.#createBootstrap()
@@ -248,6 +292,8 @@ class IdentityAgentCloudRuntime {
     signal: AbortSignal
   ): AsyncIterable<WebSocketMessage> {
     const agentId = agentIdSchema.parse(rawAgentId)
+    await this.#requireRevalidatedIdentityAuthority()
+    await this.#requireRuntimeReady()
     const epoch = this.#beginAuthorityUse(agentId)
     const identity = this.#requireIdentityAuthority()
     const authority = await this.#requireAgentAuthority(agentId)
@@ -352,6 +398,8 @@ class IdentityAgentCloudRuntime {
     request: RestRequest,
     signal?: AbortSignal
   ): Promise<RestResponse> {
+    await this.#requireRevalidatedIdentityAuthority()
+    await this.#requireRuntimeReady()
     const epoch = this.#beginAuthorityUse(agentId)
     const authority = await this.#requireAgentAuthority(agentId)
     try {
@@ -599,6 +647,54 @@ class IdentityAgentCloudRuntime {
     throw new AgentCloudRuntimeError('runtime_unavailable', status.reason)
   }
 
+  async #requireRevalidatedIdentityAuthority(): Promise<Extract<
+    ReturnType<CloudIdentityRuntime['authenticatedCloudTransportStatus']>,
+    { state: 'ready' }
+  >> {
+    const runtime = this.options.getRuntime()
+    if (!runtime) {
+      throw new AgentCloudRuntimeError(
+        'runtime_unavailable',
+        'Cloud identity runtime is not active.'
+      )
+    }
+    const status = await runtime.revalidateCurrentDevice()
+    if (status.state === 'ready') return status
+    if (status.state === 'identity_required') {
+      throw new AgentCloudRuntimeError(
+        'identity_required',
+        'Sign in to SciForge Cloud before continuing.'
+      )
+    }
+    if (status.state === 'device_required') {
+      throw new AgentCloudRuntimeError('device_required', status.reason)
+    }
+    throw new AgentCloudRuntimeError('runtime_unavailable', status.reason)
+  }
+
+  async #requireRuntimeReady(): Promise<Extract<
+    DomainMainAgentRuntimeReadiness,
+    { state: 'ready' }
+  >> {
+    let readiness: DomainMainAgentRuntimeReadiness
+    try {
+      readiness = domainMainAgentRuntimeReadinessSchema.parse(
+        await this.options.getRuntimeReadiness()
+      )
+    } catch (error) {
+      throw new AgentCloudRuntimeError(
+        'runtime_unavailable',
+        'AgentRuntime readiness could not be confirmed.',
+        undefined,
+        { cause: error }
+      )
+    }
+    if (readiness.state !== 'ready') {
+      throw new AgentCloudRuntimeError('runtime_required', readiness.reason)
+    }
+    return readiness
+  }
+
   async #request(
     baseUrl: string,
     request: RestRequest,
@@ -621,6 +717,10 @@ class IdentityAgentCloudRuntime {
         signal: combined
       })
     } catch (error) {
+      if (error instanceof AgentCloudRuntimeError) throw error
+      if (combined.aborted && combined.reason instanceof AgentCloudRuntimeError) {
+        throw combined.reason
+      }
       throw new AgentCloudRuntimeError(
         'cloud_unavailable',
         'SciForge Cloud is unavailable.',
@@ -673,6 +773,18 @@ function unexpected(response: RestResponse, operation: string): AgentCloudRuntim
     'cloud_response_invalid',
     `${operation} returned an unexpected response.`
   )
+}
+
+function authorityStatusFailure(error: unknown): AgentCloudAuthorityStatus {
+  if (!(error instanceof AgentCloudRuntimeError)) {
+    return { state: 'unavailable', reason: 'Agent authority could not be confirmed.' }
+  }
+  if (error.code === 'identity_required') return { state: 'identity_required' }
+  if (error.code === 'device_required') return { state: 'device_required' }
+  if (error.code === 'runtime_required') {
+    return { state: 'runtime_required', reason: error.message }
+  }
+  return { state: 'unavailable', reason: error.message }
 }
 
 function cloudFailure(response: RestResponse): AgentCloudRuntimeError {

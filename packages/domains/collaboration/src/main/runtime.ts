@@ -175,6 +175,10 @@ export class CollaborationRuntime {
       agentCloudRuntime: this.options.agentCloudRuntime,
       inboxHandler,
       afterHeartbeat: (connectionStatus) => tasks.publishAvailability(connectionStatus),
+      onAuthorityLost: (agentId, reason) => tasks.fenceLocalAgent(
+        agentId,
+        `Identity or Runtime authority was lost: ${reason}`
+      ),
       sanitizeText: this.options.sanitizeText,
       now: this.options.now
     })

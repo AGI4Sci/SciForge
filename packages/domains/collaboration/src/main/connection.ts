@@ -51,6 +51,7 @@ export type CollaborationConnectionOptions = Readonly<{
   agentCloudRuntime: AgentCloudRuntime
   inboxHandler: CollaborationInboxHandler
   afterHeartbeat?: (connectionStatus: 'online' | 'offline') => void | Promise<void>
+  onAuthorityLost?: (agentId: string, reason: string) => void | Promise<void>
   sanitizeText?: (value: string) => string
   now?: () => Date
 }>
@@ -310,8 +311,7 @@ export class CollaborationConnection {
       deviceId: identity.deviceId,
       ownerUserId: identity.userId,
       displayName: input.displayName.trim(),
-      nodeType: input.nodeType,
-      capabilities: [...input.capabilities].sort()
+      nodeType: input.nodeType
     }
     let agent: AgentNode | undefined
     let recoverExisting = false
@@ -319,8 +319,7 @@ export class CollaborationConnection {
       agent = await this.options.agentCloudRuntime.registerAgent({
         idempotencyKey: `idem_agent.register.${digest(JSON.stringify(registrationIntent)).slice(0, 48)}`,
         displayName: registrationIntent.displayName,
-        nodeType: registrationIntent.nodeType,
-        capabilities: registrationIntent.capabilities
+        nodeType: registrationIntent.nodeType
       })
     } catch (error) {
       recoverExisting = error instanceof AgentCloudRuntimeError &&
@@ -436,14 +435,13 @@ export class CollaborationConnection {
   async connect(): Promise<void> {
     if (this.abortController) return
     const agentId = await this.requireLocalAgentId()
-    const authority = await this.options.agentCloudRuntime.authorityStatus(agentId)
-    if (authority.state !== 'ready') {
-      throw new Error('Agent authority is unavailable for this installation.')
-    }
-    this.connectionState = { state: 'connecting' }
-    const controller = new AbortController()
-    this.abortController = controller
+    let controller: AbortController | undefined
     try {
+      const authority = await this.options.agentCloudRuntime.authorityStatus(agentId)
+      if (authority.state !== 'ready') throw authorityStatusError(authority)
+      this.connectionState = { state: 'connecting' }
+      controller = new AbortController()
+      this.abortController = controller
       await this.heartbeat('online')
       await this.pullInbox()
       this.connectionState = {
@@ -452,11 +450,13 @@ export class CollaborationConnection {
       }
       this.options.outbox.start()
       this.background = [
-        this.pollLoop(controller.signal),
+        this.pollLoop(agentId, controller.signal),
         this.notificationLoop(agentId, controller.signal)
       ]
     } catch (error) {
+      if (await this.failClosedAuthority(agentId, error)) throw error
       this.abortController = null
+      controller?.abort(error)
       this.recordError(error, true)
       throw error
     }
@@ -556,7 +556,7 @@ export class CollaborationConnection {
     return managedContainers
   }
 
-  private async pollLoop(signal: AbortSignal): Promise<void> {
+  private async pollLoop(agentId: string, signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
       await delay(15_000, signal).catch(() => undefined)
       if (signal.aborted) return
@@ -569,6 +569,7 @@ export class CollaborationConnection {
         }
         this.options.outbox.start()
       } catch (error) {
+        if (await this.failClosedAuthority(agentId, error)) return
         this.recordError(error, true)
       }
     }
@@ -582,6 +583,8 @@ export class CollaborationConnection {
     if (!agent || agent.lifecycleStatus !== 'active') {
       throw new Error('This installation has no active collaboration Agent registration.')
     }
+    const authority = await this.options.agentCloudRuntime.authorityStatus(agent.agentId)
+    if (authority.state !== 'ready') throw authorityStatusError(authority)
     const response = await this.options.agentCloudRuntime.execute({
       agentId: agent.agentId,
       request: restRequestSchema.parse({
@@ -596,7 +599,7 @@ export class CollaborationConnection {
         agentId: agent.agentId,
         expectedRevision: agent.revision,
         connectionStatus,
-        capabilities: agent.capabilities
+        capabilities: authority.capabilityTags
       })
     })
     if (response.type === 'rest.error') throw new Error(response.error.message)
@@ -626,6 +629,7 @@ export class CollaborationConnection {
         }
       } catch (error) {
         if (signal.aborted) return
+        if (await this.failClosedAuthority(agentId, error)) return
         this.connectionState = {
           state: 'recovering',
           lastConnectedAt: this.connectionState.lastConnectedAt,
@@ -728,6 +732,52 @@ export class CollaborationConnection {
       }].slice(-256)
     }).catch(() => undefined)
   }
+
+  private async failClosedAuthority(agentId: string, error: unknown): Promise<boolean> {
+    if (!(error instanceof AgentCloudRuntimeError) || ![
+      'identity_required',
+      'device_required',
+      'runtime_required',
+      'runtime_unavailable',
+      'agent_required',
+      'agent_authority_invalid'
+    ].includes(error.code)) return false
+
+    const controller = this.abortController
+    this.abortController = null
+    controller?.abort(error)
+    this.options.outbox.stop()
+    await this.options.onAuthorityLost?.(agentId, error.message)
+    this.recordError(error, false)
+    return true
+  }
+}
+
+function authorityStatusError(
+  status: Exclude<Awaited<ReturnType<AgentCloudRuntime['authorityStatus']>>, { state: 'ready' }>
+): AgentCloudRuntimeError {
+  if (status.state === 'identity_required') {
+    return new AgentCloudRuntimeError(
+      'identity_required',
+      'Sign in to SciForge Cloud before continuing.'
+    )
+  }
+  if (status.state === 'device_required') {
+    return new AgentCloudRuntimeError(
+      'device_required',
+      'Enroll this Desktop Device before continuing.'
+    )
+  }
+  if (status.state === 'runtime_required') {
+    return new AgentCloudRuntimeError('runtime_required', status.reason)
+  }
+  if (status.state === 'agent_required') {
+    return new AgentCloudRuntimeError(
+      'agent_required',
+      'Register this Device as an Agent before continuing.'
+    )
+  }
+  return new AgentCloudRuntimeError('runtime_unavailable', status.reason)
 }
 
 function mapAssurance(value: HumanEndpointBinding['assurance']): 'low' | 'verified' | 'strong' {

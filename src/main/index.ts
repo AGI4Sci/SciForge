@@ -197,7 +197,10 @@ import {
   projectDomainAgentTurnMessages,
   subscribeDomainAgentTranscriptMessages
 } from './domain-agent-transcript'
-import { createDomainAgentExecutionHost } from './domain-agent-execution'
+import {
+  createDomainAgentExecutionHost,
+  resolveDomainAgentRuntimeReadiness
+} from './domain-agent-execution'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const HIDDEN_START_ARG = '--hidden'
@@ -1630,7 +1633,8 @@ app
       },
       agentExecution: createDomainAgentExecutionHost({
         runtime: agentRuntimeHost,
-        defaultRuntimeId: async () => getActiveAgentRuntime(await store.load())
+        defaultRuntimeId: async () => getActiveAgentRuntime(await store.load()),
+        runtimeReadiness: async () => resolveDomainAgentRuntimeReadiness(await store.load())
       }),
       remoteCapabilityApprovals: {
         subscribe: (listener) => agentRuntimeHost.subscribeRemoteCapabilityApprovals(listener),

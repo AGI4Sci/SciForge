@@ -200,6 +200,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
     const externalNavigation = { issueTarget, openTarget } as never
     const principal = new IdentityService(userDataDir, installationSeed)
     const principalSnapshots: PrincipalContextSnapshot[] = []
+    const authorityInvalidations: string[] = []
     const disposePrincipal = principal.subscribe((snapshot) => principalSnapshots.push(snapshot))
     const runtime = await CloudIdentityRuntime.create({
       userDataDir,
@@ -211,7 +212,8 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       installationId: installationSeed,
       privateVault,
       externalNavigation,
-      appVersion: '0.2.17'
+      appVersion: '0.2.17',
+      onAuthorityInvalidated: (reason) => authorityInvalidations.push(reason)
     })
 
     try {
@@ -228,6 +230,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       expect(principal.current()?.deviceId).not.toBe(installationId)
       const principalBeforeRefresh = principal.snapshot()
       const principalPublicationCount = principalSnapshots.length
+      const invalidationsBeforeRefresh = authorityInvalidations.length
       const deviceStatesDuringRefresh: string[] = []
       const disposeRuntimeRefresh = runtime.subscribe(() => {
         deviceStatesDuringRefresh.push(runtime.snapshot().device.state)
@@ -241,6 +244,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       expect(refreshRotation).toBe(2)
       expect(principal.snapshot()).toEqual(principalBeforeRefresh)
       expect(principalSnapshots).toHaveLength(principalPublicationCount)
+      expect(authorityInvalidations).toHaveLength(invalidationsBeforeRefresh)
       expect(deviceStatesDuringRefresh.length).toBeGreaterThan(0)
       expect(new Set(deviceStatesDuringRefresh)).toEqual(new Set(['active']))
       await expect(runtime.executeAuthenticatedCloud({
@@ -292,6 +296,9 @@ describe('CloudIdentityRuntime HTTP integration', () => {
         identity: { state: 'signed-in' },
         device: { state: 'revoked' }
       })
+      expect(authorityInvalidations.slice(invalidationsBeforeRefresh)).toContain(
+        'Desktop Device authority changed.'
+      )
       expect(refreshRotation).toBe(3)
       await expect(runtime.executeAuthenticatedCloud({
         contractVersion: 1,
@@ -403,6 +410,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       principal.close()
 
       const restartedPrincipal = new IdentityService(userDataDir, installationSeed)
+      const restartedAuthorityInvalidations: string[] = []
       const restartedRuntime = await CloudIdentityRuntime.create({
         userDataDir,
         appRoot: userDataDir,
@@ -413,7 +421,8 @@ describe('CloudIdentityRuntime HTTP integration', () => {
         installationId: installationSeed,
         privateVault,
         externalNavigation,
-        appVersion: '0.2.17'
+        appVersion: '0.2.17',
+        onAuthorityInvalidated: (reason) => restartedAuthorityInvalidations.push(reason)
       })
       try {
         await expect(restartedRuntime.initialize()).resolves.toMatchObject({
@@ -430,6 +439,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
           identity: { state: 'signed-out' },
           device: { state: 'signed-out' }
         })
+        expect(restartedAuthorityInvalidations).toContain('OIDC User authority changed.')
         expect(revocationAccepted).toBe(true)
         expect(privateVault.value({ kind: 'oidc-session' })).toBeNull()
         expect(restartedPrincipal.current()?.assurance).toBe('local-selection')

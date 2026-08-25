@@ -231,7 +231,7 @@ export function buildAgentRegistrationInput(
 ): CollaborationAgentRegisterInput | undefined {
   const normalized = displayName.trim()
   return normalized
-    ? { displayName: normalized, nodeType: 'desktop', capabilities: [] }
+    ? { displayName: normalized, nodeType: 'desktop' }
     : undefined
 }
 
@@ -686,8 +686,7 @@ export function CollaborationPanel({
                 if (!authorityRecoveryAgent) return
                 void runAction('agent-authority-recover', () => client.registerAgent({
                   displayName: authorityRecoveryAgent.displayName,
-                  nodeType: authorityRecoveryAgent.nodeType,
-                  capabilities: authorityRecoveryAgent.capabilities
+                  nodeType: authorityRecoveryAgent.nodeType
                 }))
               }}
               onSelectPrimary={(agentId) => {
