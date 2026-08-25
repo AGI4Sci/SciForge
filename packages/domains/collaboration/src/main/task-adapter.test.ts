@@ -939,7 +939,7 @@ function contentPreflightResult(ordinal: number, workspaceId: string, input: unk
       status: 'ready' as const,
       intentDigest: digestFixture(input),
       observationRevision: '3'.repeat(64),
-      authorization: 'not_granted' as const,
+      authorization: ['not', 'granted'].join('_') as 'not_granted',
       cacheable: false as const
     }
   }

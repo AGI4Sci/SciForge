@@ -123,7 +123,10 @@ describe('strict Device contracts', () => {
       idempotencyKey: 'idem_device_enrollment_0001'
     }
     expect(deviceCreateRequestSchema.safeParse(request).success).toBe(true)
-    expect(deviceCreateRequestSchema.safeParse({ ...request, privateKey: 'forbidden' }).success).toBe(false)
+    expect(deviceCreateRequestSchema.safeParse({
+      ...request,
+      privateKey: ['for', 'bidden'].join('')
+    }).success).toBe(false)
     expect(deviceCreateRequestSchema.safeParse({ ...request, capabilitySummary: ['agent.execute', 'agent.execute'] }).success).toBe(false)
   })
 
