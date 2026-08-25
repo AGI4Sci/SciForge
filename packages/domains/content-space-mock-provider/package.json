@@ -1,10 +1,10 @@
 {
   "name": "@sciforge/domain-content-space-mock-provider",
-  "version": "1.0.2",
+  "version": "2.0.0",
   "license": "MIT",
   "type": "module",
   "private": false,
-  "description": "Local deterministic mock Provider for Content Space V1.",
+  "description": "Development-only deterministic mock Provider for Content Space V4.",
   "exports": {
     "./definition": "./src/definition.ts",
     "./main": "./src/main/index.ts"
@@ -20,8 +20,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sciforge/domain-content-space": "3.0.0",
-    "@sciforge/domain-sdk": "^0.2.1",
+    "@sciforge/domain-content-space": "4.1.0",
+    "@sciforge/domain-sdk": "^0.2.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {

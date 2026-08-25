@@ -6,6 +6,9 @@ import {
   ContentSpaceOperationError,
   artifactReferenceSchema,
   contentContainerReferenceSchema,
+  contentSpaceExternalBindingAttestationSchema,
+  contentSpaceFileDescendantProofEvidenceSchema,
+  contentSpaceFileDescendantProofLimitsSchema,
   contentFileReferenceSchema,
   contentSpaceEntryNameSchema,
   contentSpacePageRequestSchema,
@@ -17,11 +20,12 @@ import {
   type ContentSpaceCapabilityState,
   type ContentSpaceEntrySummary,
   type ContentSpaceProvider,
+  type ContentSpaceProviderFileDescendantProofInput,
   type ContentSpaceProviderOperationContext,
+  type ContentSpaceProviderUploadNewReceipt,
   type ContentSpaceProviderWriteContext,
   type ContentSpaceUploadSource,
   type CreateFolderReceipt,
-  type UploadNewReceipt
 } from '@sciforge/domain-content-space/contract'
 import { principalSnapshotSchema } from '@sciforge/domain-sdk/principal'
 import { providerInstanceRefSchema } from '@sciforge/domain-sdk/provider-composition'
@@ -56,7 +60,7 @@ type FileNode = Readonly<{
   versions: ReadonlyMap<string, FileVersion>
 }>
 type StoredNode = FolderNode | FileNode
-type WriteReceipt = CreateFolderReceipt | UploadNewReceipt
+type WriteReceipt = CreateFolderReceipt | ContentSpaceProviderUploadNewReceipt
 type WriteRecord =
   | Readonly<{ status: 'pending' | 'unknown'; fingerprint: string }>
   | Readonly<{ status: 'committed'; fingerprint: string; receipt: WriteReceipt }>
@@ -87,8 +91,10 @@ export function createLocalMockContentSpaceProvider(
   return defineContentSpaceProvider({
     contractVersion: CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
 
-    async attestExternalBinding() {
-      return undefined
+    async attestExternalBinding(context) {
+      assertContext(context, providerInstanceRef, now)
+      await assertPrincipalCurrent(context)
+      return mockExternalBinding(context, providerInstanceRef)
     },
 
     async describeCapabilities(context) {
@@ -141,6 +147,10 @@ export function createLocalMockContentSpaceProvider(
           ? CONTAINER_CAPABILITIES
           : FILE_CAPABILITIES
       })
+    },
+
+    async proveFileDescendant(input) {
+      return proveFileDescendant(nodes, input, providerInstanceRef, now)
     },
 
     async createFolder({ context, parent, name }) {
@@ -205,7 +215,7 @@ export function createLocalMockContentSpaceProvider(
         contentDigest
       ].join(':')
       const prior = priorReceipt(writes, key, fingerprint)
-      if (prior) return prior as UploadNewReceipt
+      if (prior) return prior as ContentSpaceProviderUploadNewReceipt
       assertNoCollision(nodes, parentReference.containerId, safeName)
       assertNewWriteCapacity(writes, key)
       if (nodes.size >= LOCAL_MOCK_CONTENT_SPACE_LIMITS.maxNodes ||
@@ -231,12 +241,26 @@ export function createLocalMockContentSpaceProvider(
           versions: new Map([[versionId, version]])
         }))
         totalFileBytes += sourceSize
+        const reference = fileReference(providerInstanceRef, fileId)
+        const observed = entrySummary(providerInstanceRef, assertFile(nodes, fileId))
+        if (observed.kind !== 'file' ||
+          observed.reference.fileId !== reference.fileId ||
+          observed.label !== safeName ||
+          observed.size !== sourceSize) {
+          fail('outcome_unknown', 'The upload write-after observation does not match the write.')
+        }
         const receipt = Object.freeze({
           invocationId: context.invocationId,
           parent: parentReference,
           name: safeName,
           sourceSize,
-          reference: fileReference(providerInstanceRef, fileId)
+          reference,
+          writeAfterObservation: Object.freeze({
+            parent: parentReference,
+            reference,
+            name: observed.label,
+            size: observed.size
+          })
         })
         writes.set(key, Object.freeze({ status: 'committed', fingerprint, receipt }))
         return receipt
@@ -249,8 +273,9 @@ export function createLocalMockContentSpaceProvider(
       }
     },
 
-    async downloadFile({ context, reference, destination }) {
+    async authorizeDownload({ context, reference }) {
       assertWriteContext(context, providerInstanceRef, now)
+      await assertPrincipalCurrent(context)
       const parsedReference = assertFileProvider(reference, providerInstanceRef)
       const file = assertFile(nodes, parsedReference.fileId)
       const versionId = 'immutableVersionId' in parsedReference
@@ -261,16 +286,39 @@ export function createLocalMockContentSpaceProvider(
         parsedReference.digest.value !== version.digest)) {
         fail('invalid_reference', 'The requested immutable version is unknown or mismatched.')
       }
-      for (let offset = 0; offset < version.bytes.byteLength; offset += CHUNK_BYTES) {
-        assertNotCancelled(context.signal)
-        await destination.write(version.bytes.slice(offset, offset + CHUNK_BYTES))
-      }
-      assertNotCancelled(context.signal)
+      let state: 'active' | 'consumed' | 'retired' = 'active'
       return Object.freeze({
-        invocationId: context.invocationId,
-        reference: parsedReference,
-        bytesWritten: version.bytes.byteLength,
-        digest: Object.freeze({ algorithm: 'sha256' as const, value: version.digest })
+        consume: async ({ destination }) => {
+          if (state !== 'active') {
+            fail('unauthorized', 'The local download authorization is no longer active.')
+          }
+          state = 'consumed'
+          await assertPrincipalCurrent(context)
+          assertNotCancelled(context.signal)
+          if (!destination || typeof destination.write !== 'function') {
+            fail('invalid_input', 'A managed download destination is required.')
+          }
+          try {
+            for (let offset = 0; offset < version.bytes.byteLength; offset += CHUNK_BYTES) {
+              assertNotCancelled(context.signal)
+              await destination.write(version.bytes.slice(offset, offset + CHUNK_BYTES))
+            }
+            assertNotCancelled(context.signal)
+            await assertPrincipalCurrent(context)
+            return Object.freeze({
+              invocationId: context.invocationId,
+              reference: parsedReference,
+              bytesWritten: version.bytes.byteLength,
+              digest: Object.freeze({ algorithm: 'sha256' as const, value: version.digest })
+            })
+          } catch (error) {
+            if (error instanceof ContentSpaceOperationError) throw error
+            fail('outcome_unknown', 'The local download outcome cannot be proven.')
+          }
+        },
+        retire: async () => {
+          if (state === 'active') state = 'retired'
+        }
       })
     },
 
@@ -355,6 +403,97 @@ function assertWriteContext(
     !/^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$/u.test(context.invocationId)) {
     fail('invalid_input', 'A bounded invocation identity and cancellation signal are required.')
   }
+}
+
+async function assertPrincipalCurrent(
+  context: ContentSpaceProviderOperationContext
+): Promise<void> {
+  try {
+    await context.assertPrincipalCurrent()
+  } catch {
+    fail('unauthorized', 'The Principal changed during the local Provider operation.')
+  }
+  assertNotCancelled(context.signal)
+}
+
+function mockExternalBinding(
+  context: ContentSpaceProviderOperationContext,
+  providerInstanceRef: string
+) {
+  const principal = principalSnapshotSchema.parse(context.principal)
+  return contentSpaceExternalBindingAttestationSchema.parse({
+    providerInstanceRef,
+    principal,
+    externalSubject: createHash('sha256')
+      .update(`local-mock-subject\0${providerInstanceRef}\0${JSON.stringify(principal)}`)
+      .digest('hex'),
+    bindingRevision: createHash('sha256')
+      .update(`local-mock-binding-v1\0${providerInstanceRef}`)
+      .digest('hex')
+  })
+}
+
+async function proveFileDescendant(
+  nodes: ReadonlyMap<string, StoredNode>,
+  input: ContentSpaceProviderFileDescendantProofInput,
+  providerInstanceRef: string,
+  now: () => Date
+) {
+  const { context } = input
+  assertWriteContext(context, providerInstanceRef, now)
+  const root = assertContainerReference(input.root, providerInstanceRef)
+  const candidate = contentFileReferenceSchema.parse(input.candidate)
+  if (candidate.providerInstanceRef !== providerInstanceRef) {
+    fail('invalid_target', 'The candidate file belongs to another Provider Instance.')
+  }
+  const limits = contentSpaceFileDescendantProofLimitsSchema.parse(input.limits)
+  const expectedBinding = contentSpaceExternalBindingAttestationSchema.safeParse(
+    context.expectedExternalBinding
+  )
+  const currentBinding = mockExternalBinding(context, providerInstanceRef)
+  if (!expectedBinding.success ||
+    JSON.stringify(expectedBinding.data) !== JSON.stringify(currentBinding)) {
+    fail('unauthorized', 'The current local Provider binding does not match the expected binding.')
+  }
+
+  await assertPrincipalCurrent(context)
+  const visited = new Set<string>([candidate.fileId])
+  let parentId = assertFile(nodes, candidate.fileId).parentId
+  let depth = 1
+  while (true) {
+    if (visited.has(parentId)) {
+      fail('invalid_reference', 'The local Provider hierarchy contains a cycle.')
+    }
+    visited.add(parentId)
+    if (visited.size > limits.maxNodes || depth > limits.maxDepth) {
+      fail('bounds_exceeded', 'The local Provider descendant proof exceeded its bounds.')
+    }
+    if (parentId === root.containerId) break
+    const parent = assertFolder(nodes, parentId)
+    if (!parent.parentId) {
+      fail('invalid_reference', 'The candidate file is not under the authorized root.')
+    }
+    parentId = parent.parentId
+    depth += 1
+  }
+  await assertPrincipalCurrent(context)
+  return contentSpaceFileDescendantProofEvidenceSchema.parse({
+    invocationId: context.invocationId,
+    providerInstanceRef,
+    authority: providerInstanceRef,
+    root,
+    candidate,
+    binding: currentBinding,
+    counts: {
+      depth,
+      pages: 0,
+      nodes: visited.size,
+      elapsedMs: 0
+    },
+    provedAt: now().toISOString(),
+    cacheable: false,
+    portable: false
+  })
 }
 
 function writeKey(context: ContentSpaceProviderWriteContext): string {
