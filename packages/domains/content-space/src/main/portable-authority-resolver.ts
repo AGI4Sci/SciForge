@@ -24,6 +24,10 @@ import {
   contentContainerReferenceSchema,
   contentFileReferenceSchema,
   contentSpacePortableResourceStateSchema,
+  parsePortableContentContainerReference,
+  parsePortableContentFileReference,
+  type ContentSpacePortableContainerReferenceEnvelope,
+  type ContentSpacePortableFileReferenceEnvelope,
   type ArtifactReference,
   type ContentContainerReference,
   type ContentEntryReference,
@@ -88,6 +92,43 @@ export function createContentSpacePortableAuthorityResolver(input: Readonly<{
       return resolution(reference, resourceKind, service, initial.entry)
     }
   })
+}
+
+/**
+ * Resolves an owner-coded envelope to its domain identity for one active
+ * Content Space invocation. This deliberately performs no Host materialization
+ * and issues no Broker resource: the decoded identity becomes authority only
+ * after the service reauthorizes the exact root/pair under the current
+ * Principal and Provider binding.
+ */
+export function resolveContentSpacePortableInvocationReference(
+  resolver: PortableResourceAuthorityResolver<ContentSpaceAuthorityContext>,
+  envelope: ContentSpacePortableContainerReferenceEnvelope
+): ContentContainerReference
+export function resolveContentSpacePortableInvocationReference(
+  resolver: PortableResourceAuthorityResolver<ContentSpaceAuthorityContext>,
+  envelope: ContentSpacePortableFileReferenceEnvelope
+): ContentFileReference
+export function resolveContentSpacePortableInvocationReference(
+  resolver: PortableResourceAuthorityResolver<ContentSpaceAuthorityContext>,
+  envelope:
+    | ContentSpacePortableContainerReferenceEnvelope
+    | ContentSpacePortableFileReferenceEnvelope
+): ContentContainerReference | ContentFileReference {
+  const authority = resolver.lookupAuthority({
+    reference: envelope.authority,
+    kind: envelope.kind
+  })
+  if (!authority ||
+    authority.resolverId !== CONTENT_SPACE_PORTABLE_AUTHORITY_RESOLVER_ID ||
+    authority.reference !== envelope.authority ||
+    authority.kind !== envelope.kind ||
+    authority.context?.providerInstanceRef !== envelope.authority) {
+    throw new TypeError('Content Space portable authority is unavailable.')
+  }
+  return envelope.kind === CONTENT_CONTAINER_REFERENCE_KIND
+    ? parsePortableContentContainerReference(envelope)
+    : parsePortableContentFileReference(envelope)
 }
 
 function resolution(

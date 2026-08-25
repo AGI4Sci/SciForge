@@ -16,4 +16,16 @@ describe('Content Space domain package definition', () => {
       '1.5.0'
     )).toBe(true)
   })
+
+  it('declares both provider-owned capability grants through the standard manifest', () => {
+    const grants = domainPackageDefinition.entrypoints
+      .find(({ process }) => process === 'main')
+      ?.contributions.filter(({ kind }) => kind === 'main.system-capability-grant')
+      .map(({ id }) => id)
+      .sort()
+    expect(grants).toEqual([
+      'content-space.provisioning-batch',
+      'content-space.system-transfer'
+    ])
+  })
 })

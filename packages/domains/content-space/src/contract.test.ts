@@ -5,8 +5,8 @@ import { parsePortableResourceReference } from '@sciforge/domain-sdk/portable-re
 import * as contract from './contract.js'
 
 describe('Content Space public contract', () => {
-  it('publishes the third-major Provider boundary for directory-member administration', () => {
-    expect(contract.CONTENT_SPACE_PROVIDER_CONTRACT_VERSION).toBe('3.0.0')
+  it('publishes the fourth-major Provider boundary for paired descendant proof', () => {
+    expect(contract.CONTENT_SPACE_PROVIDER_CONTRACT_VERSION).toBe('4.0.0')
   })
 
   it('projects the bounded Provider Kind needed for renderer-owned enrollment matching', () => {
@@ -117,6 +117,264 @@ describe('Content Space public contract', () => {
     }).handle).toBe(`portal_${'p'.repeat(32)}`)
     expect(() => contract.contentSpaceOpenPortalTargetInputSchema.parse({
       handle: 'https://provider.invalid/portal?token=secret'
+    })).toThrow()
+  })
+
+  it('publishes one grant and three effect-honest system transfer contracts', () => {
+    expect(contract.CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID)
+      .toBe('content-space.system-transfer')
+    expect(contract.CONTENT_SPACE_SYSTEM_CAPABILITY_GRANTS)
+      .toEqual(['content-space.system-transfer'])
+    expect(Object.isFrozen(contract.CONTENT_SPACE_SYSTEM_CAPABILITY_GRANTS)).toBe(true)
+    expect(contract.CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID)
+      .toBe('content-space.provisioning-batch')
+    expect(contract.CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT).toMatchObject({
+      actionId: 'content-space.system-transfer-preflight',
+      effect: 'read'
+    })
+    expect(contract.CONTENT_SPACE_SYSTEM_DOWNLOAD_CONTRACT).toMatchObject({
+      actionId: 'content-space.system-download',
+      effect: 'workspace-write'
+    })
+    expect(contract.CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT).toMatchObject({
+      actionId: 'content-space.system-upload-new',
+      effect: 'external-write'
+    })
+  })
+
+  it('accepts only portable root/candidate identities and relative system paths', () => {
+    const root = contract.toPortableContentContainerReference({
+      providerInstanceRef: 'provider-instance-a',
+      containerId: 'root'
+    })
+    const candidate = contract.toPortableContentFileReference({
+      providerInstanceRef: 'provider-instance-a',
+      fileId: 'candidate'
+    })
+    expect(contract.contentSpaceSystemDownloadInputSchema.parse({
+      root,
+      candidate,
+      workspaceRelativePath: 'results/download.txt'
+    })).toEqual({ root, candidate, workspaceRelativePath: 'results/download.txt' })
+    expect(contract.contentSpaceSystemUploadNewInputSchema.parse({
+      root,
+      name: 'upload.txt',
+      workspaceRelativePath: 'inputs/upload.txt'
+    })).toEqual({ root, name: 'upload.txt', workspaceRelativePath: 'inputs/upload.txt' })
+    expect(contract.contentSpaceSystemTransferPreflightInputSchema.parse({
+      operation: 'download',
+      input: { root, candidate, workspaceRelativePath: 'results/download.txt' }
+    })).toEqual({
+      operation: 'download',
+      input: { root, candidate, workspaceRelativePath: 'results/download.txt' }
+    })
+    expect(contract.contentSpaceSystemTransferPreflightInputSchema.parse({
+      operation: 'upload-new',
+      input: { root, name: 'upload.txt', workspaceRelativePath: 'inputs/upload.txt' }
+    })).toEqual({
+      operation: 'upload-new',
+      input: { root, name: 'upload.txt', workspaceRelativePath: 'inputs/upload.txt' }
+    })
+
+    expect(() => contract.contentSpaceSystemDownloadInputSchema.parse({
+      root,
+      candidate: contract.toPortableArtifactReference({
+        providerInstanceRef: 'provider-instance-a',
+        fileId: 'candidate',
+        immutableVersionId: 'version-1'
+      }),
+      workspaceRelativePath: 'results/download.txt'
+    })).toThrow()
+    expect(() => contract.contentSpaceSystemDownloadInputSchema.parse({
+      root,
+      candidate: contract.toPortableContentFileReference({
+        providerInstanceRef: 'provider-instance-b',
+        fileId: 'candidate'
+      }),
+      workspaceRelativePath: 'results/download.txt'
+    })).toThrow()
+    expect(() => contract.contentSpaceSystemUploadNewInputSchema.parse({
+      root,
+      name: 'upload.txt',
+      workspaceRelativePath: '/absolute/upload.txt'
+    })).toThrow()
+    expect(() => contract.contentSpaceSystemUploadNewInputSchema.parse({
+      root,
+      name: 'upload.txt',
+      workspaceRelativePath: 'inputs/upload.txt',
+      operationKey: 'task-123',
+      taskId: 'task-123'
+    })).toThrow()
+  })
+
+  it('wraps canonical transfer receipts with mandatory Host byte evidence', () => {
+    const sha256 = 'a'.repeat(64)
+    const invocationId = 'invocation_1234567890'
+    const reference = {
+      providerInstanceRef: 'provider-instance-a',
+      fileId: 'file-a'
+    }
+    const execution = {
+      callerId: 'sciforge.collaboration:worker-runtime',
+      principal: {
+        authority: 'sciforge.identity-access',
+        subject: 'user-a',
+        assurance: 'cloud-authenticated' as const,
+        deviceId: 'device-a',
+        identityVersion: 1
+      },
+      principalSnapshotDigest: 'b'.repeat(64),
+      workspaceId: 'workspace-a',
+      executionContextDigest: 'c'.repeat(64),
+      invocationId
+    }
+    const providerDigest = {
+      status: 'deferred' as const,
+      reason: 'provider_digest_not_in_run0_contract' as const
+    }
+    const portableReference = contract.toPortableContentFileReference(reference)
+    const preflight = {
+      execution,
+      status: 'ready' as const,
+      intentDigest: '1'.repeat(64),
+      observationRevision: '2'.repeat(64),
+      authorization: 'not_granted' as const,
+      cacheable: false as const
+    }
+    expect(contract.contentSpaceSystemTransferPreflightResultSchema.parse({
+      ok: true,
+      value: preflight
+    })).toEqual({ ok: true, value: preflight })
+    expect(() => contract.contentSpaceSystemTransferPreflightObservationSchema.parse({
+      ...preflight,
+      authorization: 'granted'
+    })).toThrow()
+    expect(() => contract.contentSpaceSystemTransferPreflightObservationSchema.parse({
+      ...preflight,
+      token: 'must-never-be-portable'
+    })).toThrow()
+    const readAfterObservation = {
+      reference: portableReference,
+      bytes: 5,
+      sha256
+    }
+    const download = {
+      execution,
+      receipt: { invocationId, reference, bytesWritten: 5 },
+      readAfterObservation,
+      workspaceRelativePath: 'results/file.txt',
+      bytes: 5,
+      sha256,
+      transferReceiptDigest: 'd'.repeat(64),
+      observationDigest: 'e'.repeat(64),
+      providerDigest
+    }
+    expect(contract.contentSpaceSystemDownloadResultSchema.parse({
+      ok: true,
+      value: download
+    })).toEqual({ ok: true, value: download })
+    expect(() => contract.contentSpaceSystemDownloadReceiptSchema.parse({
+      ...download,
+      bytes: 4
+    })).toThrow()
+    expect(() => contract.contentSpaceSystemDownloadReceiptSchema.parse({
+      ...download,
+      sha256: undefined
+    })).toThrow()
+
+    const upload = {
+      execution,
+      receipt: {
+        invocationId,
+        parent: { providerInstanceRef: 'provider-instance-a', containerId: 'root' },
+        name: 'file.txt',
+        sourceSize: 5,
+        reference
+      },
+      portableReference,
+      writeAfterObservation: {
+        parent: contract.toPortableContentContainerReference({
+          providerInstanceRef: 'provider-instance-a',
+          containerId: 'root'
+        }),
+        reference: portableReference,
+        name: 'file.txt',
+        size: 5
+      },
+      workspaceRelativePath: 'inputs/file.txt',
+      bytes: 5,
+      sha256,
+      transferReceiptDigest: 'f'.repeat(64),
+      observationDigest: '0'.repeat(64),
+      providerDigest
+    }
+    expect(contract.contentSpaceSystemUploadNewResultSchema.parse({
+      ok: true,
+      value: upload
+    })).toEqual({ ok: true, value: upload })
+    expect(() => contract.contentSpaceSystemUploadNewReceiptSchema.parse({
+      ...upload,
+      portableReference: contract.toPortableContentFileReference({
+        ...reference,
+        fileId: 'another-file'
+      })
+    })).toThrow()
+  })
+
+  it('fixes descendant proof accounting and validates exact provider-bound evidence', () => {
+    expect(contract.contentSpaceFileDescendantProofLimitsSchema.parse(
+      contract.CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS
+    )).toEqual({ maxDepth: 32, maxPages: 64, maxNodes: 4_096, deadlineMs: 10_000 })
+    for (const [field, value] of [
+      ['maxDepth', 31],
+      ['maxPages', 63],
+      ['maxNodes', 4_095],
+      ['deadlineMs', 9_999]
+    ] as const) {
+      expect(() => contract.contentSpaceFileDescendantProofLimitsSchema.parse({
+        ...contract.CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS,
+        [field]: value
+      })).toThrow()
+    }
+
+    const principal = {
+      authority: 'sciforge.identity-access',
+      subject: 'principal-a',
+      assurance: 'local-selection' as const,
+      deviceId: 'device-a',
+      identityVersion: 1
+    }
+    const evidence = {
+      invocationId: 'invocation_1234567890',
+      providerInstanceRef: 'provider-instance-a',
+      authority: 'provider-instance-a',
+      root: { providerInstanceRef: 'provider-instance-a', containerId: 'root' },
+      candidate: { providerInstanceRef: 'provider-instance-a', fileId: 'candidate' },
+      binding: {
+        providerInstanceRef: 'provider-instance-a',
+        principal,
+        externalSubject: 'a'.repeat(64),
+        bindingRevision: 'b'.repeat(64)
+      },
+      counts: { depth: 32, pages: 64, nodes: 4_096, elapsedMs: 10_000 },
+      provedAt: '2026-08-24T00:00:00.000Z',
+      cacheable: false as const,
+      portable: false as const
+    }
+    expect(contract.contentSpaceFileDescendantProofEvidenceSchema.parse(evidence))
+      .toEqual(evidence)
+    expect(() => contract.contentSpaceFileDescendantProofEvidenceSchema.parse({
+      ...evidence,
+      counts: { ...evidence.counts, depth: 33 }
+    })).toThrow()
+    expect(() => contract.contentSpaceFileDescendantProofEvidenceSchema.parse({
+      ...evidence,
+      authority: 'provider-instance-b'
+    })).toThrow()
+    expect(() => contract.contentSpaceFileDescendantProofRequestSchema.parse({
+      root: evidence.root,
+      candidate: { ...evidence.candidate, providerInstanceRef: 'provider-instance-b' },
+      limits: contract.CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS
     })).toThrow()
   })
 
@@ -352,6 +610,23 @@ function providerFixture(): contract.ContentSpaceProvider {
           },
       capabilities: []
     }),
+    proveFileDescendant: async ({ context, root, candidate }) => ({
+      invocationId: context.invocationId,
+      providerInstanceRef: context.providerInstanceRef,
+      authority: context.providerInstanceRef,
+      root,
+      candidate,
+      binding: context.expectedExternalBinding ?? {
+        providerInstanceRef: context.providerInstanceRef,
+        principal: context.principal,
+        externalSubject: 'a'.repeat(64),
+        bindingRevision: 'b'.repeat(64)
+      },
+      counts: { depth: 1, pages: 1, nodes: 2, elapsedMs: 1 },
+      provedAt: '2026-08-24T00:00:00.000Z',
+      cacheable: false,
+      portable: false
+    }),
     createFolder: async ({ context, parent, name }) => ({
       invocationId: context.invocationId,
       parent,
@@ -363,12 +638,21 @@ function providerFixture(): contract.ContentSpaceProvider {
       parent,
       name,
       sourceSize: source.size,
-      reference: { providerInstanceRef: parent.providerInstanceRef, fileId: 'new_file' }
+      reference: { providerInstanceRef: parent.providerInstanceRef, fileId: 'new_file' },
+      writeAfterObservation: {
+        parent,
+        reference: { providerInstanceRef: parent.providerInstanceRef, fileId: 'new_file' },
+        name,
+        size: source.size
+      }
     }),
-    downloadFile: async ({ context, reference }) => ({
-      invocationId: context.invocationId,
-      reference,
-      bytesWritten: 0
+    authorizeDownload: async ({ context, reference }) => ({
+      consume: async () => ({
+        invocationId: context.invocationId,
+        reference,
+        bytesWritten: 0
+      }),
+      retire: async () => undefined
     }),
     resolvePortalTarget: async () => ({
       url: 'https://content-space.invalid/portal',

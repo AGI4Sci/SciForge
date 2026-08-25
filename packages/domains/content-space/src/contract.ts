@@ -3,7 +3,8 @@ import { z } from 'zod'
 import {
   domainCapabilityResourceHandleSchema,
   domainFileTransferHandleSchema,
-  domainWorkspaceRelativePathSchema
+  domainWorkspaceRelativePathSchema,
+  type DomainCapabilityContract
 } from '@sciforge/domain-sdk/host'
 import {
   domainExternalNavigationIssuedTargetSchema,
@@ -32,7 +33,17 @@ import type { ContentSpaceProviderFeatures } from './provider-features.js'
 import { contentSpaceProviderFeaturesSchema } from './provider-features-schema.js'
 
 export const CONTENT_SPACE_DOMAIN_MODULE_ID = 'sciforge.content-space' as const
-export const CONTENT_SPACE_PROVIDER_CONTRACT_VERSION = '3.0.0' as const
+export const CONTENT_SPACE_PROVIDER_CONTRACT_VERSION = '4.0.0' as const
+
+/** The single manifest-issued grant governing the Content Space system transfer family. */
+export const CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID =
+  'content-space.system-transfer' as const
+/** Provider-owned grant for one exact, live Human-confirmed administration batch. */
+export const CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID =
+  'content-space.provisioning-batch' as const
+export const CONTENT_SPACE_SYSTEM_CAPABILITY_GRANTS = Object.freeze([
+  CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID
+] as const)
 
 export const CONTENT_CONTAINER_REFERENCE_KIND = 'content-space.container-reference' as const
 export const CONTENT_FILE_REFERENCE_KIND = 'content-space.file-reference' as const
@@ -100,6 +111,9 @@ export const CONTENT_SPACE_CAPABILITY_IDS = Object.freeze({
   createFolder: 'content-space.create-folder',
   uploadNew: 'content-space.upload-new',
   download: 'content-space.download',
+  systemTransferPreflight: 'content-space.system-transfer-preflight',
+  systemDownload: 'content-space.system-download',
+  systemUploadNew: 'content-space.system-upload-new',
   authorizeAgentRoot: 'content-space.authorize-agent-root',
   agentListEntries: 'content-space.agent-list-entries',
   agentCreateFolder: 'content-space.agent-create-folder',
@@ -140,6 +154,14 @@ export const CONTENT_SPACE_LIMITS = Object.freeze({
   featureOperationDeadlineMs: 240_000,
   maxPortalLifetimeMs: 5 * 60_000
 })
+
+/** Fixed accounting limits for one fresh root-to-file descendant proof. */
+export const CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS = Object.freeze({
+  maxDepth: 32,
+  maxPages: 64,
+  maxNodes: 4_096,
+  deadlineMs: 10_000
+} as const)
 
 export const contentSpaceTransferProgressSchema = z.object({
   operation: z.enum(['upload', 'download']),
@@ -380,9 +402,11 @@ const providerResourceIdSchema = z.string()
     message: 'Local Broker and connection handles are not Provider resource identities.'
   })
 
+export const contentSpaceSha256Schema = z.string().regex(/^[a-f0-9]{64}$/u)
+
 export const artifactDigestSchema = z.object({
   algorithm: z.literal('sha256'),
-  value: z.string().regex(/^[a-f0-9]{64}$/u)
+  value: contentSpaceSha256Schema
 }).strict().readonly()
 
 const contentContainerIdentitySchema = z.object({
@@ -396,6 +420,26 @@ const artifactIdentitySchema = z.object({
   immutableVersionId: providerResourceIdSchema,
   digest: artifactDigestSchema.optional()
 }).strict().readonly()
+
+/** Exact owner-coded portable envelopes accepted by the system transfer family. */
+export const contentSpacePortableContainerReferenceEnvelopeSchema = z.object({
+  contractVersion: z.literal(PORTABLE_RESOURCE_REFERENCE_CONTRACT_VERSION),
+  kind: z.literal(CONTENT_CONTAINER_REFERENCE_KIND),
+  authority: providerInstanceRefSchema,
+  identity: contentContainerIdentitySchema
+}).strict().readonly()
+export const contentSpacePortableFileReferenceEnvelopeSchema = z.object({
+  contractVersion: z.literal(PORTABLE_RESOURCE_REFERENCE_CONTRACT_VERSION),
+  kind: z.literal(CONTENT_FILE_REFERENCE_KIND),
+  authority: providerInstanceRefSchema,
+  identity: contentFileIdentitySchema
+}).strict().readonly()
+export type ContentSpacePortableContainerReferenceEnvelope = z.infer<
+  typeof contentSpacePortableContainerReferenceEnvelopeSchema
+>
+export type ContentSpacePortableFileReferenceEnvelope = z.infer<
+  typeof contentSpacePortableFileReferenceEnvelopeSchema
+>
 
 export const contentContainerReferenceSchema = z.object({
   providerInstanceRef: providerInstanceRefSchema,
@@ -506,6 +550,47 @@ export const uploadNewReceiptSchema = z.object({
   sourceSize: z.number().int().nonnegative().max(CONTENT_SPACE_LIMITS.maxUploadBytes),
   reference: contentFileReferenceSchema
 }).strict().readonly()
+/**
+ * Provider-owned write-after observation for one upload-new dispatch. The
+ * observation is evidence of the exact entry read back after the external
+ * write; it is not an ACL, permission grant, or portable authority proof.
+ */
+export const contentSpaceUploadWriteAfterObservationSchema = z.object({
+  parent: contentContainerReferenceSchema,
+  reference: contentFileReferenceSchema,
+  name: contentSpaceEntryNameSchema,
+  size: z.number().int().nonnegative().max(CONTENT_SPACE_LIMITS.maxUploadBytes)
+}).strict().superRefine((observation, context) => {
+  if (observation.parent.providerInstanceRef !== observation.reference.providerInstanceRef) {
+    context.addIssue({
+      code: 'custom',
+      path: ['reference', 'providerInstanceRef'],
+      message: 'Upload observation parent and file must use one Provider Instance.'
+    })
+  }
+}).readonly()
+export const contentSpaceProviderUploadNewReceiptSchema = z.object({
+  invocationId: contentSpaceInvocationIdSchema,
+  parent: contentContainerReferenceSchema,
+  name: contentSpaceEntryNameSchema,
+  sourceSize: z.number().int().nonnegative().max(CONTENT_SPACE_LIMITS.maxUploadBytes),
+  reference: contentFileReferenceSchema,
+  writeAfterObservation: contentSpaceUploadWriteAfterObservationSchema
+}).strict().superRefine((receipt, context) => {
+  const observation = receipt.writeAfterObservation
+  if (observation.parent.providerInstanceRef !== receipt.parent.providerInstanceRef ||
+    observation.parent.containerId !== receipt.parent.containerId ||
+    observation.reference.providerInstanceRef !== receipt.reference.providerInstanceRef ||
+    observation.reference.fileId !== receipt.reference.fileId ||
+    observation.name !== receipt.name ||
+    observation.size !== receipt.sourceSize) {
+    context.addIssue({
+      code: 'custom',
+      path: ['writeAfterObservation'],
+      message: 'Upload write-after observation must exactly match the canonical receipt.'
+    })
+  }
+}).readonly()
 export const downloadReceiptSchema = z.object({
   invocationId: contentSpaceInvocationIdSchema,
   reference: z.union([contentFileReferenceSchema, artifactReferenceSchema]),
@@ -515,6 +600,12 @@ export const downloadReceiptSchema = z.object({
 
 export type CreateFolderReceipt = z.infer<typeof createFolderReceiptSchema>
 export type UploadNewReceipt = z.infer<typeof uploadNewReceiptSchema>
+export type ContentSpaceUploadWriteAfterObservation = z.infer<
+  typeof contentSpaceUploadWriteAfterObservationSchema
+>
+export type ContentSpaceProviderUploadNewReceipt = z.infer<
+  typeof contentSpaceProviderUploadNewReceiptSchema
+>
 export type DownloadReceipt = z.infer<typeof downloadReceiptSchema>
 
 /** Trusted Provider claim. Only ContentSpaceService may turn it into an ArtifactReference. */
@@ -613,6 +704,219 @@ export const contentSpaceDownloadInputSchema = z.object({
   reference: z.union([contentFileReferenceSchema, artifactReferenceSchema]),
   destinationHandle: domainFileTransferHandleSchema
 }).strict().readonly()
+export const contentSpaceSystemDownloadInputSchema = z.object({
+  root: contentSpacePortableContainerReferenceEnvelopeSchema,
+  candidate: contentSpacePortableFileReferenceEnvelopeSchema,
+  workspaceRelativePath: domainWorkspaceRelativePathSchema
+}).strict().superRefine((input, context) => {
+  if (input.root.authority !== input.candidate.authority) {
+    context.addIssue({
+      code: 'custom',
+      path: ['candidate', 'authority'],
+      message: 'System download root and candidate must use one exact authority.'
+    })
+  }
+}).readonly()
+export const contentSpaceSystemUploadNewInputSchema = z.object({
+  root: contentSpacePortableContainerReferenceEnvelopeSchema,
+  name: contentSpaceEntryNameSchema,
+  workspaceRelativePath: domainWorkspaceRelativePathSchema
+}).strict().readonly()
+export const contentSpaceSystemTransferPreflightInputSchema = z.discriminatedUnion(
+  'operation',
+  [
+    z.object({
+      operation: z.literal('download'),
+      input: contentSpaceSystemDownloadInputSchema
+    }).strict(),
+    z.object({
+      operation: z.literal('upload-new'),
+      input: contentSpaceSystemUploadNewInputSchema
+    }).strict()
+  ]
+).readonly()
+
+export type ContentSpaceSystemDownloadInput = z.infer<
+  typeof contentSpaceSystemDownloadInputSchema
+>
+export type ContentSpaceSystemUploadNewInput = z.infer<
+  typeof contentSpaceSystemUploadNewInputSchema
+>
+export type ContentSpaceSystemTransferPreflightInput = z.infer<
+  typeof contentSpaceSystemTransferPreflightInputSchema
+>
+
+export const contentSpaceSystemUploadWriteAfterObservationSchema = z.object({
+  parent: contentSpacePortableContainerReferenceEnvelopeSchema,
+  reference: contentSpacePortableFileReferenceEnvelopeSchema,
+  name: contentSpaceEntryNameSchema,
+  size: z.number().int().nonnegative().max(CONTENT_SPACE_LIMITS.maxUploadBytes)
+}).strict().superRefine((observation, context) => {
+  if (observation.parent.authority !== observation.reference.authority) {
+    context.addIssue({
+      code: 'custom',
+      path: ['reference', 'authority'],
+      message: 'System upload observation parent and file must use one authority.'
+    })
+  }
+}).readonly()
+export type ContentSpaceSystemUploadWriteAfterObservation = z.infer<
+  typeof contentSpaceSystemUploadWriteAfterObservationSchema
+>
+
+const systemCallerIdSchema = z.string().min(1).max(256)
+  .refine((value) => value === value.trim())
+const systemDigestSchema = z.string().regex(/^[a-f0-9]{64}$/u)
+export const contentSpaceSystemExecutionBindingSchema = z.object({
+  callerId: systemCallerIdSchema,
+  principal: principalSnapshotSchema,
+  principalSnapshotDigest: systemDigestSchema,
+  workspaceId: z.string().min(1).max(1_024).refine((value) => value === value.trim()),
+  executionContextDigest: systemDigestSchema,
+  invocationId: contentSpaceInvocationIdSchema
+}).strict().readonly()
+export type ContentSpaceSystemExecutionBinding = z.infer<
+  typeof contentSpaceSystemExecutionBindingSchema
+>
+
+export const contentSpaceSystemTransferPreflightStatusSchema = z.enum([
+  'ready',
+  'provider_not_ready',
+  'principal_stale',
+  'binding_stale'
+])
+export const contentSpaceSystemTransferPreflightObservationSchema = z.object({
+  execution: contentSpaceSystemExecutionBindingSchema,
+  status: contentSpaceSystemTransferPreflightStatusSchema,
+  intentDigest: systemDigestSchema,
+  observationRevision: systemDigestSchema,
+  authorization: z.literal('not_granted'),
+  cacheable: z.literal(false)
+}).strict().readonly()
+export type ContentSpaceSystemTransferPreflightStatus = z.infer<
+  typeof contentSpaceSystemTransferPreflightStatusSchema
+>
+export type ContentSpaceSystemTransferPreflightObservation = z.infer<
+  typeof contentSpaceSystemTransferPreflightObservationSchema
+>
+
+export const contentSpaceDeferredProviderDigestSchema = z.object({
+  status: z.literal('deferred'),
+  reason: z.literal('provider_digest_not_in_run0_contract')
+}).strict().readonly()
+
+/** Host-observed bytes from the exact Provider-authorized system download. */
+export const contentSpaceSystemDownloadObservationSchema = z.object({
+  reference: contentSpacePortableFileReferenceEnvelopeSchema,
+  bytes: z.number().int().nonnegative().max(CONTENT_SPACE_LIMITS.maxFileBytes),
+  sha256: contentSpaceSha256Schema
+}).strict().readonly()
+export type ContentSpaceSystemDownloadObservation = z.infer<
+  typeof contentSpaceSystemDownloadObservationSchema
+>
+
+export const contentSpaceSystemDownloadReceiptSchema = z.object({
+  execution: contentSpaceSystemExecutionBindingSchema,
+  receipt: downloadReceiptSchema,
+  readAfterObservation: contentSpaceSystemDownloadObservationSchema,
+  workspaceRelativePath: domainWorkspaceRelativePathSchema,
+  bytes: z.number().int().nonnegative().max(CONTENT_SPACE_LIMITS.maxFileBytes),
+  sha256: contentSpaceSha256Schema,
+  transferReceiptDigest: systemDigestSchema,
+  observationDigest: systemDigestSchema,
+  providerDigest: contentSpaceDeferredProviderDigestSchema
+}).strict().superRefine((output, context) => {
+  if ('immutableVersionId' in output.receipt.reference) {
+    context.addIssue({
+      code: 'custom',
+      path: ['receipt', 'reference'],
+      message: 'Run-0 system download accepts Content File references only.'
+    })
+  }
+  if (output.receipt.bytesWritten !== output.bytes) {
+    context.addIssue({
+      code: 'custom',
+      path: ['bytes'],
+      message: 'System download bytes must match the canonical receipt.'
+    })
+  }
+  if (output.receipt.digest && output.receipt.digest.value !== output.sha256) {
+    context.addIssue({
+      code: 'custom',
+      path: ['sha256'],
+      message: 'System download SHA-256 must match the canonical receipt digest.'
+    })
+  }
+  const observation = output.readAfterObservation
+  if ('immutableVersionId' in output.receipt.reference ||
+    observation.reference.authority !== output.receipt.reference.providerInstanceRef ||
+    observation.reference.identity.fileId !== output.receipt.reference.fileId ||
+    observation.bytes !== output.bytes || observation.sha256 !== output.sha256) {
+    context.addIssue({
+      code: 'custom',
+      path: ['readAfterObservation'],
+      message: 'System download observation must identify the exact authorized bytes.'
+    })
+  }
+}).readonly()
+export const contentSpaceSystemUploadNewReceiptSchema = z.object({
+  execution: contentSpaceSystemExecutionBindingSchema,
+  receipt: uploadNewReceiptSchema,
+  portableReference: contentSpacePortableFileReferenceEnvelopeSchema,
+  writeAfterObservation: contentSpaceSystemUploadWriteAfterObservationSchema,
+  workspaceRelativePath: domainWorkspaceRelativePathSchema,
+  bytes: z.number().int().nonnegative().max(CONTENT_SPACE_LIMITS.maxUploadBytes),
+  sha256: contentSpaceSha256Schema,
+  transferReceiptDigest: systemDigestSchema,
+  observationDigest: systemDigestSchema,
+  providerDigest: contentSpaceDeferredProviderDigestSchema
+}).strict().superRefine((output, context) => {
+  if (output.receipt.sourceSize !== output.bytes) {
+    context.addIssue({
+      code: 'custom',
+      path: ['bytes'],
+      message: 'System upload bytes must match the canonical receipt.'
+    })
+  }
+  const identity = output.portableReference.identity
+  if (output.portableReference.authority !== output.receipt.reference.providerInstanceRef ||
+    identity.fileId !== output.receipt.reference.fileId) {
+    context.addIssue({
+      code: 'custom',
+      path: ['portableReference'],
+      message: 'System upload portable reference must identify the canonical receipt file.'
+    })
+  }
+  const observation = output.writeAfterObservation
+  if (observation.parent.authority !== output.receipt.parent.providerInstanceRef ||
+    observation.parent.identity.containerId !== output.receipt.parent.containerId ||
+    observation.reference.authority !== output.portableReference.authority ||
+    observation.reference.identity.fileId !== identity.fileId ||
+    observation.name !== output.receipt.name ||
+    observation.size !== output.receipt.sourceSize) {
+    context.addIssue({
+      code: 'custom',
+      path: ['writeAfterObservation'],
+      message: 'System upload observation must identify the exact canonical write result.'
+    })
+  }
+}).readonly()
+
+export type ContentSpaceSystemDownloadReceipt = z.infer<
+  typeof contentSpaceSystemDownloadReceiptSchema
+>
+export type ContentSpaceSystemUploadNewReceipt = z.infer<
+  typeof contentSpaceSystemUploadNewReceiptSchema
+>
+export type ContentSpaceSystemDownloadResult = ContentSpaceResult<
+  ContentSpaceSystemDownloadReceipt
+>
+export type ContentSpaceSystemUploadNewResult = ContentSpaceResult<
+  ContentSpaceSystemUploadNewReceipt
+>
+export type ContentSpaceSystemTransferPreflightResult = ContentSpaceResult<
+  ContentSpaceSystemTransferPreflightObservation
+>
 export const contentSpaceAuthorizeAgentRootInputSchema = z.object({
   providerInstanceRef: providerInstanceRefSchema,
   scope: z.enum(['personal', 'shared']),
@@ -677,6 +981,15 @@ export const contentSpaceEntryObservationResultSchema = contentSpaceResultSchema
 export const createFolderResultSchema = contentSpaceResultSchema(createFolderReceiptSchema)
 export const uploadNewResultSchema = contentSpaceResultSchema(uploadNewReceiptSchema)
 export const downloadResultSchema = contentSpaceResultSchema(downloadReceiptSchema)
+export const contentSpaceSystemDownloadResultSchema = contentSpaceResultSchema(
+  contentSpaceSystemDownloadReceiptSchema
+)
+export const contentSpaceSystemUploadNewResultSchema = contentSpaceResultSchema(
+  contentSpaceSystemUploadNewReceiptSchema
+)
+export const contentSpaceSystemTransferPreflightResultSchema = contentSpaceResultSchema(
+  contentSpaceSystemTransferPreflightObservationSchema
+)
 export const contentSpaceAgentRootAuthorizationResultSchema = contentSpaceResultSchema(
   contentSpaceAgentRootAuthorizationSchema
 )
@@ -693,6 +1006,34 @@ export const immutableVersionObservationResultSchema = contentSpaceResultSchema(
   immutableVersionObservationSchema
 )
 
+export const CONTENT_SPACE_SYSTEM_DOWNLOAD_CONTRACT: DomainCapabilityContract<
+  ContentSpaceSystemDownloadInput,
+  ContentSpaceSystemDownloadResult
+> = Object.freeze({
+  actionId: CONTENT_SPACE_CAPABILITY_IDS.systemDownload,
+  effect: 'workspace-write',
+  inputSchema: contentSpaceSystemDownloadInputSchema,
+  outputSchema: contentSpaceSystemDownloadResultSchema
+})
+export const CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT: DomainCapabilityContract<
+  ContentSpaceSystemTransferPreflightInput,
+  ContentSpaceSystemTransferPreflightResult
+> = Object.freeze({
+  actionId: CONTENT_SPACE_CAPABILITY_IDS.systemTransferPreflight,
+  effect: 'read',
+  inputSchema: contentSpaceSystemTransferPreflightInputSchema,
+  outputSchema: contentSpaceSystemTransferPreflightResultSchema
+})
+export const CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT: DomainCapabilityContract<
+  ContentSpaceSystemUploadNewInput,
+  ContentSpaceSystemUploadNewResult
+> = Object.freeze({
+  actionId: CONTENT_SPACE_CAPABILITY_IDS.systemUploadNew,
+  effect: 'external-write',
+  inputSchema: contentSpaceSystemUploadNewInputSchema,
+  outputSchema: contentSpaceSystemUploadNewResultSchema
+})
+
 export const opaqueExternalBindingValueSchema = z.string().regex(/^[a-f0-9]{64}$/u)
 
 /**
@@ -707,6 +1048,72 @@ export const contentSpaceExternalBindingAttestationSchema = z.object({
 }).strict().readonly()
 export type ContentSpaceExternalBindingAttestation = z.infer<
   typeof contentSpaceExternalBindingAttestationSchema
+>
+
+export const contentSpaceFileDescendantProofLimitsSchema = z.object({
+  maxDepth: z.literal(CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS.maxDepth),
+  maxPages: z.literal(CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS.maxPages),
+  maxNodes: z.literal(CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS.maxNodes),
+  deadlineMs: z.literal(CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS.deadlineMs)
+}).strict().readonly()
+export type ContentSpaceFileDescendantProofLimits = z.infer<
+  typeof contentSpaceFileDescendantProofLimitsSchema
+>
+
+export const contentSpaceFileDescendantProofRequestSchema = z.object({
+  root: contentContainerReferenceSchema,
+  candidate: contentFileReferenceSchema,
+  limits: contentSpaceFileDescendantProofLimitsSchema
+}).strict().superRefine((request, context) => {
+  if (request.root.providerInstanceRef !== request.candidate.providerInstanceRef) {
+    context.addIssue({
+      code: 'custom',
+      path: ['candidate', 'providerInstanceRef'],
+      message: 'Descendant proof root and candidate must use one Provider Instance.'
+    })
+  }
+}).readonly()
+export type ContentSpaceFileDescendantProofRequest = z.infer<
+  typeof contentSpaceFileDescendantProofRequestSchema
+>
+
+export const contentSpaceFileDescendantProofEvidenceSchema = z.object({
+  invocationId: contentSpaceInvocationIdSchema,
+  providerInstanceRef: providerInstanceRefSchema,
+  authority: providerInstanceRefSchema,
+  root: contentContainerReferenceSchema,
+  candidate: contentFileReferenceSchema,
+  binding: contentSpaceExternalBindingAttestationSchema,
+  counts: z.object({
+    depth: z.number().int().min(1)
+      .max(CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS.maxDepth),
+    pages: z.number().int().nonnegative()
+      .max(CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS.maxPages),
+    nodes: z.number().int().min(2)
+      .max(CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS.maxNodes),
+    elapsedMs: z.number().nonnegative()
+      .max(CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS.deadlineMs)
+  }).strict().readonly(),
+  provedAt: z.string().datetime({ offset: true }),
+  cacheable: z.literal(false),
+  portable: z.literal(false)
+}).strict().superRefine((evidence, context) => {
+  const authorities = [
+    evidence.authority,
+    evidence.root.providerInstanceRef,
+    evidence.candidate.providerInstanceRef,
+    evidence.binding.providerInstanceRef
+  ]
+  if (authorities.some((authority) => authority !== evidence.providerInstanceRef)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['providerInstanceRef'],
+      message: 'Descendant proof evidence must echo one exact Provider Instance and authority.'
+    })
+  }
+}).readonly()
+export type ContentSpaceFileDescendantProofEvidence = z.infer<
+  typeof contentSpaceFileDescendantProofEvidenceSchema
 >
 
 export type ContentSpaceProviderOperationContext = Readonly<{
@@ -727,6 +1134,20 @@ export type ContentSpaceProviderOperationContext = Readonly<{
 export type ContentSpaceProviderWriteContext = ContentSpaceProviderOperationContext & Readonly<{
   invocationId: string
   signal: AbortSignal
+}>
+export type ContentSpaceProviderFileDescendantProofInput = Readonly<{
+  context: ContentSpaceProviderWriteContext
+  root: ContentContainerReference
+  candidate: ContentFileReference
+  limits: ContentSpaceFileDescendantProofLimits
+}>
+export type ContentSpaceProviderDownloadLease = Readonly<{
+  /** One-use provider authorization bound to the exact current session. */
+  consume(input: Readonly<{
+    destination: ContentSpaceDownloadDestination
+  }>): Promise<DownloadReceipt>
+  /** Idempotently retires an unconsumed authorization without dispatching bytes. */
+  retire(): Promise<void>
 }>
 export type ContentSpaceUploadSource = Readonly<{
   name: string
@@ -766,6 +1187,9 @@ export type ContentSpaceProvider = Readonly<{
     context: ContentSpaceProviderOperationContext
     reference: ContentEntryReference
   }>): Promise<ContentSpaceProviderEntryObservation>
+  proveFileDescendant(
+    input: ContentSpaceProviderFileDescendantProofInput
+  ): Promise<ContentSpaceFileDescendantProofEvidence>
   createFolder(input: Readonly<{
     context: ContentSpaceProviderWriteContext
     parent: ContentContainerReference
@@ -776,12 +1200,11 @@ export type ContentSpaceProvider = Readonly<{
     parent: ContentContainerReference
     name: string
     source: ContentSpaceUploadSource
-  }>): Promise<UploadNewReceipt>
-  downloadFile(input: Readonly<{
+  }>): Promise<ContentSpaceProviderUploadNewReceipt>
+  authorizeDownload(input: Readonly<{
     context: ContentSpaceProviderWriteContext
     reference: ContentFileReference | ArtifactReference
-    destination: ContentSpaceDownloadDestination
-  }>): Promise<DownloadReceipt>
+  }>): Promise<ContentSpaceProviderDownloadLease>
   resolvePortalTarget(input: Readonly<{
     context: ContentSpaceProviderOperationContext
     reference: ContentEntryReference
@@ -802,11 +1225,12 @@ export function defineContentSpaceProvider(input: ContentSpaceProvider): Content
     'contractVersion',
     'createFolder',
     'describeCapabilities',
-    'downloadFile',
+    'authorizeDownload',
     'listContainers',
     'listEntries',
     'observeEntry',
     'observeImmutableVersion',
+    'proveFileDescendant',
     'resolvePortalTarget',
     'uploadNewFile'
   ].sort()
@@ -855,19 +1279,23 @@ export const artifactReferenceCodec: PortableResourceReferenceCodec<
 
 export function toPortableContentContainerReference(
   input: ContentContainerReference
-): PortableResourceReferenceEnvelope {
+): ContentSpacePortableContainerReferenceEnvelope {
   const reference = contentContainerReferenceSchema.parse(input)
-  return portableEnvelope(reference.providerInstanceRef, contentContainerReferenceCodec, {
-    containerId: reference.containerId
-  })
+  return contentSpacePortableContainerReferenceEnvelopeSchema.parse(
+    portableEnvelope(reference.providerInstanceRef, contentContainerReferenceCodec, {
+      containerId: reference.containerId
+    })
+  )
 }
 export function toPortableContentFileReference(
   input: ContentFileReference
-): PortableResourceReferenceEnvelope {
+): ContentSpacePortableFileReferenceEnvelope {
   const reference = contentFileReferenceSchema.parse(input)
-  return portableEnvelope(reference.providerInstanceRef, contentFileReferenceCodec, {
-    fileId: reference.fileId
-  })
+  return contentSpacePortableFileReferenceEnvelopeSchema.parse(
+    portableEnvelope(reference.providerInstanceRef, contentFileReferenceCodec, {
+      fileId: reference.fileId
+    })
+  )
 }
 export function toPortableArtifactReference(
   input: ArtifactReference

@@ -193,6 +193,15 @@ export type ContentSpaceVerificationAdmission = Readonly<{
   now: Date
 }>
 
+export type ContentSpaceVerificationProfileMatchAdmission = Readonly<
+  Omit<ContentSpaceVerificationAdmission, 'transferLimits'>
+>
+
+export type ContentSpaceVerificationProfileMatch = Readonly<{
+  profileId: string
+  transferLimits: ContentSpaceVerificationTransferLimits
+}>
+
 export function defineContentSpaceVerificationPolicy(
   input: ContentSpaceVerificationPolicy
 ): ContentSpaceVerificationPolicy {
@@ -213,14 +222,43 @@ export function contentSpaceVerificationPolicyAdmits(
   policy: ContentSpaceVerificationPolicy | undefined,
   admission: ContentSpaceVerificationAdmission
 ): boolean {
-  if (!policy || admission.state.readiness !== 'poc_only' ||
-    admission.state.reasonCode !== 'verification_profile_required' ||
-    !admission.audience || !Number.isFinite(admission.now.getTime())) return false
-
-  return policy.profiles.some((profile) =>
-    sameVerificationProfileFacts(profile, admission) &&
-    sameExternalBinding(profile.externalBinding, admission.externalBinding, admission)
+  const { transferLimits: requestedTransferLimits, ...facts } = admission
+  const match = contentSpaceVerificationPolicyMatch(policy, facts)
+  return match !== undefined && sameTransferLimits(
+    match.transferLimits,
+    requestedTransferLimits
   )
+}
+
+/**
+ * Selects one exact trusted profile after every invocation fact, including the
+ * live external binding, has matched. Ambiguous overlapping profiles fail
+ * closed instead of choosing the widest byte limit.
+ */
+export function contentSpaceVerificationPolicyMatch(
+  policy: ContentSpaceVerificationPolicy | undefined,
+  admission: ContentSpaceVerificationProfileMatchAdmission
+): ContentSpaceVerificationProfileMatch | undefined {
+  const matches = matchingVerificationProfiles(policy, admission, true)
+  if (matches.length !== 1) return undefined
+  const [profile] = matches
+  return Object.freeze({
+    profileId: profile!.profileId,
+    transferLimits: profile!.transferLimits
+  })
+}
+
+/**
+ * A preflight only: reports whether an otherwise exact profile could match
+ * after obtaining a Provider-owned binding attestation. It does not admit the
+ * invocation or reveal the profile's byte limit.
+ */
+export function contentSpaceVerificationPolicyHasExternalBindingCandidate(
+  policy: ContentSpaceVerificationPolicy | undefined,
+  admission: ContentSpaceVerificationProfileMatchAdmission
+): boolean {
+  return matchingVerificationProfiles(policy, admission, false)
+    .some((profile) => profile.externalBinding !== undefined)
 }
 
 /**
@@ -243,22 +281,51 @@ function sameVerificationProfileFacts(
   profile: ContentSpaceVerificationProfile,
   admission: ContentSpaceVerificationAdmission
 ): boolean {
+  return sameVerificationProfileCoreFacts(profile, admission) &&
+    sameTransferLimits(profile.transferLimits, admission.transferLimits)
+}
+
+function sameVerificationProfileCoreFacts(
+  profile: ContentSpaceVerificationProfile,
+  admission: ContentSpaceVerificationProfileMatchAdmission
+): boolean {
   return profile.providerInstanceRef === admission.providerInstanceRef &&
     profile.audience === admission.audience &&
     samePrincipalSnapshot(profile.principal, admission.principal) &&
     sameVerificationAuthority(profile.authority, admission.authority) &&
     profile.operation.family === admission.operation.family &&
     profile.operation.operation === admission.operation.operation &&
-    profile.transferLimits.maxUploadBytes === admission.transferLimits.maxUploadBytes &&
-    profile.transferLimits.maxDownloadBytes === admission.transferLimits.maxDownloadBytes &&
     admission.now.getTime() >= Date.parse(profile.validFrom) &&
     admission.now.getTime() < Date.parse(profile.expiresAt)
+}
+
+function sameTransferLimits(
+  left: ContentSpaceVerificationTransferLimits,
+  right: ContentSpaceVerificationTransferLimits
+): boolean {
+  return left.maxUploadBytes === right.maxUploadBytes &&
+    left.maxDownloadBytes === right.maxDownloadBytes
+}
+
+function matchingVerificationProfiles(
+  policy: ContentSpaceVerificationPolicy | undefined,
+  admission: ContentSpaceVerificationProfileMatchAdmission,
+  requireExactExternalBinding: boolean
+): readonly ContentSpaceVerificationProfile[] {
+  if (!policy || admission.state.readiness !== 'poc_only' ||
+    admission.state.reasonCode !== 'verification_profile_required' ||
+    !admission.audience || !Number.isFinite(admission.now.getTime())) return []
+  return policy.profiles.filter((profile) =>
+    sameVerificationProfileCoreFacts(profile, admission) &&
+    (!requireExactExternalBinding ||
+      sameExternalBinding(profile.externalBinding, admission.externalBinding, admission))
+  )
 }
 
 function sameExternalBinding(
   expected: ContentSpaceVerificationProfile['externalBinding'],
   actual: ContentSpaceExternalBindingAttestation | undefined,
-  admission: ContentSpaceVerificationAdmission
+  admission: Pick<ContentSpaceVerificationAdmission, 'providerInstanceRef' | 'principal'>
 ): boolean {
   if (!expected) return true
   if (!actual) return false

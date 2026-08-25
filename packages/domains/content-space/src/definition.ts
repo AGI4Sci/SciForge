@@ -17,6 +17,12 @@ export const CONTENT_SPACE_CAPABILITY_FACTORY_CONTRIBUTION = contributionFor(
 export const CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION = contributionFor(
   'main', 'main.runtime-lifecycle'
 )
+export const CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_CONTRIBUTION = contributionFor(
+  'main', 'main.system-capability-grant'
+)
+export const CONTENT_SPACE_PROVISIONING_BATCH_GRANT_CONTRIBUTION = contributionById(
+  'main', 'content-space.provisioning-batch'
+)
 export const CONTENT_SPACE_CONTAINER_REFERENCE_CODEC_CONTRIBUTION = contributionById(
   'main', 'content-space.container-reference-codec'
 )

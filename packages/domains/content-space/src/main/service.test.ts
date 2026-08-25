@@ -22,15 +22,18 @@ import {
 
 import {
   CONTENT_SPACE_LIMITS,
+  CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS,
   CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
   ContentSpaceOperationError,
   defineContentSpaceProvider,
   toPortableContentContainerReference,
   type ContentEntryReference,
   type ContentSpaceCapabilityState,
+  type ContentSpaceDownloadDestination,
   type ContentSpaceExternalBindingAttestation,
   type ContentSpaceProvider,
-  type ContentSpaceProviderHostPorts
+  type ContentSpaceProviderHostPorts,
+  type DownloadReceipt
 } from '../contract.js'
 import {
   CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION,
@@ -106,6 +109,36 @@ const readyCapabilities: readonly ContentSpaceCapabilityState[] = Object.freeze(
     reasonCode: 'available' as const
   }))
 )
+
+type ProviderDownloadDispatch = (input: Readonly<
+  Parameters<ContentSpaceProvider['authorizeDownload']>[0] & {
+    destination: ContentSpaceDownloadDestination
+  }
+>) => Promise<DownloadReceipt>
+
+function authorizeDownloadUsing(
+  dispatch: ProviderDownloadDispatch
+): ContentSpaceProvider['authorizeDownload'] {
+  return async ({ context, reference }) => {
+    let state: 'available' | 'consumed' | 'retired' = 'available'
+    return Object.freeze({
+      consume: async ({ destination }) => {
+        if (state !== 'available') throw new Error('Download lease is unavailable.')
+        state = 'consumed'
+        return dispatch({ context, reference, destination })
+      },
+      retire: async () => {
+        if (state === 'available') state = 'retired'
+      }
+    })
+  }
+}
+
+const defaultDownloadFile: ProviderDownloadDispatch = async ({ context, reference }) => ({
+  invocationId: context.invocationId,
+  reference,
+  bytesWritten: 0
+})
 
 describe('ContentSpaceService', () => {
   it('blocks each unready administration operation before binding the Provider feature', async () => {
@@ -867,11 +900,11 @@ describe('ContentSpaceService', () => {
 
   it('downgrades Host-gated readiness and never calls gated Provider methods', async () => {
     const uploadNewFile = vi.fn(providerFixture().uploadNewFile)
-    const downloadFile = vi.fn(providerFixture().downloadFile)
+    const downloadFile = vi.fn(defaultDownloadFile)
     const resolvePortalTarget = vi.fn(providerFixture().resolvePortalTarget)
     const service = serviceFor(providerFixture({
       uploadNewFile,
-      downloadFile,
+      authorizeDownload: authorizeDownloadUsing(downloadFile),
       resolvePortalTarget
     }), {
       platform: { fileTransfers: false, externalNavigation: false }
@@ -1060,26 +1093,40 @@ describe('ContentSpaceService', () => {
   })
 
   it('preserves outcome_unknown and requests source cleanup after upload dispatch times out', async () => {
-    const close = vi.fn(async () => undefined)
-    const uploadNewFile = vi.fn(() => new Promise<never>(() => undefined))
-    const service = serviceFor(providerFixture({ uploadNewFile }), {
-      operationDeadlineMs: 10
-    })
-
-    await expect(service.uploadNewFile({
-      parent: ROOT,
-      name: 'input.txt',
-      openSource: async () => ({
-        name: 'input.txt',
-        size: 1,
-        read: async () => new Uint8Array([1]),
-        close
+    vi.useFakeTimers()
+    try {
+      const dispatched = deferred<void>()
+      const close = vi.fn(async () => undefined)
+      const uploadNewFile = vi.fn(() => {
+        dispatched.resolve()
+        return new Promise<never>(() => undefined)
       })
-    }, writeCall())).rejects.toMatchObject({
-      detail: { code: 'outcome_unknown', retry: 'never' }
-    })
-    expect(uploadNewFile).toHaveBeenCalledTimes(1)
-    expect(close).toHaveBeenCalledTimes(1)
+      const service = serviceFor(providerFixture({ uploadNewFile }), {
+        operationDeadlineMs: 10
+      })
+
+      const pending = service.uploadNewFile({
+        parent: ROOT,
+        name: 'input.txt',
+        openSource: async () => ({
+          name: 'input.txt',
+          size: 1,
+          read: async () => new Uint8Array([1]),
+          close
+        })
+      }, writeCall())
+      const outcome = expect(pending).rejects.toMatchObject({
+        detail: { code: 'outcome_unknown', retry: 'never' }
+      })
+      await dispatched.promise
+      await vi.advanceTimersByTimeAsync(10)
+
+      await outcome
+      expect(uploadNewFile).toHaveBeenCalledTimes(1)
+      expect(close).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('rejects a read result when the Host Principal changes during Provider await', async () => {
@@ -1156,7 +1203,13 @@ describe('ContentSpaceService', () => {
       parent,
       name,
       sourceSize: source.size,
-      reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'uploaded' }
+      reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'uploaded' },
+      writeAfterObservation: {
+        parent,
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'uploaded' },
+        name,
+        size: source.size
+      }
     })) satisfies ContentSpaceProvider['uploadNewFile']
     const service = serviceFor(providerFixture({ uploadNewFile }))
 
@@ -1247,7 +1300,13 @@ describe('ContentSpaceService', () => {
         parent,
         name,
         sourceSize: source.size,
-        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'uploaded' }
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'uploaded' },
+        writeAfterObservation: {
+          parent,
+          reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'uploaded' },
+          name,
+          size: source.size
+        }
       }
     })
     const attestExternalBinding = vi.fn(async () => externalBinding)
@@ -1314,10 +1373,573 @@ describe('ContentSpaceService', () => {
     expect(blockedUpload).not.toHaveBeenCalled()
   })
 
+  it('uses real production-ready transfer evidence without a static verification profile', async () => {
+    const attestExternalBinding = vi.fn(async () => externalBinding)
+    const observeEntry = vi.fn(providerFixture().observeEntry)
+    const uploadNewFile = vi.fn(providerFixture().uploadNewFile)
+    const openSource = vi.fn(async () => ({
+      name: 'real.txt',
+      size: 1,
+      sha256: createHash('sha256').update(new Uint8Array([1])).digest('hex'),
+      read: async () => new Uint8Array([1]),
+      close: async () => undefined
+    }))
+    const service = serviceFor(providerFixture({
+      attestExternalBinding,
+      observeEntry,
+      uploadNewFile
+    }))
+
+    await expect(service.uploadNewFile({
+      parent: ROOT,
+      name: 'real.txt',
+      includeTransferEvidence: true,
+      openSource
+    }, systemWriteCall())).resolves.toMatchObject({
+      receipt: { name: 'real.txt', sourceSize: 1 },
+      bytes: 1
+    })
+
+    expect(attestExternalBinding).toHaveBeenCalledOnce()
+    expect(observeEntry).toHaveBeenCalledOnce()
+    expect(openSource).toHaveBeenCalledOnce()
+    expect(uploadNewFile).toHaveBeenCalledOnce()
+  })
+
+  it('preflights an exact download without issuing authority and reauthorizes the later transfer', async () => {
+    const attestExternalBinding = vi.fn(async () => externalBinding)
+    const proveFileDescendant = vi.fn(providerFixture().proveFileDescendant)
+    const authorizeDownload = vi.fn(providerFixture().authorizeDownload)
+    const service = serviceFor(providerFixture({
+      attestExternalBinding,
+      proveFileDescendant,
+      authorizeDownload
+    }))
+
+    await expect(service.preflightSystemTransfer({
+      operation: 'download',
+      root: ROOT,
+      candidate: FILE
+    }, systemWriteCall())).resolves.toEqual({
+      status: 'ready',
+      providerObservationRevision: expect.stringMatching(/^[a-f0-9]{64}$/u)
+    })
+
+    expect(attestExternalBinding).toHaveBeenCalledTimes(2)
+    expect(proveFileDescendant).toHaveBeenCalledOnce()
+    expect(authorizeDownload).not.toHaveBeenCalled()
+
+    const openDestination = vi.fn(async () => destinationFixture())
+    await expect(service.downloadFile({
+      reference: FILE,
+      proofRoot: ROOT,
+      includeTransferEvidence: true,
+      openDestination
+    }, systemWriteCall())).resolves.toMatchObject({ bytes: 0 })
+
+    expect(attestExternalBinding).toHaveBeenCalledTimes(3)
+    expect(proveFileDescendant).toHaveBeenCalledTimes(2)
+    expect(authorizeDownload).toHaveBeenCalledOnce()
+    expect(openDestination).toHaveBeenCalledOnce()
+  })
+
+  it('returns bounded system preflight states for stale Principal, binding, and Provider readiness', async () => {
+    const rebound = Object.freeze({
+      ...externalBinding,
+      bindingRevision: 'c'.repeat(64)
+    })
+    const bindingAttestation = vi.fn()
+      .mockResolvedValueOnce(externalBinding)
+      .mockResolvedValueOnce(rebound)
+    const staleBindingService = serviceFor(providerFixture({
+      attestExternalBinding: bindingAttestation
+    }))
+    await expect(staleBindingService.preflightSystemTransfer({
+      operation: 'upload-new',
+      root: ROOT
+    }, systemWriteCall())).resolves.toEqual({
+      status: 'binding_stale',
+      providerObservationRevision: expect.stringMatching(/^[a-f0-9]{64}$/u)
+    })
+
+    const providerCalls = {
+      attestExternalBinding: vi.fn(async () => externalBinding),
+      observeEntry: vi.fn(providerFixture().observeEntry)
+    }
+    const pocCapabilities = readyCapabilities.map((state) =>
+      state.operation === 'upload-new'
+        ? Object.freeze({
+            operation: state.operation,
+            readiness: 'poc_only' as const,
+            reasonCode: 'verification_profile_required' as const
+          })
+        : state)
+    const providerNotReadyService = serviceFor(providerFixture({
+      ...providerCalls,
+      describeCapabilities: async () => pocCapabilities
+    }), {
+      verificationPolicy: systemTransferPolicy(
+        'upload-new',
+        CONTENT_SPACE_LIMITS.maxUploadBytes,
+        new Date()
+      )
+    })
+    await expect(providerNotReadyService.preflightSystemTransfer({
+      operation: 'upload-new',
+      root: ROOT
+    }, systemWriteCall())).resolves.toEqual({
+      status: 'provider_not_ready',
+      providerObservationRevision: expect.stringMatching(/^[a-f0-9]{64}$/u)
+    })
+    expect(providerCalls.attestExternalBinding).not.toHaveBeenCalled()
+    expect(providerCalls.observeEntry).not.toHaveBeenCalled()
+
+    const principalProvider = providerFixture({
+      attestExternalBinding: vi.fn(async () => externalBinding)
+    })
+    const principalStaleService = serviceFor(principalProvider)
+    await expect(principalStaleService.preflightSystemTransfer({
+      operation: 'upload-new',
+      root: ROOT
+    }, systemWriteCall(new AbortController().signal, () => {
+      throw new Error('Principal changed')
+    }))).resolves.toEqual({
+      status: 'principal_stale',
+      providerObservationRevision: expect.stringMatching(/^[a-f0-9]{64}$/u)
+    })
+  })
+
+  it('uses the production upload bound and returns Host and Provider observations', async () => {
+    const now = new Date('2026-08-21T01:00:00.000Z')
+    const bytes = new Uint8Array([1, 2, 3])
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const close = vi.fn(async () => undefined)
+    const openSource = vi.fn(async (_signal: AbortSignal, maxBytes: number) => {
+      expect(maxBytes).toBe(CONTENT_SPACE_LIMITS.maxUploadBytes)
+      return {
+        name: 'workspace-payload.bin',
+        size: bytes.byteLength,
+        sha256,
+        read: async () => bytes,
+        close
+      }
+    })
+    const uploadNewFile = vi.fn<ContentSpaceProvider['uploadNewFile']>(async ({
+      context,
+      parent,
+      name,
+      source
+    }) => {
+      expect(context.expectedExternalBinding).toEqual(externalBinding)
+      expect(source.sha256).toBe(sha256)
+      expect(await source.read({ offset: 0, length: bytes.byteLength })).toEqual(bytes)
+      return {
+        invocationId: context.invocationId,
+        parent,
+        name,
+        sourceSize: source.size,
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'system-uploaded' },
+        writeAfterObservation: {
+          parent,
+          reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'system-uploaded' },
+          name,
+          size: source.size
+        }
+      }
+    })
+    const service = serviceFor(providerFixture({
+      attestExternalBinding: async () => externalBinding,
+      uploadNewFile
+    }), { now: () => now })
+
+    await expect(service.uploadNewFile({
+      parent: ROOT,
+      name: 'uploaded.bin',
+      includeTransferEvidence: true,
+      openSource
+    }, systemWriteCall())).resolves.toEqual({
+      receipt: {
+        invocationId: INVOCATION_ID,
+        parent: ROOT,
+        name: 'uploaded.bin',
+        sourceSize: bytes.byteLength,
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'system-uploaded' }
+      },
+      writeAfterObservation: {
+        parent: ROOT,
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'system-uploaded' },
+        name: 'uploaded.bin',
+        size: bytes.byteLength
+      },
+      bytes: bytes.byteLength,
+      sha256
+    })
+
+    expect(openSource).toHaveBeenCalledOnce()
+    expect(uploadNewFile).toHaveBeenCalledOnce()
+    expect(close).toHaveBeenCalledOnce()
+  })
+
+  it('retires an oversized system upload source without Provider dispatch', async () => {
+    const now = new Date('2026-08-21T01:00:00.000Z')
+    const close = vi.fn(async () => undefined)
+    const uploadNewFile = vi.fn(providerFixture().uploadNewFile)
+    const service = serviceFor(providerFixture({
+      attestExternalBinding: async () => externalBinding,
+      uploadNewFile
+    }), { now: () => now })
+
+    await expect(service.uploadNewFile({
+      parent: ROOT,
+      name: 'oversized.bin',
+      includeTransferEvidence: true,
+      openSource: async (_signal, maxBytes) => {
+        expect(maxBytes).toBe(CONTENT_SPACE_LIMITS.maxUploadBytes)
+        return {
+          name: 'oversized.bin',
+          size: CONTENT_SPACE_LIMITS.maxUploadBytes + 1,
+          sha256: createHash('sha256').update(new Uint8Array([1, 2, 3])).digest('hex'),
+          read: async () => new Uint8Array([1, 2, 3]),
+          close
+        }
+      }
+    }, systemWriteCall())).rejects.toMatchObject({
+      detail: { code: 'bounds_exceeded', retry: 'never' }
+    })
+
+    expect(close).toHaveBeenCalledOnce()
+    expect(uploadNewFile).not.toHaveBeenCalled()
+  })
+
+  it('freshly proves a paired system download before opening its destination and returns actual bytes', async () => {
+    const now = new Date('2026-08-21T01:00:00.000Z')
+    const bytes = new Uint8Array([9, 8, 7, 6])
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const order: string[] = []
+    const destination = destinationFixture({
+      write: vi.fn(async () => { order.push('write') }),
+      commit: vi.fn(async () => { order.push('commit') })
+    })
+    const observeEntry = vi.fn<ContentSpaceProvider['observeEntry']>(async ({ reference }) => {
+      order.push('containerId' in reference ? 'observe-root' : 'observe-candidate')
+      const observation = observationFor(reference, 'fileId' in reference ? bytes.byteLength : 0)
+      return 'containerId' in reference
+        ? {
+            ...observation,
+            capabilities: observation.capabilities.map((state) => state.operation === 'download'
+              ? {
+                  operation: state.operation,
+                  readiness: 'blocked_by_contract' as const,
+                  reasonCode: 'resource_capability_missing' as const
+                }
+              : state)
+          }
+        : observation
+    })
+    const proveFileDescendant = vi.fn<ContentSpaceProvider['proveFileDescendant']>(async (input) => {
+      order.push('prove')
+      expect(input.root).toEqual(ROOT)
+      expect(input.candidate).toEqual(FILE)
+      expect(input.limits).toEqual(CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS)
+      expect(input.context.expectedExternalBinding).toEqual(externalBinding)
+      return {
+        invocationId: input.context.invocationId,
+        providerInstanceRef: PROVIDER_INSTANCE_REF,
+        authority: PROVIDER_INSTANCE_REF,
+        root: input.root,
+        candidate: input.candidate,
+        binding: externalBinding,
+        counts: {
+          depth: CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS.maxDepth,
+          pages: CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS.maxPages,
+          nodes: CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS.maxNodes,
+          elapsedMs: 0
+        },
+        provedAt: now.toISOString(),
+        cacheable: false,
+        portable: false
+      }
+    })
+    const downloadFile = vi.fn<ProviderDownloadDispatch>(async ({
+      context,
+      reference,
+      destination: sink
+    }) => {
+      order.push('download')
+      await sink.write(bytes)
+      return {
+        invocationId: context.invocationId,
+        reference,
+        bytesWritten: bytes.byteLength
+      }
+    })
+    const openDestination = vi.fn(async (_signal: AbortSignal, maxBytes: number) => {
+      order.push('open-destination')
+      expect(maxBytes).toBe(CONTENT_SPACE_LIMITS.maxFileBytes)
+      return destination
+    })
+    const service = serviceFor(providerFixture({
+      attestExternalBinding: async () => externalBinding,
+      observeEntry,
+      proveFileDescendant,
+      authorizeDownload: async (input) => {
+        order.push('authorize')
+        return authorizeDownloadUsing(downloadFile)(input)
+      }
+    }), {
+      now: () => now,
+      monotonicNow: () => 100
+    })
+
+    await expect(service.downloadFile({
+      reference: FILE,
+      proofRoot: ROOT,
+      includeTransferEvidence: true,
+      openDestination
+    }, systemWriteCall())).resolves.toEqual({
+      receipt: {
+        invocationId: INVOCATION_ID,
+        reference: FILE,
+        bytesWritten: bytes.byteLength,
+        digest: { algorithm: 'sha256', value: sha256 }
+      },
+      bytes: bytes.byteLength,
+      sha256
+    })
+
+    expect(order).toEqual([
+      'observe-root',
+      'observe-candidate',
+      'prove',
+      'authorize',
+      'open-destination',
+      'download',
+      'write',
+      'commit'
+    ])
+    expect(proveFileDescendant).toHaveBeenCalledOnce()
+    expect(downloadFile).toHaveBeenCalledOnce()
+    expect(destination.commit).toHaveBeenCalledOnce()
+    expect(destination.abort).not.toHaveBeenCalled()
+  })
+
+  it('does not open a Host destination when the real Provider read check denies access', async () => {
+    const openDestination = vi.fn(async () => destinationFixture())
+    const authorizeDownload = vi.fn<ContentSpaceProvider['authorizeDownload']>(async () => {
+      throw new ContentSpaceOperationError({
+        code: 'unauthorized',
+        message: 'The Provider denied the exact file read.',
+        retry: 'after-human-action'
+      })
+    })
+    const proveFileDescendant = vi.fn(providerFixture().proveFileDescendant)
+    const service = serviceFor(providerFixture({
+      attestExternalBinding: async () => externalBinding,
+      proveFileDescendant,
+      authorizeDownload
+    }))
+
+    await expect(service.downloadFile({
+      reference: FILE,
+      proofRoot: ROOT,
+      includeTransferEvidence: true,
+      openDestination
+    }, systemWriteCall())).rejects.toMatchObject({
+      detail: { code: 'unauthorized', retry: 'after-human-action' }
+    })
+
+    expect(proveFileDescendant).toHaveBeenCalledOnce()
+    expect(authorizeDownload).toHaveBeenCalledOnce()
+    expect(openDestination).not.toHaveBeenCalled()
+  })
+
+  it('rejects stale paired proof evidence before opening a destination or dispatching download', async () => {
+    const now = new Date('2026-08-21T01:00:00.000Z')
+    const destination = destinationFixture()
+    const openDestination = vi.fn(async () => destination)
+    const downloadFile = vi.fn(defaultDownloadFile)
+    const proveFileDescendant = vi.fn<ContentSpaceProvider['proveFileDescendant']>(async ({
+      context,
+      root,
+      candidate
+    }) => ({
+      invocationId: context.invocationId,
+      providerInstanceRef: context.providerInstanceRef,
+      authority: context.providerInstanceRef,
+      root,
+      candidate,
+      binding: externalBinding,
+      counts: { depth: 1, pages: 0, nodes: 2, elapsedMs: 0 },
+      provedAt: new Date(now.getTime() - 1).toISOString(),
+      cacheable: false,
+      portable: false
+    }))
+    const service = serviceFor(providerFixture({
+      attestExternalBinding: async () => externalBinding,
+      observeEntry: async ({ reference }) => observationFor(reference, 0),
+      proveFileDescendant,
+      authorizeDownload: authorizeDownloadUsing(downloadFile)
+    }), {
+      verificationPolicy: systemTransferPolicy('download', 1, now),
+      now: () => now,
+      monotonicNow: () => 0
+    })
+
+    await expect(service.downloadFile({
+      reference: FILE,
+      proofRoot: ROOT,
+      includeTransferEvidence: true,
+      openDestination
+    }, systemWriteCall())).rejects.toMatchObject({
+      detail: { code: 'provider_contract_violation', retry: 'never' }
+    })
+
+    expect(proveFileDescendant).toHaveBeenCalledOnce()
+    expect(downloadFile).not.toHaveBeenCalled()
+    expect(openDestination).not.toHaveBeenCalled()
+    expect(destination.commit).not.toHaveBeenCalled()
+    expect(destination.abort).not.toHaveBeenCalled()
+  })
+
+  it('enforces the proof monotonic deadline and rejects unrelated PoC resource state', async () => {
+    const now = new Date('2026-08-21T01:00:00.000Z')
+    const destination = destinationFixture()
+    const timedOpenDestination = vi.fn(async () => destination)
+    const downloadFile = vi.fn(defaultDownloadFile)
+    let monotonicRead = 0
+    const timedService = serviceFor(providerFixture({
+      attestExternalBinding: async () => externalBinding,
+      observeEntry: async ({ reference }) => observationFor(reference, 0),
+      proveFileDescendant: async ({ context, root, candidate }) => ({
+        invocationId: context.invocationId,
+        providerInstanceRef: context.providerInstanceRef,
+        authority: context.providerInstanceRef,
+        root,
+        candidate,
+        binding: externalBinding,
+        counts: { depth: 1, pages: 0, nodes: 2, elapsedMs: 0 },
+        provedAt: now.toISOString(),
+        cacheable: false,
+        portable: false
+      }),
+      authorizeDownload: authorizeDownloadUsing(downloadFile)
+    }), {
+      verificationPolicy: systemTransferPolicy('download', 1, now),
+      now: () => now,
+      monotonicNow: () => monotonicRead++ === 0
+        ? 0
+        : CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS.deadlineMs + 1
+    })
+
+    await expect(timedService.downloadFile({
+      reference: FILE,
+      proofRoot: ROOT,
+      includeTransferEvidence: true,
+      openDestination: timedOpenDestination
+    }, systemWriteCall())).rejects.toMatchObject({
+      detail: { code: 'bounds_exceeded', retry: 'never' }
+    })
+    expect(downloadFile).not.toHaveBeenCalled()
+    expect(timedOpenDestination).not.toHaveBeenCalled()
+    expect(destination.abort).not.toHaveBeenCalled()
+
+    const blockedDestination = destinationFixture()
+    const proveBlocked = vi.fn(providerFixture().proveFileDescendant)
+    const blockedDownload = vi.fn(defaultDownloadFile)
+    const blockedService = serviceFor(providerFixture({
+      attestExternalBinding: async () => externalBinding,
+      observeEntry: async ({ reference }) => {
+        const observation = observationFor(reference, 0)
+        if ('containerId' in reference) return observation
+        return {
+          ...observation,
+          capabilities: observation.capabilities.map((state) => state.operation === 'download'
+            ? {
+                operation: state.operation,
+                readiness: 'poc_only' as const,
+                reasonCode: 'instance_policy_blocked' as const
+              }
+            : state)
+        }
+      },
+      proveFileDescendant: proveBlocked,
+      authorizeDownload: authorizeDownloadUsing(blockedDownload)
+    }), {
+      verificationPolicy: systemTransferPolicy('download', 1, now),
+      now: () => now
+    })
+
+    await expect(blockedService.downloadFile({
+      reference: FILE,
+      proofRoot: ROOT,
+      includeTransferEvidence: true,
+      openDestination: async () => blockedDestination
+    }, systemWriteCall())).rejects.toMatchObject({
+      detail: { code: 'blocked_by_contract', retry: 'never' }
+    })
+    expect(proveBlocked).not.toHaveBeenCalled()
+    expect(blockedDownload).not.toHaveBeenCalled()
+    expect(blockedDestination.abort).not.toHaveBeenCalled()
+
+    const observeBlocked = vi.fn(providerFixture().observeEntry)
+    const globallyBlockedService = serviceFor(providerFixture({
+      attestExternalBinding: async () => externalBinding,
+      describeCapabilities: async () => readyCapabilities.map((state) =>
+        state.operation === 'observe-entry'
+          ? {
+              operation: state.operation,
+              readiness: 'poc_only' as const,
+              reasonCode: 'instance_policy_blocked' as const
+            }
+          : state),
+      observeEntry: observeBlocked,
+      proveFileDescendant: proveBlocked,
+      authorizeDownload: authorizeDownloadUsing(blockedDownload)
+    }), {
+      verificationPolicy: systemTransferPolicy('download', 1, now),
+      now: () => now
+    })
+    await expect(globallyBlockedService.downloadFile({
+      reference: FILE,
+      proofRoot: ROOT,
+      includeTransferEvidence: true,
+      openDestination: async () => blockedDestination
+    }, systemWriteCall())).rejects.toMatchObject({
+      detail: { code: 'blocked_by_contract', retry: 'never' }
+    })
+    expect(observeBlocked).not.toHaveBeenCalled()
+  })
+
+  it('rejects cross-Provider and Artifact candidates before a system destination is opened', async () => {
+    const openDestination = vi.fn(async () => destinationFixture())
+    const service = serviceFor(providerFixture())
+
+    await expect(service.downloadFile({
+      reference: { providerInstanceRef: 'provider-instance-beta', fileId: 'foreign' },
+      proofRoot: ROOT,
+      includeTransferEvidence: true,
+      openDestination
+    }, systemWriteCall())).rejects.toMatchObject({
+      detail: { code: 'invalid_reference', retry: 'never' }
+    })
+    await expect(service.downloadFile({
+      reference: { ...FILE, immutableVersionId: 'immutable-v1' },
+      proofRoot: ROOT,
+      includeTransferEvidence: true,
+      openDestination
+    }, systemWriteCall())).rejects.toMatchObject({
+      detail: { code: 'invalid_reference', retry: 'never' }
+    })
+    expect(openDestination).not.toHaveBeenCalled()
+  })
+
   it('bounds Host upload-source and download-destination acquisition within the total lease', async () => {
     const uploadNewFile = vi.fn(providerFixture().uploadNewFile)
-    const downloadFile = vi.fn(providerFixture().downloadFile)
-    const service = serviceFor(providerFixture({ uploadNewFile, downloadFile }), {
+    const downloadFile = vi.fn(defaultDownloadFile)
+    const service = serviceFor(providerFixture({
+      uploadNewFile,
+      authorizeDownload: authorizeDownloadUsing(downloadFile)
+    }), {
       operationDeadlineMs: 10
     })
     const neverOpenSource = vi.fn((_signal: AbortSignal) =>
@@ -1344,8 +1966,11 @@ describe('ContentSpaceService', () => {
 
   it('maps an expired Agent Workspace transfer lease to unauthorized before Provider dispatch', async () => {
     const uploadNewFile = vi.fn(providerFixture().uploadNewFile)
-    const downloadFile = vi.fn(providerFixture().downloadFile)
-    const service = serviceFor(providerFixture({ uploadNewFile, downloadFile }))
+    const downloadFile = vi.fn(defaultDownloadFile)
+    const service = serviceFor(providerFixture({
+      uploadNewFile,
+      authorizeDownload: authorizeDownloadUsing(downloadFile)
+    }))
     const sensitiveHostMessage = 'expired lease at /private/sensitive/workspace'
     const expiredLease = () => new DomainFileTransferError(
       'principal_changed',
@@ -1406,14 +2031,20 @@ describe('ContentSpaceService', () => {
   })
 
   it('rejects concurrent or ignored invalid Provider writes and aborts without commit', async () => {
-    const downloadFile = vi.fn(async ({ context, reference, destination }) => {
+    const downloadFile = vi.fn<ProviderDownloadDispatch>(async ({
+      context,
+      reference,
+      destination
+    }) => {
       void destination.write(new Uint8Array([1]))
       void destination.write(new Uint8Array([2]))
       void destination.write(new Uint8Array())
       return { invocationId: context.invocationId, reference, bytesWritten: 0 }
-    }) satisfies ContentSpaceProvider['downloadFile']
+    }) satisfies ProviderDownloadDispatch
     const destination = destinationFixture()
-    const service = serviceFor(providerFixture({ downloadFile }))
+    const service = serviceFor(providerFixture({
+      authorizeDownload: authorizeDownloadUsing(downloadFile)
+    }))
 
     await expect(service.downloadFile({
       reference: FILE,
@@ -1431,7 +2062,11 @@ describe('ContentSpaceService', () => {
       write: vi.fn(() => writeGate.promise)
     })
     const entered = deferred<void>()
-    const downloadFile = vi.fn(async ({ context, reference, destination: sink }) => {
+    const downloadFile = vi.fn<ProviderDownloadDispatch>(async ({
+      context,
+      reference,
+      destination: sink
+    }) => {
       void sink.write(bytes)
       entered.resolve()
       return {
@@ -1440,10 +2075,10 @@ describe('ContentSpaceService', () => {
         bytesWritten: bytes.byteLength,
         digest: { algorithm: 'sha256' as const, value: digest }
       }
-    }) satisfies ContentSpaceProvider['downloadFile']
+    }) satisfies ProviderDownloadDispatch
     const service = serviceFor(providerFixture({
       observeEntry: async ({ reference }) => observationFor(reference, bytes.byteLength),
-      downloadFile
+      authorizeDownload: authorizeDownloadUsing(downloadFile)
     }))
     const pending = service.downloadFile({
       reference: FILE,
@@ -1461,17 +2096,21 @@ describe('ContentSpaceService', () => {
   it('aborts a self-consistent short download instead of committing partial bytes', async () => {
     const bytes = new Uint8Array([1, 2, 3])
     const destination = destinationFixture()
-    const downloadFile = vi.fn(async ({ context, reference, destination: sink }) => {
+    const downloadFile = vi.fn<ProviderDownloadDispatch>(async ({
+      context,
+      reference,
+      destination: sink
+    }) => {
       await sink.write(bytes)
       return {
         invocationId: context.invocationId,
         reference,
         bytesWritten: bytes.byteLength
       }
-    }) satisfies ContentSpaceProvider['downloadFile']
+    }) satisfies ProviderDownloadDispatch
     const service = serviceFor(providerFixture({
       observeEntry: async ({ reference }) => observationFor(reference, bytes.byteLength + 1),
-      downloadFile
+      authorizeDownload: authorizeDownloadUsing(downloadFile)
     }))
 
     await expect(service.downloadFile({
@@ -1493,7 +2132,11 @@ describe('ContentSpaceService', () => {
       digest: Object.freeze({ algorithm: 'sha256' as const, value: digest })
     })
     const destination = destinationFixture()
-    const downloadFile = vi.fn(async ({ context, reference, destination: sink }) => {
+    const downloadFile = vi.fn<ProviderDownloadDispatch>(async ({
+      context,
+      reference,
+      destination: sink
+    }) => {
       await sink.write(bytes)
       return {
         invocationId: context.invocationId,
@@ -1501,7 +2144,7 @@ describe('ContentSpaceService', () => {
         bytesWritten: bytes.byteLength,
         digest: artifact.digest
       }
-    }) satisfies ContentSpaceProvider['downloadFile']
+    }) satisfies ProviderDownloadDispatch
     const service = serviceFor(providerFixture({
       observeEntry: async ({ reference }) => observationFor(reference, bytes.byteLength + 1),
       observeImmutableVersion: async () => ({
@@ -1515,7 +2158,7 @@ describe('ContentSpaceService', () => {
           digest: artifact.digest
         }
       }),
-      downloadFile
+      authorizeDownload: authorizeDownloadUsing(downloadFile)
     }))
 
     await expect(service.downloadFile({
@@ -2687,6 +3330,18 @@ function providerFixture(
     }),
     listEntries: async ({ parent }) => ({ parent, items: [] }),
     observeEntry: async ({ reference }) => observationFor(reference),
+    proveFileDescendant: async ({ context, root, candidate }) => ({
+      invocationId: context.invocationId,
+      providerInstanceRef: context.providerInstanceRef,
+      authority: context.providerInstanceRef,
+      root,
+      candidate,
+      binding: context.expectedExternalBinding ?? externalBinding,
+      counts: { depth: 1, pages: 1, nodes: 2, elapsedMs: 0 },
+      provedAt: new Date().toISOString(),
+      cacheable: false,
+      portable: false
+    }),
     createFolder: async ({ context, parent, name }) => ({
       invocationId: context.invocationId,
       parent,
@@ -2698,13 +3353,15 @@ function providerFixture(
       parent,
       name,
       sourceSize: source.size,
-      reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'uploaded' }
+      reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'uploaded' },
+      writeAfterObservation: {
+        parent,
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'uploaded' },
+        name,
+        size: source.size
+      }
     }),
-    downloadFile: async ({ context, reference }) => ({
-      invocationId: context.invocationId,
-      reference,
-      bytesWritten: 0
-    }),
+    authorizeDownload: authorizeDownloadUsing(defaultDownloadFile),
     resolvePortalTarget: async () => ({
       url: 'https://provider.invalid/portal',
       expiresAt: new Date(Date.now() + 60_000).toISOString()
@@ -2752,6 +3409,7 @@ function serviceFor(
     featureFileTransfers?: DomainMainFileTransferHost
     verificationPolicy?: ContentSpaceVerificationPolicy
     now?: () => Date
+    monotonicNow?: () => number
   }> = {}
 ): ContentSpaceService {
   return serviceForFactory(() => provider, options)
@@ -2765,6 +3423,7 @@ function serviceForFactory(
     featureFileTransfers?: DomainMainFileTransferHost
     verificationPolicy?: ContentSpaceVerificationPolicy
     now?: () => Date
+    monotonicNow?: () => number
   }> = {}
 ): ContentSpaceService {
   const catalog = new ContentSpaceProviderCatalog(contributionHost([
@@ -2781,6 +3440,7 @@ function serviceForFactory(
       ? { verificationPolicy: options.verificationPolicy }
       : {}),
     ...(options.now ? { now: options.now } : {}),
+    ...(options.monotonicNow ? { monotonicNow: options.monotonicNow } : {}),
     ...(options.operationDeadlineMs === undefined
       ? {}
       : { operationDeadlineMs: options.operationDeadlineMs })
@@ -2863,6 +3523,45 @@ function writeCall(
     ...readCall(assertPrincipalCurrent),
     invocationId: INVOCATION_ID,
     signal
+  })
+}
+
+function systemWriteCall(
+  signal = new AbortController().signal,
+  assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent'] =
+    () => undefined
+): ContentSpaceServiceWriteCallContext {
+  return Object.freeze({
+    ...writeCall(signal, assertPrincipalCurrent),
+    audience: 'system' as const,
+    requireVerificationProfile: true
+  })
+}
+
+function systemTransferPolicy(
+  operation: 'upload-new' | 'download',
+  maxBytes: number,
+  now: Date
+): ContentSpaceVerificationPolicy {
+  return Object.freeze({
+    contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+    profiles: Object.freeze([{
+      profileId: `system-${operation}`,
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      principal,
+      audience: 'system' as const,
+      authority: Object.freeze({ kind: 'content-root' as const, root: ROOT }),
+      operation: Object.freeze({ family: 'ordinary' as const, operation }),
+      transferLimits: operation === 'upload-new'
+        ? Object.freeze({ maxUploadBytes: maxBytes, maxDownloadBytes: 0 })
+        : Object.freeze({ maxUploadBytes: 0, maxDownloadBytes: maxBytes }),
+      externalBinding: Object.freeze({
+        externalSubject: externalBinding.externalSubject,
+        bindingRevision: externalBinding.bindingRevision
+      }),
+      validFrom: new Date(now.getTime() - 60_000).toISOString(),
+      expiresAt: new Date(now.getTime() + 60_000).toISOString()
+    }])
   })
 }
 

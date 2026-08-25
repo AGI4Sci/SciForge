@@ -16,14 +16,21 @@ import {
 
 import {
   ARTIFACT_RESOURCE_KIND,
+  CONTENT_CONTAINER_REFERENCE_KIND,
+  CONTENT_FILE_REFERENCE_KIND,
   CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
   artifactReferenceCodec,
   defineContentSpaceProvider,
+  toPortableContentContainerReference,
+  toPortableContentFileReference,
   toPortableArtifactReference,
   type ArtifactReference,
   type ContentSpaceProvider
 } from '../contract.js'
-import { createContentSpacePortableAuthorityResolver } from './portable-authority-resolver.js'
+import {
+  createContentSpacePortableAuthorityResolver,
+  resolveContentSpacePortableInvocationReference
+} from './portable-authority-resolver.js'
 import { ContentSpaceProviderCatalog } from './provider-catalog.js'
 import { ContentSpaceService } from './service.js'
 
@@ -40,6 +47,139 @@ const principal = Object.freeze({
 })
 
 describe('Content Space portable authority resolver', () => {
+  it('decodes narrow root and file envelopes through one exact authority without materializing resources', () => {
+    const observeEntry = vi.fn()
+    const { resolver, createProvider } = resolverFixture(observeEntry)
+    const lookupAuthority = vi.fn(resolver.lookupAuthority)
+    const materialize = vi.fn(resolver.resolve)
+    const invocationResolver = Object.freeze({
+      ...resolver,
+      lookupAuthority,
+      resolve: materialize
+    })
+    const root = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      containerId: 'container-root'
+    })
+    const candidate = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      fileId: FILE_ID
+    })
+
+    expect(resolveContentSpacePortableInvocationReference(
+      invocationResolver,
+      toPortableContentContainerReference(root)
+    )).toEqual(root)
+    expect(resolveContentSpacePortableInvocationReference(
+      invocationResolver,
+      toPortableContentFileReference(candidate)
+    )).toEqual(candidate)
+    expect(lookupAuthority).toHaveBeenNthCalledWith(1, {
+      reference: PROVIDER_INSTANCE_REF,
+      kind: CONTENT_CONTAINER_REFERENCE_KIND
+    })
+    expect(lookupAuthority).toHaveBeenNthCalledWith(2, {
+      reference: PROVIDER_INSTANCE_REF,
+      kind: CONTENT_FILE_REFERENCE_KIND
+    })
+    expect(materialize).not.toHaveBeenCalled()
+    expect(createProvider).not.toHaveBeenCalled()
+    expect(observeEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects a missing Provider Instance before decoding or materializing', () => {
+    const observeEntry = vi.fn()
+    const { resolver, createProvider } = resolverFixture(observeEntry)
+    const materialize = vi.fn(resolver.resolve)
+    const invocationResolver = Object.freeze({ ...resolver, resolve: materialize })
+    const root = toPortableContentContainerReference({
+      providerInstanceRef: 'provider-instance-missing',
+      containerId: 'container-root'
+    })
+
+    expect(() => resolveContentSpacePortableInvocationReference(
+      invocationResolver,
+      root
+    )).toThrow('Content Space portable authority is unavailable.')
+    expect(materialize).not.toHaveBeenCalled()
+    expect(createProvider).not.toHaveBeenCalled()
+    expect(observeEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects a resolver authority that is not bound to the envelope authority', () => {
+    const observeEntry = vi.fn()
+    const { resolver, createProvider } = resolverFixture(observeEntry)
+    const materialize = vi.fn(resolver.resolve)
+    const root = toPortableContentContainerReference({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      containerId: 'container-root'
+    })
+    const authority = resolver.lookupAuthority({
+      reference: root.authority,
+      kind: root.kind
+    })!
+    const invocationResolver = Object.freeze({
+      ...resolver,
+      lookupAuthority: vi.fn(() => Object.freeze({
+        ...authority,
+        reference: 'provider-instance-other'
+      })),
+      resolve: materialize
+    })
+
+    expect(() => resolveContentSpacePortableInvocationReference(
+      invocationResolver,
+      root
+    )).toThrow('Content Space portable authority is unavailable.')
+    expect(materialize).not.toHaveBeenCalled()
+    expect(createProvider).not.toHaveBeenCalled()
+    expect(observeEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects an Artifact envelope presented as a narrow file reference', () => {
+    const observeEntry = vi.fn()
+    const { resolver, createProvider } = resolverFixture(observeEntry)
+    const materialize = vi.fn(resolver.resolve)
+    const invocationResolver = Object.freeze({ ...resolver, resolve: materialize })
+    const artifact = toPortableArtifactReference({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      fileId: FILE_ID,
+      immutableVersionId: REAL_VERSION,
+      digest: REAL_DIGEST
+    })
+
+    expect(() => resolveContentSpacePortableInvocationReference(
+      invocationResolver,
+      artifact as ReturnType<typeof toPortableContentFileReference>
+    )).toThrow('Portable reference kind is incompatible.')
+    expect(materialize).not.toHaveBeenCalled()
+    expect(createProvider).not.toHaveBeenCalled()
+    expect(observeEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects malformed owner identity without materializing a resource', () => {
+    const observeEntry = vi.fn()
+    const { resolver, createProvider } = resolverFixture(observeEntry)
+    const materialize = vi.fn(resolver.resolve)
+    const invocationResolver = Object.freeze({ ...resolver, resolve: materialize })
+    const candidate = toPortableContentFileReference({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      fileId: FILE_ID
+    })
+    const malformed = {
+      ...candidate,
+      identity: { ...candidate.identity, displayName: 'untrusted metadata' }
+    } as unknown as ReturnType<typeof toPortableContentFileReference>
+
+    expect(() => resolveContentSpacePortableInvocationReference(
+      invocationResolver,
+      malformed
+    )).toThrow()
+    expect(materialize).not.toHaveBeenCalled()
+    expect(createProvider).not.toHaveBeenCalled()
+    expect(observeEntry).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['wrong file', { fileId: 'file-other', immutableVersionId: REAL_VERSION }],
     ['wrong version', { fileId: FILE_ID, immutableVersionId: 'version-forged' }],
@@ -196,9 +336,26 @@ function resolverFixture(observeEntry: ContentSpaceProvider['observeEntry']) {
     }),
     listEntries: async ({ parent }) => ({ parent, items: [] }),
     observeEntry,
+    proveFileDescendant: async ({ context, root, candidate }) => ({
+      invocationId: context.invocationId,
+      providerInstanceRef: context.providerInstanceRef,
+      authority: context.providerInstanceRef,
+      root,
+      candidate,
+      binding: context.expectedExternalBinding ?? {
+        providerInstanceRef: context.providerInstanceRef,
+        principal: context.principal,
+        externalSubject: 'a'.repeat(64),
+        bindingRevision: 'b'.repeat(64)
+      },
+      counts: { depth: 1, pages: 1, nodes: 2, elapsedMs: 0 },
+      provedAt: new Date().toISOString(),
+      cacheable: false,
+      portable: false
+    }),
     createFolder: async () => { throw new Error('unused') },
     uploadNewFile: async () => { throw new Error('unused') },
-    downloadFile: async () => { throw new Error('unused') },
+    authorizeDownload: async () => { throw new Error('unused') },
     resolvePortalTarget: async () => { throw new Error('unused') },
     observeImmutableVersion: async () => ({
       proven: true,

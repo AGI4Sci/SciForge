@@ -1,12 +1,20 @@
 import { z } from 'zod'
 
+import {
+  domainCapabilityResourceHandleSchema,
+  type DomainCapabilityContract
+} from '@sciforge/domain-sdk/host'
 import type { PortableResourceReferenceEnvelope } from '@sciforge/domain-sdk/portable-resource-references'
 
 import {
+  CONTENT_SPACE_CAPABILITY_IDS,
   contentSpacePageRequestSchema,
   contentSpaceDirectoryUserReferenceSchema,
+  contentSpacePortableContainerReferenceEnvelopeSchema,
+  contentSpaceProviderInstanceInputSchema,
   contentSpaceReadinessReasonSchema,
   contentSpaceReadinessSchema,
+  contentSpaceResultSchema,
   parsePortableContentContainerReference,
   toPortableContentContainerReference,
   type ContentSpacePageRequest
@@ -188,6 +196,93 @@ export const contentSpaceAdministrationRemoveMemberReceiptSchema = z.object({
   member: contentSpaceAdministrationMemberReferenceSchema,
   removed: z.literal(true)
 }).strict().readonly()
+
+export const contentSpaceAgentProviderAdministrationAuthorizationSchema = z.object({
+  providerInstanceRef: contentSpaceProviderInstanceInputSchema.unwrap().shape.providerInstanceRef,
+  resource: domainCapabilityResourceHandleSchema
+}).strict().readonly()
+
+export const contentSpaceAgentAdministrationSpaceSummarySchema = z.object({
+  root: contentSpacePortableContainerReferenceEnvelopeSchema,
+  label: administrationSpaceLabelSchema,
+  contentOwnerUserId: consumerResourceIdSchema,
+  pinned: z.boolean()
+}).strict().readonly()
+
+export const contentSpaceAgentAdministrationCreateSpaceResultSchema = z.object({
+  space: contentSpaceAgentAdministrationSpaceSummarySchema,
+  resource: domainCapabilityResourceHandleSchema
+}).strict().readonly()
+
+/** Broker resource authority supplies the exact root; callers supply only bounded paging. */
+export const contentSpaceAgentAdministrationListMembersInputSchema = z.object({
+  page: contentSpacePageRequestSchema
+}).strict().readonly()
+
+/** Broker resource authority supplies the exact root; callers supply only a directory User. */
+export const contentSpaceAgentAdministrationMemberMutationInputSchema = z.object({
+  member: contentSpaceAdministrationMemberReferenceSchema
+}).strict().readonly()
+
+export const contentSpaceAgentAdministrationMemberPageSchema = z.object({
+  root: contentSpacePortableContainerReferenceEnvelopeSchema,
+  items: z.array(contentSpaceAdministrationMemberSummarySchema).max(1_000).readonly(),
+  nextCursor: z.string().trim().min(1).max(256).optional()
+}).strict().readonly()
+
+export const contentSpaceAgentAdministrationAddMemberReceiptSchema = z.object({
+  root: contentSpacePortableContainerReferenceEnvelopeSchema,
+  member: contentSpaceAdministrationMemberReferenceSchema
+}).strict().readonly()
+
+export const contentSpaceAgentProviderAdministrationAuthorizationResultSchema =
+  contentSpaceResultSchema(contentSpaceAgentProviderAdministrationAuthorizationSchema)
+export const contentSpaceAgentAdministrationCreateSpaceCapabilityResultSchema =
+  contentSpaceResultSchema(contentSpaceAgentAdministrationCreateSpaceResultSchema)
+export const contentSpaceAgentAdministrationListMembersResultSchema =
+  contentSpaceResultSchema(contentSpaceAgentAdministrationMemberPageSchema)
+export const contentSpaceAgentAdministrationAddMemberResultSchema =
+  contentSpaceResultSchema(contentSpaceAgentAdministrationAddMemberReceiptSchema)
+
+export const CONTENT_SPACE_AUTHORIZE_PROVIDER_ADMINISTRATION_CONTRACT: DomainCapabilityContract<
+  z.infer<typeof contentSpaceProviderInstanceInputSchema>,
+  z.infer<typeof contentSpaceAgentProviderAdministrationAuthorizationResultSchema>
+> = Object.freeze({
+  actionId: CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
+  effect: 'external-write',
+  inputSchema: contentSpaceProviderInstanceInputSchema,
+  outputSchema: contentSpaceAgentProviderAdministrationAuthorizationResultSchema
+})
+
+export const CONTENT_SPACE_AGENT_ADMIN_CREATE_SPACE_CONTRACT: DomainCapabilityContract<
+  z.infer<typeof contentSpaceAgentAdministrationCreateSpaceInputSchema>,
+  z.infer<typeof contentSpaceAgentAdministrationCreateSpaceCapabilityResultSchema>
+> = Object.freeze({
+  actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace,
+  effect: 'external-write',
+  inputSchema: contentSpaceAgentAdministrationCreateSpaceInputSchema,
+  outputSchema: contentSpaceAgentAdministrationCreateSpaceCapabilityResultSchema
+})
+
+export const CONTENT_SPACE_AGENT_ADMIN_LIST_MEMBERS_CONTRACT: DomainCapabilityContract<
+  z.infer<typeof contentSpaceAgentAdministrationListMembersInputSchema>,
+  z.infer<typeof contentSpaceAgentAdministrationListMembersResultSchema>
+> = Object.freeze({
+  actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers,
+  effect: 'read',
+  inputSchema: contentSpaceAgentAdministrationListMembersInputSchema,
+  outputSchema: contentSpaceAgentAdministrationListMembersResultSchema
+})
+
+export const CONTENT_SPACE_AGENT_ADMIN_ADD_MEMBER_CONTRACT: DomainCapabilityContract<
+  z.infer<typeof contentSpaceAgentAdministrationMemberMutationInputSchema>,
+  z.infer<typeof contentSpaceAgentAdministrationAddMemberResultSchema>
+> = Object.freeze({
+  actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
+  effect: 'external-write',
+  inputSchema: contentSpaceAgentAdministrationMemberMutationInputSchema,
+  outputSchema: contentSpaceAgentAdministrationAddMemberResultSchema
+})
 
 export type ContentSpaceAdministrationSpaceSummary = z.infer<
   typeof contentSpaceAdministrationSpaceSummarySchema

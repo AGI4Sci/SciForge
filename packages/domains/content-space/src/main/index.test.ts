@@ -23,12 +23,16 @@ import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import {
   CONTENT_CONTAINER_RESOURCE_KIND,
   CONTENT_SPACE_CAPABILITY_IDS,
+  CONTENT_SPACE_LIMITS,
   CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
   CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND,
+  CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
+  CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID,
   ContentSpaceOperationError,
   contentSpaceSuccess,
   defineContentSpaceProvider,
   toPortableContentContainerReference,
+  toPortableContentFileReference,
   type ContentSpaceProvider,
   type ContentSpaceResult
 } from '../contract.js'
@@ -47,7 +51,9 @@ import type {
 } from '../provider-features.js'
 import {
   CONTENT_SPACE_CAPABILITY_FACTORY_CONTRIBUTION,
-  CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION
+  CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION,
+  CONTENT_SPACE_PROVISIONING_BATCH_GRANT_CONTRIBUTION,
+  CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_CONTRIBUTION
 } from '../definition.js'
 import {
   CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
@@ -58,6 +64,10 @@ import * as mainExports from './index.js'
 import { createDomainMainEntry } from './index.js'
 
 const PROVIDER_INSTANCE_REF = 'provider-instance-alpha'
+const ROOT = Object.freeze({
+  providerInstanceRef: PROVIDER_INSTANCE_REF,
+  containerId: 'root'
+})
 const FILE = Object.freeze({
   providerInstanceRef: PROVIDER_INSTANCE_REF,
   fileId: 'file-one'
@@ -69,6 +79,12 @@ const principal: PrincipalSnapshot = Object.freeze({
   assurance: 'local-selection' as const,
   deviceId: 'content-space-main-test-device',
   identityVersion: 1
+})
+const externalBinding = Object.freeze({
+  providerInstanceRef: PROVIDER_INSTANCE_REF,
+  principal,
+  externalSubject: 'a'.repeat(64),
+  bindingRevision: 'b'.repeat(64)
 })
 const readyAdministrationStates = Object.freeze(
   CONTENT_SPACE_ADMINISTRATION_OPERATIONS.map((operation) => Object.freeze({
@@ -83,6 +99,9 @@ type CapabilityContext = Readonly<{
     callerId: string
     principal: typeof principal
     workspaceId?: string
+    capabilityGrants?: readonly string[]
+    principalSnapshotDigest?: string
+    executionContextDigest?: string
   }>
   invocationId: string
   signal: AbortSignal
@@ -97,7 +116,7 @@ type CapabilityDefinition = Readonly<{
   title: string
   description: string
   audiences: readonly ('ui' | 'agent' | 'system')[]
-  scope: 'global' | 'resource'
+  scope: 'global' | 'workspace' | 'resource'
   resourceKinds?: readonly string[]
   tags: readonly string[]
   effect: 'read' | 'workspace-write' | 'external-write' | 'destructive'
@@ -143,6 +162,674 @@ describe('Content Space main composition', () => {
       }]
     }))
     expect(createProvider).not.toHaveBeenCalled()
+  })
+
+  it('contributes provider-owned transfer and provisioning grants with exact delegated actions', async () => {
+    const entry = createDomainMainEntry(mainHost())
+    const transferGrant = entry.contributions.find(({ id }) =>
+      id === CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_CONTRIBUTION.id
+    )
+
+    expect(transferGrant).toMatchObject({
+      id: CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_CONTRIBUTION.id,
+      kind: CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_CONTRIBUTION.kind,
+      value: {
+        id: CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID,
+        eligibility: 'trusted-domain-runtime'
+      }
+    })
+    expect(entry.contributions.find(({ id }) =>
+      id === CONTENT_SPACE_PROVISIONING_BATCH_GRANT_CONTRIBUTION.id
+    )).toMatchObject({
+      id: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_CONTRIBUTION.id,
+      kind: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_CONTRIBUTION.kind,
+      value: {
+        id: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
+        eligibility: 'trusted-domain-runtime'
+      }
+    })
+
+    const definitions = await activateDefinitions(
+      entry.contributions,
+      contributionHost(providerContributions(() => providerFixture()))
+    )
+    expect(definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.systemTransferPreflight
+    )).toMatchObject({
+      id: 'content-space.system-transfer-preflight',
+      audiences: ['system'],
+      scope: 'workspace',
+      effect: 'read',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' }
+    })
+    expect(definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.systemDownload)).toMatchObject({
+      id: 'content-space.system-download',
+      audiences: ['system'],
+      scope: 'workspace',
+      effect: 'workspace-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' }
+    })
+    expect(definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.systemUploadNew)).toMatchObject({
+      id: 'content-space.system-upload-new',
+      audiences: ['system'],
+      scope: 'workspace',
+      effect: 'external-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' }
+    })
+    expect([
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember
+    ].map((actionId) => definition(definitions, actionId))).toEqual([
+      expect.objectContaining({ delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
+      expect.objectContaining({ delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
+      expect.objectContaining({ delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
+      expect.objectContaining({ delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID })
+    ])
+    expect(definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember
+    )).not.toHaveProperty('delegatedBatchGrant')
+  })
+
+  it('enforces system audience, Workspace scope, and the exact grant before decoding authority', async () => {
+    const createProvider = vi.fn(() => providerFixture())
+    const openUploadSource = vi.fn(async () => { throw new Error('unexpected UI source') })
+    const openDownloadDestination = vi.fn(async () => {
+      throw new Error('unexpected UI destination')
+    })
+    const openWorkspaceUploadSource = vi.fn(async () => {
+      throw new Error('unexpected Workspace source')
+    })
+    const openWorkspaceDownloadDestination = vi.fn(async () => {
+      throw new Error('unexpected Workspace destination')
+    })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost({
+        fileTransfers: {
+          openUploadSource,
+          openDownloadDestination,
+          openWorkspaceUploadSource,
+          openWorkspaceDownloadDestination
+        }
+      })).contributions,
+      contributionHost(providerContributions(createProvider))
+    )
+    const upload = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.systemUploadNew)
+    const granted = [CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID]
+    const invalidContexts: readonly CapabilityContext[] = [
+      capabilityContext(undefined, 'agent', {
+        workspaceId: 'workspace-one',
+        capabilityGrants: granted
+      }),
+      capabilityContext(undefined, 'system', { capabilityGrants: granted }),
+      capabilityContext(undefined, 'system', { workspaceId: 'workspace-one' }),
+      capabilityContext(undefined, 'system', {
+        workspaceId: 'workspace-one',
+        capabilityGrants: ['content-space.some-other-grant']
+      }),
+      capabilityContext(undefined, 'system', {
+        workspaceId: 'workspace-one',
+        capabilityGrants: granted,
+        resource: {
+          resourceId: 'unexpected-resource',
+          resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
+          workspaceId: 'workspace-one'
+        }
+      })
+    ]
+
+    for (const context of invalidContexts) {
+      const result = await upload.handler({}, context)
+      expect(result.output).toMatchObject({
+        ok: false,
+        error: { code: 'unauthorized', retry: 'never' }
+      })
+    }
+    expect(createProvider).not.toHaveBeenCalled()
+    expect(openUploadSource).not.toHaveBeenCalled()
+    expect(openDownloadDestination).not.toHaveBeenCalled()
+    expect(openWorkspaceUploadSource).not.toHaveBeenCalled()
+    expect(openWorkspaceDownloadDestination).not.toHaveBeenCalled()
+  })
+
+  it('runs a production-ready Provider transfer without a static verification profile', async () => {
+    const attestExternalBinding = vi.fn(async () => externalBinding)
+    const uploadNewFile = vi.fn<ContentSpaceProvider['uploadNewFile']>(async ({
+      context, parent, name, source
+    }) => ({
+      invocationId: context.invocationId,
+      parent,
+      name,
+      sourceSize: source.size,
+      reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'profile-free-file' },
+      writeAfterObservation: {
+        parent,
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'profile-free-file' },
+        name,
+        size: source.size
+      }
+    }))
+    const createProvider = vi.fn(() => providerFixture({
+      attestExternalBinding,
+      uploadNewFile
+    }))
+    const bytes = Uint8Array.of(1)
+    const openWorkspaceUploadSource = vi.fn(async () => ({
+      name: 'real.txt',
+      size: bytes.byteLength,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      read: async () => bytes,
+      close: async () => undefined
+    }))
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost({
+        fileTransfers: {
+          openUploadSource: vi.fn(async () => { throw new Error('unused') }),
+          openDownloadDestination: vi.fn(async () => { throw new Error('unused') }),
+          openWorkspaceUploadSource,
+          openWorkspaceDownloadDestination: vi.fn(async () => {
+            throw new Error('unused')
+          })
+        }
+      })).contributions,
+      contributionHost(providerContributions(createProvider))
+    )
+
+    const systemAuthority = {
+      workspaceId: 'workspace-one',
+      capabilityGrants: [CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID]
+    } as const
+    const transferInput = {
+      root: toPortableContentContainerReference(ROOT),
+      name: 'real.txt',
+      workspaceRelativePath: 'inputs/real.txt'
+    } as const
+    const preflightDefinition = definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.systemTransferPreflight
+    )
+    expect(preflightDefinition).toMatchObject({
+      effect: 'read',
+      approval: 'none',
+      scope: 'workspace',
+      audiences: ['system'],
+      concurrency: { revision: 'none', idempotency: 'none' }
+    })
+    const preflight = await preflightDefinition.handler({
+      operation: 'upload-new',
+      input: transferInput
+    }, capabilityContext(undefined, 'system', {
+      ...systemAuthority,
+      invocationId: 'invocation_content_space_system_preflight_0001'
+    }))
+    expect(preflight.output).toMatchObject(contentSpaceSuccess({
+      execution: {
+        invocationId: 'invocation_content_space_system_preflight_0001'
+      },
+      status: 'ready',
+      intentDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      observationRevision: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      authorization: 'not_granted',
+      cacheable: false
+    }))
+    expect(JSON.stringify(preflight.output)).not.toMatch(
+      /token|credential|https?:|externalSubject|bindingRevision/u
+    )
+    expect(attestExternalBinding).toHaveBeenCalledTimes(2)
+    expect(openWorkspaceUploadSource).not.toHaveBeenCalled()
+    expect(uploadNewFile).not.toHaveBeenCalled()
+
+    const result = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.systemUploadNew
+    ).handler(transferInput, capabilityContext(undefined, 'system', {
+      ...systemAuthority,
+      invocationId: 'invocation_content_space_system_upload_0001'
+    }))
+
+    expect(result.output).toMatchObject({ ok: true, value: { bytes: 1 } })
+    expect(createProvider).toHaveBeenCalledOnce()
+    expect(attestExternalBinding).toHaveBeenCalledTimes(3)
+    expect(openWorkspaceUploadSource).toHaveBeenCalledOnce()
+    expect(uploadNewFile).toHaveBeenCalledOnce()
+  })
+
+  it('propagates exact profile limits through real system upload and download receipts', async () => {
+    const uploadBytes = new TextEncoder().encode('real upload bytes')
+    const downloadBytes = new TextEncoder().encode('real download bytes')
+    const uploadSha256 = createHash('sha256').update(uploadBytes).digest('hex')
+    const downloadSha256 = createHash('sha256').update(downloadBytes).digest('hex')
+    const uploadLimit = uploadBytes.byteLength + 11
+    const downloadLimit = downloadBytes.byteLength + 13
+    const uploadedReference = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      fileId: 'uploaded-system-file'
+    })
+    const sourceRead = vi.fn(async ({ offset, length }: Readonly<{
+      offset: number
+      length: number
+    }>) => uploadBytes.slice(offset, offset + length))
+    const sourceClose = vi.fn(async () => undefined)
+    const destinationWrite = vi.fn(async (chunk: Uint8Array) => {
+      expect(chunk).toEqual(downloadBytes)
+    })
+    const destinationCommit = vi.fn(async () => undefined)
+    const destinationAbort = vi.fn(async () => undefined)
+    const events: string[] = []
+    const openWorkspaceUploadSource = vi.fn(async () => {
+      events.push('open-upload-source')
+      return Object.freeze({
+        name: 'workspace-upload.bin',
+        size: uploadBytes.byteLength,
+        sha256: uploadSha256,
+        read: sourceRead,
+        close: sourceClose
+      })
+    })
+    const openWorkspaceDownloadDestination = vi.fn(async () => {
+      events.push('open-download-destination')
+      return Object.freeze({
+        label: 'workspace-download.bin',
+        write: destinationWrite,
+        commit: destinationCommit,
+        abort: destinationAbort
+      })
+    })
+    const systemCapabilities = Object.freeze([
+      Object.freeze({
+        operation: 'observe-entry' as const,
+        readiness: 'production_ready' as const,
+        reasonCode: 'available' as const
+      }),
+      Object.freeze({
+        operation: 'upload-new' as const,
+        readiness: 'production_ready' as const,
+        reasonCode: 'available' as const
+      }),
+      Object.freeze({
+        operation: 'download' as const,
+        readiness: 'production_ready' as const,
+        reasonCode: 'available' as const
+      })
+    ])
+    const attestExternalBinding = vi.fn(async () => externalBinding)
+    const observeEntry = vi.fn(async ({ reference }:
+      Parameters<ContentSpaceProvider['observeEntry']>[0]) => ({
+      entry: 'containerId' in reference
+        ? {
+            kind: 'container' as const,
+            reference,
+            label: 'Root'
+          }
+        : {
+            kind: 'file' as const,
+            reference,
+            label: 'Candidate',
+            size: downloadBytes.byteLength
+          },
+      capabilities: systemCapabilities
+    }))
+    const uploadNewFile = vi.fn(async ({ context, parent, name, source }:
+      Parameters<ContentSpaceProvider['uploadNewFile']>[0]) => {
+      events.push('provider-upload')
+      const actual = await source.read({ offset: 0, length: source.size })
+      expect(actual).toEqual(uploadBytes)
+      expect(source.sha256).toBe(uploadSha256)
+      return {
+        invocationId: context.invocationId,
+        parent,
+        name,
+        sourceSize: source.size,
+        reference: uploadedReference,
+        writeAfterObservation: {
+          parent,
+          reference: uploadedReference,
+          name,
+          size: source.size
+        }
+      }
+    })
+    const proveFileDescendant = vi.fn(async ({ context, root, candidate }:
+      Parameters<ContentSpaceProvider['proveFileDescendant']>[0]) => {
+      events.push('prove-descendant')
+      return {
+        invocationId: context.invocationId,
+        providerInstanceRef: context.providerInstanceRef,
+        authority: context.providerInstanceRef,
+        root,
+        candidate,
+        binding: context.expectedExternalBinding!,
+        counts: { depth: 1, pages: 1, nodes: 2, elapsedMs: 0 },
+        provedAt: new Date().toISOString(),
+        cacheable: false as const,
+        portable: false as const
+      }
+    })
+    const authorizeDownload = vi.fn<ContentSpaceProvider['authorizeDownload']>(async ({
+      context,
+      reference
+    }) => {
+      events.push('provider-authorize-download')
+      let available = true
+      return {
+        consume: async ({ destination }) => {
+          if (!available) throw new Error('lease already consumed')
+          available = false
+          events.push('provider-download')
+          await destination.write(downloadBytes)
+          return {
+            invocationId: context.invocationId,
+            reference,
+            bytesWritten: downloadBytes.byteLength
+          }
+        },
+        retire: async () => { available = false }
+      }
+    })
+    const provider = providerFixture({
+      attestExternalBinding,
+      describeCapabilities: async () => systemCapabilities,
+      observeEntry,
+      uploadNewFile,
+      proveFileDescendant,
+      authorizeDownload
+    })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost({
+        fileTransfers: {
+          openUploadSource: vi.fn(async () => { throw new Error('unused') }),
+          openDownloadDestination: vi.fn(async () => { throw new Error('unused') }),
+          openWorkspaceUploadSource,
+          openWorkspaceDownloadDestination
+        }
+      })).contributions,
+      contributionHost([
+        ...providerContributions(() => provider),
+        systemVerificationProfileContribution(
+          'fixture-system-upload',
+          'upload-new',
+          uploadLimit
+        ),
+        systemVerificationProfileContribution(
+          'fixture-system-download',
+          'download',
+          downloadLimit
+        )
+      ])
+    )
+    const systemAuthority = {
+      workspaceId: 'workspace-one',
+      capabilityGrants: [CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID]
+    } as const
+    const upload = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.systemUploadNew
+    ).handler({
+      root: toPortableContentContainerReference(ROOT),
+      name: 'uploaded.bin',
+      workspaceRelativePath: 'inputs/uploaded.bin'
+    }, capabilityContext(undefined, 'system', {
+      ...systemAuthority,
+      invocationId: 'invocation_content_space_system_upload_0001'
+    }))
+
+    expect(upload.output).toMatchObject(contentSpaceSuccess({
+      execution: {
+        callerId: 'renderer:test',
+        principal,
+        principalSnapshotDigest: 'a'.repeat(64),
+        workspaceId: 'workspace-one',
+        executionContextDigest: 'b'.repeat(64),
+        invocationId: 'invocation_content_space_system_upload_0001'
+      },
+      receipt: {
+        invocationId: 'invocation_content_space_system_upload_0001',
+        parent: ROOT,
+        name: 'uploaded.bin',
+        sourceSize: uploadBytes.byteLength,
+        reference: uploadedReference
+      },
+      portableReference: toPortableContentFileReference(uploadedReference),
+      writeAfterObservation: {
+        parent: toPortableContentContainerReference(ROOT),
+        reference: toPortableContentFileReference(uploadedReference),
+        name: 'uploaded.bin',
+        size: uploadBytes.byteLength
+      },
+      workspaceRelativePath: 'inputs/uploaded.bin',
+      bytes: uploadBytes.byteLength,
+      sha256: uploadSha256,
+      transferReceiptDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      observationDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      providerDigest: {
+        status: 'deferred', reason: 'provider_digest_not_in_run0_contract'
+      }
+    }))
+    expect(openWorkspaceUploadSource).toHaveBeenCalledWith({
+      relativePath: 'inputs/uploaded.bin',
+      maxBytes: CONTENT_SPACE_LIMITS.maxUploadBytes,
+      systemAuthorization: {
+        requiredSystemCapabilityGrant: CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID
+      },
+      signal: expect.any(AbortSignal)
+    })
+    expect(sourceRead).toHaveBeenCalledWith({
+      offset: 0,
+      length: uploadBytes.byteLength
+    })
+    expect(sourceClose).toHaveBeenCalledOnce()
+
+    const download = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.systemDownload
+    ).handler({
+      root: toPortableContentContainerReference(ROOT),
+      candidate: toPortableContentFileReference(FILE),
+      workspaceRelativePath: 'outputs/downloaded.bin'
+    }, capabilityContext(undefined, 'system', {
+      ...systemAuthority,
+      invocationId: 'invocation_content_space_system_download_0001'
+    }))
+
+    expect(download.output).toMatchObject(contentSpaceSuccess({
+      execution: {
+        callerId: 'renderer:test',
+        principal,
+        principalSnapshotDigest: 'a'.repeat(64),
+        workspaceId: 'workspace-one',
+        executionContextDigest: 'b'.repeat(64),
+        invocationId: 'invocation_content_space_system_download_0001'
+      },
+      receipt: {
+        invocationId: 'invocation_content_space_system_download_0001',
+        reference: FILE,
+        bytesWritten: downloadBytes.byteLength,
+        digest: { algorithm: 'sha256', value: downloadSha256 }
+      },
+      readAfterObservation: {
+        reference: toPortableContentFileReference(FILE),
+        bytes: downloadBytes.byteLength,
+        sha256: downloadSha256
+      },
+      workspaceRelativePath: 'outputs/downloaded.bin',
+      bytes: downloadBytes.byteLength,
+      sha256: downloadSha256,
+      transferReceiptDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      observationDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      providerDigest: {
+        status: 'deferred', reason: 'provider_digest_not_in_run0_contract'
+      }
+    }))
+    expect(openWorkspaceDownloadDestination).toHaveBeenCalledWith({
+      relativePath: 'outputs/downloaded.bin',
+      maxBytes: CONTENT_SPACE_LIMITS.maxFileBytes,
+      systemAuthorization: {
+        requiredSystemCapabilityGrant: CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID
+      },
+      signal: expect.any(AbortSignal)
+    })
+    expect(proveFileDescendant).toHaveBeenCalledOnce()
+    expect(events.indexOf('prove-descendant')).toBeLessThan(
+      events.indexOf('provider-authorize-download')
+    )
+    expect(events.indexOf('provider-authorize-download')).toBeLessThan(
+      events.indexOf('open-download-destination')
+    )
+    expect(events.indexOf('open-download-destination'))
+      .toBeLessThan(events.indexOf('provider-download'))
+    expect(destinationWrite).toHaveBeenCalledOnce()
+    expect(destinationCommit).toHaveBeenCalledOnce()
+    expect(destinationAbort).not.toHaveBeenCalled()
+    expect(attestExternalBinding).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns unauthorized without dispatch when Principal invalidation aborts before dispatch', async () => {
+    const controller = new AbortController()
+    controller.abort(new DOMException('Principal changed', 'AbortError'))
+    const assertPrincipalCurrent = vi.fn(() => {
+      throw new Error('Principal changed')
+    })
+    const createProvider = vi.fn(() => providerFixture())
+    const openWorkspaceUploadSource = vi.fn(async () => {
+      throw new Error('Workspace source must remain unopened')
+    })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost({
+        fileTransfers: {
+          openUploadSource: vi.fn(async () => { throw new Error('unused') }),
+          openDownloadDestination: vi.fn(async () => { throw new Error('unused') }),
+          openWorkspaceUploadSource,
+          openWorkspaceDownloadDestination: vi.fn(async () => {
+            throw new Error('unused')
+          })
+        }
+      })).contributions,
+      contributionHost(providerContributions(createProvider))
+    )
+
+    const result = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.systemUploadNew
+    ).handler({
+      root: toPortableContentContainerReference(ROOT),
+      name: 'never-dispatched.txt',
+      workspaceRelativePath: 'inputs/never-dispatched.txt'
+    }, capabilityContext(assertPrincipalCurrent, 'system', {
+      workspaceId: 'workspace-one',
+      capabilityGrants: [CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID],
+      signal: controller.signal
+    }))
+
+    expect(result.output).toMatchObject({
+      ok: false,
+      error: { code: 'unauthorized', retry: 'never' }
+    })
+    expect(assertPrincipalCurrent).toHaveBeenCalledTimes(2)
+    expect(createProvider).not.toHaveBeenCalled()
+    expect(openWorkspaceUploadSource).not.toHaveBeenCalled()
+  })
+
+  it('preserves outcome_unknown when Principal drift aborts after Provider write dispatch', async () => {
+    const bytes = new TextEncoder().encode('possibly dispatched')
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const transferLimit = bytes.byteLength + 7
+    const sourceClose = vi.fn(async () => undefined)
+    const controller = new AbortController()
+    let principalCurrent = true
+    const assertPrincipalCurrent = vi.fn(() => {
+      if (!principalCurrent) throw new Error('Principal changed')
+    })
+    const uploadNewFile = vi.fn(async ({ context, parent, name, source }:
+      Parameters<ContentSpaceProvider['uploadNewFile']>[0]) => {
+      await source.read({ offset: 0, length: source.size })
+      principalCurrent = false
+      controller.abort(new DOMException('Principal changed', 'AbortError'))
+      return {
+        invocationId: context.invocationId,
+        parent,
+        name,
+        sourceSize: source.size,
+        reference: {
+          providerInstanceRef: PROVIDER_INSTANCE_REF,
+          fileId: 'indeterminate-upload'
+        },
+        writeAfterObservation: {
+          parent,
+          reference: {
+            providerInstanceRef: PROVIDER_INSTANCE_REF,
+            fileId: 'indeterminate-upload'
+          },
+          name,
+          size: source.size
+        }
+      }
+    })
+    const openWorkspaceUploadSource = vi.fn(async () => Object.freeze({
+      name: 'indeterminate.txt',
+      size: bytes.byteLength,
+      sha256,
+      read: async ({ offset, length }: Readonly<{ offset: number; length: number }>) =>
+        bytes.slice(offset, offset + length),
+      close: sourceClose
+    }))
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost({
+        fileTransfers: {
+          openUploadSource: vi.fn(async () => { throw new Error('unused') }),
+          openDownloadDestination: vi.fn(async () => { throw new Error('unused') }),
+          openWorkspaceUploadSource,
+          openWorkspaceDownloadDestination: vi.fn(async () => {
+            throw new Error('unused')
+          })
+        }
+      })).contributions,
+      contributionHost([
+        ...providerContributions(() => providerFixture({
+          attestExternalBinding: async () => externalBinding,
+          uploadNewFile
+        })),
+        systemVerificationProfileContribution(
+          'fixture-system-post-dispatch-drift',
+          'upload-new',
+          transferLimit
+        )
+      ])
+    )
+
+    const result = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.systemUploadNew
+    ).handler({
+      root: toPortableContentContainerReference(ROOT),
+      name: 'indeterminate.txt',
+      workspaceRelativePath: 'inputs/indeterminate.txt'
+    }, capabilityContext(assertPrincipalCurrent, 'system', {
+      workspaceId: 'workspace-one',
+      capabilityGrants: [CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID],
+      invocationId: 'invocation_content_space_post_dispatch_0001',
+      signal: controller.signal
+    }))
+
+    await Promise.resolve()
+    expect(result.output).toMatchObject({
+      ok: false,
+      error: { code: 'outcome_unknown', retry: 'never' }
+    })
+    expect(openWorkspaceUploadSource).toHaveBeenCalledWith(expect.objectContaining({
+      relativePath: 'inputs/indeterminate.txt',
+      maxBytes: CONTENT_SPACE_LIMITS.maxUploadBytes,
+      systemAuthorization: {
+        requiredSystemCapabilityGrant: CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID
+      }
+    }))
+    expect(uploadNewFile).toHaveBeenCalledOnce()
+    expect(sourceClose).toHaveBeenCalledOnce()
   })
 
   it('admits an exact PoC list-containers profile through composed Broker capability routing', async () => {
@@ -376,6 +1063,10 @@ describe('Content Space main composition', () => {
       CONTENT_SPACE_CAPABILITY_IDS.agentDownload,
       CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentWorkspaceWrite
     ])
+    const systemWriteIds = new Map<string, 'workspace-write' | 'external-write'>([
+      [CONTENT_SPACE_CAPABILITY_IDS.systemDownload, 'workspace-write'],
+      [CONTENT_SPACE_CAPABILITY_IDS.systemUploadNew, 'external-write']
+    ])
     for (const capability of definitions) {
       if (confirmedWriteIds.has(capability.id)) {
         expect(capability).toMatchObject({
@@ -397,6 +1088,14 @@ describe('Content Space main composition', () => {
           audiences: ['agent'],
           scope: 'resource',
           effect: 'workspace-write',
+          approval: 'none',
+          concurrency: { idempotency: 'required' }
+        })
+      } else if (systemWriteIds.has(capability.id)) {
+        expect(capability).toMatchObject({
+          audiences: ['system'],
+          scope: 'workspace',
+          effect: systemWriteIds.get(capability.id),
           approval: 'none',
           concurrency: { idempotency: 'required' }
         })
@@ -850,7 +1549,13 @@ describe('Content Space main composition', () => {
       parent,
       name,
       sourceSize: source.size,
-      reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'report-file' }
+      reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'report-file' },
+      writeAfterObservation: {
+        parent,
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'report-file' },
+        name,
+        size: source.size
+      }
     }))
     let nativeOutcome: 'outcome_unknown' | 'failed' = 'outcome_unknown'
     const nativeExecute: ContentSpaceNativeDocumentExecutor['execute'] = vi.fn(async (input) =>
@@ -2094,7 +2799,11 @@ function capabilityContext(
     callerId?: string
     principal?: typeof principal
     workspaceId?: string
+    capabilityGrants?: readonly string[]
+    principalSnapshotDigest?: string
+    executionContextDigest?: string
     invocationId?: string
+    signal?: AbortSignal
     resource?: CapabilityContext['resource']
     issueResource?: CapabilityContext['issueResource']
   }> = {}
@@ -2104,10 +2813,19 @@ function capabilityContext(
       audience,
       callerId: options.callerId ?? 'renderer:test',
       principal: options.principal ?? principal,
-      ...(options.workspaceId ? { workspaceId: options.workspaceId } : {})
+      ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+      ...(options.capabilityGrants
+        ? { capabilityGrants: options.capabilityGrants }
+        : {}),
+      ...(audience === 'system'
+        ? {
+            principalSnapshotDigest: options.principalSnapshotDigest ?? 'a'.repeat(64),
+            executionContextDigest: options.executionContextDigest ?? 'b'.repeat(64)
+          }
+        : {})
     }),
     invocationId: options.invocationId ?? 'invocation_content_space_main_0001',
-    signal: new AbortController().signal,
+    signal: options.signal ?? new AbortController().signal,
     assertPrincipalCurrent: assertPrincipalCurrent ?? (() => undefined),
     ...(options.resource ? { resource: options.resource } : {}),
     issueResource: options.issueResource ?? (() => {
@@ -2142,6 +2860,48 @@ function nativeDocumentsFixture(
     })),
     execute
   })
+}
+
+function systemVerificationProfileContribution(
+  profileId: string,
+  operation: 'upload-new' | 'download',
+  maxBytes: number,
+  currentTime = Date.now()
+): DomainMainContribution {
+  const profileContribution = defineContentSpaceVerificationProfileContribution({
+    location: MAIN_CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION,
+    contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+    profile: Object.freeze({
+      profileId,
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      principal,
+      audience: 'system' as const,
+      authority: Object.freeze({
+        kind: 'content-root' as const,
+        root: ROOT
+      }),
+      operation: Object.freeze({
+        family: 'ordinary' as const,
+        operation
+      }),
+      transferLimits: operation === 'upload-new'
+        ? Object.freeze({ maxUploadBytes: maxBytes, maxDownloadBytes: 0 })
+        : Object.freeze({ maxUploadBytes: 0, maxDownloadBytes: maxBytes }),
+      externalBinding: Object.freeze({
+        externalSubject: externalBinding.externalSubject,
+        bindingRevision: externalBinding.bindingRevision
+      }),
+      validFrom: new Date(currentTime - 60_000).toISOString(),
+      expiresAt: new Date(currentTime + 60_000).toISOString()
+    })
+  })
+  return contribution(
+    `fixture.verification-profile.${profileId}`,
+    profileContribution,
+    profileContribution,
+    CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+    'forbidden'
+  )
 }
 
 function providerFixture(overrides: Partial<ContentSpaceProvider> = {}): ContentSpaceProvider {
@@ -2186,6 +2946,23 @@ function providerFixture(overrides: Partial<ContentSpaceProvider> = {}): Content
           },
       capabilities: ready
     }),
+    proveFileDescendant: async ({ context, root, candidate }) => ({
+      invocationId: context.invocationId,
+      providerInstanceRef: context.providerInstanceRef,
+      authority: context.providerInstanceRef,
+      root,
+      candidate,
+      binding: context.expectedExternalBinding ?? {
+        providerInstanceRef: context.providerInstanceRef,
+        principal: context.principal,
+        externalSubject: 'a'.repeat(64),
+        bindingRevision: 'b'.repeat(64)
+      },
+      counts: { depth: 1, pages: 1, nodes: 2, elapsedMs: 0 },
+      provedAt: new Date().toISOString(),
+      cacheable: false,
+      portable: false
+    }),
     createFolder: async ({ context, parent, name }) => ({
       invocationId: context.invocationId,
       parent,
@@ -2197,12 +2974,21 @@ function providerFixture(overrides: Partial<ContentSpaceProvider> = {}): Content
       parent,
       name,
       sourceSize: source.size,
-      reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'uploaded' }
+      reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'uploaded' },
+      writeAfterObservation: {
+        parent,
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'uploaded' },
+        name,
+        size: source.size
+      }
     }),
-    downloadFile: async ({ context, reference }) => ({
-      invocationId: context.invocationId,
-      reference,
-      bytesWritten: 0
+    authorizeDownload: async ({ context, reference }) => ({
+      consume: async () => ({
+        invocationId: context.invocationId,
+        reference,
+        bytesWritten: 0
+      }),
+      retire: async () => undefined
     }),
     resolvePortalTarget: async () => ({
       url: exactSignedUrl,

@@ -838,7 +838,7 @@ describe('ContentSpacePanel', () => {
       input: Parameters<ContentSpaceCapabilityClient['observeResource']>[0],
       options?: Readonly<{ signal?: AbortSignal }>
     ) => {
-      if (input.resource.token === 'resource-a') {
+      if (input.resource.token === `cap_${'resource-a'.padEnd(20, 'x')}`) {
         portableSignal = options?.signal
         return firstObservation.promise
       }
@@ -1081,13 +1081,13 @@ function enrollmentView(
 function sessionResource(
   kind: string,
   resourceRef: string,
-  token: string
+  handleSuffix: string
 ): DomainRendererSessionResource {
   return Object.freeze({
     kind,
     resourceRef,
     resource: Object.freeze({
-      token,
+      token: `cap_${handleSuffix.padEnd(20, 'x')}`,
       semanticRevision: 'revision-1',
       expiresAt: '2026-08-16T12:00:00.000Z'
     })

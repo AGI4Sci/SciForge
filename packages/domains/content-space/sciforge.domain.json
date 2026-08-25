@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.content-space",
     "displayName": "Content Space",
-    "version": "3.0.0",
+    "version": "4.0.0",
     "hostApi": {
       "minimum": "1.5.0",
       "maximumExclusive": "2.0.0"
@@ -82,6 +82,16 @@
         {
           "id": "content-space.runtime-lifecycle",
           "kind": "main.runtime-lifecycle",
+          "priority": 300
+        },
+        {
+          "id": "content-space.system-transfer",
+          "kind": "main.system-capability-grant",
+          "priority": 300
+        },
+        {
+          "id": "content-space.provisioning-batch",
+          "kind": "main.system-capability-grant",
           "priority": 300
         },
         {

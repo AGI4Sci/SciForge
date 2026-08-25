@@ -4,9 +4,13 @@ import { z } from 'zod'
 
 import type {
   DomainMainHost,
-  DomainMainRuntimeLifecycleContribution
+  DomainMainRuntimeLifecycleContribution,
+  DomainMainSystemCapabilityGrant
 } from '@sciforge/domain-sdk/host'
-import { domainCapabilityResourceHandleSchema } from '@sciforge/domain-sdk/host'
+import {
+  defineDomainMainSystemCapabilityGrant,
+  domainCapabilityResourceHandleSchema
+} from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import {
   samePrincipalSnapshot,
@@ -27,6 +31,8 @@ import {
   CONTENT_SPACE_PORTABLE_AUTHORITY_RESOLVER_CONTRIBUTION,
   CONTENT_SPACE_PORTABLE_AUTHORITY_RESOLVER_CONTRACT,
   CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION,
+  CONTENT_SPACE_PROVISIONING_BATCH_GRANT_CONTRIBUTION,
+  CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition.js'
 import {
@@ -35,8 +41,10 @@ import {
   CONTENT_FILE_RESOURCE_KIND,
   CONTENT_SPACE_FEATURE_SELECTION_RESOURCE_KIND,
   CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND,
+  CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
   CONTENT_SPACE_CAPABILITY_IDS,
   CONTENT_SPACE_LIMITS,
+  CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID,
   ContentSpaceOperationError,
   artifactReferenceCodec,
   contentContainerReferenceCodec,
@@ -72,6 +80,16 @@ import {
   contentSpaceResolvePortalTargetInputSchema,
   contentSpaceSuccess,
   contentSpaceResultSchema,
+  contentSpaceSystemDownloadInputSchema,
+  contentSpaceSystemExecutionBindingSchema,
+  contentSpaceSystemDownloadReceiptSchema,
+  contentSpaceSystemDownloadResultSchema,
+  contentSpaceSystemTransferPreflightInputSchema,
+  contentSpaceSystemTransferPreflightObservationSchema,
+  contentSpaceSystemTransferPreflightResultSchema,
+  contentSpaceSystemUploadNewInputSchema,
+  contentSpaceSystemUploadNewReceiptSchema,
+  contentSpaceSystemUploadNewResultSchema,
   contentSpaceUploadNewInputSchema,
   createFolderResultSchema,
   downloadResultSchema,
@@ -79,19 +97,25 @@ import {
   uploadNewResultSchema,
   parsePortableContentContainerReference,
   toPortableContentContainerReference,
+  toPortableContentFileReference,
   type ContentSpaceError,
   type ContentContainerReference,
   type ContentEntryReference,
   type ContentFileReference,
+  type ContentSpacePortableContainerReferenceEnvelope,
+  type ContentSpacePortableFileReferenceEnvelope,
+  type ContentSpaceSystemTransferPreflightStatus,
   type ContentSpaceResult
 } from '../contract.js'
 import {
-  contentSpaceAdministrationAddMemberReceiptSchema,
-  contentSpaceAdministrationAddMemberInputSchema,
+  contentSpaceAgentAdministrationAddMemberReceiptSchema,
   contentSpaceAgentAdministrationCreateSpaceInputSchema,
-  contentSpaceAdministrationListMembersInputSchema,
+  contentSpaceAgentAdministrationCreateSpaceResultSchema,
+  contentSpaceAgentAdministrationListMembersInputSchema,
+  contentSpaceAgentAdministrationMemberMutationInputSchema,
+  contentSpaceAgentAdministrationMemberPageSchema,
+  contentSpaceAgentProviderAdministrationAuthorizationSchema,
   contentSpaceAdministrationListSpacesInputSchema,
-  contentSpaceAdministrationMemberPageSchema,
   contentSpaceAdministrationRemoveMemberReceiptSchema,
   contentSpaceAdministrationSpacePageSchema,
   contentSpaceAdministrationSpaceSummarySchema,
@@ -117,7 +141,10 @@ import {
   type ContentSpaceProviderFeatureEffect,
   type ContentSpaceProviderFeatureTarget
 } from '../provider-features.js'
-import { createContentSpacePortableAuthorityResolver } from './portable-authority-resolver.js'
+import {
+  createContentSpacePortableAuthorityResolver,
+  resolveContentSpacePortableInvocationReference
+} from './portable-authority-resolver.js'
 import { ContentSpaceProviderCatalog } from './provider-catalog.js'
 import { composeContentSpaceVerificationPolicy } from './verification-policy-catalog.js'
 import {
@@ -133,6 +160,9 @@ type ContentSpaceCapabilityContext = Readonly<{
     callerId: string
     principal?: PrincipalSnapshot
     workspaceId?: string
+    capabilityGrants?: readonly string[]
+    principalSnapshotDigest?: string
+    executionContextDigest?: string
   }>
   invocationId?: string
   signal?: AbortSignal
@@ -164,11 +194,12 @@ type ContentSpaceCapabilityOptions = Readonly<{
   title: string
   description: string
   audiences: readonly ('ui' | 'agent' | 'system')[]
-  scope: 'global' | 'resource'
+  scope: 'global' | 'workspace' | 'resource'
   resourceKinds?: readonly string[]
   producedResourceKinds?: readonly string[]
   effect: 'read' | 'workspace-write' | 'external-write' | 'destructive'
   approval: 'none' | 'confirmation'
+  delegatedBatchGrant?: string
   autonomousWrite?: 'resource-authorized'
   concurrency: Readonly<{
     revision: 'none'
@@ -206,6 +237,7 @@ type ContentSpaceRuntime = Readonly<{
 type ContentSpaceMainContribution =
   | ContentSpaceCapabilityFactory
   | DomainMainRuntimeLifecycleContribution
+  | DomainMainSystemCapabilityGrant
   | typeof contentContainerReferenceCodec
   | typeof contentFileReferenceCodec
   | typeof artifactReferenceCodec
@@ -259,6 +291,7 @@ export function createDomainMainEntry(
             options: ContentSpaceCapabilityOptions
           ) => unknown,
           getService: () => getRuntime().service,
+          portableResolver: resolver,
           fileTransfers: host.fileTransfers,
           externalNavigation: host.externalNavigation
         })
@@ -266,6 +299,22 @@ export function createDomainMainEntry(
       {
         ...CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION,
         value: lifecycle
+      },
+      {
+        ...CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_CONTRIBUTION,
+        value: defineDomainMainSystemCapabilityGrant({
+          id: CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID,
+          eligibility: 'trusted-domain-runtime',
+          description: 'Transfer files through Content Space under exact Workspace and Provider authority.'
+        })
+      },
+      {
+        ...CONTENT_SPACE_PROVISIONING_BATCH_GRANT_CONTRIBUTION,
+        value: defineDomainMainSystemCapabilityGrant({
+          id: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
+          eligibility: 'trusted-domain-runtime',
+          description: 'Execute one exact Human-confirmed Content Space provisioning batch.'
+        })
       },
       {
         ...CONTENT_SPACE_CONTAINER_REFERENCE_CODEC_CONTRIBUTION,
@@ -294,6 +343,7 @@ export function createDomainMainEntry(
 function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Readonly<{
   defineCapability(options: ContentSpaceCapabilityOptions): CapabilityDefinition
   getService(): ContentSpaceService
+  portableResolver: ReturnType<typeof createContentSpacePortableAuthorityResolver>
   fileTransfers?: NonNullable<DomainMainHost['fileTransfers']>
   externalNavigation?: NonNullable<DomainMainHost['externalNavigation']>
 }>): ContentSpaceCapabilityFactory<CapabilityDefinition> {
@@ -973,14 +1023,14 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
           return options.getService().uploadNewFile({
             parent,
             name,
-            openSource: (signal) => {
+            openSource: (signal, maxBytes) => {
               const fileTransfers = options.fileTransfers
               if (!fileTransfers) {
                 throw operationError('source_unavailable', 'Host file transfer is unavailable.')
               }
               return fileTransfers.openUploadSource({
                 handle: sourceHandle,
-                maxBytes: CONTENT_SPACE_LIMITS.maxUploadBytes,
+                maxBytes,
                 signal
               })
             }
@@ -1001,7 +1051,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
           const invocation = writeCall(context)
           return options.getService().downloadFile({
             reference,
-            openDestination: (signal) => {
+            openDestination: (signal, maxBytes) => {
               const fileTransfers = options.fileTransfers
               if (!fileTransfers) {
                 throw operationError(
@@ -1011,12 +1061,233 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
               }
               return fileTransfers.openDownloadDestination({
                 handle: destinationHandle,
-                maxBytes: CONTENT_SPACE_LIMITS.maxFileBytes,
+                maxBytes,
                 signal
               })
             }
           }, invocation)
         })
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.systemTransferPreflight,
+        audiences: ['system'],
+        scope: 'workspace',
+        title: 'Preflight System Content Space Transfer',
+        description: 'Reads a fresh token-free current-session readiness fact for one exact transfer intent without granting transfer authority.',
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        tags: ['system-transfer', 'preflight', 'advisory', 'non-authorizing'],
+        inputSchema: contentSpaceSystemTransferPreflightInputSchema,
+        outputSchema: contentSpaceSystemTransferPreflightResultSchema,
+        handler: async (rawInput, context) => capabilityResult(async () => {
+          requireSystemTransferAuthority(context)
+          const execution = systemExecutionBinding(context)
+          const input = contentSpaceSystemTransferPreflightInputSchema.parse(rawInput)
+          const intentDigest = canonicalDigest(input)
+          let probe: Awaited<ReturnType<ContentSpaceService['preflightSystemTransfer']>>
+          try {
+            if (input.operation === 'download') {
+              probe = await options.getService().preflightSystemTransfer({
+                operation: input.operation,
+                root: resolveSystemPortableReference(
+                  options.portableResolver,
+                  input.input.root
+                ),
+                candidate: resolveSystemPortableReference(
+                  options.portableResolver,
+                  input.input.candidate
+                )
+              }, systemWriteCall(context))
+            } else {
+              probe = await options.getService().preflightSystemTransfer({
+                operation: input.operation,
+                root: resolveSystemPortableReference(
+                  options.portableResolver,
+                  input.input.root
+                )
+              }, systemWriteCall(context))
+            }
+          } catch (error) {
+            let principalStale = false
+            try {
+              await context.assertPrincipalCurrent()
+            } catch {
+              principalStale = true
+            }
+            const status: ContentSpaceSystemTransferPreflightStatus = principalStale
+              ? 'principal_stale'
+              : 'provider_not_ready'
+            probe = Object.freeze({
+              status,
+              providerObservationRevision: canonicalDigest({
+                contract: 'content-space.system-transfer-preflight.provider-observation.v1',
+                status,
+                providerInstanceRef: input.input.root.authority,
+                operation: input.operation,
+                failureCode: error instanceof ContentSpaceOperationError
+                  ? error.detail.code
+                  : 'provider_unavailable'
+              })
+            })
+          }
+
+          let status = probe.status
+          try {
+            await context.assertPrincipalCurrent()
+          } catch {
+            status = 'principal_stale'
+          }
+          const observationRevision = canonicalDigest({
+            contract: 'content-space.system-transfer-preflight.observation.v1',
+            status,
+            intentDigest,
+            providerObservationRevision: probe.providerObservationRevision,
+            callerId: execution.callerId,
+            principalSnapshotDigest: execution.principalSnapshotDigest,
+            workspaceId: execution.workspaceId,
+            executionContextDigest: execution.executionContextDigest
+          })
+          return contentSpaceSystemTransferPreflightObservationSchema.parse({
+            execution,
+            status,
+            intentDigest,
+            observationRevision,
+            authorization: 'not_granted',
+            cacheable: false
+          })
+        })
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.systemDownload,
+        audiences: ['system'],
+        scope: 'workspace',
+        title: 'System Download Content Space File',
+        description: 'Downloads one freshly proven file to a new Workspace-relative destination.',
+        effect: 'workspace-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['system-transfer', 'paired-authority', 'download'],
+        inputSchema: contentSpaceSystemDownloadInputSchema,
+        outputSchema: contentSpaceSystemDownloadResultSchema,
+        handler: async (rawInput, context) => systemCapabilityResult(context, async () => {
+            requireSystemTransferAuthority(context)
+            const {
+              root: rootEnvelope,
+              candidate: candidateEnvelope,
+              workspaceRelativePath
+            } = contentSpaceSystemDownloadInputSchema.parse(rawInput)
+            const root = resolveSystemPortableReference(
+              options.portableResolver,
+              rootEnvelope
+            )
+            const candidate = resolveSystemPortableReference(
+              options.portableResolver,
+              candidateEnvelope
+            )
+            const transfer = await options.getService().downloadFile({
+              reference: candidate,
+              proofRoot: root,
+              includeTransferEvidence: true,
+              openDestination: (signal, maxBytes) => {
+                if (!options.fileTransfers) {
+                  throw operationError(
+                    'destination_unavailable',
+                    'Host file transfer is unavailable.'
+                  )
+                }
+                return options.fileTransfers.openWorkspaceDownloadDestination({
+                  relativePath: workspaceRelativePath,
+                  maxBytes,
+                  systemAuthorization: {
+                    requiredSystemCapabilityGrant: CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID
+                  },
+                  signal
+                })
+              }
+            }, systemWriteCall(context))
+            const readAfterObservation = Object.freeze({
+              reference: toPortableContentFileReference(transfer.receipt.reference as ContentFileReference),
+              bytes: transfer.bytes,
+              sha256: transfer.sha256
+            })
+            return contentSpaceSystemDownloadReceiptSchema.parse({
+              execution: systemExecutionBinding(context),
+              receipt: transfer.receipt,
+              readAfterObservation,
+              workspaceRelativePath,
+              bytes: transfer.bytes,
+              sha256: transfer.sha256,
+              transferReceiptDigest: canonicalDigest(transfer.receipt),
+              observationDigest: canonicalDigest(readAfterObservation),
+              providerDigest: deferredProviderDigest()
+            })
+          })
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.systemUploadNew,
+        audiences: ['system'],
+        scope: 'workspace',
+        title: 'System Upload New Content Space File',
+        description: 'Uploads one real Workspace file as a new entry in an exact authorized root.',
+        effect: 'external-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['system-transfer', 'root-authority', 'upload'],
+        inputSchema: contentSpaceSystemUploadNewInputSchema,
+        outputSchema: contentSpaceSystemUploadNewResultSchema,
+        handler: async (rawInput, context) => systemCapabilityResult(context, async () => {
+            requireSystemTransferAuthority(context)
+            const { root: rootEnvelope, name, workspaceRelativePath } =
+              contentSpaceSystemUploadNewInputSchema.parse(rawInput)
+            const root = resolveSystemPortableReference(
+              options.portableResolver,
+              rootEnvelope
+            )
+            const transfer = await options.getService().uploadNewFile({
+              parent: root,
+              name,
+              includeTransferEvidence: true,
+              openSource: (signal, maxBytes) => {
+                if (!options.fileTransfers) {
+                  throw operationError('source_unavailable', 'Host file transfer is unavailable.')
+                }
+                return options.fileTransfers.openWorkspaceUploadSource({
+                  relativePath: workspaceRelativePath,
+                  maxBytes,
+                  systemAuthorization: {
+                    requiredSystemCapabilityGrant: CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID
+                  },
+                  signal
+                })
+              }
+            }, systemWriteCall(context))
+            const portableReference = toPortableContentFileReference(
+              transfer.receipt.reference
+            )
+            const writeAfterObservation = Object.freeze({
+              parent: toPortableContentContainerReference(
+                transfer.writeAfterObservation.parent
+              ),
+              reference: toPortableContentFileReference(
+                transfer.writeAfterObservation.reference
+              ),
+              name: transfer.writeAfterObservation.name,
+              size: transfer.writeAfterObservation.size
+            })
+            return contentSpaceSystemUploadNewReceiptSchema.parse({
+              execution: systemExecutionBinding(context),
+              receipt: transfer.receipt,
+              portableReference,
+              writeAfterObservation,
+              workspaceRelativePath,
+              bytes: transfer.bytes,
+              sha256: transfer.sha256,
+              transferReceiptDigest: canonicalDigest(transfer.receipt),
+              observationDigest: canonicalDigest(writeAfterObservation),
+              providerDigest: deferredProviderDigest()
+            })
+          })
       }),
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
@@ -1128,13 +1399,13 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
             () => options.getService().uploadNewFile({
               parent: record.reference as ContentContainerReference,
               name,
-              openSource: (signal) => {
+              openSource: (signal, maxBytes) => {
                 if (!options.fileTransfers) {
                   throw operationError('source_unavailable', 'Host file transfer is unavailable.')
                 }
                 return options.fileTransfers.openWorkspaceUploadSource({
                   relativePath: workspaceRelativePath,
-                  maxBytes: CONTENT_SPACE_LIMITS.maxUploadBytes,
+                  maxBytes,
                   signal
                 })
               }
@@ -1166,7 +1437,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
           return capabilityMutationResult(
             () => options.getService().downloadFile({
               reference: record.reference as ContentFileReference,
-              openDestination: (signal) => {
+              openDestination: (signal, maxBytes) => {
                 if (!options.fileTransfers) {
                   throw operationError(
                     'destination_unavailable',
@@ -1175,7 +1446,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
                 }
                 return options.fileTransfers.openWorkspaceDownloadDestination({
                   relativePath: workspaceRelativePath,
-                  maxBytes: CONTENT_SPACE_LIMITS.maxFileBytes,
+                  maxBytes,
                   signal
                 })
               }
@@ -1339,10 +1610,13 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         audiences: ['agent'],
         effect: 'external-write',
         approval: 'confirmation',
+        delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
         concurrency: { revision: 'none', idempotency: 'required' },
         producedResourceKinds: [CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND],
         inputSchema: contentSpaceProviderInstanceInputSchema,
-        outputSchema: contentSpaceResultSchema(AGENT_ADMINISTRATION_AUTHORIZATION_SCHEMA),
+        outputSchema: contentSpaceResultSchema(
+          contentSpaceAgentProviderAdministrationAuthorizationSchema
+        ),
         handler: async ({ providerInstanceRef }, context) => capabilityMutationResult(
           async () => {
             await options.getService().authorizeProviderAdministration(
@@ -1393,10 +1667,13 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         producedResourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
         effect: 'external-write',
         approval: 'none',
+        delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
         autonomousWrite: 'resource-authorized',
         concurrency: { revision: 'none', idempotency: 'required' },
         inputSchema: contentSpaceAgentAdministrationCreateSpaceInputSchema,
-        outputSchema: contentSpaceResultSchema(AGENT_ADMINISTRATION_CREATE_SPACE_SCHEMA),
+        outputSchema: contentSpaceResultSchema(
+          contentSpaceAgentAdministrationCreateSpaceResultSchema
+        ),
         handler: async (input, context) => {
           const record = requireAgentAdministrationResource(context)
           return capabilityMutationResult(
@@ -1563,9 +1840,10 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
         effect: 'read',
         approval: 'none',
+        delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
         concurrency: { revision: 'none', idempotency: 'none' },
-        inputSchema: AGENT_ADMINISTRATION_LIST_MEMBERS_INPUT_SCHEMA,
-        outputSchema: contentSpaceResultSchema(ADMINISTRATION_MEMBER_PAGE_WIRE_SCHEMA),
+        inputSchema: contentSpaceAgentAdministrationListMembersInputSchema,
+        outputSchema: contentSpaceResultSchema(contentSpaceAgentAdministrationMemberPageSchema),
         handler: async (input, context) => {
           const record = requireAgentRootAdministrationResource(context)
           return capabilityMutationResult(
@@ -1590,9 +1868,10 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
         effect: 'external-write',
         approval: 'confirmation',
+        delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
         concurrency: { revision: 'none', idempotency: 'required' },
-        inputSchema: AGENT_ADMINISTRATION_MEMBER_MUTATION_INPUT_SCHEMA,
-        outputSchema: contentSpaceResultSchema(ADMINISTRATION_ADD_MEMBER_WIRE_SCHEMA),
+        inputSchema: contentSpaceAgentAdministrationMemberMutationInputSchema,
+        outputSchema: contentSpaceResultSchema(contentSpaceAgentAdministrationAddMemberReceiptSchema),
         handler: async (input, context) => {
           const record = requireAgentRootAdministrationResource(context)
           return capabilityMutationResult(
@@ -1618,7 +1897,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         effect: 'destructive',
         approval: 'confirmation',
         concurrency: { revision: 'none', idempotency: 'required' },
-        inputSchema: AGENT_ADMINISTRATION_MEMBER_MUTATION_INPUT_SCHEMA,
+        inputSchema: contentSpaceAgentAdministrationMemberMutationInputSchema,
         outputSchema: contentSpaceResultSchema(ADMINISTRATION_REMOVE_MEMBER_WIRE_SCHEMA),
         handler: async (input, context) => {
           const record = requireAgentRootAdministrationResource(context)
@@ -1768,6 +2047,88 @@ function writeCall(
   return Object.freeze({ ...base, invocationId: context.invocationId, signal: context.signal })
 }
 
+function requireSystemTransferAuthority(context: ContentSpaceCapabilityContext): void {
+  if (context.caller.audience !== 'system' ||
+    !context.caller.principal ||
+    !context.caller.workspaceId?.trim() ||
+    !context.caller.principalSnapshotDigest ||
+    !context.caller.executionContextDigest ||
+    context.resource !== undefined ||
+    !context.caller.capabilityGrants?.includes(CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID) ||
+    !context.invocationId ||
+    !(context.signal instanceof AbortSignal)) {
+    throw operationError(
+      'unauthorized',
+      'The Content Space system transfer grant and Workspace scope are required.'
+    )
+  }
+  try {
+    context.assertPrincipalCurrent()
+  } catch {
+    throw operationError('unauthorized', 'The Host Principal is no longer current.')
+  }
+}
+
+function systemExecutionBinding(
+  context: ContentSpaceCapabilityContext
+) {
+  requireSystemTransferAuthority(context)
+  return contentSpaceSystemExecutionBindingSchema.parse({
+    callerId: context.caller.callerId,
+    principal: context.caller.principal,
+    principalSnapshotDigest: context.caller.principalSnapshotDigest,
+    workspaceId: context.caller.workspaceId,
+    executionContextDigest: context.caller.executionContextDigest,
+    invocationId: context.invocationId
+  })
+}
+
+function canonicalDigest(value: unknown): string {
+  return createHash('sha256').update(canonicalJson(value)).digest('hex')
+}
+
+function deferredProviderDigest() {
+  return Object.freeze({
+    status: 'deferred' as const,
+    reason: 'provider_digest_not_in_run0_contract' as const
+  })
+}
+
+function systemWriteCall(
+  context: ContentSpaceCapabilityContext
+): ContentSpaceServiceWriteCallContext {
+  requireSystemTransferAuthority(context)
+  return Object.freeze({
+    ...writeCall(context)
+  })
+}
+
+function resolveSystemPortableReference(
+  resolver: ReturnType<typeof createContentSpacePortableAuthorityResolver>,
+  envelope: ContentSpacePortableContainerReferenceEnvelope
+): ContentContainerReference
+function resolveSystemPortableReference(
+  resolver: ReturnType<typeof createContentSpacePortableAuthorityResolver>,
+  envelope: ContentSpacePortableFileReferenceEnvelope
+): ContentFileReference
+function resolveSystemPortableReference(
+  resolver: ReturnType<typeof createContentSpacePortableAuthorityResolver>,
+  envelope:
+    | ContentSpacePortableContainerReferenceEnvelope
+    | ContentSpacePortableFileReferenceEnvelope
+): ContentContainerReference | ContentFileReference {
+  try {
+    return envelope.kind === CONTENT_CONTAINER_REFERENCE_KIND
+      ? resolveContentSpacePortableInvocationReference(resolver, envelope)
+      : resolveContentSpacePortableInvocationReference(resolver, envelope)
+  } catch {
+    throw operationError(
+      'unknown_provider_instance',
+      'The portable Content Space authority is unavailable.'
+    )
+  }
+}
+
 function featureCall(
   context: ContentSpaceCapabilityContext,
   effect: ContentSpaceProviderFeatureEffect
@@ -1785,15 +2146,52 @@ async function capabilityResult<Value>(
   try {
     return Object.freeze({ output: contentSpaceSuccess(await operation()) })
   } catch (error) {
-    const detail: ContentSpaceError = error instanceof ContentSpaceOperationError
-      ? sanitizeContentSpaceError(error.detail)
-      : Object.freeze({
-          code: 'provider_unavailable',
-          message: 'Content Space operation failed.',
-          retry: 'never'
-        })
-    return Object.freeze({ output: contentSpaceFailure(detail) })
+    return Object.freeze({ output: contentSpaceFailure(contentSpaceFailureDetail(error)) })
   }
+}
+
+async function systemCapabilityResult<Value>(
+  context: ContentSpaceCapabilityContext,
+  operation: () => Value | Promise<Value>
+): Promise<Readonly<{ output: ContentSpaceResult<Value> }>> {
+  try {
+    const value = await operation()
+    try {
+      await context.assertPrincipalCurrent()
+    } catch {
+      throw operationError(
+        'outcome_unknown',
+        'The Principal changed before the system transfer result was accepted.'
+      )
+    }
+    return Object.freeze({ output: contentSpaceSuccess(value) })
+  } catch (error) {
+    let failure = error
+    if (context.signal?.aborted) {
+      try {
+        await context.assertPrincipalCurrent()
+      } catch {
+        if (!(error instanceof ContentSpaceOperationError) ||
+          error.detail.code !== 'outcome_unknown') {
+          failure = operationError(
+            'unauthorized',
+            'The Host Principal changed before Provider dispatch.'
+          )
+        }
+      }
+    }
+    return Object.freeze({ output: contentSpaceFailure(contentSpaceFailureDetail(failure)) })
+  }
+}
+
+function contentSpaceFailureDetail(error: unknown): ContentSpaceError {
+  return error instanceof ContentSpaceOperationError
+    ? sanitizeContentSpaceError(error.detail)
+    : Object.freeze({
+        code: 'provider_unavailable',
+        message: 'Content Space operation failed.',
+        retry: 'never'
+      })
 }
 
 async function capabilityMutationResult<Value>(
@@ -1982,14 +2380,9 @@ const AGENT_EXTENDED_INPUT_SCHEMA_BY_EFFECT = Object.freeze({
   destructive: agentExtendedInputSchema('destructive')
 })
 
-const providerInstanceInputShape = contentSpaceProviderInstanceInputSchema.unwrap().shape
 const administrationUpdateShape = contentSpaceAdministrationUpdateSpaceInputSchema.unwrap().shape
-const administrationListMembersShape = contentSpaceAdministrationListMembersInputSchema.unwrap().shape
-const administrationMemberMutationShape = contentSpaceAdministrationAddMemberInputSchema.unwrap().shape
 const contentContainerReferenceShape = contentContainerReferenceSchema.unwrap().shape
 const administrationSpaceSummaryShape = contentSpaceAdministrationSpaceSummarySchema.unwrap().shape
-const administrationMemberPageShape = contentSpaceAdministrationMemberPageSchema.unwrap().shape
-const administrationAddMemberShape = contentSpaceAdministrationAddMemberReceiptSchema.unwrap().shape
 const administrationRemoveMemberShape = contentSpaceAdministrationRemoveMemberReceiptSchema
   .unwrap().shape
 
@@ -2018,43 +2411,14 @@ const ADMINISTRATION_ROOT_OPEN_WIRE_SCHEMA = z.object({
   root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA
 }).strict().readonly()
 
-const ADMINISTRATION_MEMBER_PAGE_WIRE_SCHEMA = z.object({
-  root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA,
-  items: administrationMemberPageShape.items,
-  nextCursor: administrationMemberPageShape.nextCursor
-}).strict().readonly()
-
-const ADMINISTRATION_ADD_MEMBER_WIRE_SCHEMA = z.object({
-  root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA,
-  member: administrationAddMemberShape.member
-}).strict().readonly()
-
 const ADMINISTRATION_REMOVE_MEMBER_WIRE_SCHEMA = z.object({
   root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA,
   member: administrationRemoveMemberShape.member,
   removed: administrationRemoveMemberShape.removed
 }).strict().readonly()
 
-const AGENT_ADMINISTRATION_AUTHORIZATION_SCHEMA = z.object({
-  providerInstanceRef: providerInstanceInputShape.providerInstanceRef,
-  resource: domainCapabilityResourceHandleSchema
-}).strict().readonly()
-
-const AGENT_ADMINISTRATION_CREATE_SPACE_SCHEMA = z.object({
-  space: ADMINISTRATION_SPACE_SUMMARY_WIRE_SCHEMA,
-  resource: domainCapabilityResourceHandleSchema
-}).strict().readonly()
-
 const AGENT_ADMINISTRATION_UPDATE_SPACE_INPUT_SCHEMA = z.object({
   label: administrationUpdateShape.label
-}).strict().readonly()
-
-const AGENT_ADMINISTRATION_LIST_MEMBERS_INPUT_SCHEMA = z.object({
-  page: administrationListMembersShape.page
-}).strict().readonly()
-
-const AGENT_ADMINISTRATION_MEMBER_MUTATION_INPUT_SCHEMA = z.object({
-  member: administrationMemberMutationShape.member
 }).strict().readonly()
 
 async function issueExtendedPortalTarget(

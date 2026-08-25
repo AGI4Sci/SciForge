@@ -20,6 +20,42 @@ describe('Content Space administration contract', () => {
     })).toThrow()
   })
 
+  it('publishes exact ordinary Agent contracts for the provisioning batch', () => {
+    expect([
+      administration.CONTENT_SPACE_AUTHORIZE_PROVIDER_ADMINISTRATION_CONTRACT,
+      administration.CONTENT_SPACE_AGENT_ADMIN_CREATE_SPACE_CONTRACT,
+      administration.CONTENT_SPACE_AGENT_ADMIN_LIST_MEMBERS_CONTRACT,
+      administration.CONTENT_SPACE_AGENT_ADMIN_ADD_MEMBER_CONTRACT
+    ].map(({ actionId, effect }) => ({ actionId, effect }))).toEqual([
+      {
+        actionId: 'content-space.authorize-provider-administration',
+        effect: 'external-write'
+      },
+      {
+        actionId: 'content-space.agent-admin-create-space',
+        effect: 'external-write'
+      },
+      {
+        actionId: 'content-space.agent-admin-list-members',
+        effect: 'read'
+      },
+      {
+        actionId: 'content-space.agent-admin-add-member',
+        effect: 'external-write'
+      }
+    ])
+    expect(administration.contentSpaceAgentAdministrationListMembersInputSchema.parse({
+      page: { limit: 20 }
+    })).toEqual({ page: { limit: 20 } })
+    expect(() => administration.contentSpaceAgentAdministrationListMembersInputSchema.parse({
+      root: toPortableContentContainerReference({
+        providerInstanceRef: 'provider-instance-a',
+        containerId: 'root-a'
+      }),
+      page: { limit: 20 }
+    })).toThrow()
+  })
+
   it('strictly rejects retired CAS, revision, and role fields', () => {
     const root = toPortableContentContainerReference({
       providerInstanceRef: 'provider-instance-a',

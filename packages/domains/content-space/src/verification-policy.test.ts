@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
   contentSpaceVerificationPolicyAdmits,
+  contentSpaceVerificationPolicyHasExternalBindingCandidate,
+  contentSpaceVerificationPolicyMatch,
   contentSpaceVerificationProfileSchema,
   defineContentSpaceVerificationPolicy,
   type ContentSpaceVerificationAdmission,
@@ -189,19 +191,94 @@ describe('Content Space verification policy', () => {
       }
     })).toBe(false)
   })
+
+  it('returns one exact system profile byte limit only after binding and fails ambiguous matches closed', () => {
+    const systemProfile = profile({
+      profileId: 'system-download-small',
+      audience: 'system',
+      authority: { kind: 'content-root', root },
+      operation: { family: 'ordinary', operation: 'download' },
+      transferLimits: { maxUploadBytes: 0, maxDownloadBytes: 1_024 },
+      externalBinding
+    })
+    const policy = defineContentSpaceVerificationPolicy({
+      contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+      profiles: [systemProfile]
+    })
+    const facts = {
+      state: { readiness: 'poc_only' as const, reasonCode: 'verification_profile_required' as const },
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      principal,
+      audience: 'system' as const,
+      authority: systemProfile.authority,
+      operation: systemProfile.operation,
+      now: new Date('2026-08-21T00:30:00.000Z')
+    }
+
+    expect(contentSpaceVerificationPolicyMatch(policy, facts)).toBeUndefined()
+    expect(contentSpaceVerificationPolicyHasExternalBindingCandidate(policy, facts)).toBe(true)
+    expect(contentSpaceVerificationPolicyMatch(policy, {
+      ...facts,
+      externalBinding: {
+        providerInstanceRef: PROVIDER_INSTANCE_REF,
+        principal,
+        ...externalBinding
+      }
+    })).toEqual({
+      profileId: 'system-download-small',
+      transferLimits: { maxUploadBytes: 0, maxDownloadBytes: 1_024 }
+    })
+    expect(contentSpaceVerificationPolicyAdmits(policy, {
+      ...facts,
+      transferLimits: { maxUploadBytes: 0, maxDownloadBytes: 1_024 },
+      externalBinding: {
+        providerInstanceRef: PROVIDER_INSTANCE_REF,
+        principal,
+        ...externalBinding
+      }
+    })).toBe(true)
+    expect(contentSpaceVerificationPolicyAdmits(policy, {
+      ...facts,
+      transferLimits: { maxUploadBytes: 0, maxDownloadBytes: 2_048 },
+      externalBinding: {
+        providerInstanceRef: PROVIDER_INSTANCE_REF,
+        principal,
+        ...externalBinding
+      }
+    })).toBe(false)
+
+    const ambiguous = defineContentSpaceVerificationPolicy({
+      contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+      profiles: [
+        systemProfile,
+        { ...systemProfile, profileId: 'system-download-overlap' }
+      ]
+    })
+    expect(contentSpaceVerificationPolicyMatch(ambiguous, {
+      ...facts,
+      externalBinding: {
+        providerInstanceRef: PROVIDER_INSTANCE_REF,
+        principal,
+        ...externalBinding
+      }
+    })).toBeUndefined()
+  })
 })
 
 function profile(input: Readonly<{
+  profileId?: string
+  audience?: ContentSpaceVerificationProfile['audience']
   authority: ContentSpaceVerificationProfile['authority']
   operation: ContentSpaceVerificationProfile['operation']
   transferLimits?: ContentSpaceVerificationProfile['transferLimits']
   externalBinding?: ContentSpaceVerificationProfile['externalBinding']
 }>): ContentSpaceVerificationProfile {
   return {
-    profileId: `profile-${input.operation.family}-${input.operation.operation}`.toLowerCase(),
+    profileId: input.profileId ??
+      `profile-${input.operation.family}-${input.operation.operation}`.toLowerCase(),
     providerInstanceRef: PROVIDER_INSTANCE_REF,
     principal,
-    audience: 'agent',
+    audience: input.audience ?? 'agent',
     authority: input.authority,
     operation: input.operation,
     transferLimits: input.transferLimits ?? { maxUploadBytes: 0, maxDownloadBytes: 0 },
