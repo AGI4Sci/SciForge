@@ -188,7 +188,7 @@ async function contentRecoveryProjectFixture(suffix: string) {
       ]
     }
   })
-  return { repository, service, owner, worker, created }
+  return { repository, service, owner, worker, ownerFact, workerFact, created }
 }
 
 async function activeTextOfferFixture(suffix: string) {
@@ -960,6 +960,209 @@ describe('vNext Cloud application service', () => {
     await expect(service.listProjects(worker.user, {
       protocolVersion: '1.0', type: 'project.list', requestId: 'req_content_removed_list', limit: 10
     })).resolves.toMatchObject({ projects: [] })
+  })
+
+  it('keeps a dynamic content-required member pending with suspended Task authority until provisioning', async () => {
+    const { repository, service, owner, created } =
+      await contentRecoveryProjectFixture('dynamic-content-member')
+    const addedWorker = await seedOidcUserDevice(repository, 'dynamic-content-added-worker', at)
+    const addedWorkerFact = await service.publishProviderDirectoryPrincipalFact(
+      addedWorker.user,
+      providerFactCommand(
+        addedWorker.user,
+        addedWorker.deviceId,
+        'dynamic-content-provider-added-worker',
+        'idem_dynamic_content_added_worker_fact'
+      )
+    )
+
+    const added = await service.addProjectMembership(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.membership.add',
+      requestId: 'req_dynamic_content_member_add',
+      idempotencyKey: 'idem_dynamic_content_member_add',
+      projectId: created.project.projectId,
+      expectedProjectRevision: created.project.revision,
+      userId: addedWorker.user.userId,
+      providerPrincipalFactId: addedWorkerFact.providerPrincipalFactId,
+      expectedProviderPrincipalFactRevision: addedWorkerFact.revision
+    })
+
+    expect(added.membership).toMatchObject({
+      userId: addedWorker.user.userId,
+      state: 'pending_membership',
+      activatedAt: null
+    })
+    expect(added.contentReadiness).toMatchObject({
+      userId: addedWorker.user.userId,
+      state: 'pending',
+      reason: 'provisioning_pending'
+    })
+    expect(added.taskAuthorities).toHaveLength(2)
+    expect(added.taskAuthorities.every(({ state }) => state === 'suspended')).toBe(true)
+    expect(added.provisioningIntent).toMatchObject({
+      kind: 'membership_change',
+      desiredMembers: expect.arrayContaining([
+        expect.objectContaining({
+          userId: addedWorker.user.userId,
+          providerPrincipalFactId: addedWorkerFact.providerPrincipalFactId,
+          snapshottedFactRevision: addedWorkerFact.revision
+        })
+      ])
+    })
+  })
+
+  it('activates a pending dynamic member only after exact observed Provider facts and Device attestation', async () => {
+    const { repository, service, owner, ownerFact, created } =
+      await contentRecoveryProjectFixture('dynamic-member-attestation')
+    const signing = generateKeyPairSync('ed25519')
+    const publicJwk = signing.publicKey.export({ format: 'jwk' })
+    const deviceKeyId = 'dynamic-member-owner-device-key'
+    await repository.transaction(async (tx) => {
+      const device = (await tx.getDeviceForUpdate(owner.deviceId))!
+      await tx.updateDevice({
+        ...device,
+        publicKeyJwk: {
+          kty: 'OKP',
+          crv: 'Ed25519',
+          alg: 'EdDSA',
+          use: 'sig',
+          kid: deviceKeyId,
+          x: publicJwk.x!
+        },
+        revision: device.revision + 1,
+        updatedAt: at.toISOString()
+      }, device.revision)
+    })
+    const addedWorker = await seedOidcUserDevice(repository, 'dynamic-attested-worker', at)
+    const addedWorkerFact = await service.publishProviderDirectoryPrincipalFact(
+      addedWorker.user,
+      providerFactCommand(
+        addedWorker.user,
+        addedWorker.deviceId,
+        'dynamic-attested-provider-worker',
+        'idem_dynamic_attested_worker_fact'
+      )
+    )
+    const added = await service.addProjectMembership(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.membership.add',
+      requestId: 'req_dynamic_attested_member_add',
+      idempotencyKey: 'idem_dynamic_attested_member_add',
+      projectId: created.project.projectId,
+      expectedProjectRevision: created.project.revision,
+      userId: addedWorker.user.userId,
+      providerPrincipalFactId: addedWorkerFact.providerPrincipalFactId,
+      expectedProviderPrincipalFactRevision: addedWorkerFact.revision
+    })
+    const intent = added.provisioningIntent!
+    const requestDigest = '2'.repeat(64)
+    const prepared = await service.prepareExternalOperation(owner.user, {
+      protocolVersion: '1.0',
+      type: 'external_operation.prepare',
+      requestId: 'req_dynamic_attested_prepare',
+      idempotencyKey: 'idem_dynamic_attested_prepare',
+      scope: 'project_membership',
+      projectId: created.project.projectId,
+      taskId: null,
+      executionId: null,
+      preparedTaskRevision: null,
+      preparedExecutionRevision: null,
+      provisioningIntentId: intent.provisioningIntentId,
+      provisioningRevision: intent.provisioningRevision,
+      logicalInvocationId: 'dynamic-attested-add-member',
+      operation: 'add_member',
+      requestDigest
+    })
+    const dispatched = await service.dispatchExternalOperation(owner.user, {
+      protocolVersion: '1.0',
+      type: 'external_operation.dispatch',
+      requestId: 'req_dynamic_attested_dispatch',
+      idempotencyKey: 'idem_dynamic_attested_dispatch',
+      journalEntryId: prepared.contentRecoveryJournalEntryId,
+      expectedJournalRevision: prepared.revision
+    })
+    const receiptDigest = '3'.repeat(64)
+    const observed = await service.observeExternalOperation(owner.user, {
+      protocolVersion: '1.0',
+      type: 'external_operation.observe',
+      requestId: 'req_dynamic_attested_observe',
+      idempotencyKey: 'idem_dynamic_attested_observe',
+      journalEntryId: dispatched.contentRecoveryJournalEntryId,
+      expectedJournalRevision: dispatched.revision,
+      outcome: 'observed_success',
+      receiptDigest,
+      observationDigest: '4'.repeat(64),
+      safeFailureCode: null
+    })
+    expect(await repository.getProjectMember(created.project.projectId, addedWorker.user.userId))
+      .toMatchObject({ state: 'pending_membership', activatedAt: null })
+
+    const rootLocator = {
+      contractVersion: 1 as const,
+      kind: 'content-space.container-reference' as const,
+      authority: 'opencontent.sciforge.test',
+      identity: { containerId: 'dynamic-attested-content-root' }
+    }
+    const memberObservations = intent.desiredMembers.map((member, index) => ({
+      userId: member.userId,
+      providerPrincipalFactId: member.providerPrincipalFactId,
+      snapshottedFactRevision: member.snapshottedFactRevision,
+      principal: member.principal,
+      presence: 'present' as const,
+      observationDigest: String(index + 5).repeat(64),
+      observedAt: at.toISOString()
+    }))
+    const attestation = signProvisioningAttestation({
+      format: 'sciforge.project-content-provisioning-attestation.v1',
+      provisioningAttestationId: 'pca_DynamicMemberAttested01',
+      projectId: created.project.projectId,
+      provisioningIntentId: intent.provisioningIntentId,
+      provisioningRevision: intent.provisioningRevision,
+      ownerUserId: owner.user.userId,
+      principalIdentityRevision: ownerFact.principalIdentityRevision,
+      providerBindingAttestationDigest: ownerFact.providerBindingAttestationDigest,
+      providerInstance: ownerFact.providerPrincipal.providerInstance,
+      rootLocator,
+      rootLocatorDigest: stableDigest(rootLocator),
+      observedOperations: [{
+        operationId: prepared.logicalInvocationId,
+        operationRevision: observed.journal.revision,
+        kind: 'add_member',
+        subjectPrincipal: addedWorkerFact.providerPrincipal,
+        requestDigest,
+        receiptDigest,
+        outcome: 'observed_success',
+        safeFailureCode: null,
+        observedAt: at.toISOString()
+      }],
+      memberObservations,
+      memberSetDigest: createHash('sha256')
+        .update(canonicalProvisionedMemberSetBytes(memberObservations))
+        .digest('hex'),
+      observationStartedAt: at.toISOString(),
+      observationCompletedAt: at.toISOString()
+    }, signing, owner.deviceId, deviceKeyId, 2)
+    const attested = await service.attestProjectContent(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.content.attest',
+      requestId: 'req_dynamic_attested_content',
+      idempotencyKey: 'idem_dynamic_attested_content',
+      projectId: created.project.projectId,
+      expectedProjectRevision: added.project.revision,
+      expectedProvisioningRevision: intent.provisioningRevision,
+      attestation
+    })
+
+    expect(attested.memberships).toEqual([
+      expect.objectContaining({
+        userId: addedWorker.user.userId,
+        state: 'active',
+        activatedAt: at.toISOString()
+      })
+    ])
+    expect(await repository.getProjectMember(created.project.projectId, addedWorker.user.userId))
+      .toMatchObject({ state: 'active', activatedAt: at.toISOString() })
   })
 
   it('adds and safely removes dynamic content-free Membership without a Provider ACL saga', async () => {

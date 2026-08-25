@@ -2475,9 +2475,11 @@ export class CollaborationService {
         fail('validation_failed', 'A content-free Project cannot snapshot a Provider principal fact.')
       }
 
+      const membershipPending = project.contentMode === 'required'
       const membership: StoredProjectMember = {
         projectMembershipId: newId('pmb'), projectId: project.projectId, userId: input.userId,
-        state: 'active', authorityEpoch: 1, activatedAt: at,
+        state: membershipPending ? 'pending_membership' : 'active',
+        authorityEpoch: 1, activatedAt: membershipPending ? null : at,
         removalRequestedAt: null, removalRequestedByUserId: null, removedAt: null,
         revision: 1, createdAt: at, updatedAt: at
       }
@@ -2886,7 +2888,21 @@ export class CollaborationService {
           readinessRows.push(readiness)
         }
         const currentMembership = await tx.getProjectMemberForUpdate(project.projectId, observed.userId)
-        if (currentMembership?.state === 'membership_removal_pending' && observed.presence === 'absent') {
+        if (currentMembership?.state === 'pending_membership' && observed.presence === 'present') {
+          const activated: StoredProjectMember = {
+            ...currentMembership,
+            state: 'active',
+            authorityEpoch: currentMembership.authorityEpoch + 1,
+            activatedAt: at,
+            revision: currentMembership.revision + 1,
+            updatedAt: at
+          }
+          await tx.updateProjectMember(activated, currentMembership.revision)
+          memberships.push(activated)
+        } else if (
+          currentMembership?.state === 'membership_removal_pending' &&
+          observed.presence === 'absent'
+        ) {
           const removed: StoredProjectMember = { ...currentMembership, state: 'removed',
             authorityEpoch: currentMembership.authorityEpoch + 1, removedAt: at,
             revision: currentMembership.revision + 1, updatedAt: at }
@@ -5471,7 +5487,7 @@ async function createMembershipChangeIntent(
   const binding = await tx.getProjectContentSpaceBindingForUpdate(project.projectId)
   const desiredMembers: StoredProjectContentProvisioningIntent['desiredMembers'] = []
   for (const membership of (await tx.listProjectMembers(project.projectId))
-    .filter(({ state }) => state === 'active')
+    .filter(({ state }) => state === 'active' || state === 'pending_membership')
     .sort((left, right) => left.userId.localeCompare(right.userId))) {
     if (!requireCurrentFacts) {
       const previousSnapshot = required(
