@@ -3,6 +3,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import {
   createCollaborationError,
+  deviceCreateRequestSchema,
+  deviceEnrollmentCreateRequestSchema,
+  deviceRevokeRequestSchema,
   restRequestSchema,
   restResponseSchema,
   type HumanEndpointProviderContract,
@@ -12,7 +15,8 @@ import {
 } from '@sciforge/collaboration-contracts'
 import { ZodError } from 'zod'
 
-import { AuthenticationService, type AgentActor, type AuthContext, type HumanEndpointActor, type UserActor } from './auth.js'
+import type { AgentActor, AuthContext, OidcUserActor, UserActor } from './actor.js'
+import { requireOidcUserActor } from './auth.js'
 import {
   toAgent,
   toEndpoint,
@@ -22,6 +26,25 @@ import {
   toManagedContainer,
   toParticipant,
   toProject,
+  toProjectContentProvisioningIntent,
+  toProjectContentProvisioningAttestation,
+  toProjectContentReadiness,
+  toProjectContentSpaceBinding,
+  toProjectMembership,
+  toProjectProviderMembershipObservation,
+  toTaskAuthority,
+  toProjectPlan,
+  toProjectWorkerAvailabilityView,
+  toProviderDirectoryPrincipalFact,
+  toTaskExecution,
+  toTaskOffer,
+  toTaskResultSubmission,
+  toTaskReviewDecision,
+  toExternalOperationRecoveryJournalEntry,
+  toVisibleRecoveryAction,
+  toProjectFinalSummary,
+  toWorkerAvailability,
+  toCloudResourceRef,
   toProjectEndpointBinding,
   toProjectInput,
   toProjectRecord,
@@ -31,6 +54,8 @@ import {
 } from './contracts.js'
 import { stableDigest } from './crypto.js'
 import { CollaborationServiceError } from './errors.js'
+import type { IdentityService } from './identity-service.js'
+import type { CollaborationRequestActorResolver } from './network-boundary.js'
 import type { CollaborationService } from './service.js'
 
 export const COLLABORATION_SERVER_ID = 'sciforge.collaboration-server'
@@ -50,21 +75,19 @@ export interface ProviderDirectory {
 
 export type CollaborationHttpOptions = {
   service: CollaborationService
-  authentication: AuthenticationService
+  authentication: CollaborationRequestActorResolver
+  identities?: IdentityService
   readiness: () => Promise<boolean>
   providers?: ProviderDirectory
-  resolveProviderActor?: (request: IncomingMessage, command: RestRequest) => Promise<HumanEndpointActor | null>
   basePath?: string
   maxBodyBytes?: number
-  now?: () => Date
 }
 
 export function createCollaborationHttpServer(options: CollaborationHttpOptions): Server {
   const basePath = normalizeBasePath(options.basePath)
   const maxBodyBytes = Math.max(1_024, Math.min(options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES, 1024 * 1024))
-  const limiter = new AnonymousBootstrapLimiter(options.now)
   return createServer((request, response) => {
-    handle(request, response, options, basePath, maxBodyBytes, limiter).catch((error) => sendFailure(response, error))
+    handle(request, response, options, basePath, maxBodyBytes).catch((error) => sendFailure(response, error))
   })
 }
 
@@ -73,8 +96,7 @@ async function handle(
   response: ServerResponse,
   options: CollaborationHttpOptions,
   basePath: string,
-  maxBodyBytes: number,
-  limiter: AnonymousBootstrapLimiter
+  maxBodyBytes: number
 ): Promise<void> {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`)
   if (request.method === 'GET' && url.pathname === `${basePath}/healthz`) {
@@ -84,6 +106,7 @@ async function handle(
     const ready = await options.readiness().catch(() => false)
     return sendJson(response, ready ? 200 : 503, { ok: ready })
   }
+  if (await handleIdentityRoute(request, response, url, options, basePath, maxBodyBytes)) return
   if (request.method !== 'POST' || url.pathname !== `${basePath}/v1/commands`) {
     return sendJson(response, 404, { ok: false })
   }
@@ -93,9 +116,6 @@ async function handle(
   const headerKey = firstHeader(request.headers['idempotency-key'])
   if ('idempotencyKey' in command && headerKey !== command.idempotencyKey) {
     throw new CollaborationServiceError('validation_failed', 'Idempotency-Key header must match the strict command body.')
-  }
-  if (isAnonymousBootstrapCommand(command)) {
-    limiter.consume(request.socket.remoteAddress ?? 'unknown', command.type)
   }
   const actor = await resolveActor(request, command, options)
   let body: RestResponse
@@ -111,74 +131,120 @@ async function handle(
   sendJson(response, 200, validated)
 }
 
+async function handleIdentityRoute(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+  options: CollaborationHttpOptions,
+  basePath: string,
+  maxBodyBytes: number
+): Promise<boolean> {
+  const path = url.pathname.slice(basePath.length)
+  const isIdentityPath = path === '/v1/me' || path === '/v1/device-enrollments' ||
+    path === '/v1/devices' || path === '/v1/me/devices' || /^\/v1\/me\/devices\/[^/]+$/u.test(path)
+  if (!isIdentityPath) return false
+  if (!options.identities) {
+    throw new CollaborationServiceError('resource_offline', 'The A identity service is not configured.', { retryable: true })
+  }
+  const actor = await resolveOidcUserRequest(request, options.authentication)
+  try {
+    if (request.method === 'GET' && path === '/v1/me') {
+      sendJson(response, 200, await options.identities.me(actor))
+      return true
+    }
+    if (request.method === 'POST' && path === '/v1/device-enrollments') {
+      requireJson(request)
+      const body = deviceEnrollmentCreateRequestSchema.parse(await readJson(request, maxBodyBytes))
+      requireMatchingIdempotencyKey(request, body.idempotencyKey)
+      sendJson(response, 200, await options.identities.createDeviceEnrollment(actor, body))
+      return true
+    }
+    if (request.method === 'POST' && path === '/v1/devices') {
+      requireJson(request)
+      const body = deviceCreateRequestSchema.parse(await readJson(request, maxBodyBytes))
+      requireMatchingIdempotencyKey(request, body.idempotencyKey)
+      sendJson(response, 200, await options.identities.createDevice(actor, body))
+      return true
+    }
+    if (request.method === 'GET' && path === '/v1/me/devices') {
+      sendJson(response, 200, await options.identities.listDevices(actor))
+      return true
+    }
+    const deviceMatch = /^\/v1\/me\/devices\/([^/]+)$/u.exec(path)
+    if (request.method === 'DELETE' && deviceMatch) {
+      requireJson(request)
+      const body = deviceRevokeRequestSchema.parse(await readJson(request, maxBodyBytes))
+      if (body.deviceId !== deviceMatch[1]) {
+        throw new CollaborationServiceError('validation_failed', 'Device path and body IDs must match.')
+      }
+      requireMatchingIdempotencyKey(request, body.idempotencyKey)
+      sendJson(response, 200, await options.identities.revokeDevice(actor, body.deviceId, body.idempotencyKey))
+      return true
+    }
+    sendJson(response, 405, { ok: false })
+    return true
+  } catch (error) {
+    if (error instanceof CollaborationServiceError && !error.auditRecorded) {
+      await options.identities.recordRejectedBoundary(actor, `http.${request.method?.toLowerCase() ?? 'unknown'}${path}`, error)
+        .catch(() => undefined)
+    }
+    throw error
+  }
+}
+
+async function resolveOidcUserRequest(
+  request: IncomingMessage,
+  authentication: CollaborationRequestActorResolver
+): Promise<OidcUserActor> {
+  return requireOidcUserActor(await authentication.resolveRequestActor(request))
+}
+
+function requireMatchingIdempotencyKey(request: IncomingMessage, bodyKey: string): void {
+  if (firstHeader(request.headers['idempotency-key']) !== bodyKey) {
+    throw new CollaborationServiceError('validation_failed', 'Idempotency-Key header must match the strict request body.')
+  }
+}
+
 async function resolveActor(
   request: IncomingMessage,
   command: RestRequest,
   options: CollaborationHttpOptions
 ): Promise<AuthContext | null> {
-  if (isAnonymousBootstrapCommand(command)) return null
-  if (command.type === 'pairing.verify' || command.type === 'project.input.create' || command.type === 'human.answer') {
-    const providerActor = await options.resolveProviderActor?.(request, command)
-    if (providerActor) return providerActor
+  if (command.type === 'project.input.create') {
     throw new CollaborationServiceError('permission_denied', 'This command is accepted only from the verified provider gateway.')
   }
-  const authorization = firstHeader(request.headers.authorization)
-  const token = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : undefined
-  return options.authentication.resolveBearer(token)
+  return options.authentication.resolveRequestActor(request)
 }
 
 async function dispatch(command: RestRequest, actor: AuthContext | null, options: CollaborationHttpOptions): Promise<RestResponse> {
   const { service } = options
   switch (command.type) {
-    case 'pairing.begin': {
-      const result = await service.beginPairing(command)
-      if (typeof result.challengeCode !== 'string' || typeof result.pollSecret !== 'string') {
-        throw new CollaborationServiceError('idempotency_conflict', 'One-time pairing material was already returned; start a new pairing request if it was lost.')
-      }
-      return response(command, { type: 'pairing.begun', challengeId: result.challengeId,
-        challengeCode: result.challengeCode, pollSecret: result.pollSecret, expiresAt: result.expiresAt })
-    }
-    case 'pairing.verify': {
-      throw new CollaborationServiceError('permission_denied',
-        'Pairing verification is consumed directly from the authenticated provider event stream.')
-    }
-    case 'pairing.redeem': {
-      const result = await service.redeemPairing(command)
-      if (result.type === 'pairing.pending') return response(command, { type: 'pairing.pending',
-        challengeId: result.challengeId, retryAfterSeconds: 3 })
-      if (typeof result.userCredential !== 'string') {
-        throw new CollaborationServiceError('idempotency_conflict', 'The one-time user credential was already returned; restart pairing if it was lost.')
-      }
-      return response(command, { type: 'pairing.verified', userId: result.userId,
-        humanEndpointId: result.humanEndpointId, userCredential: result.userCredential })
-    }
-    case 'user.create': throw new CollaborationServiceError('permission_denied', 'Users are created only by verified first pairing.')
     case 'user.get': return entityResponse(command, toUserPrincipal(await service.getUser(requiredActor(actor), command.userId)))
     case 'user.update': return entityResponse(command, toUserPrincipal(await service.updateUser(requiredUser(actor), command)))
     case 'endpoint.challenge.create': {
       const user = requiredUser(actor)
-      if (user.userId !== command.userId) throw new CollaborationServiceError('permission_denied', 'Cannot create another user endpoint challenge.')
-      const result = await service.beginPairing({ provider: command.expectedIdentity.provider,
-        realmId: command.expectedIdentity.realmId, requestedDisplayName: (await service.getUser(user, user.userId)).displayName,
-        idempotencyKey: command.idempotencyKey, requestedBy: user,
+      const result = await service.createEndpointChallenge(user, { provider: command.expectedIdentity.provider,
+        realmId: command.expectedIdentity.realmId, idempotencyKey: command.idempotencyKey,
         expectedProviderUserId: command.expectedIdentity.providerUserId })
-      if (typeof result.challengeCode !== 'string' || typeof result.pollSecret !== 'string') {
+      if (typeof result.challengeCode !== 'string') {
         throw new CollaborationServiceError('idempotency_conflict', 'One-time challenge material was already returned.')
       }
-      return response(command, { type: 'pairing.begun', challengeId: result.challengeId,
-        challengeCode: result.challengeCode, pollSecret: result.pollSecret, expiresAt: result.expiresAt })
+      return response(command, { type: 'endpoint.challenge.created', challengeId: result.challengeId,
+        challengeCode: result.challengeCode, expiresAt: result.expiresAt })
     }
-    case 'endpoint.bind': throw new CollaborationServiceError('permission_denied', 'Endpoint binding requires a verified provider event.')
+    case 'endpoint.challenge.get': {
+      const result = await service.getEndpointChallenge(requiredUser(actor), command.challengeId)
+      return response(command, result)
+    }
     case 'endpoint.transition': return entityResponse(command, toEndpoint(await service.setEndpointStatus(requiredUser(actor), {
       humanEndpointId: command.humanEndpointId, status: command.status, expectedRevision: command.expectedRevision,
       idempotencyKey: command.idempotencyKey })))
     case 'endpoint.transfer': return entityResponse(command, toEndpoint(await service.transferEndpoint(requiredUser(actor), command)))
     case 'agent.register': {
       const user = requiredUser(actor)
-      if (user.userId !== command.ownerUserId) throw new CollaborationServiceError('permission_denied', 'Cannot register an Agent for another user.')
       const result = await service.registerAgent(user, command)
-      if (!result.deviceCredential) throw new CollaborationServiceError('idempotency_conflict', 'The one-time Agent credential was already returned.')
-      return response(command, { type: 'agent.registered', agent: toAgent(result.agent), deviceCredential: result.deviceCredential })
+      if (!result.sealedCredential) throw new CollaborationServiceError('idempotency_conflict', 'The one-time sealed Agent credential was already returned.')
+      return response(command, { type: 'agent.registered', agent: toAgent(result.agent), sealedCredential: result.sealedCredential })
     }
     case 'agent.heartbeat': {
       const device = requiredAgent(actor, command.agentId)
@@ -186,16 +252,12 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     }
     case 'agent.rotate_credential': {
       const result = await service.rotateAgentCredential(requiredUser(actor), { agentId: command.agentId,
-        expectedRevision: command.expectedRevision, idempotencyKey: command.idempotencyKey })
-      if (!result.deviceCredential) throw new CollaborationServiceError('idempotency_conflict', 'The rotated credential was already returned.')
-      return response(command, { type: 'agent.credential_rotated', agent: toAgent(result.agent), deviceCredential: result.deviceCredential })
+        expectedRevision: command.expectedRevision, credentialBootstrapPublicKey: command.credentialBootstrapPublicKey,
+        idempotencyKey: command.idempotencyKey })
+      if (!result.sealedCredential) throw new CollaborationServiceError('idempotency_conflict', 'The rotated sealed credential was already returned.')
+      return response(command, { type: 'agent.credential_rotated', agent: toAgent(result.agent), sealedCredential: result.sealedCredential })
     }
     case 'agent.revoke': return entityResponse(command, toAgent(await service.revokeAgent(requiredUser(actor), command)))
-    case 'agent.owner.transfer': {
-      const result = await service.transferAgentOwnership(requiredUser(actor), command)
-      if (!result.deviceCredential) throw new CollaborationServiceError('idempotency_conflict', 'The transferred Agent credential was already returned.')
-      return response(command, { type: 'agent.owner_transferred', agent: toAgent(result.agent), deviceCredential: result.deviceCredential })
-    }
     case 'participant.get': {
       const snapshot = await service.getParticipantSnapshot(requiredActor(actor), command.userId)
       return response(command, { type: 'participant.snapshot', user: toUserPrincipal(snapshot.user),
@@ -263,28 +325,205 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
       await service.publishProjectionMessage(device, command)
       return receiptResponse(command, device)
     }
+    case 'provider_directory_principal.publish': return entityResponse(
+      command,
+      toProviderDirectoryPrincipalFact(await service.publishProviderDirectoryPrincipalFact(requiredUser(actor), command))
+    )
+    case 'provider_directory_principal.list': {
+      const page = await service.listProviderDirectoryPrincipalFacts(requiredUser(actor), command)
+      return response(command, { type: 'rest.provider_directory_principal_page',
+        items: page.items.map(toProviderDirectoryPrincipalFact),
+        ...(page.nextFactId ? { nextFactId: page.nextFactId } : {}) })
+    }
+    case 'project.list': {
+      const page = await service.listProjects(requiredUser(actor), command)
+      return response(command, { type: 'rest.project_page',
+        ...(command.cursor === undefined ? {} : { cursor: command.cursor }),
+        limit: command.limit,
+        projects: page.projects.map(toProject),
+        ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
+        observedAt: page.observedAt })
+    }
+    case 'project.coordination.read': {
+      const view = await service.readProjectCoordination(requiredUser(actor), command)
+      return response(command, { type: 'rest.project_coordination', project: toProject(view.project),
+        observedAt: view.observedAt, pages: view.pages,
+        finalSummary: view.finalSummary === null ? null : toProjectFinalSummary(view.finalSummary) })
+    }
     case 'project.create': {
-      const user = requiredUser(actor)
-      if (user.userId !== command.ownerUserId) throw new CollaborationServiceError('permission_denied', 'Cannot create another user Project.')
-      const project = await service.createProject(user, { displayName: command.displayName, goal: command.goal,
-        memberUserIds: command.memberUserIds, coordinatorAgentId: command.coordinatorAgentId, budgets: command.budget,
-        idempotencyKey: command.idempotencyKey })
-      const view = await service.getProject(user, project.projectId)
-      return entityResponse(command, toProject(project, view.members))
+      const created = await service.createProject(requiredUser(actor), command)
+      return response(command, { type: 'rest.project_created', project: toProject(created.project),
+        memberships: created.memberships.map(toProjectMembership),
+        provisioningIntent: created.provisioningIntent === null
+          ? null
+          : toProjectContentProvisioningIntent(created.provisioningIntent) })
     }
     case 'project.get': {
       const view = await service.getProject(requiredActor(actor), command.projectId)
-      return entityResponse(command, toProject(view.project, view.members))
+      return entityResponse(command, toProject(view.project))
     }
     case 'project.transition': {
       const project = await service.transitionProject(requiredUser(actor), command)
-      const view = await service.getProject(requiredActor(actor), project.projectId)
-      return entityResponse(command, toProject(project, view.members))
+      return entityResponse(command, toProject(project))
     }
     case 'project.transfer_coordinator': {
       const project = await service.transferCoordinator(requiredUser(actor), command)
-      const view = await service.getProject(requiredActor(actor), project.projectId)
-      return entityResponse(command, toProject(project, view.members))
+      return entityResponse(command, toProject(project))
+    }
+    case 'worker.availability.publish': return entityResponse(
+      command,
+      toWorkerAvailability(await service.publishWorkerAvailability(requiredAgent(actor), command))
+    )
+    case 'worker.availability.list': {
+      const page = await service.listWorkerAvailability(requiredActor(actor), command)
+      if (command.projectId) {
+        return response(command, { type: 'rest.project_worker_availability_page', projectId: command.projectId,
+          items: page.projectItems.map((item) => toProjectWorkerAvailabilityView({ projectId: command.projectId!, ...item })),
+          ...(page.nextAgentId ? { nextAgentId: page.nextAgentId } : {}) })
+      }
+      return response(command, { type: 'rest.worker_availability_page',
+        items: page.items.map(toWorkerAvailability),
+        ...(page.nextAgentId ? { nextAgentId: page.nextAgentId } : {}) })
+    }
+    case 'project.membership.add': {
+      const result = await service.addProjectMembership(requiredUser(actor), command)
+      return collectionResponse(command, [toProject(result.project), toProjectMembership(result.membership),
+        ...result.taskAuthorities.map(toTaskAuthority),
+        ...(result.contentReadiness === null ? [] : [toProjectContentReadiness(result.contentReadiness)]),
+        ...(result.provisioningIntent === null ? [] : [toProjectContentProvisioningIntent(result.provisioningIntent)])])
+    }
+    case 'project.membership.remove': {
+      const result = await service.removeProjectMembership(requiredUser(actor), command)
+      return collectionResponse(command, [toProject(result.project), toProjectMembership(result.membership),
+        ...result.taskAuthorities.map(toTaskAuthority),
+        ...(result.provisioningIntent === null ? [] : [toProjectContentProvisioningIntent(result.provisioningIntent)])])
+    }
+    case 'project.membership.list': return collectionResponse(
+      command,
+      (await service.listProjectMemberships(requiredActor(actor), command)).map(toProjectMembership)
+    )
+    case 'project.task_authority.list': return collectionResponse(
+      command,
+      (await service.listProjectTaskAuthorities(requiredActor(actor), command)).map(toTaskAuthority)
+    )
+    case 'project.content.provisioning_intent.get': return entityResponse(
+      command,
+      toProjectContentProvisioningIntent(await service.getProjectContentProvisioningIntent(requiredActor(actor), command))
+    )
+    case 'project.content.attest': {
+      const result = await service.attestProjectContent(requiredUser(actor), command)
+      return collectionResponse(command, [toProject(result.project),
+        toProjectContentProvisioningAttestation(result.attestation),
+        toProjectContentSpaceBinding(result.binding),
+        ...result.observations.map(toProjectProviderMembershipObservation),
+        ...result.readiness.map(toProjectContentReadiness),
+        ...result.memberships.map(toProjectMembership)])
+    }
+    case 'project.content.observation.submit': {
+      const result = await service.submitProjectContentObservation(requiredUser(actor), command)
+      return collectionResponse(command, [toProject(result.project),
+        toProjectProviderMembershipObservation(result.observation),
+        toProjectContentReadiness(result.readiness), toProjectMembership(result.membership),
+        toProjectContentSpaceBinding(result.binding)])
+    }
+    case 'project.content.binding.get': return entityResponse(
+      command,
+      toProjectContentSpaceBinding(await service.getProjectContentBinding(requiredActor(actor), command))
+    )
+    case 'project.content.binding.close': {
+      const result = await service.closeProjectContentBinding(requiredUser(actor), command)
+      return collectionResponse(command, [toProject(result.project), toProjectContentSpaceBinding(result.binding)])
+    }
+    case 'external_operation.prepare': return entityResponse(
+      command,
+      toExternalOperationRecoveryJournalEntry(
+        await service.prepareExternalOperation(requiredHumanOrAgent(actor), command)
+      )
+    )
+    case 'external_operation.dispatch': return entityResponse(
+      command,
+      toExternalOperationRecoveryJournalEntry(
+        await service.dispatchExternalOperation(requiredHumanOrAgent(actor), command)
+      )
+    )
+    case 'external_operation.observe': {
+      const result = await service.observeExternalOperation(requiredHumanOrAgent(actor), command)
+      return collectionResponse(command, [toExternalOperationRecoveryJournalEntry(result.journal),
+        ...(result.recoveryAction === null ? [] : [toVisibleRecoveryAction(result.recoveryAction)]),
+        ...(result.task === null ? [] : [toTask(result.task)]),
+        ...(result.execution === null ? [] : [toTaskExecution(result.execution)]),
+        ...(result.provisioningIntent === null ? [] : [toProjectContentProvisioningIntent(result.provisioningIntent)])])
+    }
+    case 'project.plan.submit': return entityResponse(
+      command,
+      toProjectPlan(await service.submitProjectPlan(requiredAgent(actor), command))
+    )
+    case 'project.plan.confirm': return entityResponse(
+      command,
+      toProjectPlan(await service.confirmProjectPlan(requiredUser(actor), command))
+    )
+    case 'task.offer.create': {
+      const result = await service.createTaskOffer(requiredAgent(actor), command)
+      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
+    }
+    case 'task.offer.accept': {
+      const result = await service.acceptTaskOffer(requiredAgent(actor), command)
+      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
+    }
+    case 'task.offer.reject': {
+      const result = await service.rejectTaskOffer(requiredAgent(actor), command)
+      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
+    }
+    case 'task.offer.withdraw': {
+      const result = await service.withdrawTaskOffer(requiredAgent(actor), command)
+      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
+    }
+    case 'task.offer.reassign': {
+      const result = await service.reassignTaskOffer(requiredAgent(actor), command)
+      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
+    }
+    case 'task.execution.start': {
+      const result = await service.startTaskExecution(requiredAgent(actor), command)
+      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution)])
+    }
+    case 'task.execution.fail': {
+      const result = await service.failTaskExecution(requiredAgent(actor), command)
+      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution)])
+    }
+    case 'task.execution.preflight.get': return response(command, {
+      type: 'rest.task_execution_preflight',
+      preflight: await service.getTaskExecutionPreflight(requiredAgent(actor), command)
+    })
+    case 'task.result.submit': {
+      const result = await service.submitTaskResult(requiredAgent(actor), command)
+      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution),
+        toTaskResultSubmission(result.submission)])
+    }
+    case 'task.result.review': {
+      const result = await service.reviewTaskResult(requiredAgent(actor), command)
+      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution),
+        toTaskReviewDecision(result.review), ...(result.offer === null ? [] : [toTaskOffer(result.offer)])])
+    }
+    case 'task.recovery.link_observed_output': {
+      const result = await service.linkObservedRecoveryOutput(requiredUser(actor), command)
+      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution),
+        toExternalOperationRecoveryJournalEntry(result.journal),
+        toVisibleRecoveryAction(result.recoveryAction), toCloudResourceRef(result.resource)])
+    }
+    case 'task.recovery.abandon': {
+      const result = await service.abandonTaskRecovery(requiredUser(actor), command)
+      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution),
+        toExternalOperationRecoveryJournalEntry(result.journal),
+        toVisibleRecoveryAction(result.recoveryAction)])
+    }
+    case 'project.decision.submit': {
+      const result = await service.submitProjectDecision(requiredAgent(actor), command)
+      return collectionResponse(command, [toProject(result.project), toProjectRecord(result.record)])
+    }
+    case 'project.final_summary.submit': {
+      const result = await service.submitProjectFinalSummary(requiredAgent(actor), command)
+      return collectionResponse(command, [toProject(result.project), toProjectRecord(result.record),
+        toProjectFinalSummary(result.finalSummary)])
     }
     case 'project.input.create': {
       if (actor?.kind !== 'human_endpoint' || actor.userId !== command.senderUserId || actor.humanEndpointId !== command.sourceHumanEndpointId) {
@@ -302,25 +541,9 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     }
     case 'project.endpoint.get': return entityResponse(command,
       toProjectEndpointBinding(await service.getProjectEndpointBinding(requiredActor(actor), command.projectId)))
-    case 'task.create': return entityResponse(command, toTask(await service.createTask(requiredAgent(actor), {
-      projectId: command.projectId, assigneeAgentId: command.assigneeAgentId, title: command.title,
-      objective: command.objective, completionCriteria: command.completionCriteria, dependencyTaskIds: command.dependencyTaskIds,
-      expectedProjectRevision: command.expectedRevision, idempotencyKey: command.idempotencyKey })))
     case 'task.get': return entityResponse(command, toTask(await service.getTask(requiredActor(actor), command.taskId)))
-    case 'task.transition': {
-      const status = command.status === 'running' ? 'in_progress' : command.status === 'succeeded' ? 'completed' : command.status
-      if (status === 'offered') throw new CollaborationServiceError('invalid_state_transition', 'Retrying a terminal Task requires explicit Coordinator reassignment.')
-      if (status === 'cancelled') return entityResponse(command, toTask(await service.cancelTask(requiredAgent(actor), command)))
-      return entityResponse(command, toTask(await service.transitionTask(requiredAgent(actor), {
-        taskId: command.taskId, expectedRevision: command.expectedRevision, status,
-        resultSummary: command.resultSummary, failureSummary: command.safeFailureCode,
-        idempotencyKey: command.idempotencyKey })))
-    }
-    case 'project_record.submit': return entityResponse(command, toProjectRecord(await service.submitProjectRecord(requiredHumanOrAgent(actor), {
-      projectId: command.projectId, kind: command.kind, summary: command.body,
-      sourceTaskId: command.sourceTaskId ?? undefined, sourceRevision: command.sourceRevision,
-      idempotencyKey: command.idempotencyKey })))
-    case 'project_record.accept': return entityResponse(command, toProjectRecord(await service.acceptProjectRecord(requiredHumanOrAgent(actor), command)))
+    case 'resource.get': return entityResponse(command,
+      toCloudResourceRef(await service.getCloudResourceRef(requiredActor(actor), command.resourceRefId)))
     case 'inbox.pull': {
       const page = await service.pullInbox(requiredActor(actor), command)
       return response(command, { type: 'rest.inbox_page', messages: page.messages.map(toInboxMessage),
@@ -336,8 +559,10 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
         acknowledgedAt: new Date().toISOString(), createdAt: new Date().toISOString() } })
     }
     case 'human.answer': {
-      if (actor?.kind !== 'human_endpoint') throw new CollaborationServiceError('permission_denied', 'HumanAnswer requires a verified human endpoint.')
-      return entityResponse(command, toHumanAnswer(await service.answerHumanNeeded(actor, command)))
+      return entityResponse(
+        command,
+        toHumanAnswer(await service.answerHumanNeeded(requiredUser(actor), command))
+      )
     }
     case 'human.needed.create': return entityResponse(command, toHumanNeeded(await service.createHumanNeeded(requiredAgent(actor), command)))
     case 'receipt.get': {
@@ -349,6 +574,10 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
         requestHash: receipt.requestDigest, status: 'succeeded', resultHash: stableDigest(receipt.response),
         createdAt: receipt.createdAt } })
     }
+    default: throw new CollaborationServiceError(
+      'resource_offline',
+      'The requested canonical service path is not installed in this server build.'
+    )
   }
 }
 
@@ -384,18 +613,23 @@ function requiredActor(actor: AuthContext | null): AuthContext {
   return actor
 }
 function requiredUser(actor: AuthContext | null): UserActor {
-  if (actor?.kind !== 'user') throw new CollaborationServiceError('permission_denied', 'A user credential is required.')
+  if (actor?.kind !== 'user') {
+    throw new CollaborationServiceError('permission_denied', 'An OIDC User Principal is required.')
+  }
   return actor
 }
 function requiredAgent(actor: AuthContext | null, expectedAgentId?: string): AgentActor {
   if (actor?.kind !== 'agent_device' || (expectedAgentId && actor.agentId !== expectedAgentId)) {
-    throw new CollaborationServiceError('permission_denied', 'The matching Agent device credential is required.')
+    throw new CollaborationServiceError('permission_denied', 'The matching Agent machine credential is required.')
   }
   return actor
 }
 function requiredHumanOrAgent(actor: AuthContext | null): UserActor | AgentActor {
   if (actor?.kind !== 'user' && actor?.kind !== 'agent_device') {
-    throw new CollaborationServiceError('permission_denied', 'A user or Agent credential is required.')
+    throw new CollaborationServiceError(
+      'permission_denied',
+      'An OIDC User Principal or Agent machine credential is required.'
+    )
   }
   return actor
 }
@@ -454,45 +688,4 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store',
     'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' })
   response.end(JSON.stringify(body))
-}
-
-type AnonymousBootstrapCommand = Extract<RestRequest, {
-  type: 'endpoint.catalog.get' | 'pairing.begin' | 'pairing.redeem'
-}>
-
-function isAnonymousBootstrapCommand(command: RestRequest): command is AnonymousBootstrapCommand {
-  return command.type === 'endpoint.catalog.get' || command.type === 'pairing.begin' || command.type === 'pairing.redeem'
-}
-
-const ANONYMOUS_BOOTSTRAP_LIMITS = {
-  'pairing.begin': 10,
-  'pairing.redeem': 240,
-  'endpoint.catalog.get': 120
-} as const
-
-class AnonymousBootstrapLimiter {
-  private readonly buckets = new Map<string, { windowStartedAt: number; count: number }>()
-  private readonly now: () => Date
-  constructor(now: (() => Date) | undefined) { this.now = now ?? (() => new Date()) }
-  consume(remoteAddress: string, operation: AnonymousBootstrapCommand['type']): void {
-    const current = this.now().getTime()
-    const key = `${operation}:${remoteAddress}`
-    const bucket = this.buckets.get(key)
-    if (!bucket || current - bucket.windowStartedAt >= 10 * 60_000) {
-      if (!bucket && this.buckets.size >= 10_000) {
-        for (const [candidate, value] of this.buckets) {
-          if (current - value.windowStartedAt >= 10 * 60_000) this.buckets.delete(candidate)
-        }
-        if (this.buckets.size >= 10_000) {
-          throw new CollaborationServiceError('rate_limited', 'Too many anonymous bootstrap attempts; retry later.', { retryable: true })
-        }
-      }
-      this.buckets.set(key, { windowStartedAt: current, count: 1 })
-      return
-    }
-    if (bucket.count >= ANONYMOUS_BOOTSTRAP_LIMITS[operation]) {
-      throw new CollaborationServiceError('rate_limited', 'Too many anonymous bootstrap attempts; retry later.', { retryable: true })
-    }
-    bucket.count += 1
-  }
 }

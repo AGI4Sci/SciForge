@@ -1,32 +1,43 @@
 import { digestSecret } from './crypto.js'
-import { fail } from './errors.js'
-import type { Assurance, InboxRecipient, StoredEndpoint } from './model.js'
+import { CollaborationServiceError, fail } from './errors.js'
+import type { IdentityService } from './identity-service.js'
+import type { Assurance, StoredEndpoint } from './model.js'
+import { OidcVerificationError, type OidcAccessTokenVerifier } from './oidc.js'
 import type { CollaborationReadRepository } from './repository.js'
+import type { AgentActor, AuthContext, HumanEndpointActor, OidcUserActor, UserActor } from './actor.js'
 
-export type SystemActor = { kind: 'system'; actorKey: string }
-export type UserActor = {
-  kind: 'user'
-  actorKey: string
-  userId: string
-  credentialId: string
-  assurance: 'verified' | 'strong'
+export type OidcUserResolver = Readonly<{
+  isCandidate(token: string): boolean
+  resolve(token: string): Promise<OidcUserActor>
+}>
+
+export class StrictOidcUserResolver implements OidcUserResolver {
+  constructor(private readonly verifier: OidcAccessTokenVerifier, private readonly identities: IdentityService) {}
+
+  isCandidate(token: string): boolean { return token.split('.').length === 3 }
+
+  async resolve(token: string): Promise<OidcUserActor> {
+    try {
+      return await this.identities.resolveOidcUser(await this.verifier.verifyAccessToken(token))
+    } catch (error) {
+      if (error instanceof CollaborationServiceError) throw error
+      if (error instanceof OidcVerificationError) {
+        if (error.code === 'oidc_discovery_unavailable' || error.code === 'oidc_jwks_unavailable') {
+          fail('resource_offline', 'The configured OIDC authentication dependency is unavailable.', { retryable: true })
+        }
+        fail('authentication_required', 'The OIDC access token is not valid.')
+      }
+      fail('authentication_required', 'The OIDC access token could not be verified.')
+    }
+  }
 }
-export type HumanEndpointActor = {
-  kind: 'human_endpoint'
-  actorKey: string
-  userId: string
-  humanEndpointId: string
-  assurance: 'verified' | 'strong'
+
+export function requireOidcUserActor(actor: AuthContext): OidcUserActor {
+  if (actor.kind !== 'user' || actor.authentication !== 'oidc') {
+    fail('permission_denied', 'This operation requires an OIDC User actor.')
+  }
+  return actor
 }
-export type AgentActor = {
-  kind: 'agent_device'
-  actorKey: string
-  userId: string
-  agentId: string
-  credentialId: string
-  assurance: 'device'
-}
-export type AuthContext = SystemActor | UserActor | HumanEndpointActor | AgentActor
 
 export type PermissionOperation =
   | 'personal_message'
@@ -97,7 +108,7 @@ export function authorize(facts: PermissionFacts): void {
       return
     case 'human_answer':
       if ((actor.kind !== 'user' && actor.kind !== 'human_endpoint') || actor.userId !== facts.targetUserId) {
-        fail('permission_denied', 'A HumanNeeded request may only be answered by its target user.')
+        fail('permission_denied', 'A HumanNeeded request may only be answered by its authenticated Project Owner.')
       }
       return
     case 'capability_approval':
@@ -114,7 +125,7 @@ export function authorize(facts: PermissionFacts): void {
       return
     case 'project_admin':
       if (actor.kind !== 'user' || facts.projectRole !== 'owner') {
-        fail('permission_denied', 'This Project operation requires the owner user credential.')
+        fail('permission_denied', 'This Project operation requires its Owner OIDC User Principal.')
       }
       return
     case 'record_submit':
@@ -134,10 +145,27 @@ export function authorize(facts: PermissionFacts): void {
 }
 
 export class AuthenticationService {
-  constructor(private readonly repository: CollaborationReadRepository, private readonly now: () => Date = () => new Date()) {}
+  constructor(
+    private readonly repository: CollaborationReadRepository,
+    private readonly now: () => Date = () => new Date(),
+    private readonly oidc?: OidcUserResolver
+  ) {}
+
+  async resolveRequestActor(request: import('node:http').IncomingMessage): Promise<UserActor | AgentActor> {
+    const authorization = firstHeader(request.headers.authorization)
+    const token = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : undefined
+    return this.resolveBearer(token)
+  }
 
   async resolveBearer(token: string | undefined): Promise<UserActor | AgentActor> {
-    if (!token || token.length < 24 || token.length > 512) fail('authentication_required', 'A valid bearer credential is required.')
+    if (!token || token.length < 16 || token.length > 16 * 1024 || /\s/u.test(token)) {
+      fail('authentication_required', 'A valid bearer credential is required.')
+    }
+    if (token.split('.').length === 3) {
+      if (!this.oidc || !this.oidc.isCandidate(token)) fail('authentication_required', 'OIDC User authentication is not configured.')
+      return this.oidc.resolve(token)
+    }
+    if (token.length > 512) fail('authentication_required', 'The bearer credential is not recognized.')
     const credential = await this.repository.getCredentialByDigest(digestSecret(token))
     if (!credential) fail('authentication_required', 'The bearer credential is not recognized.')
     if (credential.revokedAt || (credential.expiresAt && credential.expiresAt <= this.now().toISOString())) {
@@ -145,27 +173,24 @@ export class AuthenticationService {
     }
     const user = await this.repository.getUser(credential.subjectUserId)
     if (!user || user.status !== 'active') fail('credential_revoked', 'The user principal is not active.')
-    if (credential.kind === 'user') {
-      return {
-        kind: 'user',
-        actorKey: `user:${user.userId}:credential:${credential.credentialId}`,
-        userId: user.userId,
-        credentialId: credential.credentialId,
-        assurance: credential.assurance === 'strong' ? 'strong' : 'verified'
-      }
-    }
     const agentId = credential.subjectAgentId
-    if (!agentId) fail('authentication_required', 'The device credential has no Agent subject.')
+    if (!agentId) fail('authentication_required', 'The Agent machine credential has no Agent subject.')
     const agent = await this.repository.getAgent(agentId)
     if (!agent || agent.status !== 'active' || agent.ownerUserId !== user.userId || agent.credentialGeneration !== credential.generation) {
-      fail('credential_revoked', 'The Agent device identity is no longer active.')
+      fail('credential_revoked', 'The Agent machine identity is no longer active.')
+    }
+    const device = await this.repository.getDevice(agent.deviceId)
+    if (!device || device.status !== 'active' || device.userId !== user.userId) {
+      fail('credential_revoked', 'The Agent Device is no longer active.')
     }
     return {
       kind: 'agent_device',
       actorKey: `agent:${agent.agentId}:credential:${credential.credentialId}`,
       userId: user.userId,
       agentId: agent.agentId,
+      deviceId: device.deviceId,
       credentialId: credential.credentialId,
+      credentialGeneration: credential.generation,
       assurance: 'device'
     }
   }
@@ -190,11 +215,6 @@ export class AuthenticationService {
   }
 }
 
-export function actorInboxRecipient(actor: AuthContext): InboxRecipient {
-  switch (actor.kind) {
-    case 'system': return fail('permission_denied', 'The system actor has no inbox.')
-    case 'user': return { kind: 'user', id: actor.userId }
-    case 'human_endpoint': return { kind: 'human_endpoint', id: actor.humanEndpointId }
-    case 'agent_device': return { kind: 'agent', id: actor.agentId }
-  }
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value
 }

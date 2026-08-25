@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import { FakeCollaborationRepository } from '../../../test-fixtures/collaboration/fake-adapters.mjs'
-import { AuthenticationService, type UserActor } from './auth.js'
+import type { UserActor } from './actor.js'
+import { AuthenticationService } from './auth.js'
 import { stableDigest } from './crypto.js'
 import { CollaborationService } from './service.js'
+import { createAgentCredentialBootstrap, seedOidcUserDevice } from './test-fixtures/collaboration-identity.js'
 
 const at = new Date('2026-08-15T02:00:00.000Z')
 const now = () => at
@@ -19,18 +21,20 @@ class SerialFakeCollaborationRepository extends FakeCollaborationRepository {
 }
 
 async function onboard(
+  repository: SerialFakeCollaborationRepository,
   service: CollaborationService,
   authentication: AuthenticationService,
   label: string,
   providerUserId: string
 ) {
-  const pairing = await service.beginPairing({
+  const identity = await seedOidcUserDevice(repository, label, at)
+  const pairing = await service.createEndpointChallenge(identity.user, {
     provider: 'zulip',
     realmId: 'realm-fixture',
-    requestedDisplayName: label,
+    expectedProviderUserId: providerUserId,
     idempotencyKey: `idem_pairing_begin_${label}`
   })
-  await service.verifyPairingFromProvider({
+  await service.verifyEndpointChallengeFromProvider({
     provider: 'zulip',
     realmId: 'realm-fixture',
     providerUserId,
@@ -39,22 +43,17 @@ async function onboard(
     providerEventId: `provider-event-${label}-verify`,
     assurance: 'verified'
   })
-  const redeemed = await service.redeemPairing({
-    pollSecret: String(pairing.pollSecret),
-    idempotencyKey: `idem_pairing_redeem_${label}`
-  })
-  const user = await authentication.resolveBearer(String(redeemed.userCredential))
-  if (user.kind !== 'user') throw new Error('Expected user actor')
+  const verified = await service.getEndpointChallenge(identity.user, String(pairing.challengeId))
   const endpoint = await authentication.resolveProviderIdentity(
     'zulip',
     'realm-fixture',
     providerUserId
   )
   return {
-    user,
+    user: identity.user,
     endpoint,
-    userId: String(redeemed.userId),
-    endpointId: String(redeemed.humanEndpointId)
+    userId: identity.userId,
+    endpointId: String(verified.humanEndpointId)
   }
 }
 
@@ -63,15 +62,17 @@ async function registerAgent(
   user: UserActor,
   label: string
 ) {
+  const bootstrap = createAgentCredentialBootstrap()
   const registered = await service.registerAgent(user, {
-    installationId: `ins_${label.padEnd(12, '0')}`,
+    deviceId: `dev_${user.userId.slice(4)}`,
     displayName: `${label} desktop`,
     nodeType: 'desktop',
     capabilities: ['research.execute'],
+    credentialBootstrapPublicKey: bootstrap.publicKey,
     idempotencyKey: `idem_agent_register_${label}`
   })
-  if (!registered.deviceCredential) throw new Error('Expected one-time device credential')
-  return registered
+  if (!registered.sealedCredential) throw new Error('Expected one-time sealed Agent credential')
+  return { ...registered, openedCredential: bootstrap.open(registered.sealedCredential) }
 }
 
 async function activateManagedContainer(
@@ -115,11 +116,11 @@ describe('remote capability approval security boundary', () => {
     const reference = `AP1-${'A'.repeat(20)}`
     const service = new CollaborationService({ repository, now, remoteApprovalReference: () => reference })
     const authentication = new AuthenticationService(repository, now)
-    const owner = await onboard(service, authentication, 'approval-owner', 'provider-owner')
-    const intruder = await onboard(service, authentication, 'approval-intruder', 'provider-intruder')
+    const owner = await onboard(repository, service, authentication, 'approval-owner', 'provider-owner')
+    const intruder = await onboard(repository, service, authentication, 'approval-intruder', 'provider-intruder')
     const registered = await registerAgent(service, owner.user, 'approvalagent')
     await activateManagedContainer(repository, owner, 'private-channel')
-    const device = await authentication.resolveBearer(registered.deviceCredential!)
+    const device = await authentication.resolveBearer(registered.openedCredential)
     if (device.kind !== 'agent_device') throw new Error('Expected Agent actor')
     const locator = {
       type: 'provider_locator' as const,

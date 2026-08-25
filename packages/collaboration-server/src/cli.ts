@@ -4,7 +4,6 @@ import { runCollaborationMigrations } from './migrations.js'
 import { createPostgresPool } from './postgres.js'
 import {
   createInstalledProviderRuntime,
-  FileProviderSecretReader,
   loadProviderConfiguration
 } from './provider-runtime.js'
 
@@ -40,9 +39,7 @@ if (Boolean(providerConfigurationFile) !== Boolean(providerSecretDirectory)) {
 const providerConfiguration = providerConfigurationFile
   ? await loadProviderConfiguration(providerConfigurationFile)
   : undefined
-const providerSecretReader = providerSecretDirectory
-  ? await FileProviderSecretReader.create(providerSecretDirectory)
-  : undefined
+const oidcIssuer = process.env.SCIFORGE_COLLABORATION_OIDC_ISSUER?.trim()
 
 const runtime = createCollaborationServerRuntime({
   pool,
@@ -50,11 +47,17 @@ const runtime = createCollaborationServerRuntime({
   port: integerEnvironment('SCIFORGE_COLLABORATION_LISTEN_PORT', 8787, 1, 65_535),
   basePath: process.env.SCIFORGE_COLLABORATION_BASE_PATH,
   allowedOrigins: optionalCsvEnvironment('SCIFORGE_COLLABORATION_ALLOWED_ORIGINS'),
-  ...(providerConfiguration && providerSecretReader
-    ? { providerRuntimeFactory: ({ repository, service, authentication }) => createInstalledProviderRuntime({
-        pool, repository, service, authentication,
+  ...(oidcIssuer ? { oidc: {
+    issuer: oidcIssuer,
+    audience: process.env.SCIFORGE_COLLABORATION_OIDC_AUDIENCE?.trim() || 'sciforge-cloud-api',
+    allowedAuthorizedParties: optionalCsvEnvironment('SCIFORGE_COLLABORATION_OIDC_ALLOWED_AUTHORIZED_PARTIES') ??
+      ['sciforge-desktop', 'sciforge-web-mobile']
+  } } : {}),
+  ...(providerConfiguration && providerSecretDirectory
+    ? { providerRuntimeFactory: ({ repository, service, providerIdentityResolver }) => createInstalledProviderRuntime({
+        pool, repository, service, authentication: providerIdentityResolver,
         configuration: providerConfiguration,
-        secretReader: providerSecretReader
+        secretFileDirectory: providerSecretDirectory
       }) }
     : {})
 })

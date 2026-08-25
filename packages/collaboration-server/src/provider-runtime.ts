@@ -1,5 +1,4 @@
-import { readFile, realpath, stat } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { readFile, stat } from 'node:fs/promises'
 
 import {
   CURRENT_PROTOCOL_VERSION,
@@ -9,9 +8,6 @@ import {
   providerSendResultSchema,
   type HumanEndpointProvider,
   type HumanEndpointProviderContract,
-  type HumanEndpointProviderHttpRequest,
-  type HumanEndpointProviderHttpResponse,
-  type HumanEndpointProviderSecretReader,
   type HumanEndpointProviderServices,
   type ProviderEvent,
   type ProviderLocator,
@@ -23,8 +19,7 @@ import {
 } from '@sciforge/collaboration-contracts'
 
 import type { ProviderDirectory } from './api.js'
-import type { AuthContext, HumanEndpointActor } from './auth.js'
-import { AuthenticationService } from './auth.js'
+import type { AuthContext, HumanEndpointActor } from './actor.js'
 import { newId, stableDigest } from './crypto.js'
 import { CollaborationServiceError } from './errors.js'
 import {
@@ -39,8 +34,6 @@ import { ProviderRuntimeStore, type ProviderDeliveryState } from './provider-run
 import { CollaborationService, providerIdentityInboxId } from './service.js'
 
 const MAX_PROVIDER_CONFIG_BYTES = 256 * 1024
-const MAX_SECRET_BYTES = 64 * 1024
-const MAX_HTTP_RESPONSE_BYTES = 16 * 1024 * 1024
 const DEFAULT_OUTBOX_POLL_MS = 1_000
 const MANAGED_CONTAINER_JOB_LEASE_MS = 10 * 60_000
 
@@ -82,7 +75,7 @@ type ProviderRuntimePersistence = Pick<ProviderRuntimeStore,
 >
 
 type ProviderRuntimeService = Pick<CollaborationService,
-  | 'verifyPairingFromProvider'
+  | 'verifyEndpointChallengeFromProvider'
   | 'enqueueProviderCommandResult'
   | 'pullProviderIdentityInbox'
   | 'ackProviderIdentityInboxMessage'
@@ -108,7 +101,9 @@ type ProviderRuntimeRepository = Pick<CollaborationRepository,
   | 'completeManagedContainerJob'
   | 'failManagedContainerJob'
 >
-type ProviderRuntimeAuthentication = Pick<AuthenticationService, 'resolveProviderIdentity'>
+export type ProviderRuntimeAuthentication = Readonly<{
+  resolveProviderIdentity(provider: string, realmId: string, providerUserId: string): Promise<HumanEndpointActor>
+}>
 
 export type ProviderRuntimeOptions = Readonly<{
   providers: readonly HumanEndpointProvider[]
@@ -116,7 +111,7 @@ export type ProviderRuntimeOptions = Readonly<{
   service: ProviderRuntimeService
   repository: ProviderRuntimeRepository
   authentication: ProviderRuntimeAuthentication
-  pairingAssurance?: Readonly<Record<string, 'verified' | 'strong'>>
+  endpointBindingAssurance?: Readonly<Record<string, 'verified' | 'strong'>>
   now?: () => Date
   outboxPollMs?: number
 }>
@@ -127,7 +122,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
   private readonly service: ProviderRuntimeService
   private readonly repository: ProviderRuntimeRepository
   private readonly authentication: ProviderRuntimeAuthentication
-  private readonly pairingAssurance: Readonly<Record<string, 'verified' | 'strong'>>
+  private readonly endpointBindingAssurance: Readonly<Record<string, 'verified' | 'strong'>>
   private readonly now: () => Date
   private readonly outboxPollMs: number
   private readonly pumpTasks = new Set<Promise<void>>()
@@ -144,7 +139,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
     this.service = options.service
     this.repository = options.repository
     this.authentication = options.authentication
-    this.pairingAssurance = options.pairingAssurance ?? {}
+    this.endpointBindingAssurance = options.endpointBindingAssurance ?? {}
     this.now = options.now ?? (() => new Date())
     this.outboxPollMs = Math.max(250, Math.min(options.outboxPollMs ?? DEFAULT_OUTBOX_POLL_MS, 60_000))
   }
@@ -300,10 +295,10 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
           providerEventId: claimEventId,
           result: 'invalid_or_expired'
         })
-      } else if (event.type === 'provider.human_answer.responded') {
-        await this.handleHumanAnswerResponded(event, claimEventId)
       } else if (event.type === 'provider.remote_approval.responded') {
         await this.handleRemoteApprovalResponded(event, claimEventId)
+      } else if (event.type === 'provider.human_answer.candidate') {
+        await this.handleHumanAnswerCandidate(event, claimEventId)
       } else if (event.type === 'provider.locator.changed') {
         await this.service.applyProviderLocatorChange({ previousLocator: event.previousLocator,
           currentLocator: event.currentLocator, providerEventId: claimEventId })
@@ -379,7 +374,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
   ): Promise<void> {
     let result: 'success' | 'invalid_or_expired' | 'identity_conflict'
     try {
-      await this.service.verifyPairingFromProvider({
+      await this.service.verifyEndpointChallengeFromProvider({
         provider: event.identity.provider,
         realmId: event.identity.realmId,
         providerUserId: event.identity.providerUserId,
@@ -387,7 +382,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
         challengeId: event.challengeId,
         challengeCode: event.challengeResponse,
         providerEventId: claimEventId,
-        assurance: this.pairingAssurance[event.provider] ?? 'verified'
+        assurance: this.endpointBindingAssurance[event.provider] ?? 'verified'
       })
       result = 'success'
     } catch (error) {
@@ -407,24 +402,6 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
     })
   }
 
-  private async handleHumanAnswerResponded(
-    event: Extract<ProviderEvent, { type: 'provider.human_answer.responded' }>,
-    claimEventId: string
-  ): Promise<void> {
-    const actor = await this.authentication.resolveProviderIdentity(
-      event.identity.provider,
-      event.identity.realmId,
-      event.identity.providerUserId
-    )
-    await this.service.answerHumanNeeded(actor, {
-      humanRequestId: event.humanRequestId,
-      requestRevision: event.requestRevision,
-      answer: event.answer,
-      sourceLocator: event.locator,
-      idempotencyKey: `idem_${stableDigest(claimEventId)}`
-    })
-  }
-
   private async handleRemoteApprovalResponded(
     event: Extract<ProviderEvent, { type: 'provider.remote_approval.responded' }>,
     claimEventId: string
@@ -439,6 +416,28 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       decision: event.decision,
       sourceLocator: event.locator,
       providerEventId: claimEventId
+    })
+  }
+
+  private async handleHumanAnswerCandidate(
+    event: Extract<ProviderEvent, { type: 'provider.human_answer.candidate' }>,
+    claimEventId: string
+  ): Promise<void> {
+    const actor = await this.authentication.resolveProviderIdentity(
+      event.identity.provider,
+      event.identity.realmId,
+      event.identity.providerUserId
+    )
+    const eventDigest = stableDigest({ provider: event.provider, claimEventId })
+    await this.service.answerHumanNeeded(actor, {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'human.answer',
+      requestId: `req_${eventDigest.slice(0, 24)}`,
+      idempotencyKey: `idem_provider_human_answer_${eventDigest}`,
+      humanRequestId: event.humanRequestId,
+      requestRevision: event.requestRevision,
+      answer: event.answer,
+      sourceLocator: event.locator
     })
   }
 
@@ -630,7 +629,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
     const cursor = await this.repository.getInboxCursor({ kind: 'human_endpoint', id: endpoint.humanEndpointId })
     const page = await this.service.pullInbox(actor, { afterSequence: cursor?.ackedSequence ?? 0, limit: 100 })
     for (const message of page.messages) {
-      const request = outboundRequest(message, provider.contract.limits.maxTextLength)
+      const request = outboundRequest(message)
       if (!request) {
         await this.service.ackInboxMessage(actor, {
           inboxMessageId: message.messageId,
@@ -693,7 +692,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
   private async flushProviderIdentity(recipientId: string): Promise<void> {
     const page = await this.service.pullProviderIdentityInbox({ recipientId, limit: 100 })
     for (const message of page.messages) {
-      const request = outboundRequest(message, Number.MAX_SAFE_INTEGER)
+      const request = outboundRequest(message)
       if (!request || !('recipient' in request) || providerIdentityInboxId(request.recipient) !== recipientId) {
         await this.recordRuntimeFailure('gateway',
           new CollaborationServiceError('validation_failed', 'Direct provider outbox target is invalid.'))
@@ -786,9 +785,9 @@ export async function createInstalledProviderRuntime(input: Readonly<{
   pool: SqlPool
   repository: CollaborationRepository
   service: CollaborationService
-  authentication: AuthenticationService
+  authentication: ProviderRuntimeAuthentication
   configuration: ProviderConfiguration
-  secretReader: HumanEndpointProviderSecretReader
+  secretFileDirectory: string
   now?: () => Date
 }>): Promise<CollaborationProviderRuntime> {
   const now = input.now ?? (() => new Date())
@@ -800,7 +799,7 @@ export async function createInstalledProviderRuntime(input: Readonly<{
     if (!configuration) {
       throw new CollaborationServiceError('resource_offline', `Installed provider ${definition.provider} has no non-sensitive configuration.`)
     }
-    assurances[definition.provider] = pairingAssurance(configuration)
+    assurances[definition.provider] = endpointBindingAssurance(configuration)
     let providerServices = services.get(definition.provider)
     if (!providerServices) {
       providerServices = createProviderServices({ definition, store, service: input.service, now })
@@ -809,7 +808,7 @@ export async function createInstalledProviderRuntime(input: Readonly<{
     return {
       provider: definition.provider,
       configuration,
-      secretReader: input.secretReader,
+      secretFileDirectory: input.secretFileDirectory,
       services: providerServices,
       now: () => timestamp(now)
     }
@@ -820,7 +819,7 @@ export async function createInstalledProviderRuntime(input: Readonly<{
     service: input.service,
     repository: input.repository,
     authentication: input.authentication,
-    pairingAssurance: assurances,
+    endpointBindingAssurance: assurances,
     now
   })
 }
@@ -866,38 +865,6 @@ export async function loadProviderConfiguration(filePath: string): Promise<Provi
   return Object.freeze({ providers: Object.freeze(providers) })
 }
 
-export class FileProviderSecretReader implements HumanEndpointProviderSecretReader {
-  private constructor(private readonly root: string) {}
-
-  static async create(directory: string): Promise<FileProviderSecretReader> {
-    const root = await realpath(directory)
-    const info = await stat(root)
-    if (!info.isDirectory()) throw new CollaborationServiceError('validation_failed', 'Provider secret path must be a directory.')
-    return new FileProviderSecretReader(root)
-  }
-
-  async readSecret(secretReference: string): Promise<string> {
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(secretReference) || secretReference === '.' || secretReference === '..') {
-      throw new CollaborationServiceError('validation_failed', 'Provider secret reference must be a safe file basename.')
-    }
-    const candidate = await realpath(resolve(this.root, secretReference))
-    const pathFromRoot = relative(this.root, candidate)
-    if (!pathFromRoot || pathFromRoot.startsWith('..') || isAbsolute(pathFromRoot)) {
-      throw new CollaborationServiceError('permission_denied', 'Provider secret reference escapes the configured secret directory.')
-    }
-    const info = await stat(candidate)
-    if (!info.isFile() || info.size === 0 || info.size > MAX_SECRET_BYTES) {
-      throw new CollaborationServiceError('validation_failed', 'Provider secret must be a bounded non-empty regular file.')
-    }
-    if ((info.mode & 0o007) !== 0) {
-      throw new CollaborationServiceError('permission_denied', 'Provider secret file must not be accessible to other users.')
-    }
-    const value = (await readFile(candidate, 'utf8')).trim()
-    if (!value) throw new CollaborationServiceError('validation_failed', 'Provider secret file is empty.')
-    return value
-  }
-}
-
 function createProviderServices(input: Readonly<{
   definition: InstalledHumanEndpointProviderDefinition
   store: ProviderRuntimeStore
@@ -919,7 +886,6 @@ function createProviderServices(input: Readonly<{
     },
     recordDelivery: (clientMessageId, result) => store.recordDelivery(definition.provider, clientMessageId, result),
     verifyChallenge: (request) => verifyChallenge(input.service, request, definition.provider),
-    http: providerHttp,
     reportDiagnostic: (diagnostic) => {
       void store.recordDiagnostic(diagnostic).catch(() => undefined)
     }
@@ -932,7 +898,7 @@ async function verifyChallenge(
   provider: string
 ): Promise<ProviderVerifyIdentityResult> {
   try {
-    const result = await service.verifyPairingFromProvider({
+    const result = await service.verifyEndpointChallengeFromProvider({
       provider,
       realmId: request.expectedIdentity.realmId,
       providerUserId: request.expectedIdentity.providerUserId,
@@ -962,34 +928,7 @@ async function verifyChallenge(
   }
 }
 
-async function providerHttp(request: HumanEndpointProviderHttpRequest): Promise<HumanEndpointProviderHttpResponse> {
-  const url = new URL(request.url)
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new CollaborationServiceError('validation_failed', 'Provider HTTP transport requires an HTTP(S) URL.')
-  }
-  const timeoutMs = Math.max(250, Math.min(request.timeoutMs, 120_000))
-  const response = await fetch(url, {
-    method: request.method,
-    headers: request.headers,
-    ...(request.body === undefined ? {} : { body: request.body }),
-    signal: AbortSignal.timeout(timeoutMs),
-    redirect: 'error'
-  })
-  const body = Buffer.from(await response.arrayBuffer())
-  if (body.byteLength > MAX_HTTP_RESPONSE_BYTES) {
-    throw new CollaborationServiceError('payload_too_large', 'Provider response exceeded the transport limit.')
-  }
-  return {
-    status: response.status,
-    headers: Object.fromEntries(response.headers.entries()),
-    body: body.toString('utf8')
-  }
-}
-
-function outboundRequest(
-  message: StoredInboxMessage,
-  maxTextLength: number
-): ProviderSendRequest | ProviderUpdateMessageRequest | undefined {
+function outboundRequest(message: StoredInboxMessage): ProviderSendRequest | ProviderUpdateMessageRequest | undefined {
   const payload = message.payload
   if (
     message.messageType === 'provider.message.update.outbound'
@@ -1026,24 +965,12 @@ function outboundRequest(
       typeof payload.text !== 'string') return undefined
   const locator = providerLocatorSchema.safeParse(payload.locator)
   if (!locator.success) return undefined
-  let text = payload.text
-  if (message.messageType === 'provider.notification.outbound' &&
-      payload.notificationKind === 'human_needed' && text.length > maxTextLength) {
-    const commandMarker = '\n\n回复命令：sciforge-answer '
-    const commandOffset = text.lastIndexOf(commandMarker)
-    if (commandOffset < 0 || text.length - commandOffset > maxTextLength) {
-      throw new CollaborationServiceError('validation_failed',
-        'The provider text limit cannot carry the complete HumanNeeded reply command.')
-    }
-    const command = text.slice(commandOffset)
-    text = `${text.slice(0, Math.max(0, maxTextLength - command.length))}${command}`
-  }
   return {
     protocolVersion: CURRENT_PROTOCOL_VERSION,
     type: 'provider.send.message',
     locator: locator.data,
     clientMessageId: message.messageId,
-    text,
+    text: payload.text,
     ...(payload.type === 'projection.message.outbound' && payload.kind === 'assistant_progress'
       ? { presentation: { disposition: 'collapsible' as const, summary: '中间进展' } }
       : {})
@@ -1057,9 +984,9 @@ function eventRealmId(event: ProviderEvent): string | undefined {
     case 'provider.message.deleted':
     case 'provider.message.reaction':
     case 'provider.challenge.responded':
-    case 'provider.challenge.invalid':
-    case 'provider.human_answer.responded': return event.identity.realmId
+    case 'provider.challenge.invalid': return event.identity.realmId
     case 'provider.remote_approval.responded': return event.identity.realmId
+    case 'provider.human_answer.candidate': return event.identity.realmId
     case 'provider.locator.changed': return event.currentLocator.realmId
     case 'provider.lifecycle.changed': return undefined
   }
@@ -1070,9 +997,9 @@ function eventDedupeKey(event: ProviderEvent): string {
     case 'provider.message.created':
     case 'provider.message.edited':
     case 'provider.message.deleted':
-    case 'provider.message.reaction':
-    case 'provider.human_answer.responded': return event.providerMessageId
+    case 'provider.message.reaction': return event.providerMessageId
     case 'provider.remote_approval.responded': return event.providerMessageId
+    case 'provider.human_answer.candidate': return event.providerMessageId
     case 'provider.locator.changed':
     case 'provider.challenge.responded':
     case 'provider.challenge.invalid':
@@ -1103,11 +1030,11 @@ function deliveryAttemptDue(delivery: ProviderDeliveryState, now: string): boole
   return delivery.nextAttemptAt === undefined || delivery.nextAttemptAt <= now
 }
 
-function pairingAssurance(configuration: Readonly<Record<string, string | number | boolean>>): 'verified' | 'strong' {
-  const value = configuration.pairingAssurance
+function endpointBindingAssurance(configuration: Readonly<Record<string, string | number | boolean>>): 'verified' | 'strong' {
+  const value = configuration.endpointBindingAssurance
   if (value === undefined || value === 'verified') return 'verified'
   if (value === 'strong') return 'strong'
-  throw new CollaborationServiceError('validation_failed', 'Provider pairingAssurance must be verified or strong.')
+  throw new CollaborationServiceError('validation_failed', 'Provider endpointBindingAssurance must be verified or strong.')
 }
 
 function looksLikeInlineSecret(key: string): boolean {

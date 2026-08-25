@@ -10,6 +10,25 @@ import {
   projectEndpointBindingSchema,
   projectRecordSchema,
   projectSchema,
+  projectContentProvisioningIntentSchema,
+  projectContentProvisioningAttestationSchema,
+  projectMembershipSchema,
+  taskAuthoritySchema,
+  projectContentReadinessSchema,
+  projectWorkerAvailabilityViewSchema,
+  providerDirectoryPrincipalFactSchema,
+  workerAvailabilityProjectionSchema,
+  projectPlanSchema,
+  taskExecutionSchema,
+  taskOfferSchema,
+  taskResultSubmissionSchema,
+  taskReviewDecisionSchema,
+  projectContentSpaceBindingSchema,
+  projectProviderMembershipObservationSchema,
+  externalOperationRecoveryJournalEntrySchema,
+  visibleRecoveryActionSchema,
+  projectFinalSummarySchema,
+  cloudResourceRefSchema,
   remoteSessionProjectionSchema,
   taskSchema,
   userPrincipalSchema,
@@ -21,6 +40,25 @@ import {
   type InboxMessage,
   type ParticipantProfile,
   type Project,
+  type ProjectContentProvisioningIntent,
+  type ProjectContentProvisioningAttestation,
+  type ProjectMembership,
+  type TaskAuthority,
+  type ProjectContentReadiness,
+  type ProjectWorkerAvailabilityView,
+  type ProviderDirectoryPrincipalFact,
+  type WorkerAvailabilityProjection,
+  type ProjectPlan,
+  type TaskExecution,
+  type TaskOffer,
+  type TaskResultSubmission,
+  type TaskReviewDecision,
+  type ProjectContentSpaceBinding,
+  type ProjectProviderMembershipObservation,
+  type ExternalOperationRecoveryJournalEntry,
+  type VisibleRecoveryAction,
+  type ProjectFinalSummary,
+  type CloudResourceRef,
   type ProjectInput,
   type ProjectEndpointBinding,
   type ProjectRecord,
@@ -39,13 +77,30 @@ import type {
   StoredInboxMessage,
   StoredParticipant,
   StoredProject,
+  StoredProjectContentProvisioningIntent,
+  StoredProjectContentProvisioningAttestation,
+  StoredProjectContentSpaceBinding,
+  StoredProjectProviderMembershipObservation,
+  StoredCloudResourceRef,
   StoredProjectEndpointBinding,
   StoredProjectInput,
   StoredProjectMember,
+  StoredTaskAuthority,
+  StoredProjectContentReadiness,
+  StoredProviderDirectoryPrincipalFact,
   StoredProjectRecord,
   StoredProjection,
   StoredTask,
-  StoredUser
+  StoredTaskExecution,
+  StoredTaskOffer,
+  StoredProjectPlan,
+  StoredTaskResultSubmission,
+  StoredTaskResultReview,
+  StoredWorkerAvailability,
+  StoredUser,
+  StoredExternalOperationJournal,
+  StoredVisibleRecoveryAction,
+  StoredProjectFinalSummary
 } from './model.js'
 
 export function toUserPrincipal(user: StoredUser): UserPrincipal {
@@ -66,7 +121,8 @@ export function toEndpoint(endpoint: StoredEndpoint): HumanEndpointBinding {
 
 export function toAgent(agent: StoredAgent): AgentNode {
   return agentNodeSchema.parse({ schemaVersion: 1, type: 'agent_node', agentId: agent.agentId,
-    ownerUserId: agent.ownerUserId, installationId: agent.installationId, displayName: agent.displayName,
+    deviceId: agent.deviceId, ownerUserId: agent.ownerUserId,
+    displayName: agent.displayName,
     nodeType: agent.nodeType, capabilities: agent.capabilities,
     lifecycleStatus: agent.status === 'revoked' ? 'revoked' : 'active', connectionStatus: agent.connectionStatus,
     credentialVersion: agent.credentialGeneration, ...(agent.lastSeenAt ? { lastSeenAt: agent.lastSeenAt } : {}),
@@ -117,34 +173,216 @@ export function toManagedContainer(container: StoredManagedContainer): ManagedPr
   })
 }
 
-export function toProject(project: StoredProject, members: StoredProjectMember[]): Project {
+export function toProject(project: StoredProject): Project {
   return projectSchema.parse({ schemaVersion: 1, type: 'project', projectId: project.projectId,
     ownerUserId: project.ownerUserId, displayName: project.displayName, goal: project.goal,
-    memberUserIds: members.filter((member) => member.active).map((member) => member.userId),
     coordinatorAgentId: project.coordinatorAgentId,
-    status: project.status === 'failed' ? 'cancelled' : project.status,
-    budget: project.budgets, revision: project.revision, createdAt: project.createdAt, updatedAt: project.updatedAt })
+    coordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+    executionAuthorityEpoch: project.executionAuthorityEpoch,
+    contentMode: project.contentMode,
+    status: project.status,
+    budget: project.budget,
+    revision: project.revision,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt })
 }
 
 export function toTask(task: StoredTask): Task {
-  const status = task.status === 'in_progress' ? 'running' : task.status === 'completed' ? 'succeeded' : task.status
   return taskSchema.parse({ schemaVersion: 1, type: 'task', taskId: task.taskId, projectId: task.projectId,
-    createdByCoordinatorAgentId: task.createdByAgentId, assigneeAgentId: task.assigneeAgentId,
+    createdByCoordinatorAgentId: task.createdByCoordinatorAgentId,
     title: task.title, objective: task.objective, completionCriteria: task.completionCriteria,
-    dependencyTaskIds: task.dependencyTaskIds, status, attempt: task.retryCount + 1, maxRetries: task.maxRetries,
-    ...(task.activeTurnId ? { activeTurnId: task.activeTurnId } : {}),
-    ...(task.completedAt ? { completedAt: task.completedAt } : {}), revision: task.revision,
+    dependencyTaskIds: task.dependencyTaskIds, fileIntent: task.fileIntent,
+    currentExecutionId: task.currentExecutionId,
+    currentExecutionState: task.currentExecutionState,
+    status: task.status,
+    executionCount: task.executionCount,
+    maxRetries: task.maxRetries,
+    completedAt: task.completedAt,
+    revision: task.revision,
     createdAt: task.createdAt, updatedAt: task.updatedAt })
+}
+
+export function toProviderDirectoryPrincipalFact(
+  fact: StoredProviderDirectoryPrincipalFact
+): ProviderDirectoryPrincipalFact {
+  return providerDirectoryPrincipalFactSchema.parse({
+    schemaVersion: 1,
+    type: 'provider_directory_principal_fact',
+    ...fact
+  })
+}
+
+export function toProjectMembership(membership: StoredProjectMember): ProjectMembership {
+  return projectMembershipSchema.parse({
+    schemaVersion: 1,
+    type: 'project_membership',
+    ...membership
+  })
+}
+
+export function toTaskAuthority(authority: StoredTaskAuthority): TaskAuthority {
+  return taskAuthoritySchema.parse({ schemaVersion: 1, type: 'task_authority', ...authority })
+}
+
+export function toProjectContentReadiness(
+  readiness: StoredProjectContentReadiness
+): ProjectContentReadiness {
+  return projectContentReadinessSchema.parse({
+    schemaVersion: 1,
+    type: 'project_content_readiness',
+    ...readiness
+  })
+}
+
+export function toProjectWorkerAvailabilityView(input: Readonly<{
+  projectId: string
+  availability: StoredWorkerAvailability
+  membership: StoredProjectMember | null
+  taskAuthorities: StoredTaskAuthority[]
+  providerPrincipalFact: StoredProviderDirectoryPrincipalFact | null
+  providerPrincipalSnapshotStatus: ProjectWorkerAvailabilityView['providerPrincipalSnapshotStatus']
+  contentReadiness: StoredProjectContentReadiness | null
+  observedAt: string
+}>): ProjectWorkerAvailabilityView {
+  return projectWorkerAvailabilityViewSchema.parse({
+    schemaVersion: 1,
+    type: 'project_worker_availability_view',
+    projectId: input.projectId,
+    userId: input.availability.userId,
+    agentId: input.availability.agentId,
+    revision: input.availability.revision,
+    availability: toWorkerAvailability(input.availability),
+    membership: input.membership === null ? null : toProjectMembership(input.membership),
+    taskAuthorities: input.taskAuthorities.map(toTaskAuthority),
+    providerPrincipalFact: input.providerPrincipalFact === null
+      ? null
+      : toProviderDirectoryPrincipalFact(input.providerPrincipalFact),
+    providerPrincipalSnapshotStatus: input.providerPrincipalSnapshotStatus,
+    contentReadiness: input.contentReadiness === null
+      ? null
+      : toProjectContentReadiness(input.contentReadiness),
+    observedAt: input.observedAt
+  })
+}
+
+export function toProjectContentProvisioningIntent(
+  intent: StoredProjectContentProvisioningIntent
+): ProjectContentProvisioningIntent {
+  return projectContentProvisioningIntentSchema.parse({
+    schemaVersion: 1,
+    type: 'project_content_provisioning_intent',
+    ...intent
+  })
+}
+
+export function toProjectContentProvisioningAttestation(
+  attestation: StoredProjectContentProvisioningAttestation
+): ProjectContentProvisioningAttestation {
+  return projectContentProvisioningAttestationSchema.parse({
+    schemaVersion: 1,
+    type: 'project_content_provisioning_attestation',
+    ...attestation
+  })
+}
+
+export function toProjectProviderMembershipObservation(
+  observation: StoredProjectProviderMembershipObservation
+): ProjectProviderMembershipObservation {
+  return projectProviderMembershipObservationSchema.parse({
+    schemaVersion: 1,
+    type: 'project_provider_membership_observation',
+    ...observation
+  })
+}
+
+export function toExternalOperationRecoveryJournalEntry(
+  journal: StoredExternalOperationJournal
+): ExternalOperationRecoveryJournalEntry {
+  return externalOperationRecoveryJournalEntrySchema.parse({
+    schemaVersion: 1,
+    type: 'external_operation_recovery_journal_entry',
+    ...journal
+  })
+}
+
+export function toVisibleRecoveryAction(action: StoredVisibleRecoveryAction): VisibleRecoveryAction {
+  return visibleRecoveryActionSchema.parse({
+    schemaVersion: 1,
+    type: 'visible_recovery_action',
+    ...action
+  })
+}
+
+export function toProjectFinalSummary(summary: StoredProjectFinalSummary): ProjectFinalSummary {
+  return projectFinalSummarySchema.parse({
+    schemaVersion: 1,
+    type: 'project_final_summary',
+    ...summary
+  })
+}
+
+export function toWorkerAvailability(
+  availability: StoredWorkerAvailability
+): WorkerAvailabilityProjection {
+  return workerAvailabilityProjectionSchema.parse({
+    schemaVersion: 1,
+    type: 'worker_availability_projection',
+    ...availability
+  })
+}
+
+export function toProjectPlan(plan: StoredProjectPlan): ProjectPlan {
+  const { coordinatorAuthorityEpoch: _coordinatorAuthorityEpoch, ...publicPlan } = plan
+  return projectPlanSchema.parse({ schemaVersion: 1, type: 'project_plan', ...publicPlan })
+}
+
+export function toTaskExecution(execution: StoredTaskExecution): TaskExecution {
+  return taskExecutionSchema.parse({ schemaVersion: 1, type: 'task_execution', ...execution })
+}
+
+export function toTaskOffer(offer: StoredTaskOffer): TaskOffer {
+  return taskOfferSchema.parse({ schemaVersion: 1, type: 'task_offer', ...offer })
+}
+
+export function toTaskResultSubmission(submission: StoredTaskResultSubmission): TaskResultSubmission {
+  return taskResultSubmissionSchema.parse({ schemaVersion: 1, type: 'task_result_submission', ...submission })
+}
+
+export function toTaskReviewDecision(review: StoredTaskResultReview): TaskReviewDecision {
+  const { coordinatorAuthorityEpoch: _coordinatorAuthorityEpoch, ...publicReview } = review
+  return taskReviewDecisionSchema.parse({ schemaVersion: 1, type: 'task_review_decision', ...publicReview })
+}
+
+export function toProjectContentSpaceBinding(
+  binding: StoredProjectContentSpaceBinding
+): ProjectContentSpaceBinding {
+  return projectContentSpaceBindingSchema.parse({
+    schemaVersion: 1,
+    type: 'project_content_space_binding',
+    ...binding
+  })
+}
+
+export function toCloudResourceRef(resource: StoredCloudResourceRef): CloudResourceRef {
+  return cloudResourceRefSchema.parse({
+    schemaVersion: 1,
+    type: 'resource_ref',
+    ...resource,
+    invalidatedAt: resource.invalidatedAt ?? null
+  })
 }
 
 export function toProjectRecord(record: StoredProjectRecord): ProjectRecord {
   return projectRecordSchema.parse({ schemaVersion: 1, type: 'project_record',
     projectRecordId: record.projectRecordId, projectId: record.projectId, kind: record.kind,
-    status: record.status === 'candidate' ? 'proposed' : record.status, body: record.summary,
-    authorUserId: record.authorUserId, authorAgentId: record.authorAgentId ?? null,
-    sourceTaskId: record.sourceTaskId ?? null, sourceRevision: record.sourceRevision ?? 1,
-    acceptedByUserId: record.acceptedByUserId ?? null, acceptedByAgentId: record.acceptedByAgentId ?? null,
-    acceptedAt: record.acceptedAt ?? null, revision: record.revision,
+    status: record.status, body: record.summary,
+    authorUserId: record.authorUserId, authorAgentId: record.authorAgentId,
+    sourceTaskId: record.sourceTaskId ?? null,
+    sourceResultSubmissionId: record.sourceResultSubmissionId ?? null,
+    sourceHumanAnswerId: record.sourceHumanAnswerId ?? null,
+    sourceRevision: record.sourceRevision ?? 1,
+    acceptedByUserId: record.acceptedByUserId, acceptedByAgentId: record.acceptedByAgentId,
+    acceptedAt: record.acceptedAt, revision: record.revision,
     createdAt: record.createdAt, updatedAt: record.updatedAt })
 }
 

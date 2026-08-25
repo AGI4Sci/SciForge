@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/collaboration-server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -25,10 +25,6 @@
     },
     "./api": {
       "types": "./dist/api.d.ts",
-      "import": "./dist/index.js"
-    },
-    "./auth": {
-      "types": "./dist/auth.d.ts",
       "import": "./dist/index.js"
     },
     "./postgres": {
@@ -58,11 +54,12 @@
     "dev": "node --env-file-if-exists=.env --import tsx src/cli.ts",
     "migrate": "node dist/cli.js migrate",
     "test": "vitest run",
+    "test:postgres17": "tsx src/postgres17-contract.integration.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@sciforge/collaboration-contracts": "0.1.0",
-    "@sciforge/collaboration-provider-zulip": "0.1.0",
+    "@sciforge/collaboration-contracts": "1.0.0",
+    "@sciforge/collaboration-provider-zulip": "0.2.0",
     "pg": "^8.16.3",
     "ws": "8.21.1",
     "zod": "^4.4.3"
