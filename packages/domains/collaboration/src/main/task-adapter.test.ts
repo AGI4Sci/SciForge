@@ -859,8 +859,7 @@ function fileContentReadiness() {
     providerInstance: {
       schemaVersion: 1 as const,
       type: 'provider_instance_reference' as const,
-      authority: 'provider.instance.alpha',
-      instanceId: 'instance-alpha'
+      providerInstanceRef: FILE_LOCATOR.authority
     },
     state: 'ready' as const,
     reason: null,
@@ -872,8 +871,7 @@ function fileContentReadiness() {
       providerInstance: {
         schemaVersion: 1 as const,
         type: 'provider_instance_reference' as const,
-        authority: 'provider.instance.alpha',
-        instanceId: 'instance-alpha'
+        providerInstanceRef: FILE_LOCATOR.authority
       },
       principalKind: 'user' as const,
       principalId: 'principal-worker-alpha'
@@ -897,8 +895,7 @@ function fileContentBinding() {
     providerInstance: {
       schemaVersion: 1 as const,
       type: 'provider_instance_reference' as const,
-      authority: 'provider.instance.alpha',
-      instanceId: 'instance-alpha'
+      providerInstanceRef: ROOT_LOCATOR.authority
     },
     rootLocator: ROOT_LOCATOR,
     rootLocatorDigest: ROOT_LOCATOR_DIGEST,

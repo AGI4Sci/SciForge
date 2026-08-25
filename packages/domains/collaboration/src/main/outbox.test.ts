@@ -2,14 +2,19 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   createCollaborationError,
+  restResponseSchema,
+  taskExecutionSchema,
+  taskOfferSchema,
   type RestRequest,
   type RestResponse
 } from '@sciforge/collaboration-contracts'
 import {
   TEST_HASH,
   TEST_IDS,
+  TEST_LATER_TIMESTAMP,
   TEST_TIMESTAMP,
-  agentNodeFixture
+  agentNodeFixture,
+  taskFixture
 } from '@sciforge/collaboration-contracts/testing'
 import { DurableCloudOutbox } from './outbox.js'
 import { createTestAgentCloudRuntime } from './test-agent-cloud-runtime.js'
@@ -161,6 +166,105 @@ test('persists and replays a strict Cloud fence error as a delivered command res
   })
 })
 
+test('rejects a strict Cloud error whose request envelope belongs to another command', async () => {
+  const store = await localStore()
+  const command = coordinatorWithdrawCommand()
+  const response = restResponseSchema.parse({
+    protocolVersion: '1.0',
+    type: 'rest.error',
+    requestId: 'req_Reque0000002',
+    error: createCollaborationError('revision_conflict', 'Coordinator fence changed.')
+  })
+  const outbox = coordinatorOutbox(store, async () => response)
+
+  await assert.rejects(outbox.enqueueAndWait('coordinator.command', command))
+  assert.equal(store.snapshot().outbox[0]?.state, 'failed')
+  assert.equal(store.snapshot().outbox[0]?.response, undefined)
+})
+
+test('delivers task.offer.create only through its exact canonical collection response', async () => {
+  const store = await localStore()
+  const command = coordinatorCreateCommand()
+  const response = coordinatorOfferCollection(command)
+  const outbox = coordinatorOutbox(store, async () => response)
+
+  assert.deepEqual(await outbox.enqueueAndWait('coordinator.command', command), response)
+  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+})
+
+test('delivers task.offer.withdraw only through its exact terminal collection response', async () => {
+  const store = await localStore()
+  const command = coordinatorWithdrawCommand()
+  const response = coordinatorWithdrawCollection(command)
+  const outbox = coordinatorOutbox(store, async () => response)
+
+  assert.deepEqual(await outbox.enqueueAndWait('coordinator.command', command), response)
+  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+})
+
+test('delivers task.offer.reassign only through its exact replacement collection response', async () => {
+  const store = await localStore()
+  const command = coordinatorReassignCommand()
+  const response = coordinatorReassignCollection(command)
+  const outbox = coordinatorOutbox(store, async () => response)
+
+  assert.deepEqual(await outbox.enqueueAndWait('coordinator.command', command), response)
+  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+})
+
+test('rejects collection response drift instead of treating an arbitrary page as write success', async () => {
+  const store = await localStore()
+  const command = coordinatorCreateCommand()
+  const response = coordinatorOfferCollection(command)
+  assert.equal(response.type, 'rest.collection')
+  const drifted = restResponseSchema.parse({
+    ...response,
+    nextCursor: 'opaque-write-page-cursor'
+  })
+  const outbox = coordinatorOutbox(store, async () => drifted)
+
+  await assert.rejects(outbox.enqueueAndWait('coordinator.command', command))
+  assert.equal(store.snapshot().outbox[0]?.state, 'failed')
+  assert.equal(store.snapshot().outbox[0]?.response, undefined)
+})
+
+test('recovers an idempotent Coordinator collection after the first response is lost', async () => {
+  const store = await localStore()
+  const command = coordinatorCreateCommand()
+  const committedResponse = coordinatorOfferCollection(command)
+  let attempts = 0
+  let businessCommits = 0
+  let responseLost = true
+  let committed = false
+  const outbox = coordinatorOutbox(store, async () => {
+    attempts += 1
+    if (!committed) {
+      committed = true
+      businessCommits += 1
+    }
+    if (responseLost) {
+      responseLost = false
+      throw new Error('response lost after canonical Cloud commit')
+    }
+    return committedResponse
+  })
+
+  await assert.rejects(outbox.enqueueAndWait('coordinator.command', command))
+  assert.equal(store.snapshot().outbox[0]?.state, 'failed')
+  await outbox.retry('idem_task.offer.create-outbox-01')
+  await outbox.waitForIdle()
+
+  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+  assert.deepEqual(store.snapshot().outbox[0]?.response, committedResponse)
+  assert.equal(attempts, 2)
+  assert.equal(businessCommits, 1)
+  assert.deepEqual(
+    await outbox.enqueueAndWait('coordinator.command', command),
+    committedResponse
+  )
+  assert.equal(attempts, 2)
+})
+
 test('does not change existing fire-and-retry outbox error semantics', async () => {
   const store = await localStore()
   const outbox = new DurableCloudOutbox({
@@ -306,6 +410,209 @@ function coordinatorWithdrawCommand(): RestRequest {
     expectedCoordinatorAuthorityEpoch: 1,
     reason: 'Coordinator changed the synthetic assignment.'
   }
+}
+
+function coordinatorCreateCommand(): RestRequest {
+  return {
+    protocolVersion: '1.0',
+    requestId: TEST_IDS.requestId,
+    idempotencyKey: 'idem_task.offer.create-outbox-01',
+    type: 'task.offer.create',
+    projectId: TEST_IDS.projectId,
+    expectedProjectRevision: 1,
+    expectedCoordinatorAuthorityEpoch: 1,
+    expectedExecutionAuthorityEpoch: 1,
+    projectPlanId: TEST_IDS.projectPlanId,
+    expectedPlanRevision: 1,
+    planItemId: 'item_Plan00000001',
+    assigneeAgentId: TEST_IDS.secondAgentId,
+    expectedAvailabilityRevision: 1,
+    offerExpiresAt: TEST_LATER_TIMESTAMP
+  }
+}
+
+function coordinatorReassignCommand(): RestRequest {
+  return {
+    protocolVersion: '1.0',
+    requestId: TEST_IDS.requestId,
+    idempotencyKey: 'idem_task.offer.reassign-outbox-01',
+    type: 'task.offer.reassign',
+    taskId: TEST_IDS.taskId,
+    previousExecutionId: TEST_IDS.executionId,
+    expectedTaskRevision: 1,
+    expectedExecutionRevision: 1,
+    expectedCoordinatorAuthorityEpoch: 1,
+    assigneeAgentId: TEST_IDS.secondAgentId,
+    expectedAvailabilityRevision: 1,
+    offerExpiresAt: TEST_LATER_TIMESTAMP
+  }
+}
+
+function coordinatorOfferCollection(request: RestRequest): RestResponse {
+  const execution = taskExecutionSchema.parse({
+    schemaVersion: 1,
+    type: 'task_execution',
+    projectId: TEST_IDS.projectId,
+    taskId: TEST_IDS.taskId,
+    executionId: TEST_IDS.executionId,
+    attempt: 1,
+    offeredByCoordinatorAgentId: TEST_IDS.agentId,
+    assigneeUserId: TEST_IDS.secondUserId,
+    assigneeAgentId: TEST_IDS.secondAgentId,
+    assigneeDeviceId: 'dev_WorkerDevice01',
+    state: 'offered',
+    stateRevision: 1,
+    fence: {
+      schemaVersion: 1,
+      executionId: TEST_IDS.executionId,
+      assigneeUserId: TEST_IDS.secondUserId,
+      assigneeAgentId: TEST_IDS.secondAgentId,
+      assigneeDeviceId: 'dev_WorkerDevice01',
+      assignmentTaskRevision: 1,
+      projectExecutionAuthorityEpoch: 1,
+      userTaskAuthorityEpoch: 1,
+      bindingRevision: null,
+      status: 'open',
+      reason: null,
+      fencedAt: null
+    },
+    fileIntent: null,
+    currentResultSubmissionId: null,
+    offeredAt: TEST_TIMESTAMP,
+    acceptedAt: null,
+    startedAt: null,
+    terminalAt: null,
+    revision: 1,
+    createdAt: TEST_TIMESTAMP,
+    updatedAt: TEST_TIMESTAMP
+  })
+  const offer = taskOfferSchema.parse({
+    schemaVersion: 1,
+    type: 'task_offer',
+    taskOfferId: TEST_IDS.taskOfferId,
+    projectId: TEST_IDS.projectId,
+    taskId: TEST_IDS.taskId,
+    executionId: TEST_IDS.executionId,
+    assigneeUserId: TEST_IDS.secondUserId,
+    assigneeAgentId: TEST_IDS.secondAgentId,
+    assigneeDeviceId: 'dev_WorkerDevice01',
+    state: 'pending',
+    offeredAt: TEST_TIMESTAMP,
+    expiresAt: TEST_LATER_TIMESTAMP,
+    respondedAt: null,
+    rejectionReason: null,
+    safeReasonDetail: null,
+    revision: 1,
+    createdAt: TEST_TIMESTAMP,
+    updatedAt: TEST_TIMESTAMP
+  })
+  return restResponseSchema.parse({
+    protocolVersion: '1.0',
+    type: 'rest.collection',
+    requestId: request.requestId,
+    items: [taskFixture, execution, offer]
+  })
+}
+
+function coordinatorWithdrawCollection(request: RestRequest): RestResponse {
+  const created = coordinatorOfferCollection(request)
+  assert.equal(created.type, 'rest.collection')
+  const task = created.items.find((item) => item.type === 'task')
+  const execution = created.items.find((item) => item.type === 'task_execution')
+  const offer = created.items.find((item) => item.type === 'task_offer')
+  assert.ok(task && execution && offer)
+  return restResponseSchema.parse({
+    ...created,
+    items: [
+      {
+        ...task,
+        currentExecutionState: 'cancelled',
+        status: 'revision_requested',
+        revision: 2,
+        updatedAt: TEST_LATER_TIMESTAMP
+      },
+      {
+        ...execution,
+        state: 'cancelled',
+        stateRevision: 2,
+        fence: {
+          ...execution.fence,
+          status: 'fenced',
+          reason: 'offer_withdrawn',
+          fencedAt: TEST_LATER_TIMESTAMP
+        },
+        terminalAt: TEST_LATER_TIMESTAMP,
+        revision: 2,
+        updatedAt: TEST_LATER_TIMESTAMP
+      },
+      {
+        ...offer,
+        state: 'withdrawn',
+        respondedAt: TEST_LATER_TIMESTAMP,
+        revision: 2,
+        updatedAt: TEST_LATER_TIMESTAMP
+      }
+    ]
+  })
+}
+
+function coordinatorReassignCollection(request: RestRequest): RestResponse {
+  const created = coordinatorOfferCollection(request)
+  assert.equal(created.type, 'rest.collection')
+  const task = created.items.find((item) => item.type === 'task')
+  const execution = created.items.find((item) => item.type === 'task_execution')
+  const offer = created.items.find((item) => item.type === 'task_offer')
+  assert.ok(task && execution && offer)
+  const replacementExecutionId = 'exe_Exec00000002'
+  return restResponseSchema.parse({
+    ...created,
+    items: [
+      {
+        ...task,
+        currentExecutionId: replacementExecutionId,
+        executionCount: 2,
+        revision: 2,
+        updatedAt: TEST_LATER_TIMESTAMP
+      },
+      {
+        ...execution,
+        executionId: replacementExecutionId,
+        attempt: 2,
+        fence: {
+          ...execution.fence,
+          executionId: replacementExecutionId,
+          assignmentTaskRevision: 2
+        },
+        updatedAt: TEST_LATER_TIMESTAMP
+      },
+      {
+        ...offer,
+        taskOfferId: 'ofr_Offer00000002',
+        executionId: replacementExecutionId,
+        updatedAt: TEST_LATER_TIMESTAMP
+      }
+    ]
+  })
+}
+
+function coordinatorOutbox(
+  store: CollaborationLocalStore,
+  execute: (agentId: string, request: RestRequest) => Promise<RestResponse>
+): DurableCloudOutbox {
+  return new DurableCloudOutbox({
+    store,
+    agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: async (agentId) => ({
+        state: 'ready',
+        agentId,
+        userId: agentNodeFixture.ownerUserId,
+        deviceId: agentNodeFixture.deviceId!,
+        generation: agentNodeFixture.credentialVersion
+      }),
+      execute
+    }),
+    localAgentId: () => TEST_IDS.agentId
+  })
 }
 
 class MemoryBackend implements CollaborationStateBackend {
