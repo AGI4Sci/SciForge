@@ -10,21 +10,21 @@
 
 ## 2. Identity 与通用安全边界
 
-- [ ] 2.1 复用 Domain SDK 的 main-only owner-scoped internal-service mediation，由 identity-access 定义 allowlisted、token-free authenticated Cloud transport public contract，并增加 manifest/composition/边界测试。
-- [ ] 2.2 由 identity-access 实现唯一 OIDC request broker，私有注入 Token、重验 Device lease、严格返回 token-free response，并删除协作包 OIDC/session broker 路径。
-- [ ] 2.3 增加 Device key enrollment、原生安全存储、canonical digest signing 和 Cloud verification metadata；禁止 domain 任意签名与私钥导出。
+- [x] 2.1 复用 Domain SDK 的 main-only owner-scoped internal-service mediation，由 identity-access 定义 allowlisted、token-free authenticated Cloud transport public contract，并增加 manifest/composition/边界测试。
+- [x] 2.2 由 identity-access 实现唯一 OIDC request broker，私有注入 Token、重验 Device lease、严格返回 token-free response，并删除协作包 OIDC/session broker 路径。
+- [x] 2.3 增加 Device key enrollment、原生安全存储、canonical digest signing 和 Cloud verification metadata；禁止 domain 任意签名与私钥导出。
 - [ ] 2.4 将 Agent bootstrap 改为 OIDC User → ACTIVE Device → Runtime configured → 每 Device 一个 active Agent，并覆盖 logout/revoke/refresh/ownership conflict。
 - [ ] 2.5 扩展 secret audit，证明 Token、Device/Agent secret 和 Provider credential 不进入跨包合同、IPC、日志、Git 或回执。
 
 ## 3. Cloud 合同、状态机与数据库
 
 - [x] 3.1 升级 collaboration contracts，增加 Worker availability、Project Membership/content readiness、content provisioning intent/attestation/binding、Task execution/file intent/review/recovery 的 strict versioned schemas。
-- [ ] 3.2 保持 OIDC JIT 为唯一 User 创建路径并使 pairing 仅绑定 endpoint；删除匿名 pairing 与 first-pairing user creation。
-- [ ] 3.3 实现每 Project 唯一且始终由 Project Owner 所有的 Coordinator Agent、动态 User/精确 Worker Agent 选择、Owner-owned Agent 间 Coordinator transfer 和权限 fencing。
+- [x] 3.2 保持 OIDC JIT 为唯一 User 创建路径并使 pairing 仅绑定 endpoint；删除匿名 pairing 与 first-pairing user creation。
+- [x] 3.3 实现每 Project 唯一且始终由 Project Owner 所有的 Coordinator Agent、动态 User/精确 Worker Agent 选择、Owner-owned Agent 间 Coordinator transfer 和权限 fencing。
 - [ ] 3.4 实现 offer/accept/reject/timeout/revoke/reassign、每次新 executionId、expected revision/idempotency 和旧 execution 全写入 fencing。
 - [ ] 3.5 实现 Project Membership lifecycle、Provider Membership Observation、derived Project Content Readiness、command-time Task Authority 四项独立事实及普通成员/Owner 失权降级规则。
 - [ ] 3.6 实现 provisioning intent/attestation verification/binding saga、dynamic add、removal pending、closed/degraded lifecycle 和 durable recovery journal。
-- [ ] 3.7 实现 Project plan、统一 `worker_execution | coordinator_project` HumanNeeded to Owner、HumanAnswer → Coordinator Inbox、result review accept/request-revision、Coordinator-only observation/decision/summary/final completion 与 visible recovery actions。
+- [x] 3.7 实现 Project plan、统一 `worker_execution | coordinator_project` HumanNeeded to Owner、HumanAnswer → Coordinator Inbox、result review accept/request-revision、Coordinator-only observation/decision/summary/final completion 与 visible recovery actions。
 - [ ] 3.8 添加 forward-only PostgreSQL migrations、从所有受支持旧 schema 的升级测试、transactional Inbox/receipt 和 restart recovery。
 - [ ] 3.9 完成 REST/SDK/WSS contract、authorization matrix、rate/bounds/redaction、revision/idempotency 和运维恢复手册。
 
@@ -41,8 +41,8 @@
 
 ## 5. 本地 Collaboration Agent 执行
 
-- [ ] 5.1 将 domain-collaboration 改为只消费 Identity-owned token-free User/Agent transport；Agent machine credential 仅由 Identity 私有原生安全存储持有，collaboration 只保留 presence/WSS 状态消费与 durable Inbox/outbox。
-- [ ] 5.2 实现每 Agent Device 本地持久 `manual | automatic` 策略、统一 preflight、显式 accept/reject reason，确认 Cloud 无 acceptancePolicy。
+- [x] 5.1 将 domain-collaboration 改为只消费 Identity-owned token-free User/Agent transport；Agent machine credential 仅由 Identity 私有原生安全存储持有，collaboration 只保留 presence/WSS 状态消费与 durable Inbox/outbox。
+- [x] 5.2 实现每 Agent Device 本地持久 `manual | automatic` 策略、统一 preflight、显式 accept/reject reason，确认 Cloud 无 acceptancePolicy。
 - [ ] 5.3 实现 Worker availability 发布、Runtime capability tags、active Task count、Provider identity/current Project readiness 与 heartbeat projection。
 - [ ] 5.4 从 B donor 重写 Worker runner，使用 runtime-neutral AgentRuntime、当前 execution journal 和真实 Content Space system channel。
 - [ ] 5.5 实现 accept 后重启恢复、WSS reconnect/inbox refill、duplicate offer/ACK 幂等、Device/membership/execution fencing 和迟到外部结果 journal。
@@ -50,8 +50,8 @@
 
 ## 6. Project Coordinator 模块与 HCI
 
-- [ ] 6.1 新建独立 `@sciforge/domain-project-coordinator`，提供 main/renderer entrypoints、manifest/generated composition 和明确 public contracts。
-- [ ] 6.2 从 B donor 重写 Project create/focus、Runtime plan、按 User 分组的 Worker availability、精确 Agent 选择和 Task dispatch UI。
+- [x] 6.1 新建独立 `@sciforge/domain-project-coordinator`，提供 main/renderer entrypoints、manifest/generated composition 和明确 public contracts。
+- [x] 6.2 从 B donor 重写 Project create/focus、Runtime plan、按 User 分组的 Worker availability、精确 Agent 选择和 Task dispatch UI。
 - [ ] 6.3 实现 plan confirmation/edit、pending approval 默认可见、HumanNeeded Owner answer、accept/request-revision 和 Project completion UI。
 - [ ] 6.4 实现 Owner Desktop provisioning/reconcile orchestrator、Device-signed attestation、dynamic add/removal pending 和 Owner root loss recovery HCI。
 - [ ] 6.5 实现 outcome_unknown exact observation/link-or-abandon 流程，禁止无 observation 的 mark-success。
@@ -70,7 +70,7 @@
 - [ ] 8.2 对本变更新增/修改的生产路径执行 `Repository architecture principles gate`：不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证；全仓历史发现只报告，不扩展本任务。
 - [ ] 8.3 运行与 changed collaboration path 相关的 package boundary、private-import、generated composition freshness、capability governance、secret audit 和 full regression tests；只有直接阻断该路径的既有问题才允许最小通用适配。
 - [ ] 8.4 验证 source app 的真实生产 composition，并构建同一 exact commit 的 packaged artifact；验证 packaged app 无 mock/fallback，且只指向冻结的 A-upgrade PoC origin/issuer。
-- [ ] 8.5 准备 U0-U4 合成账号/议程/需求、三文件 Task、HumanNeeded、reject/reassign、review/revision 和 completion 验收脚本。
+- [x] 8.5 准备 U0-U4 合成账号/议程/需求、三文件 Task、HumanNeeded、reject/reassign、review/revision 和 completion 验收脚本。
 - [ ] 8.6 在至少三台机器/独立 VM 的五个 packaged profiles 上完成真实 OIDC、Device/Agent、OpenContent provisioning 与并发会议 happy path。
 - [ ] 8.7 完成 restart、WSS refill、duplicate、old execution fence、Device revoke、Coordinator transfer、Provider removal 和 outcome_unknown recovery matrix。
 - [ ] 8.8 从授权 Desktop 下载并人工核对最终产物，生成不含秘密的 verification receipt；逐文件 bytes/SHA-256 不作为本 PoC 门禁，candidate/cutover 或设备门禁未满足时精确标记 `awaiting_candidate`/`awaiting_real_devices`。
