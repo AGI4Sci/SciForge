@@ -48,7 +48,9 @@
   "scripts": {
     "prebuild": "node ./scripts/public-release-prebuild.cjs && npm run capability:check",
     "dev": "node ./scripts/dev-bootstrap.mjs",
-    "build": "npm run build:agent-support && electron-vite build",
+    "build": "npm run build:agent-support && npm run build:opencontent-native && electron-vite build && npm run stage:opencontent-native",
+    "build:opencontent-native": "node ./packages/domains/opencontent-connector/src/main/native-enrollment/native/build-addon.mjs --skip-unsupported",
+    "stage:opencontent-native": "node ./packages/domains/opencontent-connector/src/main/native-enrollment/native/stage-addon.mjs --skip-unsupported",
     "build:execution-governance": "npm --workspace @sciforge/execution-governance run build",
     "build:full-trace": "npm --workspace @sciforge/full-trace run build",
     "build:multi-agent": "npm --workspace @sciforge/multi-agent run build",

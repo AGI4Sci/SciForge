@@ -25,9 +25,13 @@ import {
   OPENCONTENT_PROVIDER_INSTANCE_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition.js'
-import { createOpenContentCapabilityFactory } from './connection-capabilities.js'
+import {
+  createOpenContentCapabilityFactory,
+  type OpenContentCapabilityFactoryContribution
+} from './connection-capabilities.js'
 import { createOpenContentConnectionService } from './connection-service.js'
 import { createOpenContentClient } from './opencontent-client.js'
+import { createNativeOpenContentPrivateAccountRuntime } from './native-enrollment/index.js'
 import { createOpenContentTeamAdministration } from './team-administration.js'
 import {
   createOpenContentSkillRuntimeSession,
@@ -64,23 +68,27 @@ const instance = defineProviderInstanceDirectoryEntry({
 type OpenContentMainContribution =
   | typeof instance
   | typeof internalServiceDescriptor
-  | ReturnType<typeof createOpenContentCapabilityFactory>
+  | OpenContentCapabilityFactoryContribution
 
 export function createDomainMainEntry(
   host: DomainMainHost
 ): TrustedDomainProcessEntryInput<OpenContentMainContribution> {
-  if (!host.packageSettings || !host.packageSecrets?.providerCredentials) {
-    throw new Error('OpenContent Connector requires secure owner-scoped package storage.')
+  if (!host.packageSettings) {
+    throw new Error('OpenContent Connector requires owner-scoped package settings.')
   }
   if (!host.internalServices) {
     throw new Error('OpenContent Connector requires Host internal-service mediation.')
   }
   let runtime: OpenContentDeploymentRuntime | undefined
   const getRuntime: OpenContentDeploymentRuntimeGetter = () => runtime
+  const accounts = createNativeOpenContentPrivateAccountRuntime({
+    providerInstanceRef: instance.providerInstanceRef,
+    getRuntime
+  })
   const connections = createOpenContentConnectionService({
     providerInstanceRef: instance.providerInstanceRef,
     settings: host.packageSettings,
-    credentials: host.packageSecrets.providerCredentials,
+    accounts,
     getRuntime
   })
   const deployment = resolveOpenContentDeploymentConfiguration(

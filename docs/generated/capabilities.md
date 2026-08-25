@@ -73080,7 +73080,7 @@ Selects an existing display-only Local Account on this installation.
 
 ## `opencontent.connection.bind`
 
-Validates and binds one existing OpenContent account to the current Local Account.
+Validates and binds one existing OpenContent account to the current Principal.
 
 - Version: `1.0.0`
 - Audiences: ui
@@ -73101,27 +73101,15 @@ Validates and binds one existing OpenContent account to the current Local Accoun
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
     "properties": {
-      "password": {
-        "maxLength": 1024,
-        "minLength": 1,
-        "type": "string"
-      },
       "providerInstanceRef": {
         "maxLength": 256,
         "minLength": 3,
-        "type": "string"
-      },
-      "username": {
-        "maxLength": 256,
-        "minLength": 1,
         "type": "string"
       }
     },
     "readOnly": true,
     "required": [
-      "providerInstanceRef",
-      "username",
-      "password"
+      "providerInstanceRef"
     ],
     "type": "object"
   },
@@ -73341,6 +73329,25 @@ Validates and binds one existing OpenContent account to the current Local Accoun
                 "additionalProperties": false,
                 "properties": {
                   "action": {
+                    "const": "install_native_support",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "native_enrollment_unavailable",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
                     "const": "none",
                     "type": "string"
                   },
@@ -73376,7 +73383,7 @@ Validates and binds one existing OpenContent account to the current Local Accoun
   "tags": [
     "opencontent",
     "provider-connection",
-    "sensitive-input"
+    "native-enrollment"
   ],
   "title": "Bind Existing OpenContent Account"
 }
@@ -73384,7 +73391,7 @@ Validates and binds one existing OpenContent account to the current Local Accoun
 
 ## `opencontent.connection.status`
 
-Reads the current Local Account connection status for OpenContent.
+Reads the current Principal connection status for OpenContent.
 
 - Version: `1.0.0`
 - Audiences: ui
@@ -73633,6 +73640,25 @@ Reads the current Local Account connection status for OpenContent.
                 "additionalProperties": false,
                 "properties": {
                   "action": {
+                    "const": "install_native_support",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "native_enrollment_unavailable",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
                     "const": "none",
                     "type": "string"
                   },
@@ -73844,6 +73870,25 @@ Removes this node-local OpenContent credential and connection metadata.
                   },
                   "code": {
                     "const": "secure_storage_unavailable",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "install_native_support",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "native_enrollment_unavailable",
                     "type": "string"
                   }
                 },

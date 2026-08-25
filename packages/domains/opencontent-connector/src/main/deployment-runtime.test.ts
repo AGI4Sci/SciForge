@@ -7,6 +7,10 @@ import type {
   DomainMainInternalServiceRegistration
 } from '@sciforge/domain-sdk/host'
 import type { DomainPackageJsonValue } from '@sciforge/domain-sdk/contract'
+import type {
+  DomainMainProviderCredentialAccess,
+  DomainMainProviderCredentialStoreHost
+} from '@sciforge/domain-sdk/package-storage'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -17,7 +21,7 @@ import type { OpenContentContentSpaceFacade } from '../main-contract.js'
 import { OPENCONTENT_DEPLOYMENT_CONFIGURATION_DESCRIPTOR } from './deployment-config.js'
 import { createDomainMainEntry } from './index.js'
 
-const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo'
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo' as const
 
 const principal = Object.freeze({
   authority: 'sciforge.identity-access',
@@ -49,14 +53,6 @@ describe('OpenContent deployment runtime availability', () => {
       write: vi.fn(async (value: DomainPackageJsonValue) => ({ revision: 1, value })),
       clear: vi.fn(async () => ({ revision: 1, value: null }))
     })
-    const credentials = Object.freeze({
-      status: vi.fn(async () => ({ state: 'absent' as const })),
-      replace: vi.fn(async () => undefined),
-      use: vi.fn(async () => {
-        throw new Error('credentials must remain gated')
-      }),
-      remove: vi.fn(async () => undefined)
-    })
     let facade: OpenContentContentSpaceFacade | undefined
     const host: DomainMainHost = Object.freeze({
       getUserDataDir: () => join(root, 'user-data'),
@@ -65,13 +61,6 @@ describe('OpenContent deployment runtime availability', () => {
       isPackaged: () => false,
       defineCapability: (options: unknown) => options,
       packageSettings: settings,
-      packageSecrets: Object.freeze({
-        has: vi.fn(async () => false),
-        read: vi.fn(async () => null),
-        write: vi.fn(async () => undefined),
-        remove: vi.fn(async () => undefined),
-        providerCredentials: credentials
-      }),
       internalServices: Object.freeze({
         register<Service extends object>(
           registration: DomainMainInternalServiceRegistration<Service>
@@ -107,9 +96,7 @@ describe('OpenContent deployment runtime availability', () => {
       }
     })
     await expect(bind.handler({
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      username: 'fixture-user',
-      password: 'fixture-password'
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
     }, capabilityContext())).resolves.toEqual({
       output: {
         outcome: 'error',
@@ -173,10 +160,6 @@ describe('OpenContent deployment runtime availability', () => {
     expect(settings.read).not.toHaveBeenCalled()
     expect(settings.write).not.toHaveBeenCalled()
     expect(settings.clear).not.toHaveBeenCalled()
-    expect(credentials.status).not.toHaveBeenCalled()
-    expect(credentials.replace).not.toHaveBeenCalled()
-    expect(credentials.use).not.toHaveBeenCalled()
-    expect(credentials.remove).not.toHaveBeenCalled()
     expect(fetch).not.toHaveBeenCalled()
     expect(getExecutablePath).not.toHaveBeenCalled()
   })
@@ -214,7 +197,7 @@ describe('OpenContent deployment runtime availability', () => {
     expect(read).not.toHaveBeenCalled()
   })
 
-  it('keeps a packaged sidecar isolated from an absent supplier overlay', async () => {
+  it('fails closed when the native account vault has no packaged session', async () => {
     const resourcesRoot = mkdtempSync(join(tmpdir(), 'sciforge-opencontent-packaged-'))
     tempRoots.push(resourcesRoot)
     const appRoot = join(resourcesRoot, 'app.asar')
@@ -256,6 +239,17 @@ describe('OpenContent deployment runtime availability', () => {
     })
     vi.stubGlobal('fetch', fetch)
     const getExecutablePath = vi.fn(() => process.execPath)
+    const legacyUse = vi.fn(async (
+      _access: DomainMainProviderCredentialAccess,
+      operation: (secret: string) => unknown | Promise<unknown>
+    ) => operation('legacy-host-token-must-not-be-used')) as unknown as
+      DomainMainProviderCredentialStoreHost['use'] & ReturnType<typeof vi.fn>
+    const legacyProviderCredentials = Object.freeze({
+      status: vi.fn(async () => ({ state: 'available' as const, recordVersion: 1 as const })),
+      replace: vi.fn(async () => undefined),
+      use: legacyUse,
+      remove: vi.fn(async () => undefined)
+    })
     let facade: OpenContentContentSpaceFacade | undefined
     const host: DomainMainHost = Object.freeze({
       getUserDataDir: () => join(resourcesRoot, 'user-data'),
@@ -297,15 +291,7 @@ describe('OpenContent deployment runtime availability', () => {
         read: vi.fn(async () => null),
         write: vi.fn(async () => undefined),
         remove: vi.fn(async () => undefined),
-        providerCredentials: Object.freeze({
-          status: vi.fn(async () => ({
-            state: 'available' as const,
-            recordVersion: 1 as const
-          })),
-          replace: vi.fn(async () => undefined),
-          use: vi.fn(async (_access, operation) => operation('packaged-token-0001')),
-          remove: vi.fn(async () => undefined)
-        })
+        providerCredentials: legacyProviderCredentials
       }),
       internalServices: Object.freeze({
         register: (registration: DomainMainInternalServiceRegistration<object>) => {
@@ -323,9 +309,15 @@ describe('OpenContent deployment runtime availability', () => {
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
-    }, ({ administration }) => typeof administration.listTeams)).resolves.toBe('function')
-    expect(fetch).toHaveBeenCalledTimes(2)
+    }, ({ administration }) => typeof administration.listTeams)).rejects.toMatchObject({
+      code: 'reauthentication_required'
+    })
+    expect(fetch).not.toHaveBeenCalled()
     expect(getExecutablePath).not.toHaveBeenCalled()
+    expect(legacyProviderCredentials.status).not.toHaveBeenCalled()
+    expect(legacyProviderCredentials.replace).not.toHaveBeenCalled()
+    expect(legacyProviderCredentials.use).not.toHaveBeenCalled()
+    expect(legacyProviderCredentials.remove).not.toHaveBeenCalled()
   })
 })
 
@@ -364,18 +356,6 @@ function minimalHost(
       read,
       write: async (value: DomainPackageJsonValue) => ({ revision: 1, value }),
       clear: async () => ({ revision: 1, value: null })
-    }),
-    packageSecrets: Object.freeze({
-      has: async () => false,
-      read: async () => null,
-      write: async () => undefined,
-      remove: async () => undefined,
-      providerCredentials: Object.freeze({
-        status: async () => ({ state: 'absent' as const }),
-        replace: async () => undefined,
-        use: async () => { throw new Error('must stay gated') },
-        remove: async () => undefined
-      })
     }),
     internalServices: Object.freeze({
       register: (registration: DomainMainInternalServiceRegistration<object>) => {

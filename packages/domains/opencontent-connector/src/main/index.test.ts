@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest'
-import { DomainMainProviderCredentialError } from '@sciforge/domain-sdk/package-storage'
 
 import {
   OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION,
@@ -19,6 +18,7 @@ import * as openContentMainModule from './index.js'
 import { createOpenContentCapabilityFactory } from './connection-capabilities.js'
 import { createOpenContentContentSpaceFacade } from './facade.js'
 import type { OpenContentConnectionService } from './connection-service.js'
+import { OpenContentPrivateAccountError } from './private-account-runtime.js'
 import {
   createOpenContentClient,
   type OpenContentClient
@@ -32,7 +32,7 @@ import {
   type OpenContentTeamAdministration
 } from './team-administration.js'
 
-const OPENCONTENT_PROVIDER_INSTANCE_REF = 'test-opencontent-provider'
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo' as const
 
 const principal = Object.freeze({
   authority: 'sciforge.local-account',
@@ -40,6 +40,13 @@ const principal = Object.freeze({
   assurance: 'local-selection' as const,
   deviceId: 'device-1',
   identityVersion: 4
+})
+const cloudPrincipal = Object.freeze({
+  ...principal,
+  authority: 'sciforge.identity-access',
+  subject: 'cloud-user-1',
+  assurance: 'cloud-authenticated' as const,
+  deviceId: 'cloud-device-1'
 })
 const bindingAttestation = Object.freeze({
   providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
@@ -71,7 +78,7 @@ describe('OpenContent connection capabilities', () => {
       .toBe(OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION)
   })
 
-  it('keeps enrollment UI-only and marks credential input as sensitive', () => {
+  it('keeps secret-free native enrollment UI-only', () => {
     const definitions = capabilityDefinitions(connectionService())
     const bind = definitions.find(({ id }) => id === OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind)
     const status = definitions.find(({ id }) => id === OPENCONTENT_CONNECTION_CAPABILITY_IDS.status)
@@ -81,7 +88,7 @@ describe('OpenContent connection capabilities', () => {
       effect: 'external-write',
       concurrency: { revision: 'none', idempotency: 'required' }
     })
-    expect(bind?.tags).toContain('sensitive-input')
+    expect(bind?.tags).toContain('native-enrollment')
     expect(status).toMatchObject({
       audiences: ['ui'],
       effect: 'read',
@@ -111,9 +118,7 @@ describe('OpenContent connection capabilities', () => {
     const bind = definitions.find(({ id }) => id === OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind)!
 
     await expect(bind.handler({
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      username: 'scientist',
-      password: 'fixture-password'
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
     }, {
       caller: { audience: 'ui', principal },
       assertPrincipalCurrent: () => undefined
@@ -141,6 +146,79 @@ describe('OpenContent connection capabilities', () => {
         remoteRevocation: 'unsupported'
       }
     })
+  })
+
+  it('admits the current Cloud Principal for UI bind, status, and unbind', async () => {
+    const connections = connectionService()
+    const definitions = capabilityDefinitions(connections)
+    const context = {
+      caller: { audience: 'ui' as const, principal: cloudPrincipal },
+      assertPrincipalCurrent: vi.fn()
+    }
+    const status = definitions.find(({ id }) => id === OPENCONTENT_CONNECTION_CAPABILITY_IDS.status)!
+    const bind = definitions.find(({ id }) => id === OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind)!
+    const unbind = definitions.find(({ id }) => id === OPENCONTENT_CONNECTION_CAPABILITY_IDS.unbind)!
+
+    await status.handler({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+    }, context)
+    await bind.handler({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+    }, context)
+    await unbind.handler({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+    }, context)
+
+    expect(connections.status).toHaveBeenCalledWith(expect.objectContaining({
+      principal: cloudPrincipal
+    }))
+    expect(connections.enroll).toHaveBeenCalledWith(expect.objectContaining({
+      principal: cloudPrincipal
+    }))
+    expect(connections.unbind).toHaveBeenCalledWith(expect.objectContaining({
+      principal: cloudPrincipal
+    }))
+    expect(context.assertPrincipalCurrent).toHaveBeenCalledTimes(3)
+  })
+
+  it.each(['agent', 'system'] as const)(
+    'rejects %s callers from every connection-management capability',
+    async (audience) => {
+      const connections = connectionService()
+      const definitions = capabilityDefinitions(connections)
+      const context = {
+        caller: { audience, principal: cloudPrincipal },
+        assertPrincipalCurrent: vi.fn()
+      }
+
+      for (const definition of definitions) {
+        const input = { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF }
+        await expect(definition.handler(input, context)).rejects.toThrow(
+          'A current UI Principal is required'
+        )
+      }
+
+      expect(connections.status).not.toHaveBeenCalled()
+      expect(connections.enroll).not.toHaveBeenCalled()
+      expect(connections.unbind).not.toHaveBeenCalled()
+      expect(context.assertPrincipalCurrent).not.toHaveBeenCalled()
+    }
+  )
+
+  it('rejects connection management when the UI has no current Principal', async () => {
+    const connections = connectionService()
+    const definitions = capabilityDefinitions(connections)
+    const status = definitions.find(({ id }) => id === OPENCONTENT_CONNECTION_CAPABILITY_IDS.status)!
+    const assertPrincipalCurrent = vi.fn()
+
+    await expect(status.handler({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+    }, {
+      caller: { audience: 'ui' },
+      assertPrincipalCurrent
+    })).rejects.toThrow('A current UI Principal is required')
+    expect(connections.status).not.toHaveBeenCalled()
+    expect(assertPrincipalCurrent).not.toHaveBeenCalled()
   })
 
   it('returns an unknown Provider Instance as a bounded result before touching connections', async () => {
@@ -172,17 +250,17 @@ describe('OpenContent connection capabilities', () => {
     [new OpenContentConnectorError('rate_limited', 'raw throttle detail'), 'rate_limited', 'retry_later'],
     [new OpenContentConnectorError('provider_contract_violation', 'raw response body'), 'provider_contract_violation', 'contact_support'],
     [new OpenContentConnectorError('cancelled', 'raw cancellation detail'), 'cancelled', 'none'],
-    [new DomainMainProviderCredentialError('secure_storage_unavailable', 'raw keychain detail'), 'secure_storage_unavailable', 'repair_secure_storage']
+    [new OpenContentPrivateAccountError('cancelled', 'raw Principal detail'), 'cancelled', 'none'],
+    [new OpenContentPrivateAccountError('secure_storage_unavailable', 'raw keychain detail'), 'secure_storage_unavailable', 'repair_secure_storage'],
+    [new OpenContentPrivateAccountError('native_enrollment_unavailable', 'raw native detail'), 'native_enrollment_unavailable', 'install_native_support']
   ] as const)('maps an expected bind failure to bounded code %s', async (failure, code, action) => {
     const connections = connectionService()
-    vi.mocked(connections.bindExistingAccount).mockRejectedValueOnce(failure)
+    vi.mocked(connections.enroll).mockRejectedValueOnce(failure)
     const definitions = capabilityDefinitions(connections)
     const bind = definitions.find(({ id }) => id === OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind)!
 
     const result = await bind.handler({
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      username: 'scientist',
-      password: 'secret-password-canary'
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
     }, {
       caller: { audience: 'ui', principal },
       assertPrincipalCurrent: () => undefined
@@ -191,7 +269,7 @@ describe('OpenContent connection capabilities', () => {
     expect(result).toEqual({
       output: { outcome: 'error', error: { code, action } }
     })
-    expect(JSON.stringify(result)).not.toMatch(/secret-password-canary|raw |test1\.edoc2\.com/u)
+    expect(JSON.stringify(result)).not.toMatch(/raw |test1\.edoc2\.com/u)
   })
 
   it('always binds the current Host Principal and never accepts one in input', async () => {
@@ -201,20 +279,16 @@ describe('OpenContent connection capabilities', () => {
     const assertPrincipalCurrent = vi.fn()
 
     await bind.handler({
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      username: 'scientist',
-      password: 'fixture-password'
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
     }, {
       caller: { audience: 'ui', principal },
       signal: new AbortController().signal,
       assertPrincipalCurrent
     })
 
-    expect(connections.bindExistingAccount).toHaveBeenCalledWith(expect.objectContaining({
+    expect(connections.enroll).toHaveBeenCalledWith(expect.objectContaining({
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      username: 'scientist',
-      password: 'fixture-password',
       assertPrincipalCurrent
     }))
   })
@@ -246,6 +320,32 @@ describe('OpenContent connection capabilities', () => {
 })
 
 describe('OpenContent main-only Content Space facade', () => {
+  it('binds runtime access to the installed Provider Instance without a demo-ID fallback', async () => {
+    const providerInstanceRef = 'opencontent-installed-instance'
+    const connections = connectionService()
+    vi.mocked(connections.attestExternalBinding).mockResolvedValue(Object.freeze({
+      ...bindingAttestation,
+      providerInstanceRef
+    }))
+    const facade = createOpenContentContentSpaceFacade({
+      providerInstanceRef,
+      connections,
+      getRuntime: facadeRuntime({} as OpenContentClient, teamAdministration())
+    })
+
+    await expect(facade.attestExternalBinding({
+      principal,
+      providerInstanceRef,
+      assertPrincipalCurrent: () => undefined
+    })).resolves.toMatchObject({ providerInstanceRef })
+    await expect(facade.attestExternalBinding({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })).rejects.toMatchObject({ code: 'invalid_input' })
+    expect(connections.attestExternalBinding).toHaveBeenCalledOnce()
+  })
+
   it('keeps SDK and Team operations available when private attachment assets are absent', () => {
     const facade = createOpenContentContentSpaceFacade({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
@@ -387,14 +487,12 @@ describe('OpenContent main-only Content Space facade', () => {
         bindingAttestation
       }))
     ))
-    const authorizeDownload = vi.fn<OpenContentClient['authorizeDownload']>(
-      async ({ fileGuid }) => ({
-        fileGuid,
-        regionType: 1,
-        regionHash: 'opaque-region-hash',
-        regionUrl: ''
-      })
-    )
+    const authorizeDownload = vi.fn<OpenContentClient['authorizeDownload']>(async ({ fileGuid }) => ({
+      fileGuid,
+      regionType: 1,
+      regionHash: 'opaque-region-hash',
+      regionUrl: ''
+    }))
     const bytes = Uint8Array.of(1, 2, 3)
     const downloadAuthorizedFile = vi.fn<OpenContentClient['downloadAuthorizedFile']>(async ({
       token,
@@ -658,7 +756,7 @@ function connectionService(): OpenContentConnectionService {
   return {
     status: vi.fn(async () => ({ state: 'disconnected' as const })),
     attestExternalBinding: vi.fn(async () => bindingAttestation),
-    bindExistingAccount: vi.fn(async () => ({
+    enroll: vi.fn(async () => ({
       state: 'connected' as const,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       externalAccount: {

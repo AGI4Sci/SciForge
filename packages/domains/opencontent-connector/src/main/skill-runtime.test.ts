@@ -514,7 +514,7 @@ function connectionService(token: string): OpenContentConnectionService {
   return {
     status: vi.fn(),
     attestExternalBinding: vi.fn(async () => bindingAttestation),
-    bindExistingAccount: vi.fn(),
+    enroll: vi.fn(),
     useCurrentSession: vi.fn(async (_input, operation) => operation({
       token,
       externalIdentityId: 42,
