@@ -1,30 +1,53 @@
 import { z } from 'zod'
 import {
-  domainPackageJsonValueSchema,
-  type DomainPackageJsonValue
-} from '@sciforge/domain-sdk/contract'
-import { deviceIdSchema, userIdSchema } from '@sciforge/collaboration-contracts'
+  deviceIdSchema,
+  isCredentialFieldName,
+  redactedJsonSchema,
+  restRequestSchema,
+  restResponseSchema,
+  userIdSchema,
+  type RestRequest
+} from '@sciforge/collaboration-contracts'
 
 export const AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID =
   'sciforge.authenticated-cloud-transport' as const
-export const AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION = '1.0.0' as const
+export const AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION = '2.0.0' as const
 export const AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID = 'sciforge.cloud.command' as const
 
-export const authenticatedCloudOperationIdSchema = z.string()
-  .trim()
-  .min(3)
-  .max(192)
-  .regex(
-    /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/u,
-    'Use a namespaced authenticated Cloud operation ID.'
-  )
+const publicAuthenticatedCloudCommandSchema = restRequestSchema.superRefine(
+  (request, context) => {
+    if (request.type === 'agent.register' || request.type === 'agent.rotate_credential' ||
+        request.type === 'agent.revoke') {
+      context.addIssue({
+        code: 'custom',
+        path: ['type'],
+        message: 'Agent credential lifecycle commands belong to the Identity-private Agent runtime.'
+      })
+    }
+    rejectSecretBearingJsonExtensions(request, context)
+    rejectCredentialChannelKeys(request, context, [])
+  }
+)
+
+const publicAuthenticatedCloudResponseSchema = restResponseSchema.superRefine(
+  (response, context) => {
+    if (response.type === 'agent.registered' || response.type === 'agent.credential_rotated') {
+      context.addIssue({
+        code: 'custom',
+        path: ['type'],
+        message: 'Sealed Agent credentials belong to the Identity-private Agent runtime.'
+      })
+    }
+    rejectSecretBearingJsonExtensions(response, context)
+    rejectCredentialChannelKeys(response, context, [])
+  }
+)
 
 export const authenticatedCloudRequestSchema = z.object({
   contractVersion: z.literal(1),
-  operationId: authenticatedCloudOperationIdSchema,
-  payload: domainPackageJsonValueSchema
+  operationId: z.literal(AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID),
+  payload: publicAuthenticatedCloudCommandSchema
 }).strict().superRefine((request, context) => {
-  rejectSecretMaterial(request.payload, context, ['payload'])
   if (new TextEncoder().encode(JSON.stringify(request)).byteLength > 1_048_576) {
     context.addIssue({ code: 'custom', message: 'Authenticated Cloud request exceeds 1 MiB.' })
   }
@@ -33,9 +56,8 @@ export const authenticatedCloudRequestSchema = z.object({
 export const authenticatedCloudResponseSchema = z.object({
   contractVersion: z.literal(1),
   status: z.number().int().min(100).max(599),
-  body: domainPackageJsonValueSchema
+  body: publicAuthenticatedCloudResponseSchema
 }).strict().superRefine((response, context) => {
-  rejectSecretMaterial(response.body, context, ['body'])
   if (new TextEncoder().encode(JSON.stringify(response)).byteLength > 1_048_576) {
     context.addIssue({ code: 'custom', message: 'Authenticated Cloud response exceeds 1 MiB.' })
   }
@@ -111,46 +133,77 @@ export function defineAuthenticatedCloudTransport(
   })
 }
 
-export function authenticatedCloudJsonBody(value: unknown): DomainPackageJsonValue {
-  return domainPackageJsonValueSchema.parse(value)
+/** Parses the one closed Cloud command contract used by both public and Identity-private callers. */
+export function authenticatedCloudJsonBody(value: unknown): RestRequest {
+  return restRequestSchema.parse(value)
 }
 
-const FORBIDDEN_SECRET_FIELDS = new Set([
-  'accesstoken',
-  'authorization',
-  'authorizationcode',
-  'clientsecret',
-  'credential',
-  'devicemachinecredential',
-  'idtoken',
-  'oidctoken',
-  'password',
-  'pkceverifier',
-  'privatekey',
-  'refreshtoken',
-  'secret'
-])
+/**
+ * collaboration-contracts is closed except for provider-neutral portable
+ * locator identity. Validate that exact extension with the contracts-owned
+ * credential detector rather than maintaining another field denylist here.
+ */
+function rejectSecretBearingJsonExtensions(
+  value: unknown,
+  context: z.RefinementCtx,
+  path: Array<string | number> = []
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => rejectSecretBearingJsonExtensions(
+      item,
+      context,
+      [...path, index]
+    ))
+    return
+  }
+  if (value === null || typeof value !== 'object') return
+  const record = value as Record<string, unknown>
+  if (
+    record.contractVersion === 1 &&
+    typeof record.kind === 'string' &&
+    record.kind.startsWith('content-space.') &&
+    typeof record.authority === 'string' &&
+    record.identity !== null &&
+    typeof record.identity === 'object'
+  ) {
+    const result = redactedJsonSchema.safeParse(record.identity)
+    if (!result.success) {
+      context.addIssue({
+        code: 'custom',
+        path: [...path, 'identity'],
+        message: 'Secret material cannot cross a portable Cloud resource identity.'
+      })
+    }
+    rejectCredentialChannelKeys(record.identity, context, [...path, 'identity'])
+  }
+  for (const [key, item] of Object.entries(record)) {
+    rejectSecretBearingJsonExtensions(item, context, [...path, key])
+  }
+}
 
-function rejectSecretMaterial(
-  value: DomainPackageJsonValue,
+function rejectCredentialChannelKeys(
+  value: unknown,
   context: z.RefinementCtx,
   path: Array<string | number>
 ): void {
   if (Array.isArray(value)) {
-    value.forEach((item, index) => rejectSecretMaterial(item, context, [...path, index]))
+    value.forEach((item, index) => rejectCredentialChannelKeys(
+      item,
+      context,
+      [...path, index]
+    ))
     return
   }
   if (value === null || typeof value !== 'object') return
   for (const [key, item] of Object.entries(value)) {
-    const normalized = key.replace(/[-_.]/gu, '').toLowerCase()
-    if (FORBIDDEN_SECRET_FIELDS.has(normalized)) {
+    if (isCredentialFieldName(key)) {
       context.addIssue({
         code: 'custom',
         path: [...path, key],
-        message: 'Secret material cannot cross the authenticated Cloud transport contract.'
+        message: 'Credential-shaped keys are not portable resource identity.'
       })
       continue
     }
-    rejectSecretMaterial(item, context, [...path, key])
+    rejectCredentialChannelKeys(item, context, [...path, key])
   }
 }

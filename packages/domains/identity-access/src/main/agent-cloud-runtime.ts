@@ -45,6 +45,16 @@ type StoredAgentAuthority = Readonly<{
   authority: string
 }>
 
+type AgentAuthorityState = Readonly<{
+  epoch: number
+  enabled: boolean
+}>
+
+type InFlightAgentAuthorityUse = Readonly<{
+  epoch: number
+  abort(reason: AgentCloudRuntimeError): void
+}>
+
 export type IdentityAgentCloudRuntimeOptions = Readonly<{
   getRuntime: () => CloudIdentityRuntime | null
   vault: IdentityPrivateVault
@@ -80,6 +90,8 @@ class IdentityAgentCloudRuntime {
   readonly #fetch: typeof fetch
   readonly #webSocketFactory: NonNullable<IdentityAgentCloudRuntimeOptions['webSocketFactory']>
   readonly #createBootstrap: typeof createAgentCredentialBootstrap
+  readonly #authorityStates = new Map<string, AgentAuthorityState>()
+  readonly #inFlightAuthorityUses = new Map<string, Set<InFlightAgentAuthorityUse>>()
   #lifecycleOperation = false
 
   constructor(private readonly options: IdentityAgentCloudRuntimeOptions) {
@@ -97,6 +109,7 @@ class IdentityAgentCloudRuntime {
     if (status.state === 'identity_required') return { state: 'identity_required' }
     if (status.state === 'device_required') return { state: 'device_required' }
     if (status.state === 'unavailable') return { state: 'unavailable', reason: status.reason }
+    if (!this.#authorityState(agentId).enabled) return { state: 'agent_required', agentId }
     let authority: StoredAgentAuthority | null
     try {
       authority = await this.#readAuthority(agentId)
@@ -139,6 +152,7 @@ class IdentityAgentCloudRuntime {
   }
 
   async rotateAgent(input: AgentCloudRotateInput): Promise<AgentNode> {
+    const expectedAuthorityEpoch = this.#authorityState(input.agentId).epoch
     return this.#withLifecycle(async () => {
       const bootstrap = this.#createBootstrap()
       const response = await this.#executeAsUser(restRequestSchema.parse({
@@ -153,11 +167,21 @@ class IdentityAgentCloudRuntime {
       if (response.type !== 'agent.credential_rotated') {
         throw unexpected(response, 'Agent authority rotation')
       }
-      return this.#commitEnvelope(response.agent, response.sealedCredential, bootstrap.open)
+      return this.#commitEnvelope(
+        response.agent,
+        response.sealedCredential,
+        bootstrap.open,
+        expectedAuthorityEpoch
+      )
     })
   }
 
   async revokeAgent(input: AgentCloudRevokeInput): Promise<AgentNode> {
+    this.#fenceAuthority(input.agentId)
+    await this.options.vault.remove({
+      kind: 'agent-credential',
+      agentId: input.agentId
+    })
     return this.#withLifecycle(async () => {
       const response = await this.#executeAsUser(restRequestSchema.parse({
         protocolVersion: '1.0',
@@ -172,13 +196,13 @@ class IdentityAgentCloudRuntime {
           response.entity.lifecycleStatus !== 'revoked') {
         throw unexpected(response, 'Agent revocation')
       }
-      await this.options.vault.remove({ kind: 'agent-credential', agentId: input.agentId })
       return response.entity
     })
   }
 
   async fenceAgent(rawAgentId: string): Promise<void> {
     const agentId = agentIdSchema.parse(rawAgentId)
+    this.#fenceAuthority(agentId)
     await this.options.vault.remove({ kind: 'agent-credential', agentId })
   }
 
@@ -189,17 +213,7 @@ class IdentityAgentCloudRuntime {
   ): Promise<RestResponse> {
     const agentId = agentIdSchema.parse(rawAgentId)
     const request = restRequestSchema.parse(rawRequest)
-    const authority = await this.#requireAgentAuthority(agentId)
-    try {
-      return await this.#request(
-        this.#requireIdentityAuthority().baseUrl,
-        request,
-        authority.authority,
-        options?.signal
-      )
-    } finally {
-      authority.authority = ''
-    }
+    return this.#executeWithAgentAuthority(agentId, request, options?.signal)
   }
 
   async pullAgentInbox(
@@ -234,58 +248,90 @@ class IdentityAgentCloudRuntime {
     signal: AbortSignal
   ): AsyncIterable<WebSocketMessage> {
     const agentId = agentIdSchema.parse(rawAgentId)
+    const epoch = this.#beginAuthorityUse(agentId)
     const identity = this.#requireIdentityAuthority()
     const authority = await this.#requireAgentAuthority(agentId)
-    const url = new URL('v1/events', identity.baseUrl)
-    url.protocol = url.protocol === 'http:' ? 'ws:' : 'wss:'
-    const socket = this.#webSocketFactory(url.toString(), {
-      authorization: `Bearer ${authority.authority}`
-    })
-    authority.authority = ''
-    const close = () => socket.close(1000, 'client shutdown')
-    const events: unknown[] = []
-    let wake: (() => void) | undefined
-    const onMessage = (data: WebSocket.RawData) => {
-      try {
-        const text = rawDataText(data)
-        if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES ||
-            events.length >= MAX_QUEUED_EVENTS) {
-          socket.close(1009, 'payload too large')
-          return
-        }
-        events.push(JSON.parse(text) as unknown)
-        wake?.()
-        wake = undefined
-      } catch {
-        socket.close(1007, 'invalid payload')
-      }
-    }
-    signal.addEventListener('abort', close, { once: true })
-    socket.on('message', onMessage)
+    const authorityAbort = new AbortController()
+    let socket: WebSocket | undefined
+    let release: () => void = () => undefined
     try {
+      release = this.#registerAuthorityUse(agentId, {
+        epoch,
+        abort: (reason) => {
+          authorityAbort.abort(reason)
+          if (socket?.readyState === WebSocket.OPEN ||
+              socket?.readyState === WebSocket.CONNECTING) {
+            socket.close(1008, 'agent authority fenced')
+          }
+        }
+      })
+      const url = new URL('v1/events', identity.baseUrl)
+      url.protocol = url.protocol === 'http:' ? 'ws:' : 'wss:'
+      socket = this.#webSocketFactory(url.toString(), {
+        authorization: `Bearer ${authority.authority}`
+      })
+      authority.authority = ''
+      if (authorityAbort.signal.aborted) {
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close(1008, 'agent authority fenced')
+        }
+        throw authorityAbort.signal.reason
+      }
+      const activeSocket = socket
+      const close = () => activeSocket.close(1000, 'client shutdown')
+      const events: unknown[] = []
+      let wake: (() => void) | undefined
+      const onMessage = (data: WebSocket.RawData) => {
+        try {
+          const text = rawDataText(data)
+          if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES ||
+              events.length >= MAX_QUEUED_EVENTS) {
+            activeSocket.close(1009, 'payload too large')
+            return
+          }
+          events.push(JSON.parse(text) as unknown)
+          wake?.()
+          wake = undefined
+        } catch {
+          activeSocket.close(1007, 'invalid payload')
+        }
+      }
+      const lifetimeSignal = AbortSignal.any([signal, authorityAbort.signal])
+      signal.addEventListener('abort', close, { once: true })
+      activeSocket.on('message', onMessage)
       const handshakeSignal = AbortSignal.any([
-        signal,
+        lifetimeSignal,
         AbortSignal.timeout(REQUEST_TIMEOUT_MS)
       ])
-      await Promise.race([
-        once(socket, 'open'),
-        once(socket, 'error').then(([error]) => Promise.reject(error)),
-        abortPromise(handshakeSignal)
-      ])
-      while (!signal.aborted && socket.readyState === WebSocket.OPEN) {
-        if (events.length === 0) {
-          await Promise.race([
-            new Promise<void>((resolve) => { wake = resolve }),
-            once(socket, 'close').then(() => undefined),
-            abortPromise(signal)
-          ])
+      try {
+        await Promise.race([
+          once(activeSocket, 'open'),
+          once(activeSocket, 'error').then(([error]) => Promise.reject(error)),
+          abortPromise(handshakeSignal)
+        ])
+        this.#assertAuthorityUseCurrent(agentId, epoch)
+        while (!lifetimeSignal.aborted && activeSocket.readyState === WebSocket.OPEN) {
+          if (events.length === 0) {
+            await Promise.race([
+              new Promise<void>((resolve) => { wake = resolve }),
+              once(activeSocket, 'close').then(() => undefined),
+              abortPromise(lifetimeSignal)
+            ])
+          }
+          while (events.length > 0) {
+            this.#assertAuthorityUseCurrent(agentId, epoch)
+            yield webSocketMessageSchema.parse(events.shift())
+          }
         }
-        while (events.length > 0) yield webSocketMessageSchema.parse(events.shift())
+      } finally {
+        activeSocket.off('message', onMessage)
+        signal.removeEventListener('abort', close)
+        if (activeSocket.readyState === WebSocket.OPEN ||
+            activeSocket.readyState === WebSocket.CONNECTING) close()
       }
     } finally {
-      socket.off('message', onMessage)
-      signal.removeEventListener('abort', close)
-      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) close()
+      authority.authority = ''
+      release()
     }
   }
 
@@ -294,14 +340,42 @@ class IdentityAgentCloudRuntime {
     request: RestRequest,
     options?: Readonly<{ signal?: AbortSignal }>
   ): Promise<RestResponse> {
+    return this.#executeWithAgentAuthority(
+      agentIdSchema.parse(agentId),
+      request,
+      options?.signal
+    )
+  }
+
+  async #executeWithAgentAuthority(
+    agentId: string,
+    request: RestRequest,
+    signal?: AbortSignal
+  ): Promise<RestResponse> {
+    const epoch = this.#beginAuthorityUse(agentId)
     const authority = await this.#requireAgentAuthority(agentId)
     try {
-      return await this.#request(
-        this.#requireIdentityAuthority().baseUrl,
-        request,
-        authority.authority,
-        options?.signal
-      )
+      this.#assertAuthorityUseCurrent(agentId, epoch)
+      const controller = new AbortController()
+      const release = this.#registerAuthorityUse(agentId, {
+        epoch,
+        abort: (reason) => controller.abort(reason)
+      })
+      try {
+        const requestSignal = signal
+          ? AbortSignal.any([controller.signal, signal])
+          : controller.signal
+        const response = await this.#request(
+          this.#requireIdentityAuthority().baseUrl,
+          request,
+          authority.authority,
+          requestSignal
+        )
+        this.#assertAuthorityUseCurrent(agentId, epoch)
+        return response
+      } finally {
+        release()
+      }
     } finally {
       authority.authority = ''
     }
@@ -329,7 +403,8 @@ class IdentityAgentCloudRuntime {
   async #commitEnvelope(
     rawAgent: AgentNode,
     envelope: Parameters<ReturnType<typeof createAgentCredentialBootstrap>['open']>[0],
-    open: ReturnType<typeof createAgentCredentialBootstrap>['open']
+    open: ReturnType<typeof createAgentCredentialBootstrap>['open'],
+    expectedAuthorityEpoch?: number
   ): Promise<AgentNode> {
     const identity = this.#requireIdentityAuthority()
     const agent = agentNodeSchema.parse(rawAgent)
@@ -341,6 +416,13 @@ class IdentityAgentCloudRuntime {
         'Cloud returned Agent authority for a different User, Device, or Agent.'
       )
     }
+    const current = this.#authorityState(agent.agentId)
+    const commitEpoch = expectedAuthorityEpoch ?? current.epoch
+    this.#assertAuthorityCommitCurrent(
+      agent.agentId,
+      commitEpoch,
+      expectedAuthorityEpoch !== undefined
+    )
     let authority = open(envelope)
     try {
       await this.options.vault.write(
@@ -354,6 +436,20 @@ class IdentityAgentCloudRuntime {
           authority
         } satisfies StoredAgentAuthority)
       )
+      try {
+        this.#assertAuthorityCommitCurrent(
+          agent.agentId,
+          commitEpoch,
+          expectedAuthorityEpoch !== undefined
+        )
+        this.#activateReplacementAuthority(agent.agentId, commitEpoch)
+      } catch (error) {
+        await this.options.vault.remove({
+          kind: 'agent-credential',
+          agentId: agent.agentId
+        })
+        throw error
+      }
     } finally {
       authority = ''
     }
@@ -396,6 +492,95 @@ class IdentityAgentCloudRuntime {
       )
     }
     return { ...authority }
+  }
+
+  #authorityState(agentId: string): AgentAuthorityState {
+    return this.#authorityStates.get(agentId) ?? { epoch: 0, enabled: true }
+  }
+
+  #beginAuthorityUse(agentId: string): number {
+    const state = this.#authorityState(agentId)
+    if (!state.enabled) {
+      throw new AgentCloudRuntimeError(
+        'agent_required',
+        'Agent authority has been fenced on this installation.'
+      )
+    }
+    return state.epoch
+  }
+
+  #assertAuthorityUseCurrent(agentId: string, epoch: number): void {
+    const current = this.#authorityState(agentId)
+    if (!current.enabled || current.epoch !== epoch) {
+      throw new AgentCloudRuntimeError(
+        'agent_required',
+        'Agent authority changed while Cloud work was in flight.'
+      )
+    }
+  }
+
+  #assertAuthorityCommitCurrent(
+    agentId: string,
+    epoch: number,
+    allowExplicitRecovery: boolean
+  ): void {
+    const current = this.#authorityState(agentId)
+    if (current.epoch !== epoch || (!current.enabled && !allowExplicitRecovery)) {
+      throw new AgentCloudRuntimeError(
+        'agent_required',
+        'Agent authority changed before replacement authority could be committed.'
+      )
+    }
+  }
+
+  #registerAuthorityUse(
+    agentId: string,
+    use: InFlightAgentAuthorityUse
+  ): () => void {
+    this.#assertAuthorityUseCurrent(agentId, use.epoch)
+    const uses = this.#inFlightAuthorityUses.get(agentId) ?? new Set()
+    uses.add(use)
+    this.#inFlightAuthorityUses.set(agentId, uses)
+    return () => {
+      uses.delete(use)
+      if (uses.size === 0) this.#inFlightAuthorityUses.delete(agentId)
+    }
+  }
+
+  #fenceAuthority(agentId: string): void {
+    const current = this.#authorityState(agentId)
+    this.#authorityStates.set(agentId, {
+      epoch: current.epoch + 1,
+      enabled: false
+    })
+    const reason = new AgentCloudRuntimeError(
+      'agent_required',
+      'Agent authority was fenced on this installation.'
+    )
+    const uses = this.#inFlightAuthorityUses.get(agentId)
+    this.#inFlightAuthorityUses.delete(agentId)
+    for (const use of uses ?? []) use.abort(reason)
+  }
+
+  #activateReplacementAuthority(agentId: string, expectedEpoch: number): void {
+    const current = this.#authorityState(agentId)
+    if (current.epoch !== expectedEpoch) {
+      throw new AgentCloudRuntimeError(
+        'agent_required',
+        'Agent authority changed before replacement authority activation.'
+      )
+    }
+    this.#authorityStates.set(agentId, {
+      epoch: current.epoch + 1,
+      enabled: true
+    })
+    const reason = new AgentCloudRuntimeError(
+      'agent_required',
+      'Agent authority was replaced while Cloud work was in flight.'
+    )
+    const uses = this.#inFlightAuthorityUses.get(agentId)
+    this.#inFlightAuthorityUses.delete(agentId)
+    for (const use of uses ?? []) use.abort(reason)
   }
 
   #requireIdentityAuthority(): Extract<

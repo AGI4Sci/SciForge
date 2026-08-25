@@ -3,7 +3,6 @@ import { join } from 'node:path'
 import {
   AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
   AuthenticatedCloudTransportError,
-  authenticatedCloudJsonBody,
   type AuthenticatedCloudRequest,
   type AuthenticatedCloudResponse,
   type AuthenticatedCloudTransportStatus
@@ -30,6 +29,7 @@ import type {
   DeviceFactSignatureMetadata,
   DeviceFactSigningRequest
 } from '@sciforge/collaboration-contracts'
+import { restResponseSchema } from '@sciforge/collaboration-contracts'
 
 type CloudIdentityRuntimeError = NonNullable<CloudIdentitySnapshot['error']>
 
@@ -465,10 +465,8 @@ export class CloudIdentityRuntime {
 function authenticatedCloudIdempotencyHeader(
   payload: AuthenticatedCloudRequest['payload']
 ): Readonly<Record<string, string>> {
-  if (payload === null || Array.isArray(payload) || typeof payload !== 'object') return {}
-  const idempotencyKey = payload.idempotencyKey
-  return typeof idempotencyKey === 'string'
-    ? { 'idempotency-key': idempotencyKey }
+  return 'idempotencyKey' in payload
+    ? { 'idempotency-key': payload.idempotencyKey }
     : {}
 }
 
@@ -489,9 +487,14 @@ async function readAuthenticatedCloudBody(response: Response) {
       'SciForge Cloud returned a response larger than 1 MiB.'
     )
   }
-  if (bytes.byteLength === 0) return null
+  if (bytes.byteLength === 0) {
+    throw new AuthenticatedCloudTransportError(
+      'cloud_response_invalid',
+      'SciForge Cloud returned an empty command response.'
+    )
+  }
   try {
-    return authenticatedCloudJsonBody(JSON.parse(new TextDecoder().decode(bytes)))
+    return restResponseSchema.parse(JSON.parse(new TextDecoder().decode(bytes)))
   } catch (error) {
     throw new AuthenticatedCloudTransportError(
       'cloud_response_invalid',

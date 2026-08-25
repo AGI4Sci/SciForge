@@ -18,9 +18,15 @@ display-name and first-run preference edits do not change the authorization
 
 The main process publishes three owner-scoped, token-free internal services.
 The authenticated User Cloud transport is available only to its manifest
-allowlist. The Agent Cloud runtime owns bounded registration, rotation,
-revocation, command, pull, and WSS operations for Collaboration; it performs
-bootstrap decryption and bearer injection without returning Agent authority.
+allowlist. Its `2.0.0` contract accepts only the closed Collaboration
+`RestRequest`/`RestResponse` protocol, rejects credential-shaped portable
+resource identities, and excludes Agent credential lifecycle envelopes. The
+Agent Cloud runtime owns bounded registration, rotation, revocation, command,
+pull, and WSS operations for Collaboration; it performs bootstrap decryption
+and bearer injection without returning Agent authority. A local fence or
+revocation advances the exact Agent authority epoch synchronously, aborts
+in-flight HTTP, closes in-flight WSS, and rechecks the epoch before accepting a
+response. Only a newly committed replacement authority can reopen that Agent.
 The Device fact-attestation signer is available only to
 `sciforge.project-coordinator`, accepts the single
 `project-content-provisioning-attestation` fact envelope, revalidates the exact

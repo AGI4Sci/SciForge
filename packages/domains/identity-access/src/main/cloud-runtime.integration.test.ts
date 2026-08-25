@@ -138,16 +138,23 @@ describe('CloudIdentityRuntime HTTP integration', () => {
           return
         }
         if (url.pathname === '/v1/commands') {
+          const command = await readRequestJson(request) as Readonly<{
+            requestId: string
+            limit?: number
+          }>
           commandIdempotencyKeys.push(
             typeof request.headers['idempotency-key'] === 'string'
               ? request.headers['idempotency-key']
               : undefined
           )
-          commandPayloads.push(await readRequestJson(request))
+          commandPayloads.push(command)
           sendJson(response, 200, {
             protocolVersion: '1.0',
-            type: 'project.listed',
-            projects: []
+            type: 'rest.project_page',
+            requestId: command.requestId,
+            limit: command.limit ?? 50,
+            projects: [],
+            observedAt: '2026-08-18T12:00:00.000Z'
           })
           return
         }
@@ -241,22 +248,37 @@ describe('CloudIdentityRuntime HTTP integration', () => {
         operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
         payload: {
           protocolVersion: '1.0',
+          requestId: 'req_IdentityTransport0001',
           type: 'project.transition',
-          idempotencyKey: 'idem_IdentityTransport0001'
+          idempotencyKey: 'idem_IdentityTransport0001',
+          projectId: 'prj_IdentityTransport0001',
+          expectedRevision: 1,
+          expectedCoordinatorAuthorityEpoch: 1,
+          expectedExecutionAuthorityEpoch: 1,
+          status: 'paused'
         }
       })).resolves.toEqual({
         contractVersion: 1,
         status: 200,
         body: {
           protocolVersion: '1.0',
-          type: 'project.listed',
-          projects: []
+          type: 'rest.project_page',
+          requestId: 'req_IdentityTransport0001',
+          limit: 50,
+          projects: [],
+          observedAt: '2026-08-18T12:00:00.000Z'
         }
       })
       expect(commandPayloads).toEqual([{
         protocolVersion: '1.0',
+        requestId: 'req_IdentityTransport0001',
         type: 'project.transition',
-        idempotencyKey: 'idem_IdentityTransport0001'
+        idempotencyKey: 'idem_IdentityTransport0001',
+        projectId: 'prj_IdentityTransport0001',
+        expectedRevision: 1,
+        expectedCoordinatorAuthorityEpoch: 1,
+        expectedExecutionAuthorityEpoch: 1,
+        status: 'paused'
       }])
       expect(commandIdempotencyKeys).toEqual(['idem_IdentityTransport0001'])
       let principalVersion = expectLatestPrincipal(
@@ -274,7 +296,12 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       await expect(runtime.executeAuthenticatedCloud({
         contractVersion: 1,
         operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
-        payload: { protocolVersion: '1.0', type: 'project.list' }
+        payload: {
+          protocolVersion: '1.0',
+          requestId: 'req_IdentityTransport0002',
+          type: 'project.list',
+          limit: 50
+        }
       })).rejects.toMatchObject({ code: 'device_required' })
       expect(commandPayloads).toHaveLength(1)
       expect(principal.current()?.assurance).toBe('local-selection')

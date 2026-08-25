@@ -20,7 +20,7 @@
     "identity-access.authenticated-cloud-transport": {
       "location": "main.internal-service-descriptor",
       "serviceId": "sciforge.authenticated-cloud-transport",
-      "contractVersion": "1.0.0",
+      "contractVersion": "2.0.0",
       "allowedConsumerModuleIds": [
         "sciforge.collaboration",
         "sciforge.project-coordinator"
@@ -75,7 +75,7 @@
         {
           "id": "identity-access.authenticated-cloud-transport",
           "kind": "main.extension",
-          "version": "1.0.0",
+          "version": "2.0.0",
           "priority": 900
         },
         {

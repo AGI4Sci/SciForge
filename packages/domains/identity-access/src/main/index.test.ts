@@ -114,7 +114,12 @@ describe('Identity main contributions', () => {
     await expect(transport.execute({
       contractVersion: 1,
       operationId: 'sciforge.cloud.command',
-      payload: {}
+      payload: {
+        protocolVersion: '1.0',
+        requestId: 'req_IdentityIndexTest0001',
+        type: 'project.list',
+        limit: 50
+      }
     })).rejects.toMatchObject({ code: 'transport_unavailable' })
     const signer = registered.get(
       `${DEVICE_FACT_ATTESTATION_SIGNING_SERVICE_ID}@${DEVICE_FACT_ATTESTATION_SIGNING_CONTRACT_VERSION}`
