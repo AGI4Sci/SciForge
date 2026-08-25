@@ -69,14 +69,18 @@ describe('strict collaboration entities', () => {
 })
 
 describe('identity and ownership invariants', () => {
-  it('requires OIDC HumanAnswer provenance and couples decisions to confirmations', () => {
+  it('requires one authenticated Owner provenance for HumanAnswer and couples decisions to confirmations', () => {
     expect(humanAnswerSchema.safeParse({
       ...humanAnswerFixture,
-      answeredFromOidcIdentityId: 'oid_TargetIdentity01'
+      answeredFrom: { type: 'oidc_user', oidcIdentityId: 'oid_TargetIdentity01' }
     }).success).toBe(true)
     expect(humanAnswerSchema.safeParse({
       ...humanAnswerFixture,
-      answeredFromOidcIdentityId: null
+      answeredFrom: { type: 'human_endpoint', humanEndpointId: TEST_IDS.humanEndpointId }
+    }).success).toBe(true)
+    expect(humanAnswerSchema.safeParse({
+      ...humanAnswerFixture,
+      answeredFrom: null
     }).success).toBe(false)
     expect(humanAnswerSchema.safeParse({
       ...humanAnswerFixture,
@@ -103,6 +107,14 @@ describe('identity and ownership invariants', () => {
         actionType: 'workspace.delete_file', safeSummary: 'Delete generated output.',
         effect: 'destructive', actionDigest: 'a'.repeat(64), command: 'rm -rf /'
       }
+    }).success).toBe(false)
+    expect(humanNeededSchema.safeParse({
+      ...humanNeededFixture,
+      context: { scope: 'coordinator_project', coordinatorAuthorityEpoch: 2 }
+    }).success).toBe(true)
+    expect(humanNeededSchema.safeParse({
+      ...humanNeededFixture,
+      context: { scope: 'coordinator_project', coordinatorAuthorityEpoch: 2, taskId: TEST_IDS.taskId }
     }).success).toBe(false)
   })
 
@@ -203,7 +215,7 @@ describe('projection, Project, Task, and Record invariants', () => {
     }).success).toBe(true)
   })
 
-  it('requires provenance acceptance fields only on accepted Project Records', () => {
+  it('admits only Coordinator-authored official ProjectRecord kinds with exact provenance', () => {
     expect(projectRecordSchema.safeParse({
       ...projectRecordFixture,
       kind: 'proposal'
@@ -214,13 +226,29 @@ describe('projection, Project, Task, and Record invariants', () => {
     }).success).toBe(false)
     expect(projectRecordSchema.safeParse({
       ...projectRecordFixture,
-      status: 'accepted'
+      status: 'proposed'
     }).success).toBe(false)
     expect(projectRecordSchema.safeParse({
       ...projectRecordFixture,
-      status: 'accepted',
-      acceptedByAgentId: TEST_IDS.agentId,
-      acceptedAt: TEST_LATER_TIMESTAMP
+      acceptedByAgentId: TEST_IDS.secondAgentId
+    }).success).toBe(false)
+    expect(projectRecordSchema.safeParse({
+      ...projectRecordFixture,
+      sourceResultSubmissionId: null
+    }).success).toBe(false)
+    expect(projectRecordSchema.safeParse({
+      ...projectRecordFixture,
+      kind: 'decision',
+      sourceTaskId: null,
+      sourceResultSubmissionId: null,
+      sourceHumanAnswerId: TEST_IDS.humanAnswerId
+    }).success).toBe(true)
+    expect(projectRecordSchema.safeParse({
+      ...projectRecordFixture,
+      kind: 'summary',
+      sourceTaskId: null,
+      sourceResultSubmissionId: null,
+      sourceHumanAnswerId: null
     }).success).toBe(true)
   })
 })

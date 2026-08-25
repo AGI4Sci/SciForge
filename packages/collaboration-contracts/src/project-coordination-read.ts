@@ -900,20 +900,6 @@ export const restProjectCoordinationResponseSchema = z.object({
   }
 
   for (const [index, humanNeeded] of pendingHumanNeeded.entries()) {
-    const task = tasksById.get(humanNeeded.taskId)
-    const execution = executionsById.get(humanNeeded.executionId)
-    requireCompleteReference(
-      'tasks',
-      task,
-      ['pages', index, 'taskId'],
-      'A pending HumanNeeded fact must resolve its exact Task.'
-    )
-    requireCompleteReference(
-      'executions',
-      execution,
-      ['pages', index, 'executionId'],
-      'A pending HumanNeeded fact must resolve its exact execution.'
-    )
     if (humanNeeded.targetUserId !== response.project.ownerUserId) {
       context.addIssue({
         code: 'custom',
@@ -921,14 +907,41 @@ export const restProjectCoordinationResponseSchema = z.object({
         message: 'Run-0 HumanNeeded is addressed only to the exact Project Owner User.'
       })
     }
+    if (humanNeeded.context.scope === 'coordinator_project') {
+      if (
+        humanNeeded.requestedByAgentId !== response.project.coordinatorAgentId ||
+        humanNeeded.context.coordinatorAuthorityEpoch !== response.project.coordinatorAuthorityEpoch
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['pages', index, 'context', 'coordinatorAuthorityEpoch'],
+          message: 'A Coordinator-Project HumanNeeded must belong to the current Coordinator authority.'
+        })
+      }
+      continue
+    }
+    const task = tasksById.get(humanNeeded.context.taskId)
+    const execution = executionsById.get(humanNeeded.context.executionId)
+    requireCompleteReference(
+      'tasks',
+      task,
+      ['pages', index, 'context', 'taskId'],
+      'A Worker HumanNeeded fact must resolve its exact Task.'
+    )
+    requireCompleteReference(
+      'executions',
+      execution,
+      ['pages', index, 'context', 'executionId'],
+      'A Worker HumanNeeded fact must resolve its exact execution.'
+    )
     if (execution !== undefined && (
-      execution.taskId !== humanNeeded.taskId ||
+      execution.taskId !== humanNeeded.context.taskId ||
       execution.assigneeAgentId !== humanNeeded.requestedByAgentId ||
       execution.state !== 'needs_human'
     )) {
       context.addIssue({
         code: 'custom',
-        path: ['pages', index, 'executionId'],
+        path: ['pages', index, 'context', 'executionId'],
         message: 'Pending HumanNeeded must belong to the exact needs-human execution and its assignee Agent.'
       })
     }

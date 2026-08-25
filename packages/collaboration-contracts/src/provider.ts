@@ -3,6 +3,7 @@ import {
   assuranceLevelSchema,
   challengeIdSchema,
   displayNameSchema,
+  humanRequestIdSchema,
   humanEndpointIdSchema,
   nonEmptyTextSchema,
   protocolVersionSchema,
@@ -11,6 +12,7 @@ import {
   providerMessageIdSchema,
   providerOpaqueIdSchema,
   redactedJsonSchema,
+  revisionSchema,
   timestampSchema,
   userIdSchema
 } from './core.js'
@@ -200,6 +202,24 @@ export type ProviderRemoteApprovalRespondedEvent = z.infer<
   typeof providerRemoteApprovalRespondedEventSchema
 >
 
+/**
+ * A provider-authored candidate is not a HumanAnswer. Cloud must first resolve
+ * the Provider identity to one active verified Human Endpoint, match that
+ * endpoint to the current Project Owner and exact Project locator, and then run
+ * the canonical HumanAnswer service.
+ */
+export const providerHumanAnswerCandidateEventSchema = z.object({
+  ...providerEventEnvelopeShape,
+  type: z.literal('provider.human_answer.candidate'),
+  identity: providerIdentitySchema,
+  locator: providerLocatorSchema,
+  providerMessageId: providerMessageIdSchema,
+  humanRequestId: humanRequestIdSchema,
+  requestRevision: revisionSchema,
+  answer: nonEmptyTextSchema
+}).strict()
+export type ProviderHumanAnswerCandidateEvent = z.infer<typeof providerHumanAnswerCandidateEventSchema>
+
 export const providerLifecycleEventSchema = z.object({
   ...providerEventEnvelopeShape,
   type: z.literal('provider.lifecycle.changed'),
@@ -216,6 +236,7 @@ export const providerEventSchema = z.discriminatedUnion('type', [
   providerChallengeRespondedEventSchema,
   providerChallengeInvalidEventSchema,
   providerRemoteApprovalRespondedEventSchema,
+  providerHumanAnswerCandidateEventSchema,
   providerLifecycleEventSchema
 ])
 export type ProviderEvent = z.infer<typeof providerEventSchema>

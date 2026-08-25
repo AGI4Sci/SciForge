@@ -51,7 +51,6 @@ import {
   participantProfileSchema,
   projectInputSchema,
   projectEndpointBindingSchema,
-  projectRecordKindSchema,
   projectRecordSchema,
   projectSchema,
   remoteSessionProjectionSchema,
@@ -480,6 +479,22 @@ const writeCommandShape = {
   idempotencyKey: idempotencyKeySchema
 } as const
 
+export const humanNeededCreateContextSchema = z.discriminatedUnion('scope', [
+  z.object({
+    scope: z.literal('worker_execution'),
+    taskId: taskIdSchema,
+    executionId: executionIdSchema,
+    expectedTaskRevision: revisionSchema,
+    expectedExecutionRevision: revisionSchema
+  }).strict(),
+  z.object({
+    scope: z.literal('coordinator_project'),
+    expectedProjectRevision: revisionSchema,
+    expectedCoordinatorAuthorityEpoch: revisionSchema
+  }).strict()
+])
+export type HumanNeededCreateContext = z.infer<typeof humanNeededCreateContextSchema>
+
 export const restRequestSchema = z.discriminatedUnion('type', [
   ...cloudStateCommandSchemas,
   z.object({
@@ -543,12 +558,10 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...protocolEnvelopeShape, type: z.literal('project.endpoint.get'), projectId: projectIdSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('task.get'), taskId: taskIdSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('resource.get'), resourceRefId: resourceRefIdSchema }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('project_record.submit'), projectId: projectIdSchema, sourceTaskId: taskIdSchema.nullable(), sourceRevision: revisionSchema, kind: projectRecordKindSchema, body: nonEmptyTextSchema }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('project_record.accept'), projectRecordId: projectRecordIdSchema, expectedRevision: revisionSchema, decision: z.enum(['accepted', 'rejected']) }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('inbox.pull'), recipientType: z.enum(['user', 'agent']), afterSequence: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), limit: z.number().int().min(1).max(1_000) }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('inbox.ack'), inboxMessageId: inboxMessageIdSchema, sequence: sequenceSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('human.answer'), humanRequestId: z.string().regex(/^hrq_[A-Za-z0-9]{12,64}$/u), requestRevision: revisionSchema, answer: nonEmptyTextSchema, decision: z.enum(['approve', 'reject']).optional() }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('human.needed.create'), projectId: projectIdSchema, taskId: taskIdSchema, executionId: executionIdSchema, expectedTaskRevision: revisionSchema, expectedExecutionRevision: revisionSchema, requiredAssurance: assuranceLevelSchema, prompt: nonEmptyTextSchema, confirmableAction: confirmableHumanActionSchema.nullable().optional(), expiresAt: timestampSchema }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('human.needed.create'), projectId: projectIdSchema, context: humanNeededCreateContextSchema, requiredAssurance: assuranceLevelSchema, prompt: nonEmptyTextSchema, confirmableAction: confirmableHumanActionSchema.nullable().optional(), expiresAt: timestampSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('receipt.get'), receiptId: receiptIdSchema }).strict()
 ])
 export type RestRequest = z.infer<typeof restRequestSchema>

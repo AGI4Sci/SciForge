@@ -7,6 +7,8 @@ import {
   deviceIdSchema,
   displayNameSchema,
   executionIdSchema,
+  humanAnswerIdSchema,
+  humanRequestIdSchema,
   idempotencyKeySchema,
   nonEmptyTextSchema,
   projectContentBindingIdSchema,
@@ -639,6 +641,19 @@ export const projectFinalSummarySubmitCommandSchema = z.object({
   summary: nonEmptyTextSchema
 }).strict()
 
+export const projectDecisionSubmitCommandSchema = z.object({
+  ...writeCommandShape,
+  type: z.literal('project.decision.submit'),
+  projectId: projectIdSchema,
+  humanRequestId: humanRequestIdSchema,
+  humanAnswerId: humanAnswerIdSchema,
+  expectedProjectRevision: revisionSchema,
+  expectedCoordinatorAuthorityEpoch: revisionSchema,
+  expectedHumanRequestRevision: revisionSchema,
+  expectedHumanAnswerRevision: revisionSchema,
+  decision: nonEmptyTextSchema
+}).strict()
+
 export const cloudStateCommandSchemas = [
   projectListQuerySchema,
   projectCoordinationReadQuerySchema,
@@ -673,6 +688,7 @@ export const cloudStateCommandSchemas = [
   taskResultReviewCommandSchema,
   taskRecoveryLinkObservedOutputCommandSchema,
   taskRecoveryAbandonCommandSchema,
+  projectDecisionSubmitCommandSchema,
   projectFinalSummarySubmitCommandSchema
 ] as const
 

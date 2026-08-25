@@ -6,7 +6,10 @@ import {
   taskResultSubmissionSchema,
   taskReviewDecisionSchema
 } from './project-review.js'
-import { projectFinalSummarySubmitCommandSchema } from './cloud-state-protocol.js'
+import {
+  projectDecisionSubmitCommandSchema,
+  projectFinalSummarySubmitCommandSchema
+} from './cloud-state-protocol.js'
 import { TEST_HASH, TEST_IDS, TEST_LATER_TIMESTAMP, TEST_TIMESTAMP } from './testing.js'
 
 const metadata = {
@@ -161,5 +164,28 @@ describe('Project plan, result review and final summary', () => {
     } as const
     expect(projectFinalSummarySubmitCommandSchema.safeParse(command).success).toBe(true)
     expect(projectFinalSummarySubmitCommandSchema.safeParse({ ...command, integrityVerified: true }).success).toBe(false)
+  })
+
+  it('binds a Coordinator decision to one exact Owner HumanAnswer revision', () => {
+    const command = {
+      protocolVersion: '1.0',
+      requestId: TEST_IDS.requestId,
+      idempotencyKey: 'idem_project_decision_0001',
+      type: 'project.decision.submit',
+      projectId: TEST_IDS.projectId,
+      humanRequestId: TEST_IDS.humanRequestId,
+      humanAnswerId: TEST_IDS.humanAnswerId,
+      expectedProjectRevision: 5,
+      expectedCoordinatorAuthorityEpoch: 2,
+      expectedHumanRequestRevision: 2,
+      expectedHumanAnswerRevision: 1,
+      decision: 'Proceed with the frozen Coordinator boundary.'
+    } as const
+
+    expect(projectDecisionSubmitCommandSchema.safeParse(command).success).toBe(true)
+    expect(projectDecisionSubmitCommandSchema.safeParse({
+      ...command,
+      humanAnswerId: undefined
+    }).success).toBe(false)
   })
 })

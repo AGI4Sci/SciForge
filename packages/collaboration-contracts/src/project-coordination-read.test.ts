@@ -831,6 +831,16 @@ describe('Project Coordinator authoritative read protocol', () => {
     expect(restResponseSchema.safeParse({
       ...response,
       pages: response.pages.map((page) => page.collection === 'pending_human_needed'
+        ? { ...page, items: [{
+            ...humanNeededFixture,
+            context: { scope: 'coordinator_project', coordinatorAuthorityEpoch: projectFixture.coordinatorAuthorityEpoch },
+            requestedByAgentId: projectFixture.coordinatorAgentId
+          }] }
+        : page)
+    }).success).toBe(true)
+    expect(restResponseSchema.safeParse({
+      ...response,
+      pages: response.pages.map((page) => page.collection === 'pending_human_needed'
         ? { ...page, items: [{ ...humanNeededFixture, targetUserId: TEST_IDS.secondUserId }] }
         : page)
     }).success).toBe(false)
@@ -981,6 +991,8 @@ describe('Project Coordinator authoritative read protocol', () => {
       authorUserId: TEST_IDS.userId,
       authorAgentId: TEST_IDS.agentId,
       sourceTaskId: TEST_IDS.taskId,
+      sourceResultSubmissionId: TEST_IDS.resultSubmissionId,
+      sourceHumanAnswerId: null,
       sourceRevision: 5,
       acceptedByUserId: TEST_IDS.userId,
       acceptedByAgentId: TEST_IDS.agentId,
@@ -1009,7 +1021,10 @@ describe('Project Coordinator authoritative read protocol', () => {
       projectRecordId: finalRecordId,
       kind: 'summary',
       body: 'The design review meeting completed.',
-      sourceTaskId: null
+      sourceTaskId: null,
+      sourceResultSubmissionId: null,
+      sourceHumanAnswerId: null,
+      sourceRevision: 1
     } as const
     const finalSummary = {
       ...metadata,

@@ -224,6 +224,33 @@ describe('provider-neutral contract', () => {
       providerMessageId: 'provider-message-1',
       replacementText: '更正内容'
     }).success).toBe(true)
+    expect(providerEventSchema.safeParse({
+      protocolVersion: '1.0',
+      type: 'provider.human_answer.candidate',
+      provider: 'example-im',
+      eventId: 'provider-event-answer-1',
+      eventCursor: 'cursor-3',
+      occurredAt: TEST_TIMESTAMP,
+      identity: providerIdentityFixture,
+      locator: chineseProviderLocatorFixture,
+      providerMessageId: 'provider-message-answer-1',
+      humanRequestId: TEST_IDS.humanRequestId,
+      requestRevision: 2,
+      answer: '采用已确认的冻结边界。'
+    }).success).toBe(true)
+    expect(providerEventSchema.safeParse({
+      protocolVersion: '1.0',
+      type: 'provider.human_answer.candidate',
+      provider: 'example-im',
+      eventId: 'provider-event-answer-2',
+      eventCursor: 'cursor-4',
+      occurredAt: TEST_TIMESTAMP,
+      locator: chineseProviderLocatorFixture,
+      providerMessageId: 'provider-message-answer-2',
+      humanRequestId: TEST_IDS.humanRequestId,
+      requestRevision: 2,
+      answer: '不得接受缺少 Provider identity 的文本。'
+    }).success).toBe(false)
   })
 
   it('uses provider-neutral send requests without a provider ID branch', () => {

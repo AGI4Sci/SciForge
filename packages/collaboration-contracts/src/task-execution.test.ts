@@ -289,24 +289,54 @@ describe('Coordinator authority epoch', () => {
     }).success).toBe(false)
   })
 
-  it('fences HumanNeeded creation to the exact execution and keeps Task results on the canonical path', () => {
+  it('uses one HumanNeeded command with exact worker-execution or Coordinator-Project scope', () => {
     const humanNeeded = {
       protocolVersion: '1.0',
       type: 'human.needed.create',
       requestId: TEST_IDS.requestId,
       idempotencyKey: 'idem_human_needed_0001',
       projectId: TEST_IDS.projectId,
-      taskId: TEST_IDS.taskId,
-      executionId: TEST_IDS.executionId,
-      expectedTaskRevision: 4,
-      expectedExecutionRevision: 3,
+      context: {
+        scope: 'worker_execution',
+        taskId: TEST_IDS.taskId,
+        executionId: TEST_IDS.executionId,
+        expectedTaskRevision: 4,
+        expectedExecutionRevision: 3
+      },
       requiredAssurance: 'basic',
       prompt: 'Confirm how to interpret the ambiguous sample.',
       expiresAt: TEST_LATER_TIMESTAMP
     }
     expect(restRequestSchema.safeParse(humanNeeded).success).toBe(true)
-    const { expectedExecutionRevision: _executionRevision, ...staleHumanNeeded } = humanNeeded
-    expect(restRequestSchema.safeParse(staleHumanNeeded).success).toBe(false)
+    expect(restRequestSchema.safeParse({
+      ...humanNeeded,
+      context: { ...humanNeeded.context, expectedExecutionRevision: undefined }
+    }).success).toBe(false)
+    expect(restRequestSchema.safeParse({
+      ...humanNeeded,
+      context: {
+        scope: 'coordinator_project',
+        expectedProjectRevision: 6,
+        expectedCoordinatorAuthorityEpoch: 2
+      }
+    }).success).toBe(true)
+    expect(restRequestSchema.safeParse({
+      ...humanNeeded,
+      context: {
+        scope: 'coordinator_project',
+        taskId: TEST_IDS.taskId,
+        expectedProjectRevision: 6,
+        expectedCoordinatorAuthorityEpoch: 2
+      }
+    }).success).toBe(false)
+    expect(restRequestSchema.safeParse({
+      ...humanNeeded,
+      context: undefined,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      expectedTaskRevision: 4,
+      expectedExecutionRevision: 3
+    }).success).toBe(false)
     expect(restRequestSchema.safeParse({
       protocolVersion: '1.0',
       type: 'project_record.submit',

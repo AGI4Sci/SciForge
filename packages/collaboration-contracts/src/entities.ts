@@ -23,6 +23,7 @@ import {
   projectRecordIdSchema,
   projectionIdSchema,
   providerMessageIdSchema,
+  resultSubmissionIdSchema,
   revisionSchema,
   runtimeIdSchema,
   sequenceSchema,
@@ -355,7 +356,7 @@ export const taskSchema = z.object({
 export type Task = z.infer<typeof taskSchema>
 
 export const projectRecordKindSchema = z.enum(['observation', 'decision', 'summary'])
-export const projectRecordStatusSchema = z.enum(['proposed', 'accepted', 'rejected'])
+export const projectRecordStatusSchema = z.literal('accepted')
 export type ProjectRecordKind = z.infer<typeof projectRecordKindSchema>
 export type ProjectRecordStatus = z.infer<typeof projectRecordStatusSchema>
 
@@ -368,24 +369,72 @@ export const projectRecordSchema = z.object({
   status: projectRecordStatusSchema,
   body: nonEmptyTextSchema,
   authorUserId: userIdSchema,
-  authorAgentId: agentIdSchema.nullable(),
+  authorAgentId: agentIdSchema,
   sourceTaskId: taskIdSchema.nullable(),
+  sourceResultSubmissionId: resultSubmissionIdSchema.nullable(),
+  sourceHumanAnswerId: humanAnswerIdSchema.nullable(),
   sourceRevision: revisionSchema,
-  acceptedByUserId: userIdSchema.nullable(),
-  acceptedByAgentId: agentIdSchema.nullable(),
-  acceptedAt: timestampSchema.nullable()
+  acceptedByUserId: userIdSchema,
+  acceptedByAgentId: agentIdSchema,
+  acceptedAt: timestampSchema
 }).strict().superRefine((record, context) => {
-  const hasAcceptance = record.acceptedByUserId !== null || record.acceptedByAgentId !== null
-  if (record.status === 'accepted' && (!hasAcceptance || record.acceptedAt === null)) {
-    context.addIssue({ code: 'custom', path: ['acceptedAt'], message: 'Accepted record requires accepter and time' })
+  if (
+    record.authorUserId !== record.acceptedByUserId ||
+    record.authorAgentId !== record.acceptedByAgentId
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['acceptedByAgentId'],
+      message: 'The Coordinator Agent that authors an official ProjectRecord must be its accepting writer.'
+    })
   }
-  if (record.status !== 'accepted' && (hasAcceptance || record.acceptedAt !== null)) {
-    context.addIssue({ code: 'custom', path: ['acceptedAt'], message: 'Only accepted record may identify accepter' })
+  if (
+    record.kind === 'observation' &&
+    (record.sourceTaskId === null || record.sourceResultSubmissionId === null || record.sourceHumanAnswerId !== null)
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['sourceResultSubmissionId'],
+      message: 'An observation must cite exactly one accepted TaskResult and no HumanAnswer.'
+    })
+  }
+  if (
+    record.kind === 'decision' &&
+    (record.sourceResultSubmissionId !== null || record.sourceHumanAnswerId === null)
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['sourceHumanAnswerId'],
+      message: 'A decision must cite exactly one HumanAnswer and no TaskResult.'
+    })
+  }
+  if (
+    record.kind === 'summary' &&
+    (record.sourceTaskId !== null || record.sourceResultSubmissionId !== null || record.sourceHumanAnswerId !== null)
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['sourceTaskId'],
+      message: 'A summary is derived from the accepted Project results rather than one TaskResult or HumanAnswer.'
+    })
   }
 })
 export type ProjectRecord = z.infer<typeof projectRecordSchema>
 
 export const humanNeededStatusSchema = z.enum(['pending', 'answered', 'expired', 'cancelled'])
+export const humanNeededContextSchema = z.discriminatedUnion('scope', [
+  z.object({
+    scope: z.literal('worker_execution'),
+    taskId: taskIdSchema,
+    executionId: executionIdSchema
+  }).strict(),
+  z.object({
+    scope: z.literal('coordinator_project'),
+    coordinatorAuthorityEpoch: revisionSchema
+  }).strict()
+])
+export type HumanNeededContext = z.infer<typeof humanNeededContextSchema>
+
 export const confirmableHumanActionSchema = z.object({
   actionType: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u),
   safeSummary: z.string().trim().min(1).max(500),
@@ -399,8 +448,7 @@ export const humanNeededSchema = z.object({
   type: z.literal('human_needed'),
   humanRequestId: humanRequestIdSchema,
   projectId: projectIdSchema,
-  taskId: taskIdSchema,
-  executionId: executionIdSchema,
+  context: humanNeededContextSchema,
   targetUserId: userIdSchema,
   requestedByAgentId: agentIdSchema,
   requiredAssurance: assuranceLevelSchema,
@@ -411,17 +459,28 @@ export const humanNeededSchema = z.object({
 }).strict()
 export type HumanNeeded = z.infer<typeof humanNeededSchema>
 
+export const humanAnswerSourceSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('oidc_user'),
+    oidcIdentityId: oidcIdentityIdSchema
+  }).strict(),
+  z.object({
+    type: z.literal('human_endpoint'),
+    humanEndpointId: humanEndpointIdSchema
+  }).strict()
+])
+export type HumanAnswerSource = z.infer<typeof humanAnswerSourceSchema>
+
 export const humanAnswerSchema = z.object({
   ...entityMetadataShape,
   type: z.literal('human_answer'),
   humanAnswerId: humanAnswerIdSchema,
   humanRequestId: humanRequestIdSchema,
   projectId: projectIdSchema,
-  taskId: taskIdSchema,
-  executionId: executionIdSchema,
+  context: humanNeededContextSchema,
   requestRevision: revisionSchema,
   answeredByUserId: userIdSchema,
-  answeredFromOidcIdentityId: oidcIdentityIdSchema,
+  answeredFrom: humanAnswerSourceSchema,
   assurance: assuranceLevelSchema,
   answer: nonEmptyTextSchema,
   decision: z.enum(['approve', 'reject']).nullable(),
