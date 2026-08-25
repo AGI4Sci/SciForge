@@ -1,6 +1,10 @@
 import { z } from 'zod'
 import { domainMainFiniteCapabilityBatchPlanDigestSchema } from '@sciforge/domain-sdk/host'
 import {
+  ARTIFACT_RESOURCE_KIND,
+  CONTENT_FILE_RESOURCE_KIND
+} from '@sciforge/domain-content-space/contract'
+import {
   agentIdSchema,
   deviceIdSchema,
   displayNameSchema,
@@ -29,6 +33,7 @@ import {
   projectWorkerAvailabilityViewSchema,
   taskExecutionSchema,
   taskFileDestinationNameSchema,
+  taskResultOutputSchema,
   taskResultReviewFactsSchema,
   taskResultSubmissionSchema,
   taskReviewDecisionSchema,
@@ -60,6 +65,7 @@ export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   humanNeededCreate: 'project-coordinator.human-needed.create',
   humanAnswer: 'project-coordinator.human-needed.answer',
   coordinatorTransfer: 'project-coordinator.coordinator.transfer',
+  artifactReviewPrepare: 'project-coordinator.artifact-review.prepare',
   resultReview: 'project-coordinator.result.review',
   projectComplete: 'project-coordinator.project.complete'
 } as const)
@@ -303,6 +309,35 @@ export const projectCoordinatorHumanAnswerInputSchema = humanAnswerCommandSchema
 export const projectCoordinatorTransferInputSchema = z.object({
   projectId: projectIdSchema,
   coordinatorAgentId: agentIdSchema
+}).strict().readonly()
+
+/**
+ * Selects one immutable output from fresh Cloud facts. The renderer never
+ * supplies the portable locator or claims a binding/session authority fact.
+ */
+export const projectCoordinatorArtifactReviewPrepareInputSchema = z.object({
+  projectId: projectIdSchema,
+  taskId: taskResultSubmissionSchema.shape.taskId,
+  executionId: taskResultSubmissionSchema.shape.executionId,
+  resultSubmissionId: taskResultSubmissionSchema.shape.resultSubmissionId,
+  submissionDigest: taskResultSubmissionSchema.shape.submissionDigest,
+  outputIndex: z.number().int().min(0).max(99),
+  locatorDigest: taskResultOutputSchema.shape.locatorDigest
+}).strict().readonly()
+
+export const projectCoordinatorArtifactReviewResourceSchema = z.object({
+  kind: z.enum([CONTENT_FILE_RESOURCE_KIND, ARTIFACT_RESOURCE_KIND]),
+  resourceRef: z.string().trim().regex(/^res_[A-Za-z0-9_-]{20,}$/u)
+}).strict().readonly()
+
+export const projectCoordinatorArtifactReviewPreparedSchema = z.object({
+  projectId: projectIdSchema,
+  taskId: taskResultSubmissionSchema.shape.taskId,
+  executionId: taskResultSubmissionSchema.shape.executionId,
+  resultSubmissionId: taskResultSubmissionSchema.shape.resultSubmissionId,
+  outputIndex: z.number().int().min(0).max(99),
+  locatorDigest: taskResultOutputSchema.shape.locatorDigest,
+  resource: projectCoordinatorArtifactReviewResourceSchema
 }).strict().readonly()
 
 export const projectCoordinatorTransferFeedbackSchema = z.object({
@@ -698,6 +733,12 @@ export type ProjectCoordinatorProjectCreateInput = z.infer<
 >
 export type ProjectCoordinatorProjectCreateResult = z.infer<
   typeof projectCoordinatorProjectCreateResultSchema
+>
+export type ProjectCoordinatorArtifactReviewPrepareInput = z.infer<
+  typeof projectCoordinatorArtifactReviewPrepareInputSchema
+>
+export type ProjectCoordinatorArtifactReviewPrepared = z.infer<
+  typeof projectCoordinatorArtifactReviewPreparedSchema
 >
 export type ProjectCoordinatorPlanDraft = z.infer<typeof projectCoordinatorPlanDraftSchema>
 export type ProjectCoordinatorPlanAssignment = z.infer<

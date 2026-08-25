@@ -24,6 +24,7 @@ import type { DomainWorkbenchRightPanelSession } from '@sciforge/domain-sdk/host
 
 import type {
   ProjectCoordinatorCompleteInput,
+  ProjectCoordinatorArtifactReviewPrepareInput,
   ProjectCoordinatorContentRecoveryAbandonInput,
   ProjectCoordinatorContentRecoveryObserveLinkInput,
   ProjectCoordinatorContentRecoveryRetrySuccessorInput,
@@ -57,6 +58,7 @@ export type ProjectCoordinatorPanelProps = Readonly<{
   initialProjectId?: string
   className?: string
   onCollapse?: () => void
+  onOpenArtifact?: (input: ProjectCoordinatorArtifactReviewPrepareInput) => Promise<void>
 }>
 
 export function selectFocusedProject(
@@ -105,7 +107,8 @@ export function ProjectCoordinatorPanel({
   session,
   initialProjectId,
   className,
-  onCollapse
+  onCollapse,
+  onOpenArtifact
 }: ProjectCoordinatorPanelProps): ReactElement {
   const { t } = useTranslation('common')
   const [workspace, setWorkspace] = useState<ProjectCoordinatorWorkspace>()
@@ -305,6 +308,11 @@ export function ProjectCoordinatorPanel({
     void runAction('result-review', () => client.reviewResult(input), applyProjectWorkspace)
   }, [applyProjectWorkspace, client, runAction])
 
+  const openArtifact = useCallback((input: ProjectCoordinatorArtifactReviewPrepareInput) => {
+    if (!onOpenArtifact) return
+    void runAction('artifact-review', () => onOpenArtifact(input), () => undefined)
+  }, [onOpenArtifact, runAction])
+
   const completeProject = useCallback((input: ProjectCoordinatorCompleteInput) => {
     void runAction('project-complete', () => client.completeProject(input), applyProjectWorkspace)
   }, [applyProjectWorkspace, client, runAction])
@@ -471,6 +479,7 @@ export function ProjectCoordinatorPanel({
           busy={Boolean(busyAction && !busyAction.startsWith('plan-'))}
           onCreateHumanNeeded={createHumanNeeded}
           onAnswerHumanNeeded={answerHumanNeeded}
+          onOpenArtifact={onOpenArtifact ? openArtifact : undefined}
           onReviewResult={reviewResult}
           onComplete={completeProject}
         />
@@ -906,6 +915,7 @@ export function ProjectCoordinatorDecisionSection({
   busy,
   onCreateHumanNeeded,
   onAnswerHumanNeeded,
+  onOpenArtifact,
   onReviewResult,
   onComplete
 }: Readonly<{
@@ -914,6 +924,7 @@ export function ProjectCoordinatorDecisionSection({
   busy: boolean
   onCreateHumanNeeded(input: ProjectCoordinatorHumanNeededCreateInput): void
   onAnswerHumanNeeded(input: ProjectCoordinatorHumanAnswerInput): void
+  onOpenArtifact?: (input: ProjectCoordinatorArtifactReviewPrepareInput) => void
   onReviewResult(input: ProjectCoordinatorResultReviewInput): void
   onComplete(input: ProjectCoordinatorCompleteInput): void
 }>): ReactElement {
@@ -991,6 +1002,33 @@ export function ProjectCoordinatorDecisionSection({
               <p className="mt-1 whitespace-pre-wrap text-[11px] text-ds-muted">
                 {review.submission.summary}
               </p>
+              {review.submission.outputs.length > 0 ? (
+                <div className="space-y-1" data-artifact-review-list="true">
+                  {review.submission.outputs.map((output, outputIndex) => (
+                    <button
+                      key={`${output.locatorDigest}:${outputIndex}`}
+                      type="button"
+                      disabled={busy || !onOpenArtifact}
+                      data-artifact-review-output={outputIndex}
+                      className="flex w-full items-center justify-between gap-2 rounded border border-ds-border px-2 py-1.5 text-left disabled:opacity-50"
+                      onClick={() => onOpenArtifact?.({
+                        projectId: review.submission.projectId,
+                        taskId: review.submission.taskId,
+                        executionId: review.submission.executionId,
+                        resultSubmissionId: review.submission.resultSubmissionId,
+                        submissionDigest: review.submission.submissionDigest,
+                        outputIndex,
+                        locatorDigest: output.locatorDigest
+                      })}
+                    >
+                      <span>{t('projectCoordinatorOpenArtifactInContentSpace')}</span>
+                      <span className="max-w-[11rem] truncate font-mono text-[10px] text-ds-faint">
+                        {output.locatorDigest}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               <textarea name="instruction" aria-label={t('projectCoordinatorRevisionInstruction')} placeholder={t('projectCoordinatorRevisionInstruction')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
               <select name="next-agent" defaultValue="" aria-label={t('projectCoordinatorNextAgent')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs">
                 <option value="">{t('projectCoordinatorChooseExactAgent')}</option>

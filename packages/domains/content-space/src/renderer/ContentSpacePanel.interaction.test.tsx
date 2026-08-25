@@ -503,6 +503,97 @@ describe('ContentSpacePanel', () => {
     expect(mounted.container.textContent).toContain('paper.pdf')
   })
 
+  it('downloads a governed deep-linked result through the canonical Content Space transfer', async () => {
+    const boundHandle = sessionResource(
+      CONTENT_FILE_RESOURCE_KIND,
+      'res_result-review-file-001',
+      'result-review-file'
+    ).resource
+    const bindResource = vi.fn(async () => boundHandle)
+    const download = vi.fn(async (input) => ok({
+      invocationId: 'renderer-result-review-download-0001',
+      reference: input.reference,
+      bytesWritten: 128
+    })) satisfies ContentSpaceCapabilityClient['download']
+    const transfers = fileTransfers()
+    const mounted = await mountPanel(panelClient({
+      listProviderInstances: async () => ok({
+        items: [{
+          providerInstanceRef: providerOne,
+          providerKind: 'mock-one',
+          label: 'Mock One'
+        }]
+      }),
+      bindResource,
+      observeResource: async () => ({
+        reference: fileReference,
+        entry: fileEntry,
+        capabilities: fileCapabilities
+      }),
+      download
+    }), {
+      fileTransfers: transfers,
+      workspaceId: '/workspace/review',
+      initialResource: {
+        kind: CONTENT_FILE_RESOURCE_KIND,
+        resourceRef: 'res_result-review-file-001'
+      }
+    })
+
+    expect(bindResource).toHaveBeenCalledWith('res_result-review-file-001', {
+      workspaceId: '/workspace/review',
+      signal: expect.any(AbortSignal)
+    })
+    await click(buttonByText(mounted.container, 'Download'))
+
+    expect(transfers.pickDownloadDestination).toHaveBeenCalledWith({
+      title: 'Download Content Space file',
+      suggestedName: 'paper.pdf'
+    }, { signal: expect.any(AbortSignal) })
+    expect(download).toHaveBeenCalledWith({
+      reference: fileReference,
+      destinationHandle: `xfer_${'d'.repeat(32)}`
+    }, {
+      approval: { mode: 'confirmation' },
+      signal: expect.any(AbortSignal)
+    })
+  })
+
+  it('fails closed before Provider observation when the Host cannot rebind the review reference', async () => {
+    const bindResource = vi.fn(async () => {
+      throw new Error('Resource reference is outside the caller workspace.')
+    })
+    const observeResource = vi.fn(panelClient().observeResource)
+    const download = vi.fn(panelClient().download)
+    const mounted = await mountPanel(panelClient({
+      listProviderInstances: async () => ok({
+        items: [{
+          providerInstanceRef: providerOne,
+          providerKind: 'mock-one',
+          label: 'Mock One'
+        }]
+      }),
+      bindResource,
+      observeResource,
+      download
+    }), {
+      workspaceId: '/workspace/review',
+      initialResource: {
+        kind: CONTENT_FILE_RESOURCE_KIND,
+        resourceRef: 'res_result-review-file-001'
+      }
+    })
+
+    expect(bindResource).toHaveBeenCalledOnce()
+    expect(observeResource).not.toHaveBeenCalled()
+    expect(download).not.toHaveBeenCalled()
+    expect(mounted.container.textContent)
+      .toContain('Content Space operation failed. (provider_unavailable)')
+    expect(mounted.container.textContent)
+      .not.toContain('Resource reference is outside the caller workspace.')
+    expect(() => buttonByText(mounted.container, 'Download')).toThrow()
+  })
+
   it('requires a source choice for ambiguous deep links and aborts a stale access check', async () => {
     const firstAccess = deferred<{ status: 'ready' }>()
     let firstAccessSignal: AbortSignal | undefined
@@ -963,6 +1054,7 @@ function panelClient(
   overrides: Partial<ContentSpaceCapabilityClient> = {}
 ): ContentSpaceCapabilityClient {
   return {
+    bindResource: async () => { throw new Error('resource bind not configured') },
     listProviderInstances: async () => ok({
       items: [
         { providerInstanceRef: providerOne, providerKind: 'mock-one', label: 'Mock One' },
@@ -1078,11 +1170,13 @@ function enrollmentView(
   })
 }
 
-function sessionResource(
-  kind: string,
+function sessionResource<Kind extends
+    | typeof CONTENT_CONTAINER_RESOURCE_KIND
+    | typeof CONTENT_FILE_RESOURCE_KIND>(
+  kind: Kind,
   resourceRef: string,
   handleSuffix: string
-): DomainRendererSessionResource {
+): DomainRendererSessionResource & Readonly<{ kind: Kind }> {
   return Object.freeze({
     kind,
     resourceRef,

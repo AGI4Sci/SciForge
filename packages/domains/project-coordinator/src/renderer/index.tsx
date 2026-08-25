@@ -10,6 +10,7 @@ import {
 } from '@sciforge/domain-sdk/renderer'
 
 import { projectCoordinatorActivationSchema } from '../contract.js'
+import type { ProjectCoordinatorArtifactReviewPrepareInput } from '../contract.js'
 import {
   PROJECT_COORDINATOR_I18N_CONTRIBUTION,
   PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION,
@@ -56,6 +57,32 @@ export function createProjectCoordinatorRightPanelContribution(
           className={className}
           onCollapse={onCollapse}
           session={session}
+          {...(host.workbench?.openResource ? {
+            onOpenArtifact: async (input: ProjectCoordinatorArtifactReviewPrepareInput) => {
+              if (!session.workspaceRoot) {
+                throw new Error('Artifact review requires an exact Workspace binding.')
+              }
+              const prepared = await client.prepareArtifactReview(input, {
+                workspaceId: session.workspaceRoot
+              })
+              if (host.workbench?.canOpenResource &&
+                  !host.workbench.canOpenResource(prepared.resource.kind)) {
+                throw new Error('The Content Space resource review surface is unavailable.')
+              }
+              const opened = host.workbench?.openResource?.({
+                sessionId: session.id,
+                placement: 'new',
+                resource: {
+                  resourceKind: prepared.resource.kind,
+                  resourceId: prepared.resource.resourceRef,
+                  resourceRef: prepared.resource.resourceRef
+                }
+              })
+              if (!opened) {
+                throw new Error('The Content Space resource review surface could not be opened.')
+              }
+            }
+          } : {})}
           {...(parsedActivation?.success && parsedActivation.data.projectId
             ? { initialProjectId: parsedActivation.data.projectId }
             : {})}

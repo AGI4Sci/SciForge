@@ -111,13 +111,20 @@ export const contentSpaceCapabilityContracts = Object.freeze({
   )
 })
 
-export type ContentSpaceReadOptions = Readonly<{ signal?: AbortSignal }>
+export type ContentSpaceReadOptions = Readonly<{
+  workspaceId?: string
+  signal?: AbortSignal
+}>
 export type ContentSpaceMutationOptions = Readonly<{
   approval: Readonly<{ mode: 'confirmation' }>
   signal?: AbortSignal
 }>
 
 export type ContentSpaceCapabilityClient = Readonly<{
+  bindResource(
+    resourceRef: string,
+    options?: ContentSpaceReadOptions
+  ): Promise<DomainCapabilityResourceHandle>
   listProviderInstances(options?: ContentSpaceReadOptions): Promise<z.infer<
     typeof contentSpaceProviderInstanceListResultSchema
   >>
@@ -144,6 +151,12 @@ export function createContentSpaceCapabilityClient(
   invoker: DomainRendererCapabilityInvoker
 ): ContentSpaceCapabilityClient {
   return Object.freeze({
+    bindResource: (resourceRef, options) => {
+      if (!invoker.bind) {
+        return Promise.reject(new Error('Host resource binding is unavailable.'))
+      }
+      return invoker.bind(resourceRef, options)
+    },
     listProviderInstances: (options) => invoker.invoke(
       contentSpaceCapabilityContracts.listProviderInstances,
       {},
@@ -206,7 +219,10 @@ export function createContentSpaceCapabilityClient(
       const observation = await invoker.observe({
         resourceKind,
         stateSchema: contentSpacePortableResourceStateSchema
-      }, resource, { signal: options?.signal })
+      }, resource, {
+        ...(options?.workspaceId ? { workspaceId: options.workspaceId } : {}),
+        signal: options?.signal
+      })
       if (!observation.state) return null
       if (!resourceKindMatchesReference(resourceKind, observation.state.reference)) {
         throw new TypeError('Content Space resource observation kind drifted.')

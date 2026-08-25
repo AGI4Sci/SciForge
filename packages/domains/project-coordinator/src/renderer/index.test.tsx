@@ -27,7 +27,8 @@ import {
 import { createProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
 import {
   createDomainRendererEntry,
-  createProjectCoordinatorOpenCommand
+  createProjectCoordinatorOpenCommand,
+  createProjectCoordinatorRightPanelContribution
 } from './index.js'
 
 test('renderer entry owns one generic Workbench surface without Identity UI contributions', () => {
@@ -110,6 +111,7 @@ test('panel surface is limited to Coordinator, Plan, Worker, Task, review, and p
       createHumanNeeded: async () => { throw new Error('unused') },
       answerHumanNeeded: async () => { throw new Error('unused') },
       transferCoordinator: async () => { throw new Error('unused') },
+      prepareArtifactReview: async () => { throw new Error('unused') },
       reviewResult: async () => { throw new Error('unused') },
       completeProject: async () => { throw new Error('unused') }
     },
@@ -249,6 +251,81 @@ test('renderer Coordinator transfer invokes one governed Owner command without c
     input: {
       projectId: 'prj_ProjectCreated01',
       coordinatorAgentId: 'agt_OwnerSuccessor1'
+    }
+  }])
+})
+
+test('result artifact navigation materializes through main and opens the generic Content Space resource owner', async () => {
+  const invoked: unknown[] = []
+  const opened: unknown[] = []
+  const host: DomainRendererHost = {
+    capabilityInvoker: {
+      observe: async () => { throw new Error('not observed') },
+      invoke: async (contract, input, options) => {
+        invoked.push({ actionId: contract.actionId, effect: contract.effect, input, options })
+        return {
+          ...input as object,
+          resource: {
+            kind: 'content-space.file',
+            resourceRef: 'res_artifact-review-resource-001'
+          }
+        } as never
+      }
+    },
+    openExternal: () => undefined,
+    workbench: {
+      canOpenResource: (kind) => kind === 'content-space.file',
+      openResource: (input) => {
+        opened.push(input)
+        return true
+      },
+      openRightPanel: () => undefined
+    }
+  }
+  const rendered = createProjectCoordinatorRightPanelContribution(host).render({
+    active: true,
+    focused: true,
+    surfaceId: 'project-coordinator-panel',
+    className: 'host-panel',
+    onCollapse: () => undefined,
+    session: { id: 'session-artifact-review', workspaceRoot: '/workspace/review' }
+  }) as ReactElement<{
+    onOpenArtifact(input: {
+      projectId: string
+      taskId: string
+      executionId: string
+      resultSubmissionId: string
+      submissionDigest: string
+      outputIndex: number
+      locatorDigest: string
+    }): Promise<void>
+  }>
+  const selection = {
+    projectId: 'prj_ProjectCreated01',
+    taskId: 'tsk_MeetingTask001',
+    executionId: 'exe_MeetingExec001',
+    resultSubmissionId: 'rsu_MeetingResult01',
+    submissionDigest: 'b'.repeat(64),
+    outputIndex: 0,
+    locatorDigest: 'c'.repeat(64)
+  }
+
+  await rendered.props.onOpenArtifact(selection)
+
+  assert.deepEqual(invoked, [{
+    actionId: 'project-coordinator.artifact-review.prepare',
+    effect: 'read',
+    input: selection,
+    options: { workspaceId: '/workspace/review' }
+  }])
+  assert.equal('locator' in (invoked[0] as { input: object }).input, false)
+  assert.deepEqual(opened, [{
+    sessionId: 'session-artifact-review',
+    placement: 'new',
+    resource: {
+      resourceKind: 'content-space.file',
+      resourceId: 'res_artifact-review-resource-001',
+      resourceRef: 'res_artifact-review-resource-001'
     }
   }])
 })
@@ -717,6 +794,36 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   assert.match(reviewMarkup, /data-default-visible-card="result-review"/u)
   assert.match(reviewMarkup, /projectCoordinatorAcceptResult/u)
   assert.match(reviewMarkup, /projectCoordinatorRequestRevision/u)
+
+  const artifactProject = decisionProjectFixture('review')
+  artifactProject.reviews[0]!.submission.outputs.push({
+    executionId: 'exe_MeetingExec001',
+    assignmentTaskRevision: 3,
+    locator: {
+      contractVersion: 1,
+      kind: 'content-space.file-reference',
+      authority: 'opencontent.run0',
+      identity: { fileId: 'provider-file-output-001' }
+    },
+    locatorDigest: 'c'.repeat(64),
+    rootLocatorDigest: 'd'.repeat(64),
+    bindingRevision: 4,
+    transferReceiptDigest: 'e'.repeat(64),
+    observationDigest: 'f'.repeat(64),
+    preflightObservationDigest: 'a'.repeat(64)
+  })
+  const artifactMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
+    project: artifactProject,
+    canAnswer: true,
+    busy: false,
+    onCreateHumanNeeded: () => undefined,
+    onAnswerHumanNeeded: () => undefined,
+    onOpenArtifact: () => undefined,
+    onReviewResult: () => undefined,
+    onComplete: () => undefined
+  }))
+  assert.match(artifactMarkup, /data-artifact-review-output="0"/u)
+  assert.match(artifactMarkup, /projectCoordinatorOpenArtifactInContentSpace/u)
 
   const askMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: {

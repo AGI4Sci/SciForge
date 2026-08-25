@@ -85,6 +85,7 @@ import {
 import { ProjectCoordinatorStateStore } from './state.js'
 import type { ProjectCoordinatorProvisioningPort } from './provisioning.js'
 import type { ProjectCoordinatorRecoveryPort } from './recovery.js'
+import type { ProjectCoordinatorArtifactReviewPort } from './artifact-review.js'
 
 export type ProjectCoordinatorWorkspacePort = Readonly<{
   readWorkspace(input: ProjectCoordinatorWorkspaceReadInput): Promise<ProjectCoordinatorWorkspace>
@@ -144,6 +145,7 @@ export type ProjectContentProvisioningAttestationSigningPort = Readonly<{
 export type ProjectCoordinatorMainPorts = Readonly<{
   workspace: ProjectCoordinatorCloudWorkspacePort
   plan: ProjectCoordinatorPlanPort
+  artifactReview: ProjectCoordinatorArtifactReviewPort
   provisioningAttestationSigning: ProjectContentProvisioningAttestationSigningPort
   provisioning: ProjectCoordinatorProvisioningPort
   recovery: ProjectCoordinatorRecoveryPort

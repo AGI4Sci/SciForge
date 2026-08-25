@@ -9,6 +9,10 @@ import type {
 } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import {
+  ARTIFACT_RESOURCE_KIND,
+  CONTENT_FILE_RESOURCE_KIND
+} from '@sciforge/domain-content-space/contract'
+import {
   COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION,
   COORDINATOR_CLOUD_COMMAND_SERVICE_ID,
   type CoordinatorCloudCommandService
@@ -26,6 +30,8 @@ import {
 
 import {
   PROJECT_COORDINATOR_CAPABILITY_IDS,
+  projectCoordinatorArtifactReviewPrepareInputSchema,
+  projectCoordinatorArtifactReviewPreparedSchema,
   projectCoordinatorCompleteInputSchema,
   projectCoordinatorContentRecoveryAbandonInputSchema,
   projectCoordinatorContentRecoveryObserveLinkInputSchema,
@@ -69,6 +75,7 @@ import {
 import { ProjectCoordinatorStateStore } from './state.js'
 import { createProjectCoordinatorProvisioningPort } from './provisioning.js'
 import { createProjectCoordinatorRecoveryPort } from './recovery.js'
+import { createProjectCoordinatorArtifactReviewPort } from './artifact-review.js'
 
 export type ProjectCoordinatorCapabilityOptions = Readonly<{
   id: string
@@ -84,6 +91,7 @@ export type ProjectCoordinatorCapabilityOptions = Readonly<{
     idempotency: 'none' | 'required'
   }>
   tags: readonly string[]
+  producedResourceKinds?: readonly string[]
   inputSchema: z.ZodType
   outputSchema: z.ZodType
   handler(
@@ -478,6 +486,26 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         })
       }),
       options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.artifactReviewPrepare,
+        version: '1.0.0',
+        title: 'Prepare Task result artifact review',
+        description: 'Re-reads the exact current Cloud submission and binding before returning one Host-scoped non-authorizing Content Space review reference.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        tags: ['project', 'coordinator', 'review', 'content-space', 'artifact'],
+        producedResourceKinds: [CONTENT_FILE_RESOURCE_KIND, ARTIFACT_RESOURCE_KIND],
+        inputSchema: projectCoordinatorArtifactReviewPrepareInputSchema,
+        outputSchema: projectCoordinatorArtifactReviewPreparedSchema,
+        handler: async (raw) => ({
+          output: await options.ports.artifactReview.prepare(
+            projectCoordinatorArtifactReviewPrepareInputSchema.parse(raw)
+          )
+        })
+      }),
+      options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
         version: '1.0.0',
         title: 'Review Task result',
@@ -540,8 +568,8 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
   ProjectCoordinatorCapabilityFactory<CapabilityDefinition> |
   DomainMainRuntimeLifecycleContribution
 > {
-  if (!host.internalServices || !host.packageSettings) {
-    throw new Error('Project Coordinator requires internal services and owner-scoped settings.')
+  if (!host.internalServices || !host.packageSettings || !host.portableResources) {
+    throw new Error('Project Coordinator requires internal services, owner-scoped settings, and portable resources.')
   }
   const transport = host.internalServices.acquire<AuthenticatedCloudTransport>(
     AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
@@ -581,6 +609,10 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     transport,
     state
   })
+  const artifactReview = createProjectCoordinatorArtifactReviewPort({
+    workspace,
+    portableResources: host.portableResources
+  })
   const disposeCoordinatorInbox = coordinatorCloudCommands.subscribe((message) => (
     actions.handleInbox(message)
   ))
@@ -617,6 +649,7 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
   const ports: ProjectCoordinatorMainPorts = Object.freeze({
     workspace,
     plan,
+    artifactReview,
     actions,
     provisioningAttestationSigning,
     provisioning,
@@ -656,3 +689,4 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
 }
 
 export * from './ports.js'
+export * from './artifact-review.js'

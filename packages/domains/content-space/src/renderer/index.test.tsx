@@ -97,6 +97,11 @@ describe('Content Space renderer activation', () => {
 
   it('navigates only the three declared Content Space resource kinds without inspecting metadata', () => {
     const navigation = createContentSpaceResourceNavigationContribution()
+    const materialized = sessionResource(
+      CONTENT_FILE_RESOURCE_KIND,
+      'res_materialized-review-resource',
+      'review'
+    )
 
     expect(navigation.resolve({
       sessionId: 'session-content-space',
@@ -116,6 +121,39 @@ describe('Content Space renderer activation', () => {
     expect(navigation.resolve({
       sessionId: 'session-content-space',
       resource: {
+        resourceKind: CONTENT_FILE_RESOURCE_KIND,
+        resourceId: materialized.resourceRef,
+        resourceRef: materialized.resourceRef
+      }
+    })).toEqual({
+      activation: {
+        revision: 1,
+        payload: {
+          resourceKind: CONTENT_FILE_RESOURCE_KIND,
+          resourceId: materialized.resourceRef,
+          materializedResourceRef: materialized.resourceRef
+        }
+      }
+    })
+    expect(findContentSpaceActivationResource({
+      resourceKind: CONTENT_FILE_RESOURCE_KIND,
+      resourceId: materialized.resourceRef,
+      materializedResourceRef: materialized.resourceRef
+    })).toEqual({
+      kind: CONTENT_FILE_RESOURCE_KIND,
+      resourceRef: materialized.resourceRef
+    })
+    expect(navigation.resolve({
+      sessionId: 'session-content-space',
+      resource: {
+        resourceKind: CONTENT_FILE_RESOURCE_KIND,
+        resourceId: materialized.resourceRef,
+        resourceRef: 'res_different-materialized-reference'
+      }
+    })).toBeNull()
+    expect(navigation.resolve({
+      sessionId: 'session-content-space',
+      resource: {
         resourceKind: 'application/pdf',
         resourceId: 'looks-like-a-content-space-file'
       }
@@ -126,6 +164,7 @@ describe('Content Space renderer activation', () => {
 function rendererHost(): DomainRendererHost {
   return {
     capabilityInvoker: {
+      bind: async () => { throw new Error('not used') },
       observe: async () => { throw new Error('not used') },
       invoke: async () => { throw new Error('not used') }
     },
@@ -133,11 +172,14 @@ function rendererHost(): DomainRendererHost {
   }
 }
 
-function sessionResource(
-  kind: string,
+function sessionResource<Kind extends
+    | typeof CONTENT_CONTAINER_RESOURCE_KIND
+    | typeof CONTENT_FILE_RESOURCE_KIND
+    | typeof ARTIFACT_RESOURCE_KIND>(
+  kind: Kind,
   resourceRef: string,
   handleSuffix: string
-): DomainRendererSessionResource {
+): DomainRendererSessionResource & Readonly<{ kind: Kind }> {
   return Object.freeze({
     kind,
     resourceRef,

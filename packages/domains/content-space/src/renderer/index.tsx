@@ -29,6 +29,7 @@ import {
   CONTENT_FILE_RESOURCE_KIND
 } from '../contract.js'
 import { createContentSpaceCapabilityClient } from './capability-client.js'
+import type { ContentSpaceInitialResource } from './ContentSpacePanel.js'
 import { collectContentSpaceProviderEnrollmentViews } from './provider-enrollment-view.js'
 
 const ContentSpacePanel = lazy(() => import('./ContentSpacePanel.js').then((module) => ({
@@ -64,6 +65,7 @@ export function createContentSpaceRightPanelContribution(
           className={className}
           onCollapse={onCollapse}
           initialResource={initialResource}
+          workspaceId={session.workspaceRoot}
         />
       )
     }
@@ -101,12 +103,16 @@ DomainRendererResourceNavigationValue {
         CONTENT_CONTAINER_RESOURCE_KIND,
         CONTENT_FILE_RESOURCE_KIND
       ].includes(resource.resourceKind as typeof ARTIFACT_RESOURCE_KIND)) return null
+      if (resource.resourceRef && resource.resourceRef !== resource.resourceId) return null
       return Object.freeze({
         activation: Object.freeze({
           revision: 1,
           payload: Object.freeze({
             resourceKind: resource.resourceKind,
-            resourceId: resource.resourceId
+            resourceId: resource.resourceId,
+            ...(resource.resourceRef ? {
+              materializedResourceRef: resource.resourceRef
+            } : {})
           })
         })
       })
@@ -146,14 +152,22 @@ export function createDomainRendererEntry(
 export function findContentSpaceActivationResource(
   payload: unknown,
   resources?: readonly DomainRendererSessionResource[]
-): DomainRendererSessionResource | undefined {
+): ContentSpaceInitialResource | undefined {
   const parsed = contentSpaceActivationPayloadSchema.safeParse(payload)
   if (!parsed.success) return undefined
+  if (parsed.data.materializedResourceRef) {
+    return Object.freeze({
+      kind: parsed.data.resourceKind,
+      resourceRef: parsed.data.materializedResourceRef
+    })
+  }
   const matches = (resources ?? []).filter((resource) =>
     resource.kind === parsed.data.resourceKind &&
     resource.resourceRef === parsed.data.resourceId
   )
-  return matches.length === 1 ? matches[0] : undefined
+  return matches.length === 1
+    ? Object.freeze({ ...matches[0], kind: parsed.data.resourceKind })
+    : undefined
 }
 
 const contentSpaceActivationPayloadSchema = z.object({
@@ -162,7 +176,18 @@ const contentSpaceActivationPayloadSchema = z.object({
     CONTENT_CONTAINER_RESOURCE_KIND,
     CONTENT_FILE_RESOURCE_KIND
   ]),
-  resourceId: z.string().trim().min(1).max(512)
-}).strict()
+  resourceId: z.string().trim().min(1).max(512),
+  materializedResourceRef: z.string().trim()
+    .regex(/^res_[A-Za-z0-9_-]{20,}$/u).optional()
+}).strict().superRefine((activation, context) => {
+  if (activation.materializedResourceRef &&
+      activation.materializedResourceRef !== activation.resourceId) {
+    context.addIssue({
+      code: 'custom',
+      path: ['materializedResourceRef'],
+      message: 'Materialized Content Space resource reference must match navigation identity.'
+    })
+  }
+})
 
 export * from './provider-enrollment-view.js'

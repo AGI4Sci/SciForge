@@ -27,8 +27,8 @@ import {
 } from 'lucide-react'
 
 import type {
-  DomainRendererFileTransferHost,
-  DomainRendererSessionResource
+  DomainCapabilityResourceHandle,
+  DomainRendererFileTransferHost
 } from '@sciforge/domain-sdk/host'
 
 import {
@@ -67,7 +67,8 @@ export type ContentSpacePanelProps = Readonly<{
   fileTransfers?: DomainRendererFileTransferHost
   className?: string
   onCollapse?: () => void
-  initialResource?: DomainRendererSessionResource
+  initialResource?: ContentSpaceInitialResource
+  workspaceId?: string
   enrollmentViews?: readonly ContentSpaceProviderEnrollmentView[]
 }>
 
@@ -77,6 +78,7 @@ export function ContentSpacePanel({
   className,
   onCollapse,
   initialResource,
+  workspaceId,
   enrollmentViews = EMPTY_ENROLLMENT_VIEWS
 }: ContentSpacePanelProps) {
   const [providers, setProviders] = useState<readonly Readonly<{
@@ -285,12 +287,7 @@ export function ContentSpacePanel({
   }, [beginRead, client])
 
   const openInitialResource = useCallback((
-    resource: DomainRendererSessionResource & Readonly<{
-      kind:
-        | typeof CONTENT_CONTAINER_RESOURCE_KIND
-        | typeof CONTENT_FILE_RESOURCE_KIND
-        | typeof ARTIFACT_RESOURCE_KIND
-    }>,
+    resource: ContentSpaceInitialResource,
     expectedProviderInstanceRef?: string
   ) => {
     const { controller, epoch } = beginRead()
@@ -304,10 +301,16 @@ export function ContentSpacePanel({
     setFileCapabilities([])
     setStatus('Opening Content Space resource…')
     setError(undefined)
-    void client.observeResource({
+    void resolveInitialResourceHandle(client, resource, {
+      ...(workspaceId ? { workspaceId } : {}),
+      signal: controller.signal
+    }).then((handle) => client.observeResource({
       resourceKind: resource.kind,
-      resource: resource.resource
-    }, { signal: controller.signal }).then((observed) => {
+      resource: handle
+    }, {
+      ...(workspaceId ? { workspaceId } : {}),
+      signal: controller.signal
+    })).then((observed) => {
       if (controller.signal.aborted || epoch !== requestEpoch.current || !observed) return
       const reference = observed.reference
       if (expectedProviderInstanceRef &&
@@ -343,7 +346,7 @@ export function ContentSpacePanel({
         setStatus('')
       }
     })
-  }, [beginRead, client, loadEntries, supersedeMutation])
+  }, [beginRead, client, loadEntries, supersedeMutation, workspaceId])
 
   const checkProviderAccess = useCallback(async (
     targetProviderInstanceRef: string,
@@ -383,12 +386,7 @@ export function ContentSpacePanel({
 
   const activateProvider = useCallback((
     next: string,
-    resource?: DomainRendererSessionResource & Readonly<{
-      kind:
-        | typeof CONTENT_CONTAINER_RESOURCE_KIND
-        | typeof CONTENT_FILE_RESOURCE_KIND
-        | typeof ARTIFACT_RESOURCE_KIND
-    }>
+    resource?: ContentSpaceInitialResource
   ) => {
     supersedeMutation()
     clearProviderContent()
@@ -1101,19 +1099,30 @@ function mergeClassNames(...values: Array<string | undefined>): string {
   return values.filter(Boolean).join(' ')
 }
 
-type ContentSpaceInitialResource = DomainRendererSessionResource & Readonly<{
+export type ContentSpaceInitialResource = Readonly<{
   kind:
     | typeof CONTENT_CONTAINER_RESOURCE_KIND
     | typeof CONTENT_FILE_RESOURCE_KIND
     | typeof ARTIFACT_RESOURCE_KIND
+  resourceRef: string
+  resource?: DomainCapabilityResourceHandle
 }>
 
 function isContentSpaceInitialResource(
-  resource: DomainRendererSessionResource | undefined
+  resource: ContentSpaceInitialResource | undefined
 ): resource is ContentSpaceInitialResource {
   return resource?.kind === CONTENT_CONTAINER_RESOURCE_KIND ||
     resource?.kind === CONTENT_FILE_RESOURCE_KIND ||
     resource?.kind === ARTIFACT_RESOURCE_KIND
+}
+
+async function resolveInitialResourceHandle(
+  client: ContentSpaceCapabilityClient,
+  resource: ContentSpaceInitialResource,
+  options: Readonly<{ workspaceId?: string; signal?: AbortSignal }>
+): Promise<DomainCapabilityResourceHandle> {
+  if (resource.resource) return resource.resource
+  return client.bindResource(resource.resourceRef, options)
 }
 
 function readinessLabel(state: ContentSpaceAdmittedCapabilityState): string {

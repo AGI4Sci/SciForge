@@ -915,6 +915,11 @@ export type DomainWorkbenchOpenRightPanelInput =
 export type DomainWorkbenchExactResource = Readonly<{
   resourceKind: string
   resourceId: string
+  /**
+   * Optional non-authorizing Broker reference. The target renderer must bind
+   * it through the Host before use; this value never carries a capability.
+   */
+  resourceRef?: string | undefined
   integrity?: Readonly<{
     algorithm: 'sha256'
     expectedDigest: string
@@ -1194,6 +1199,11 @@ export type DomainRendererVisibleContextHost = Readonly<{
 }>
 
 export type DomainRendererCapabilityInvoker = Readonly<{
+  /** Rebinds one non-authorizing reference after Host scope and lease checks. */
+  bind?(
+    resourceRef: string,
+    options?: Readonly<{ workspaceId?: string; signal?: AbortSignal }>
+  ): Promise<DomainCapabilityResourceHandle>
   observe<TState>(
     contract: DomainRendererCapabilityObservationContract<TState>,
     resource: DomainCapabilityResourceHandle,

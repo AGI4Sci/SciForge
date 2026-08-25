@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **291**
+Registered actions: **292**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -200,6 +200,7 @@ Registered actions: **291**
 | `paper-radar.sync-arxiv` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
 | `paper-radar.sync-biorxiv` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
 | `paper-radar.sync-profile` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
+| `project-coordinator.artifact-review.prepare` | 1.0.0 | ui | read | none | global |
 | `project-coordinator.content-provisioning.apply` | 1.0.0 | ui | external-write | confirmation | global |
 | `project-coordinator.content-provisioning.plan` | 1.0.0 | ui | read | none | global |
 | `project-coordinator.content-recovery.abandon` | 1.0.0 | ui | destructive | confirmation | global |
@@ -76392,6 +76393,151 @@ Synchronizes papers matching one configured Paper Radar profile.
     "profile"
   ],
   "title": "Sync a Paper Radar profile"
+}
+```
+
+## `project-coordinator.artifact-review.prepare`
+
+Re-reads the exact current Cloud submission and binding before returning one Host-scoped non-authorizing Content Space review reference.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "executionId": {
+        "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      },
+      "locatorDigest": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "outputIndex": {
+        "maximum": 99,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "projectId": {
+        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      },
+      "resultSubmissionId": {
+        "pattern": "^rsu_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      },
+      "submissionDigest": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "taskId": {
+        "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "projectId",
+      "taskId",
+      "executionId",
+      "resultSubmissionId",
+      "submissionDigest",
+      "outputIndex",
+      "locatorDigest"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "executionId": {
+        "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      },
+      "locatorDigest": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "outputIndex": {
+        "maximum": 99,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "projectId": {
+        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      },
+      "resource": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "content-space.file",
+              "content-space.artifact"
+            ],
+            "type": "string"
+          },
+          "resourceRef": {
+            "pattern": "^res_[A-Za-z0-9_-]{20,}$",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "kind",
+          "resourceRef"
+        ],
+        "type": "object"
+      },
+      "resultSubmissionId": {
+        "pattern": "^rsu_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      },
+      "taskId": {
+        "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "projectId",
+      "taskId",
+      "executionId",
+      "resultSubmissionId",
+      "outputIndex",
+      "locatorDigest",
+      "resource"
+    ],
+    "type": "object"
+  },
+  "producedResourceKinds": [
+    "content-space.file",
+    "content-space.artifact"
+  ],
+  "resourceKinds": [],
+  "tags": [
+    "project",
+    "coordinator",
+    "review",
+    "content-space",
+    "artifact"
+  ],
+  "title": "Prepare Task result artifact review"
 }
 ```
 

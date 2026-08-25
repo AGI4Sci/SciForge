@@ -2,6 +2,8 @@ import type { DomainRendererCapabilityInvoker } from '@sciforge/domain-sdk/host'
 
 import {
   PROJECT_COORDINATOR_CAPABILITY_IDS,
+  projectCoordinatorArtifactReviewPrepareInputSchema,
+  projectCoordinatorArtifactReviewPreparedSchema,
   projectCoordinatorCompleteInputSchema,
   projectCoordinatorContentRecoveryAbandonInputSchema,
   projectCoordinatorContentRecoveryObserveLinkInputSchema,
@@ -27,6 +29,8 @@ import {
   projectCoordinatorWorkspaceReadInputSchema,
   projectCoordinatorWorkspaceSchema,
   type ProjectCoordinatorPlanConfirmActivateInput,
+  type ProjectCoordinatorArtifactReviewPrepareInput,
+  type ProjectCoordinatorArtifactReviewPrepared,
   type ProjectCoordinatorCompleteInput,
   type ProjectCoordinatorContentRecoveryAbandonInput,
   type ProjectCoordinatorContentRecoveryObserveLinkInput,
@@ -171,6 +175,13 @@ const coordinatorTransferContract = Object.freeze({
   outputSchema: projectCoordinatorWorkspaceSchema
 })
 
+const artifactReviewPrepareContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.artifactReviewPrepare,
+  effect: 'read' as const,
+  inputSchema: projectCoordinatorArtifactReviewPrepareInputSchema,
+  outputSchema: projectCoordinatorArtifactReviewPreparedSchema
+})
+
 const resultReviewContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
   effect: 'external-write' as const,
@@ -209,6 +220,10 @@ export type ProjectCoordinatorRendererClient = Readonly<{
   createHumanNeeded(input: ProjectCoordinatorHumanNeededCreateInput): Promise<ProjectCoordinatorWorkspace>
   answerHumanNeeded(input: ProjectCoordinatorHumanAnswerInput): Promise<ProjectCoordinatorWorkspace>
   transferCoordinator(input: ProjectCoordinatorTransferInput): Promise<ProjectCoordinatorWorkspace>
+  prepareArtifactReview(
+    input: ProjectCoordinatorArtifactReviewPrepareInput,
+    options?: Readonly<{ workspaceId?: string }>
+  ): Promise<ProjectCoordinatorArtifactReviewPrepared>
   reviewResult(input: ProjectCoordinatorResultReviewInput): Promise<ProjectCoordinatorWorkspace>
   completeProject(input: ProjectCoordinatorCompleteInput): Promise<ProjectCoordinatorWorkspace>
 }>
@@ -240,6 +255,11 @@ export function createProjectCoordinatorRendererClient(
     createHumanNeeded: (input) => invoker.invoke(humanNeededCreateContract, input),
     answerHumanNeeded: (input) => invoker.invoke(humanAnswerContract, input),
     transferCoordinator: (input) => invoker.invoke(coordinatorTransferContract, input),
+    prepareArtifactReview: (input, options) => invoker.invoke(
+      artifactReviewPrepareContract,
+      input,
+      options
+    ),
     reviewResult: (input) => invoker.invoke(resultReviewContract, input),
     completeProject: (input) => invoker.invoke(projectCompleteContract, input)
   })

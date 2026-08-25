@@ -111,7 +111,7 @@ Cloud SHALL 把持久化后的 HumanAnswer 投递到当前 Coordinator Agent Inb
 
 ### Requirement: Coordinator 复审显式接受或要求修订
 
-Coordinator SHALL 在 HCI 中审阅 Worker result 与关联文件，并对每个提交执行 `accept` 或 `request_revision`；修订 SHALL 创建新的有界 execution/revision，旧提交保持 provenance 但不再可覆盖当前结果。新 Project 创建成功后 HCI SHALL 自动聚焦该 Project，pending plan 与审批卡 SHALL 默认可见。
+Coordinator SHALL 在 HCI 中审阅 Worker result 与关联文件，并对每个提交执行 `accept` 或 `request_revision`；结果卡打开关联文件时，Project Coordinator main SHALL 从 fresh Cloud snapshot 重新验证当前 Owner、current Task/execution/submission、active binding revision、root/locator digest，再由 Host 在当前 Principal/Workspace 下 materialize process-local opaque resource。公开 capability output 与 domain-neutral resource navigation SHALL 只携带非授权 `resourceRef`；Content Space 使用前 SHALL 通过 Host rebind 重验 current caller/audience/Workspace/Principal lease/semantic revision。Renderer SHALL NOT 接收 materialized handle、解码 portable locator、直接调用 Provider 或把 locator/binding/execution context 当作调用方声明的权限；Content Space 的真实 download 仍 SHALL 是最终 Provider ACL 门禁。修订 SHALL 创建新的有界 execution/revision，旧提交保持 provenance 但不再可覆盖当前结果。新 Project 创建成功后 HCI SHALL 自动聚焦该 Project，pending plan 与审批卡 SHALL 默认可见。
 
 每个 `accept` SHALL 由当前 Coordinator Agent 原子写入一个引用精确 TaskResult submission 的正式 `observation`。HumanAnswer 本身 SHALL NOT 写 ProjectRecord；当前 Coordinator Agent SHALL 使用精确 HumanAnswer 写 `decision`。最终 `summary` 和 Project completion 同样 SHALL 只由当前 Coordinator Agent 写入，并且三类 ProjectRecord 之外不得存在 candidate/proposed/accept 的并行记录路径。
 
@@ -120,6 +120,12 @@ Coordinator SHALL 在 HCI 中审阅 Worker result 与关联文件，并对每个
 - **WHEN** Coordinator 对 Worker 结果选择 request revision 并给出要求
 - **THEN** Cloud SHALL 记录审阅决定和新 revision/execution
 - **AND** Worker SHALL 只在接受新的 offer 后继续修改。
+
+#### Scenario: Coordinator 从结果卡下载审核产物
+
+- **WHEN** 当前 Owner 在 pending result 卡中选择一个精确 output
+- **THEN** Project Coordinator SHALL 只提交 Project/Task/execution/submission/output 的不可变选择事实，并从 fresh Cloud facts 派生 portable locator 与 binding authority
+- **AND** Host SHALL 向 Content Space 导航传递 non-authorizing materialized `resourceRef`，并仅在 Content Space 使用前完成 current-scope rebind；任何 stale submission、binding/root drift、wrong caller/Workspace/Principal、session/materialization authorization 失败 SHALL fail closed，且不得返回或继续使用 executable resource；后续真实 download ACL 失败 SHALL 不写出文件或产生成功审核结果。
 
 ### Requirement: Coordinator 转交由 Owner 显式执行并立即 fencing
 

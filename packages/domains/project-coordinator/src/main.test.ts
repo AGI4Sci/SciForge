@@ -52,6 +52,7 @@ test('workspace read remains a strict non-writing coordination capability', asyn
       },
       provisioning: coordinatorProvisioningPort(),
       recovery: coordinatorRecoveryPort(),
+      artifactReview: coordinatorArtifactReviewPort(),
       coordinatorCloudCommands: coordinatorCloudCommandService(),
       actions: coordinatorActionPort()
     }
@@ -112,6 +113,11 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
       write: async (value) => ({ revision: 1, value }),
       clear: async () => ({ revision: 1, value: null })
     },
+    portableResources: {
+      materialize: async () => { throw new Error('No artifact review is expected.') },
+      discard: async () => undefined,
+      export: async () => { throw new Error('No portable export is expected.') }
+    },
     internalServices: {
       register: () => undefined,
       acquire: ((serviceId: string, contractVersion: string) => {
@@ -160,6 +166,7 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
     PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.artifactReviewPrepare,
     PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete
   ])
@@ -248,6 +255,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
     },
     provisioning: coordinatorProvisioningPort(),
     recovery: coordinatorRecoveryPort(),
+    artifactReview: coordinatorArtifactReviewPort(),
     coordinatorCloudCommands: coordinatorCloudCommandService(),
     actions: coordinatorActionPort()
   }
@@ -275,6 +283,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
     PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.artifactReviewPrepare,
     PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete
   ])
@@ -318,6 +327,12 @@ function coordinatorActionPort() {
     reviewResult: async () => { throw new Error('unused') },
     completeProject: async () => { throw new Error('unused') },
     handleInbox: async () => { throw new Error('unused') }
+  })
+}
+
+function coordinatorArtifactReviewPort() {
+  return Object.freeze({
+    prepare: async () => { throw new Error('unused') }
   })
 }
 

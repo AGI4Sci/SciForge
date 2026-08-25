@@ -4,6 +4,8 @@ import test from 'node:test'
 import {
   PROJECT_COORDINATOR_CAPABILITY_IDS,
   projectCoordinatorActivationSchema,
+  projectCoordinatorArtifactReviewPrepareInputSchema,
+  projectCoordinatorArtifactReviewPreparedSchema,
   projectCoordinatorContentRecoveryAbandonInputSchema,
   projectCoordinatorContentRecoveryObserveLinkInputSchema,
   projectCoordinatorContentRecoveryRetrySuccessorInputSchema,
@@ -246,6 +248,46 @@ test('Coordinator transfer HCI selects only a successor identity and cannot clai
   assert.equal(
     PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer,
     'project-coordinator.coordinator.transfer'
+  )
+})
+
+test('artifact review selects immutable Cloud facts without accepting a locator or executable authority', () => {
+  const input = {
+    projectId: 'prj_Project000001',
+    taskId: 'tsk_ReviewTask0001',
+    executionId: 'exe_ReviewExecution1',
+    resultSubmissionId: 'rsu_ReviewResult001',
+    submissionDigest: 'a'.repeat(64),
+    outputIndex: 0,
+    locatorDigest: 'b'.repeat(64)
+  }
+  assert.deepEqual(projectCoordinatorArtifactReviewPrepareInputSchema.parse(input), input)
+  for (const callerClaim of [
+    { locator: { contractVersion: 1 } },
+    { bindingRevision: 4 },
+    { resourceRef: 'res_caller-chosen-resource' },
+    { executionContextDigest: 'c'.repeat(64) }
+  ]) {
+    assert.throws(() => projectCoordinatorArtifactReviewPrepareInputSchema.parse({
+      ...input,
+      ...callerClaim
+    }))
+  }
+  assert.deepEqual(projectCoordinatorArtifactReviewPreparedSchema.parse({
+    projectId: input.projectId,
+    taskId: input.taskId,
+    executionId: input.executionId,
+    resultSubmissionId: input.resultSubmissionId,
+    outputIndex: input.outputIndex,
+    locatorDigest: input.locatorDigest,
+    resource: {
+      kind: 'content-space.file',
+      resourceRef: 'res_artifact-review-resource-001'
+    }
+  }).resource.kind, 'content-space.file')
+  assert.equal(
+    PROJECT_COORDINATOR_CAPABILITY_IDS.artifactReviewPrepare,
+    'project-coordinator.artifact-review.prepare'
   )
 })
 

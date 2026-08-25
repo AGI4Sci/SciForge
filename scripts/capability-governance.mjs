@@ -279,6 +279,7 @@ async function loadApplicationCapabilityModel() {
           throw new GovernanceError('Governance must not invoke a package system capability.')
         }
       }),
+      portableResourcesFor: () => createUnavailableDependency('portableResources'),
       packageStorageFor: () => Object.freeze({
         settings: Object.freeze({
           read: async () => Object.freeze({ revision: 0, value: null }),
