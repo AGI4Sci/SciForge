@@ -22,6 +22,8 @@ import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 
 import {
   CONTENT_CONTAINER_RESOURCE_KIND,
+  CONTENT_FILE_REFERENCE_KIND,
+  CONTENT_FILE_RESOURCE_KIND,
   CONTENT_SPACE_CAPABILITY_IDS,
   CONTENT_SPACE_LIMITS,
   CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
@@ -111,6 +113,10 @@ type CapabilityContext = Readonly<{
   resource?: Readonly<{ resourceId: string; resourceKind: string; workspaceId?: string }>
   issueResource(registration: any): unknown
 }>
+
+type PortableMaterializeReference = Parameters<
+  NonNullable<DomainMainHost['portableResources']>['materialize']
+>[0]
 
 type CapabilityDefinition = Readonly<{
   id: string
@@ -400,6 +406,92 @@ describe('Content Space main composition', () => {
     expect(uploadNewFile).toHaveBeenCalledOnce()
   })
 
+  it('fails a system transfer before Provider dispatch when portable materialization is unavailable', async () => {
+    const createProvider = vi.fn(() => providerFixture({
+      attestExternalBinding: async () => externalBinding
+    }))
+    const openWorkspaceUploadSource = vi.fn(async () => {
+      throw new Error('Workspace source must remain unopened.')
+    })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost({
+        portableResources: undefined,
+        fileTransfers: {
+          openUploadSource: vi.fn(async () => { throw new Error('unused') }),
+          openDownloadDestination: vi.fn(async () => { throw new Error('unused') }),
+          openWorkspaceUploadSource,
+          openWorkspaceDownloadDestination: vi.fn(async () => { throw new Error('unused') })
+        }
+      })).contributions,
+      contributionHost([
+        ...providerContributions(createProvider),
+        systemVerificationProfileContribution(
+          'fixture-system-materialization-required',
+          'upload-new',
+          64
+        )
+      ])
+    )
+
+    const result = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.systemUploadNew
+    ).handler({
+      root: toPortableContentContainerReference(ROOT),
+      name: 'blocked.txt',
+      workspaceRelativePath: 'inputs/blocked.txt'
+    }, capabilityContext(undefined, 'system', {
+      workspaceId: 'workspace-one',
+      capabilityGrants: [CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID]
+    }))
+
+    expect(result.output).toMatchObject({
+      ok: false,
+      error: { code: 'composition_not_ready', retry: 'never' }
+    })
+    expect(createProvider).not.toHaveBeenCalled()
+    expect(openWorkspaceUploadSource).not.toHaveBeenCalled()
+  })
+
+  it('discards an acquired root when candidate materialization rejects the current session', async () => {
+    const portableResources = portableResourcesFixture({ failAt: 2 })
+    const createProvider = vi.fn(() => providerFixture())
+    const openWorkspaceDownloadDestination = vi.fn(async () => {
+      throw new Error('Workspace destination must remain unopened.')
+    })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost({
+        portableResources,
+        fileTransfers: {
+          openUploadSource: vi.fn(async () => { throw new Error('unused') }),
+          openDownloadDestination: vi.fn(async () => { throw new Error('unused') }),
+          openWorkspaceUploadSource: vi.fn(async () => { throw new Error('unused') }),
+          openWorkspaceDownloadDestination
+        }
+      })).contributions,
+      contributionHost(providerContributions(createProvider))
+    )
+
+    const result = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.systemDownload
+    ).handler({
+      root: toPortableContentContainerReference(ROOT),
+      candidate: toPortableContentFileReference(FILE),
+      workspaceRelativePath: 'outputs/session-rejected.bin'
+    }, capabilityContext(undefined, 'system', {
+      workspaceId: 'workspace-one',
+      capabilityGrants: [CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID]
+    }))
+
+    expect(result.output).toMatchObject({ ok: false })
+    expect(portableResources.materialize).toHaveBeenCalledTimes(2)
+    expect(portableResources.discard).toHaveBeenCalledTimes(1)
+    expect(portableResources.liveCount()).toBe(0)
+    expect(createProvider).not.toHaveBeenCalled()
+    expect(openWorkspaceDownloadDestination).not.toHaveBeenCalled()
+  })
+
   it('propagates exact profile limits through real system upload and download receipts', async () => {
     const uploadBytes = new TextEncoder().encode('real upload bytes')
     const downloadBytes = new TextEncoder().encode('real download bytes')
@@ -422,6 +514,7 @@ describe('Content Space main composition', () => {
     const destinationCommit = vi.fn(async () => undefined)
     const destinationAbort = vi.fn(async () => undefined)
     const events: string[] = []
+    const portableResources = portableResourcesFixture()
     const openWorkspaceUploadSource = vi.fn(async () => {
       events.push('open-upload-source')
       return Object.freeze({
@@ -475,9 +568,17 @@ describe('Content Space main composition', () => {
           },
       capabilities: systemCapabilities
     }))
+    let uploadAuthorized = true
     const uploadNewFile = vi.fn(async ({ context, parent, name, source }:
       Parameters<ContentSpaceProvider['uploadNewFile']>[0]) => {
       events.push('provider-upload')
+      if (!uploadAuthorized) {
+        throw new ContentSpaceOperationError({
+          code: 'unauthorized',
+          message: 'The current Provider session cannot upload to this root.',
+          retry: 'never'
+        })
+      }
       const actual = await source.read({ offset: 0, length: source.size })
       expect(actual).toEqual(uploadBytes)
       expect(source.sha256).toBe(uploadSha256)
@@ -511,11 +612,19 @@ describe('Content Space main composition', () => {
         portable: false as const
       }
     })
+    let downloadAuthorized = true
     const authorizeDownload = vi.fn<ContentSpaceProvider['authorizeDownload']>(async ({
       context,
       reference
     }) => {
       events.push('provider-authorize-download')
+      if (!downloadAuthorized) {
+        throw new ContentSpaceOperationError({
+          code: 'unauthorized',
+          message: 'The current Provider session cannot download this file.',
+          retry: 'never'
+        })
+      }
       let available = true
       return {
         consume: async ({ destination }) => {
@@ -542,6 +651,7 @@ describe('Content Space main composition', () => {
     })
     const definitions = await activateDefinitions(
       createDomainMainEntry(mainHost({
+        portableResources,
         fileTransfers: {
           openUploadSource: vi.fn(async () => { throw new Error('unused') }),
           openDownloadDestination: vi.fn(async () => { throw new Error('unused') }),
@@ -642,6 +752,15 @@ describe('Content Space main composition', () => {
       length: uploadBytes.byteLength
     })
     expect(sourceClose).toHaveBeenCalledOnce()
+    expect(portableResources.materialize).toHaveBeenCalledTimes(1)
+    expect(portableResources.materialize).toHaveBeenNthCalledWith(
+      1,
+      toPortableContentContainerReference(ROOT),
+      { exportPolicy: 'forbid', signal: expect.any(AbortSignal) }
+    )
+    expect(portableResources.discard).toHaveBeenCalledTimes(1)
+    expect(portableResources.liveCount()).toBe(0)
+    expect(JSON.stringify(upload.output)).not.toContain('portable-process-local')
 
     const download = await definition(
       definitions,
@@ -723,6 +842,66 @@ describe('Content Space main composition', () => {
     expect(destinationCommit).toHaveBeenCalledOnce()
     expect(destinationAbort).not.toHaveBeenCalled()
     expect(attestExternalBinding).toHaveBeenCalledTimes(2)
+    expect(portableResources.materialize).toHaveBeenCalledTimes(3)
+    expect(portableResources.materialize).toHaveBeenNthCalledWith(
+      2,
+      toPortableContentContainerReference(ROOT),
+      { exportPolicy: 'forbid', signal: expect.any(AbortSignal) }
+    )
+    expect(portableResources.materialize).toHaveBeenNthCalledWith(
+      3,
+      toPortableContentFileReference(FILE),
+      { exportPolicy: 'forbid', signal: expect.any(AbortSignal) }
+    )
+    expect(portableResources.discard).toHaveBeenCalledTimes(3)
+    expect(portableResources.liveCount()).toBe(0)
+    expect(JSON.stringify(download.output)).not.toContain('portable-process-local')
+
+    downloadAuthorized = false
+    const deniedDownload = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.systemDownload
+    ).handler({
+      root: toPortableContentContainerReference(ROOT),
+      candidate: toPortableContentFileReference(FILE),
+      workspaceRelativePath: 'outputs/denied.bin'
+    }, capabilityContext(undefined, 'system', {
+      ...systemAuthority,
+      invocationId: 'invocation_content_space_system_download_denied_0001'
+    }))
+
+    expect(deniedDownload.output).toMatchObject({
+      ok: false,
+      error: { code: 'unauthorized', retry: 'never' }
+    })
+    expect(proveFileDescendant).toHaveBeenCalledTimes(2)
+    expect(authorizeDownload).toHaveBeenCalledTimes(2)
+    expect(openWorkspaceDownloadDestination).toHaveBeenCalledTimes(1)
+    expect(portableResources.materialize).toHaveBeenCalledTimes(5)
+    expect(portableResources.discard).toHaveBeenCalledTimes(5)
+    expect(portableResources.liveCount()).toBe(0)
+
+    uploadAuthorized = false
+    const deniedUpload = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.systemUploadNew
+    ).handler({
+      root: toPortableContentContainerReference(ROOT),
+      name: 'denied-upload.bin',
+      workspaceRelativePath: 'inputs/denied-upload.bin'
+    }, capabilityContext(undefined, 'system', {
+      ...systemAuthority,
+      invocationId: 'invocation_content_space_system_upload_denied_0001'
+    }))
+
+    expect(deniedUpload.output).toMatchObject({
+      ok: false,
+      error: { code: 'unauthorized', retry: 'never' }
+    })
+    expect(uploadNewFile).toHaveBeenCalledTimes(2)
+    expect(portableResources.materialize).toHaveBeenCalledTimes(6)
+    expect(portableResources.discard).toHaveBeenCalledTimes(6)
+    expect(portableResources.liveCount()).toBe(0)
   })
 
   it('returns unauthorized without dispatch when Principal invalidation aborts before dispatch', async () => {
@@ -2846,7 +3025,45 @@ function mainHost(overrides: Partial<DomainMainHost> = {}): DomainMainHost {
   return Object.freeze({
     getUserDataDir: () => '/private/tmp/sciforge-content-space-main-test',
     defineCapability: (options: unknown) => options,
+    portableResources: portableResourcesFixture(),
     ...overrides
+  })
+}
+
+function portableResourcesFixture(options: Readonly<{ failAt?: number }> = {}) {
+  let sequence = 0
+  const live = new Set<string>()
+  const materialize = vi.fn(async (reference: PortableMaterializeReference) => {
+    sequence += 1
+    if (sequence === options.failAt) {
+      throw new Error('The current portable resource session is unavailable.')
+    }
+    const marker = String(sequence).padStart(4, '0')
+    const resourceRef = `res_portable-process-local-${marker}`
+    live.add(resourceRef)
+    return Object.freeze({
+      resource: Object.freeze({
+        token: `cap_portable-process-local-${marker}`,
+        semanticRevision: `portable-process-local-${marker}`,
+        expiresAt: '2026-08-25T23:59:59.000Z'
+      }),
+      resourceRef,
+      resourceKind: typeof reference !== 'string' &&
+        reference.kind === CONTENT_FILE_REFERENCE_KIND
+        ? CONTENT_FILE_RESOURCE_KIND
+        : CONTENT_CONTAINER_RESOURCE_KIND
+    })
+  })
+  const discard = vi.fn(async ({ resourceRef }: Readonly<{ resourceRef: string }>) => {
+    live.delete(resourceRef)
+  })
+  return Object.freeze({
+    materialize,
+    discard,
+    export: vi.fn(async () => {
+      throw new Error('Process-local test resources are not exportable.')
+    }),
+    liveCount: () => live.size
   })
 }
 

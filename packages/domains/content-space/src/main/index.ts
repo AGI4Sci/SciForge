@@ -96,6 +96,7 @@ import {
   immutableVersionObservationResultSchema,
   uploadNewResultSchema,
   parsePortableContentContainerReference,
+  parsePortableContentFileReference,
   toPortableContentContainerReference,
   toPortableContentFileReference,
   type ContentSpaceError,
@@ -142,8 +143,7 @@ import {
   type ContentSpaceProviderFeatureTarget
 } from '../provider-features.js'
 import {
-  createContentSpacePortableAuthorityResolver,
-  resolveContentSpacePortableInvocationReference
+  createContentSpacePortableAuthorityResolver
 } from './portable-authority-resolver.js'
 import { ContentSpaceProviderCatalog } from './provider-catalog.js'
 import { composeContentSpaceVerificationPolicy } from './verification-policy-catalog.js'
@@ -291,7 +291,7 @@ export function createDomainMainEntry(
             options: ContentSpaceCapabilityOptions
           ) => unknown,
           getService: () => getRuntime().service,
-          portableResolver: resolver,
+          portableResources: host.portableResources,
           fileTransfers: host.fileTransfers,
           externalNavigation: host.externalNavigation
         })
@@ -343,7 +343,7 @@ export function createDomainMainEntry(
 function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Readonly<{
   defineCapability(options: ContentSpaceCapabilityOptions): CapabilityDefinition
   getService(): ContentSpaceService
-  portableResolver: ReturnType<typeof createContentSpacePortableAuthorityResolver>
+  portableResources?: NonNullable<DomainMainHost['portableResources']>
   fileTransfers?: NonNullable<DomainMainHost['fileTransfers']>
   externalNavigation?: NonNullable<DomainMainHost['externalNavigation']>
 }>): ContentSpaceCapabilityFactory<CapabilityDefinition> {
@@ -1084,29 +1084,32 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
           requireSystemTransferAuthority(context)
           const execution = systemExecutionBinding(context)
           const input = contentSpaceSystemTransferPreflightInputSchema.parse(rawInput)
+          const portableResources = requireSystemPortableResources(options.portableResources)
           const intentDigest = canonicalDigest(input)
           let probe: Awaited<ReturnType<ContentSpaceService['preflightSystemTransfer']>>
           try {
             if (input.operation === 'download') {
-              probe = await options.getService().preflightSystemTransfer({
-                operation: input.operation,
-                root: resolveSystemPortableReference(
-                  options.portableResolver,
-                  input.input.root
-                ),
-                candidate: resolveSystemPortableReference(
-                  options.portableResolver,
-                  input.input.candidate
-                )
-              }, systemWriteCall(context))
+              probe = await withSystemPortableDownloadReferences(
+                portableResources,
+                input.input.root,
+                input.input.candidate,
+                context.signal,
+                ({ root, candidate }) => options.getService().preflightSystemTransfer({
+                  operation: input.operation,
+                  root,
+                  candidate
+                }, systemWriteCall(context))
+              )
             } else {
-              probe = await options.getService().preflightSystemTransfer({
-                operation: input.operation,
-                root: resolveSystemPortableReference(
-                  options.portableResolver,
-                  input.input.root
-                )
-              }, systemWriteCall(context))
+              probe = await withSystemPortableContainerReference(
+                portableResources,
+                input.input.root,
+                context.signal,
+                (root) => options.getService().preflightSystemTransfer({
+                  operation: input.operation,
+                  root
+                }, systemWriteCall(context))
+              )
             }
           } catch (error) {
             let principalStale = false
@@ -1177,35 +1180,34 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
               candidate: candidateEnvelope,
               workspaceRelativePath
             } = contentSpaceSystemDownloadInputSchema.parse(rawInput)
-            const root = resolveSystemPortableReference(
-              options.portableResolver,
-              rootEnvelope
-            )
-            const candidate = resolveSystemPortableReference(
-              options.portableResolver,
-              candidateEnvelope
-            )
-            const transfer = await options.getService().downloadFile({
-              reference: candidate,
-              proofRoot: root,
-              includeTransferEvidence: true,
-              openDestination: (signal, maxBytes) => {
-                if (!options.fileTransfers) {
-                  throw operationError(
-                    'destination_unavailable',
-                    'Host file transfer is unavailable.'
-                  )
+            const portableResources = requireSystemPortableResources(options.portableResources)
+            const transfer = await withSystemPortableDownloadReferences(
+              portableResources,
+              rootEnvelope,
+              candidateEnvelope,
+              context.signal,
+              ({ root, candidate }) => options.getService().downloadFile({
+                reference: candidate,
+                proofRoot: root,
+                includeTransferEvidence: true,
+                openDestination: (signal, maxBytes) => {
+                  if (!options.fileTransfers) {
+                    throw operationError(
+                      'destination_unavailable',
+                      'Host file transfer is unavailable.'
+                    )
+                  }
+                  return options.fileTransfers.openWorkspaceDownloadDestination({
+                    relativePath: workspaceRelativePath,
+                    maxBytes,
+                    systemAuthorization: {
+                      requiredSystemCapabilityGrant: CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID
+                    },
+                    signal
+                  })
                 }
-                return options.fileTransfers.openWorkspaceDownloadDestination({
-                  relativePath: workspaceRelativePath,
-                  maxBytes,
-                  systemAuthorization: {
-                    requiredSystemCapabilityGrant: CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID
-                  },
-                  signal
-                })
-              }
-            }, systemWriteCall(context))
+              }, systemWriteCall(context))
+            )
             const readAfterObservation = Object.freeze({
               reference: toPortableContentFileReference(transfer.receipt.reference as ContentFileReference),
               bytes: transfer.bytes,
@@ -1254,28 +1256,30 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
             requireSystemTransferAuthority(context)
             const { root: rootEnvelope, name, workspaceRelativePath } =
               contentSpaceSystemUploadNewInputSchema.parse(rawInput)
-            const root = resolveSystemPortableReference(
-              options.portableResolver,
-              rootEnvelope
-            )
-            const transfer = await options.getService().uploadNewFile({
-              parent: root,
-              name,
-              includeTransferEvidence: true,
-              openSource: (signal, maxBytes) => {
-                if (!options.fileTransfers) {
-                  throw operationError('source_unavailable', 'Host file transfer is unavailable.')
+            const portableResources = requireSystemPortableResources(options.portableResources)
+            const transfer = await withSystemPortableContainerReference(
+              portableResources,
+              rootEnvelope,
+              context.signal,
+              (root) => options.getService().uploadNewFile({
+                parent: root,
+                name,
+                includeTransferEvidence: true,
+                openSource: (signal, maxBytes) => {
+                  if (!options.fileTransfers) {
+                    throw operationError('source_unavailable', 'Host file transfer is unavailable.')
+                  }
+                  return options.fileTransfers.openWorkspaceUploadSource({
+                    relativePath: workspaceRelativePath,
+                    maxBytes,
+                    systemAuthorization: {
+                      requiredSystemCapabilityGrant: CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID
+                    },
+                    signal
+                  })
                 }
-                return options.fileTransfers.openWorkspaceUploadSource({
-                  relativePath: workspaceRelativePath,
-                  maxBytes,
-                  systemAuthorization: {
-                    requiredSystemCapabilityGrant: CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID
-                  },
-                  signal
-                })
-              }
-            }, systemWriteCall(context))
+              }, systemWriteCall(context))
+            )
             const portableReference = toPortableContentFileReference(
               transfer.receipt.reference
             )
@@ -2132,28 +2136,105 @@ function systemWriteCall(
   })
 }
 
-function resolveSystemPortableReference(
-  resolver: ReturnType<typeof createContentSpacePortableAuthorityResolver>,
-  envelope: ContentSpacePortableContainerReferenceEnvelope
-): ContentContainerReference
-function resolveSystemPortableReference(
-  resolver: ReturnType<typeof createContentSpacePortableAuthorityResolver>,
-  envelope: ContentSpacePortableFileReferenceEnvelope
-): ContentFileReference
-function resolveSystemPortableReference(
-  resolver: ReturnType<typeof createContentSpacePortableAuthorityResolver>,
-  envelope:
-    | ContentSpacePortableContainerReferenceEnvelope
-    | ContentSpacePortableFileReferenceEnvelope
-): ContentContainerReference | ContentFileReference {
-  try {
-    return envelope.kind === CONTENT_CONTAINER_REFERENCE_KIND
-      ? resolveContentSpacePortableInvocationReference(resolver, envelope)
-      : resolveContentSpacePortableInvocationReference(resolver, envelope)
-  } catch {
+type SystemPortableResources = NonNullable<DomainMainHost['portableResources']>
+
+function requireSystemPortableResources(
+  portableResources: SystemPortableResources | undefined
+): SystemPortableResources {
+  if (!portableResources) {
     throw operationError(
-      'unknown_provider_instance',
-      'The portable Content Space authority is unavailable.'
+      'composition_not_ready',
+      'Host portable resource materialization is unavailable.'
+    )
+  }
+  return portableResources
+}
+
+async function withSystemPortableContainerReference<Value>(
+  portableResources: SystemPortableResources,
+  envelope: ContentSpacePortableContainerReferenceEnvelope,
+  signal: AbortSignal | undefined,
+  operation: (reference: ContentContainerReference) => Value | Promise<Value>
+): Promise<Value> {
+  const acquired: string[] = []
+  try {
+    const materialized = await portableResources.materialize(envelope, {
+      exportPolicy: 'forbid',
+      ...(signal ? { signal } : {})
+    })
+    acquired.push(materialized.resourceRef)
+    if (materialized.resourceKind !== CONTENT_CONTAINER_RESOURCE_KIND) {
+      throw operationError(
+        'unknown_provider_instance',
+        'The materialized Content Space root has an incompatible kind.'
+      )
+    }
+    return await operation(parsePortableContentContainerReference(envelope))
+  } finally {
+    await discardSystemPortableResources(portableResources, acquired)
+  }
+}
+
+async function withSystemPortableDownloadReferences<Value>(
+  portableResources: SystemPortableResources,
+  rootEnvelope: ContentSpacePortableContainerReferenceEnvelope,
+  candidateEnvelope: ContentSpacePortableFileReferenceEnvelope,
+  signal: AbortSignal | undefined,
+  operation: (references: Readonly<{
+    root: ContentContainerReference
+    candidate: ContentFileReference
+  }>) => Value | Promise<Value>
+): Promise<Value> {
+  const acquired: string[] = []
+  try {
+    const rootMaterialized = await portableResources.materialize(rootEnvelope, {
+      exportPolicy: 'forbid',
+      ...(signal ? { signal } : {})
+    })
+    acquired.push(rootMaterialized.resourceRef)
+    if (rootMaterialized.resourceKind !== CONTENT_CONTAINER_RESOURCE_KIND) {
+      throw operationError(
+        'unknown_provider_instance',
+        'The materialized Content Space root has an incompatible kind.'
+      )
+    }
+
+    const candidateMaterialized = await portableResources.materialize(candidateEnvelope, {
+      exportPolicy: 'forbid',
+      ...(signal ? { signal } : {})
+    })
+    acquired.push(candidateMaterialized.resourceRef)
+    if (candidateMaterialized.resourceKind !== CONTENT_FILE_RESOURCE_KIND) {
+      throw operationError(
+        'unknown_provider_instance',
+        'The materialized Content Space file has an incompatible kind.'
+      )
+    }
+    return await operation(Object.freeze({
+      root: parsePortableContentContainerReference(rootEnvelope),
+      candidate: parsePortableContentFileReference(candidateEnvelope)
+    }))
+  } finally {
+    await discardSystemPortableResources(portableResources, acquired)
+  }
+}
+
+async function discardSystemPortableResources(
+  portableResources: SystemPortableResources,
+  resourceRefs: readonly string[]
+): Promise<void> {
+  let discardFailed = false
+  for (const resourceRef of [...resourceRefs].reverse()) {
+    try {
+      await portableResources.discard({ resourceRef })
+    } catch {
+      discardFailed = true
+    }
+  }
+  if (discardFailed) {
+    throw operationError(
+      'composition_not_ready',
+      'Host process-local resource cleanup was incomplete.'
     )
   }
 }

@@ -107,6 +107,8 @@ type ResourceState = {
   workspaceId?: string
   allowedAudiences: CapabilityAudience[]
   principalLease: string
+  callerIdBinding?: string
+  executionContextDigestBinding?: string
   semanticRevision: string
   layoutRevision?: string
   observe: CapabilityResourceRegistration['observe']
@@ -138,13 +140,20 @@ type ResourceGrant = {
   resourceKey: string
   workspaceId?: string
   principalLease: string
+  callerIdBinding?: string
+  executionContextDigestBinding?: string
   semanticRevision: string
   expiresAt: string
 }
 
 type RetiredResourceState = Pick<
   ResourceState,
-  'resourceRef' | 'workspaceId' | 'allowedAudiences' | 'principalLease'
+  | 'resourceRef'
+  | 'workspaceId'
+  | 'allowedAudiences'
+  | 'principalLease'
+  | 'callerIdBinding'
+  | 'executionContextDigestBinding'
 >
 
 type IdempotencyEntry = {
@@ -177,6 +186,12 @@ export type ActiveCapabilityInvocation = Readonly<{
     workspaceId?: string
     semanticRevision: string
   }>
+}>
+
+/** Host-private resource scope derived from an already authenticated invocation. */
+export type CapabilityResourceInvocationBinding = Readonly<{
+  callerId: string
+  executionContextDigest?: string
 }>
 
 type ActiveCapabilityInvocationState = {
@@ -244,15 +259,39 @@ function normalizedWorkspaceId(value: string | undefined): string | undefined {
 function resourceKey(
   registration: Pick<CapabilityResourceRegistration, 'workspaceId' | 'resourceKind' | 'resourceId'>,
   allowedAudiences: readonly CapabilityAudience[],
-  principalLease: string
+  principalLease: string,
+  invocationBinding?: CapabilityResourceInvocationBinding
 ): string {
   return stableJson({
     workspaceId: registration.workspaceId ?? null,
     resourceKind: registration.resourceKind,
     resourceId: registration.resourceId,
     allowedAudiences: [...allowedAudiences].sort(),
-    principalLease
+    principalLease,
+    invocationBinding: invocationBinding ?? null
   })
+}
+
+function resourceInvocationBinding(
+  resource: Pick<ResourceState, 'callerIdBinding' | 'executionContextDigestBinding'>
+): CapabilityResourceInvocationBinding | undefined {
+  if (!resource.callerIdBinding) return undefined
+  return Object.freeze({
+    callerId: resource.callerIdBinding,
+    ...(resource.executionContextDigestBinding
+      ? { executionContextDigest: resource.executionContextDigestBinding }
+      : {})
+  })
+}
+
+function resourceInvocationBindingMatches(
+  resource: Pick<ResourceState, 'callerIdBinding' | 'executionContextDigestBinding'>,
+  caller: CapabilityCallerContext
+): boolean {
+  return resource.callerIdBinding === undefined || (
+    resource.callerIdBinding === caller.callerId &&
+    resource.executionContextDigestBinding === caller.executionContextDigest
+  )
 }
 
 function sameContentTransport(
@@ -359,10 +398,15 @@ export class CapabilityBroker {
    */
   issueResource(
     rawCaller: CapabilityCallerContextInput,
-    rawRegistration: CapabilityResourceRegistration
+    rawRegistration: CapabilityResourceRegistration,
+    rawInvocationBinding?: CapabilityResourceInvocationBinding
   ): IssuedCapabilityResource {
     const caller = this.#hostResourceCaller(rawCaller)
-    return this.#issueResourceAs(caller, rawRegistration)
+    const invocationBinding = this.#parseResourceInvocationBinding(
+      caller,
+      rawInvocationBinding
+    )
+    return this.#issueResourceAs(caller, rawRegistration, invocationBinding)
   }
 
   issueResourceHandle(
@@ -374,7 +418,8 @@ export class CapabilityBroker {
 
   #issueResourceAs(
     caller: CapabilityCallerContext,
-    rawRegistration: CapabilityResourceRegistration
+    rawRegistration: CapabilityResourceRegistration,
+    invocationBinding?: CapabilityResourceInvocationBinding
   ): IssuedCapabilityResource {
     const registration = this.#parseResourceRegistration(rawRegistration)
     const workspaceId = registration.workspaceId ?? caller.workspaceId
@@ -394,7 +439,8 @@ export class CapabilityBroker {
     const key = resourceKey(
       { ...registration, workspaceId },
       allowedAudiences,
-      callerLease
+      callerLease,
+      invocationBinding
     )
     const existing = this.#resources.get(key)
     const resourceTransaction = this.#invocationResourceTransaction(caller)
@@ -433,6 +479,14 @@ export class CapabilityBroker {
       workspaceId,
       allowedAudiences,
       principalLease: callerLease,
+      ...(invocationBinding
+        ? {
+            callerIdBinding: invocationBinding.callerId,
+            ...(invocationBinding.executionContextDigest
+              ? { executionContextDigestBinding: invocationBinding.executionContextDigest }
+              : {})
+          }
+        : {}),
       semanticRevision: registration.semanticRevision,
       layoutRevision: registration.layoutRevision,
       observe: registration.observe,
@@ -479,6 +533,12 @@ export class CapabilityBroker {
       resourceKey: key,
       workspaceId,
       principalLease: callerLease,
+      ...(resource.callerIdBinding
+        ? { callerIdBinding: resource.callerIdBinding }
+        : {}),
+      ...(resource.executionContextDigestBinding
+        ? { executionContextDigestBinding: resource.executionContextDigestBinding }
+        : {}),
       semanticRevision: resource.semanticRevision,
       expiresAt
     }
@@ -519,7 +579,7 @@ export class CapabilityBroker {
       dispose: state.dispose,
       contentTransport: state.contentTransport,
       retireAfterLastHandleExpires: state.retireAfterLastHandleExpires
-    }).resource
+    }, resourceInvocationBinding(state)).resource
   }
 
   /**
@@ -667,7 +727,7 @@ export class CapabilityBroker {
         dispose: state.dispose,
         contentTransport: state.contentTransport,
         retireAfterLastHandleExpires: state.retireAfterLastHandleExpires
-      }).resource
+      }, resourceInvocationBinding(state)).resource
 
       result = capabilityObservationSchema.parse({
         resource: refreshedHandle,
@@ -1378,7 +1438,7 @@ export class CapabilityBroker {
         dispose: resource.dispose,
         contentTransport: resource.contentTransport,
         retireAfterLastHandleExpires: resource.retireAfterLastHandleExpires
-      }).resource
+      }, resourceInvocationBinding(resource)).resource
     }
 
     if (retireResource && resource) {
@@ -1436,6 +1496,27 @@ export class CapabilityBroker {
     return this.#parseCaller(rawCaller)
   }
 
+  #parseResourceInvocationBinding(
+    caller: CapabilityCallerContext,
+    rawBinding: CapabilityResourceInvocationBinding | undefined
+  ): CapabilityResourceInvocationBinding | undefined {
+    if (rawBinding === undefined) return undefined
+    const result = z.object({
+      callerId: z.string().trim().min(1).max(256),
+      executionContextDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional()
+    }).strict().safeParse(rawBinding)
+    const active = this.#activeInvocation.getStore()
+    if (!result.success || !active?.active || caller !== active.invocation.caller ||
+      result.data.callerId !== caller.callerId ||
+      result.data.executionContextDigest !== caller.executionContextDigest) {
+      throw new CapabilityBrokerError(
+        'resource_scope_mismatch',
+        'A process-local resource can only bind to the exact active Host invocation.'
+      )
+    }
+    return Object.freeze(result.data)
+  }
+
   #invocationResourceTransaction(
     caller: CapabilityCallerContext
   ): InvocationResourceTransaction | undefined {
@@ -1446,7 +1527,8 @@ export class CapabilityBroker {
       caller.callerId !== invocationCaller.callerId ||
       caller.audience !== invocationCaller.audience ||
       workspaceInvocationScope(caller) !== workspaceInvocationScope(invocationCaller) ||
-      callerPrincipalLease(caller) !== callerPrincipalLease(invocationCaller)
+      callerPrincipalLease(caller) !== callerPrincipalLease(invocationCaller) ||
+      caller.executionContextDigest !== invocationCaller.executionContextDigest
     ) return undefined
     return active.resourceTransaction
   }
@@ -1467,6 +1549,11 @@ export class CapabilityBroker {
     transaction.state = 'committed'
     const committedResources = new Set<ResourceState>()
     for (const { resource } of transaction.issuances) {
+      if (
+        this.#resources.get(resource.key) !== resource ||
+        this.#resourcesByRef.get(resource.resourceRef) !== resource ||
+        resource.retirementRequested
+      ) continue
       if (resource.provisionalTransactions?.has(transaction)) {
         // One successful adopter commits the shared resource for every handle.
         resource.provisionalTransactions = undefined
@@ -1645,7 +1732,8 @@ export class CapabilityBroker {
       if (retired) {
         if (
           retired.workspaceId !== caller.workspaceId ||
-          retired.principalLease !== callerPrincipalLease(caller)
+          retired.principalLease !== callerPrincipalLease(caller) ||
+          !resourceInvocationBindingMatches(retired, caller)
         ) {
           throw new CapabilityBrokerError('resource_scope_mismatch', 'Resource reference is outside the caller scope.')
         }
@@ -1661,7 +1749,8 @@ export class CapabilityBroker {
     }
     if (
       state.workspaceId !== caller.workspaceId ||
-      state.principalLease !== callerPrincipalLease(caller)
+      state.principalLease !== callerPrincipalLease(caller) ||
+      !resourceInvocationBindingMatches(state, caller)
     ) {
       throw new CapabilityBrokerError('resource_scope_mismatch', 'Resource reference is outside the caller scope.')
     }
@@ -1697,13 +1786,15 @@ export class CapabilityBroker {
     const callerLease = callerPrincipalLease(caller)
     if (
       grant.workspaceId !== caller.workspaceId ||
-      grant.principalLease !== callerLease
+      grant.principalLease !== callerLease ||
+      !resourceInvocationBindingMatches(grant, caller)
     ) {
       throw new CapabilityBrokerError('resource_scope_mismatch', 'Resource handle is outside the caller scope.')
     }
     const state = this.#resources.get(grant.resourceKey)
     if (!state) throw new CapabilityBrokerError('resource_unavailable', 'Resource is no longer available.')
-    if (state.principalLease !== callerLease) {
+    if (state.principalLease !== callerLease ||
+      !resourceInvocationBindingMatches(state, caller)) {
       throw new CapabilityBrokerError('resource_scope_mismatch', 'Resource handle is outside the caller scope.')
     }
     if (!state.allowedAudiences.includes(caller.audience)) {
@@ -1977,6 +2068,7 @@ export class CapabilityBroker {
     return Boolean(
       resource &&
       resource.principalLease === callerPrincipalLease(caller) &&
+      resourceInvocationBindingMatches(resource, caller) &&
       resource.allowedAudiences.includes(caller.audience)
     )
   }
@@ -1989,6 +2081,7 @@ export class CapabilityBroker {
     return state
       && state.workspaceId === caller.workspaceId
       && state.principalLease === callerPrincipalLease(caller)
+      && resourceInvocationBindingMatches(state, caller)
       && state.allowedAudiences.includes(caller.audience)
       ? 'live'
       : 'retired'
@@ -2105,7 +2198,13 @@ export class CapabilityBroker {
         resourceRef: resource.resourceRef,
         workspaceId: resource.workspaceId,
         allowedAudiences: [...resource.allowedAudiences],
-        principalLease: resource.principalLease
+        principalLease: resource.principalLease,
+        ...(resource.callerIdBinding
+          ? { callerIdBinding: resource.callerIdBinding }
+          : {}),
+        ...(resource.executionContextDigestBinding
+          ? { executionContextDigestBinding: resource.executionContextDigestBinding }
+          : {})
       })
       this.#trimMap(this.#retiredResourcesByRef, this.#maxEvents)
       for (const [token, grant] of this.#handles) {

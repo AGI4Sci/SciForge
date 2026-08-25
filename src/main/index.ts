@@ -1195,6 +1195,12 @@ app
           }
           return portableResourceReferences.forOwner(owner).materialize(reference, options)
         },
+        discard: (input) => {
+          if (!portableResourceReferences) {
+            throw new Error('Portable resource references are not ready.')
+          }
+          return portableResourceReferences.forOwner(owner).discard(input)
+        },
         export: (input, options) => {
           if (!portableResourceReferences) {
             throw new Error('Portable resource references are not ready.')

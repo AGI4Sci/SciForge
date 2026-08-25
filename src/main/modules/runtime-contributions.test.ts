@@ -454,6 +454,23 @@ describe('main runtime contributions', () => {
       ).digest('hex'),
       rawExecutionContextPresent: false
     })
+    const callerAuthoredDigestOptions = {
+      ...options,
+      idempotencyKey: 'fixture-execution-context-forged-digest',
+      executionContextDigest: 'f'.repeat(64),
+      principalSnapshotDigest: 'e'.repeat(64)
+    }
+    await expect(invoker.invoke(contract, {}, callerAuthoredDigestOptions)).resolves.toEqual({
+      principalSnapshotDigest: createHash('sha256').update(
+        '{"assurance":"local-selection","authority":"sciforge.local-identity",' +
+        '"deviceId":"device-1","identityVersion":7,"subject":"person-1"}'
+      ).digest('hex'),
+      executionContextDigest: createHash('sha256').update(
+        '{"contractVersion":1,"executionId":"execution-1",' +
+        '"projectId":"project-1","taskId":"task-1"}'
+      ).digest('hex'),
+      rawExecutionContextPresent: false
+    })
     await expect(invoker.invoke(contract, {}, {
       ...options,
       systemExecutionContext: { ...executionContext, executionId: 'execution-2' }
