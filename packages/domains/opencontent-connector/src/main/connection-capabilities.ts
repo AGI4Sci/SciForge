@@ -4,7 +4,6 @@ import type { z } from 'zod'
 
 import {
   OPENCONTENT_CONNECTION_CAPABILITY_IDS,
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
   OpenContentConnectorError,
   openContentBindInputSchema,
   openContentConnectionTargetInputSchema,
@@ -56,6 +55,7 @@ type OpenContentCapabilityFactory<CapabilityDefinition = unknown> = Readonly<{
 
 export function createOpenContentCapabilityFactory<CapabilityDefinition>(options: Readonly<{
   defineCapability(options: OpenContentCapabilityOptions): CapabilityDefinition
+  providerInstanceRef: string
   connections: OpenContentConnectionService
 }>): OpenContentCapabilityFactory<CapabilityDefinition> {
   const define = (
@@ -87,7 +87,10 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
         outputSchema: openContentConnectionResultSchema,
         handler: async (input, context) => {
           const principal = requireLocalAccount(context)
-          const targetError = validateSelectedProviderInstance(input.providerInstanceRef)
+          const targetError = validateSelectedProviderInstance(
+            input.providerInstanceRef,
+            options.providerInstanceRef
+          )
           if (targetError) return { output: targetError }
           return {
             output: await connectionCapabilityResult(() => options.connections.status({
@@ -111,7 +114,10 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
         outputSchema: openContentConnectionResultSchema,
         handler: async (input, context) => {
           const principal = requireLocalAccount(context)
-          const targetError = validateSelectedProviderInstance(input.providerInstanceRef)
+          const targetError = validateSelectedProviderInstance(
+            input.providerInstanceRef,
+            options.providerInstanceRef
+          )
           if (targetError) return { output: targetError }
           return {
             output: await connectionCapabilityResult(() => options.connections.bindExistingAccount({
@@ -137,7 +143,10 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
         outputSchema: openContentUnbindOutputSchema,
         handler: async (input, context) => {
           const principal = requireLocalAccount(context)
-          const targetError = validateSelectedProviderInstance(input.providerInstanceRef)
+          const targetError = validateSelectedProviderInstance(
+            input.providerInstanceRef,
+            options.providerInstanceRef
+          )
           if (targetError) return { output: targetError }
           return {
             output: await unbindCapabilityResult(() => options.connections.unbind({
@@ -160,8 +169,11 @@ function requireLocalAccount(context: OpenContentCapabilityContext): PrincipalSn
   return context.caller.principal
 }
 
-function validateSelectedProviderInstance(providerInstanceRef: string) {
-  if (providerInstanceRef === OPENCONTENT_PROVIDER_INSTANCE_REF) return undefined
+function validateSelectedProviderInstance(
+  providerInstanceRef: string,
+  installedProviderInstanceRef: string
+) {
+  if (providerInstanceRef === installedProviderInstanceRef) return undefined
   return Object.freeze({
     outcome: 'error' as const,
     error: Object.freeze({

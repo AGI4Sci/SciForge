@@ -20,6 +20,21 @@ For `system-upload-new`, the adapter SHALL use only the current Principal-bound 
 - **THEN** the adapter SHALL fail the execution as unauthorized
 - **AND** SHALL NOT reuse a cached metadata observation or another Connection.
 
+### Requirement: V4 file-operation readiness remains evidence-gated
+
+The V4 `observe-entry`, `upload-new`, and `download` implementations SHALL remain
+`poc_only` with reason `verification_profile_required` until a real packaged
+multi-user loop produces reviewable operation evidence for the exact shipped
+commit and Provider profile. Donor characterization, unit/integration tests,
+source-only execution, schema conformance, or successful sibling operations
+SHALL NOT promote any of these operations to `production_ready`.
+
+#### Scenario: V4 contracts pass without packaged-live evidence
+
+- **WHEN** the V4 implementation and repository tests pass but no qualifying real packaged loop receipt exists
+- **THEN** all three operations SHALL remain `poc_only` / `verification_profile_required`
+- **AND** the Provider SHALL advertise no `production_ready` claim for them.
+
 ### Requirement: Team provisioning uses exact ordinary Provider operations
 
 The OpenContent adapter SHALL support Project orchestration only through its existing provider-neutral shared-container creation, current-principal reference, exact user member add/remove, full member listing and observation operations. Every operation SHALL remain independently authorized and receipt-bound; no OpenContent-specific Project DTO, batch provisioning method, Cloud identity mapping, email lookup, persistent authorization scope or privileged administrator session SHALL be introduced. Production composition SHALL contain no `productionMockContentSpace` or synthetic Team/file result.

@@ -15,7 +15,6 @@ import {
 } from './bundled-assets.js'
 
 import {
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
   OpenContentConnectorError
 } from '../contract.js'
 import type {
@@ -114,6 +113,7 @@ function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
  * settles; Provider adapters receive an allowlisted command transport only.
  */
 export function createOpenContentSkillRuntimeSession(options: Readonly<{
+  providerInstanceRef: string
   connections: OpenContentConnectionService
   processPort: OpenContentCliProcessPort
   assets: OpenContentSkillBundledAssetLocation
@@ -122,7 +122,7 @@ export function createOpenContentSkillRuntimeSession(options: Readonly<{
 }>): OpenContentSkillRuntimeSession {
   return Object.freeze({
     useSupplierTransport: async (input, operation) => {
-      if (input.providerInstanceRef !== OPENCONTENT_PROVIDER_INSTANCE_REF) {
+      if (input.providerInstanceRef !== options.providerInstanceRef) {
         throw new OpenContentConnectorError(
           'invalid_input',
           'The selected OpenContent Provider Instance is unavailable.'

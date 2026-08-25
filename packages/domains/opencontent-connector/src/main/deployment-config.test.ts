@@ -22,7 +22,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   OPENCONTENT_DEPLOYMENT_CONFIGURATION_DESCRIPTOR,
-  resolveOpenContentDeploymentConfiguration
+  resolveOpenContentDeploymentConfiguration as resolveInstalledDeploymentConfiguration
 } from './deployment-config.js'
 
 const sidecar = Object.freeze({
@@ -30,6 +30,17 @@ const sidecar = Object.freeze({
   providerInstanceRef: 'opencontent-edoc2-demo' as const,
   origin: 'https://tenant.example'
 })
+
+function resolveOpenContentDeploymentConfiguration(
+  host: Parameters<typeof resolveInstalledDeploymentConfiguration>[0],
+  fileOperations?: Parameters<typeof resolveInstalledDeploymentConfiguration>[2]
+) {
+  return resolveInstalledDeploymentConfiguration(
+    host,
+    sidecar.providerInstanceRef,
+    fileOperations
+  )
+}
 
 const tempRoots: string[] = []
 

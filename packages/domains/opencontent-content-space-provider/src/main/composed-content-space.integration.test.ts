@@ -18,8 +18,7 @@ import {
   createDomainMainEntry as createContentSpaceMainEntry
 } from '@sciforge/domain-content-space/main'
 import {
-  OPENCONTENT_CONNECTION_CAPABILITY_IDS,
-  OPENCONTENT_PROVIDER_INSTANCE_REF
+  OPENCONTENT_CONNECTION_CAPABILITY_IDS
 } from '@sciforge/domain-opencontent-connector/contract'
 import {
   OPENCONTENT_CAPABILITY_FACTORY_CONTRIBUTION
@@ -45,6 +44,7 @@ import {
 
 import { createDomainMainEntry as createAdapterMainEntry } from './index.js'
 
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo'
 const TRUSTED_ORIGIN = 'https://tenant.example'
 const TOKEN_CANARY = 'opaque-integration-token-0001'
 const PASSWORD_CANARY = 'password-canary-do-not-return'

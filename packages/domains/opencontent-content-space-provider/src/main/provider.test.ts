@@ -4,15 +4,22 @@ import {
   CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS
 } from '@sciforge/domain-content-space/extended-operations-contract'
 import { NATIVE_DOCUMENT_OPERATIONS } from '@sciforge/domain-content-space/native-document-contract'
+import {
+  CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS
+} from '@sciforge/domain-content-space/contract'
 
 import {
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
   OpenContentConnectorError
 } from '@sciforge/domain-opencontent-connector/contract'
-import type { OpenContentContentSpaceFacade } from '@sciforge/domain-opencontent-connector/main-contract'
+import type {
+  OpenContentContentSpaceFacade,
+  OpenContentDownloadAuthorizationLease,
+  OpenContentHierarchyProofSession
+} from '@sciforge/domain-opencontent-connector/main-contract'
 
 import { createOpenContentContentSpaceProvider } from './provider.js'
 
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'test-opencontent-provider'
 const principal = Object.freeze({
   authority: 'sciforge.identity-access',
   subject: 'local-account-a',
@@ -28,8 +35,32 @@ const externalBinding = Object.freeze({
   bindingRevision: 'b'.repeat(64)
 })
 
+type FacadeDownloadDispatch = (input: Readonly<
+  Parameters<OpenContentContentSpaceFacade['authorizeDownload']>[0] & {
+    write(chunk: Uint8Array): Promise<void>
+  }
+>) => Promise<Readonly<{ bytesWritten: number }>>
+
+function facadeAuthorizeDownloadUsing(
+  dispatch: FacadeDownloadDispatch
+): OpenContentContentSpaceFacade['authorizeDownload'] {
+  return async (input) => {
+    let state: 'available' | 'consumed' | 'retired' = 'available'
+    return Object.freeze({
+      consume: async ({ write }) => {
+        if (state !== 'available') throw new Error('Download lease is unavailable.')
+        state = 'consumed'
+        return dispatch({ ...input, write })
+      },
+      retire: async () => {
+        if (state === 'available') state = 'retired'
+      }
+    }) satisfies OpenContentDownloadAuthorizationLease
+  }
+}
+
 describe('OpenContent Content Space Provider', () => {
-  it('maps the exact Provider Instance and complete Principal through facade v3 attestation', async () => {
+  it('maps the exact Provider Instance and complete Principal through facade v4 attestation', async () => {
     const attestation = Object.freeze({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       principal,
@@ -78,7 +109,7 @@ describe('OpenContent Content Space Provider', () => {
       bindingRevision: 'b'.repeat(64),
       unexpected: true
     }]
-  ])('fails closed when facade v3 returns %s', async (_label, rawAttestation) => {
+  ])('fails closed when facade v4 returns %s', async (_label, rawAttestation) => {
     const attestExternalBinding = vi.fn(async () => rawAttestation) as unknown as
       OpenContentContentSpaceFacade['attestExternalBinding']
     const provider = createOpenContentContentSpaceProvider({
@@ -117,8 +148,16 @@ describe('OpenContent Content Space Provider', () => {
     const createFolder = vi.fn<OpenContentContentSpaceFacade['createFolder']>()
       .mockResolvedValue({ folderGuid: 'created-folder-guid' })
     const uploadNewFile = vi.fn<OpenContentContentSpaceFacade['uploadNewFile']>()
-      .mockResolvedValue({ fileGuid: 'uploaded-file-guid' })
-    const downloadFile = vi.fn<OpenContentContentSpaceFacade['downloadFile']>()
+      .mockResolvedValue({
+        fileGuid: 'uploaded-file-guid',
+        writeAfterObservation: {
+          parentFolderGuid: 'ordinary-root-guid',
+          fileGuid: 'uploaded-file-guid',
+          name: 'result.txt',
+          size: 0
+        }
+      })
+    const downloadDispatch = vi.fn<FacadeDownloadDispatch>()
       .mockResolvedValue({ bytesWritten: 0 })
     const provider = createOpenContentContentSpaceProvider({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
@@ -128,7 +167,7 @@ describe('OpenContent Content Space Provider', () => {
         observeEntry,
         createFolder,
         uploadNewFile,
-        downloadFile
+        downloadDispatch
       })
     })
     const signal = new AbortController().signal
@@ -156,12 +195,14 @@ describe('OpenContent Content Space Provider', () => {
       name: 'result.txt',
       source: { name: 'result.txt', size: 0, read: async () => new Uint8Array() }
     })
-    await provider.downloadFile({
+    const downloadLease = await provider.authorizeDownload({
       context,
       reference: {
         providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
         fileId: 'uploaded-file-guid'
-      },
+      }
+    })
+    await downloadLease.consume({
       destination: { write: async () => undefined }
     })
 
@@ -171,7 +212,7 @@ describe('OpenContent Content Space Provider', () => {
       observeEntry,
       createFolder,
       uploadNewFile,
-      downloadFile
+      downloadDispatch
     ]) {
       expect(facadeCall).toHaveBeenCalledWith(expect.objectContaining({
         principal,
@@ -180,6 +221,318 @@ describe('OpenContent Content Space Provider', () => {
         assertPrincipalCurrent
       }))
     }
+  })
+
+  it('proves one direct file child with exact current-session binding and neutral evidence', async () => {
+    const observeEntryParent = vi.fn<OpenContentHierarchyProofSession['observeEntryParent']>()
+      .mockResolvedValue({
+        child: { kind: 'file', resourceGuid: 'candidate-file-guid' },
+        parent: { kind: 'container', resourceGuid: 'authorized-root-guid' }
+      })
+    const useHierarchyProofSession = hierarchyProofSession({ observeEntryParent })
+    const provider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({ useHierarchyProofSession })
+    })
+    const signal = new AbortController().signal
+    const context = {
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedExternalBinding: externalBinding,
+      invocationId: 'invocation-proof-direct-0001',
+      deadlineAt: new Date(Date.now() + 10_000).toISOString(),
+      signal,
+      assertPrincipalCurrent
+    }
+    const root = {
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      containerId: 'authorized-root-guid'
+    }
+    const candidate = {
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      fileId: 'candidate-file-guid'
+    }
+
+    await expect(provider.proveFileDescendant({
+      context,
+      root,
+      candidate,
+      limits: CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS
+    })).resolves.toMatchObject({
+      invocationId: context.invocationId,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      authority: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      root,
+      candidate,
+      binding: externalBinding,
+      counts: { depth: 1, pages: 0, nodes: 2 },
+      provedAt: expect.any(String),
+      cacheable: false,
+      portable: false
+    })
+    expect(useHierarchyProofSession).toHaveBeenCalledOnce()
+    expect(useHierarchyProofSession).toHaveBeenCalledWith({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedBindingAttestation: externalBinding,
+      signal: expect.any(AbortSignal),
+      assertPrincipalCurrent
+    }, expect.any(Function))
+    expect(observeEntryParent).toHaveBeenCalledWith({
+      kind: 'file',
+      resourceGuid: 'candidate-file-guid'
+    })
+    expect(JSON.stringify(observeEntryParent.mock.calls[0]?.[0]))
+      .not.toMatch(/token|parentFolderId/u)
+  })
+
+  it('accepts exactly 32 parent edges and stops before an incomplete 33rd edge', async () => {
+    const boundaryFact = vi.fn<OpenContentHierarchyProofSession['observeEntryParent']>(
+      async ({ kind, resourceGuid }) => {
+        if (kind === 'file') {
+          return {
+            child: { kind, resourceGuid },
+            parent: { kind: 'container', resourceGuid: 'folder-31' }
+          }
+        }
+        const index = Number(/^folder-(\d+)$/u.exec(resourceGuid)?.[1])
+        return {
+          child: { kind, resourceGuid },
+          parent: {
+            kind: 'container',
+            resourceGuid: index === 1 ? 'authorized-root-guid' : `folder-${String(index - 1)}`
+          }
+        }
+      }
+    )
+    const boundaryProvider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({
+        useHierarchyProofSession: hierarchyProofSession({ observeEntryParent: boundaryFact })
+      })
+    })
+
+    await expect(boundaryProvider.proveFileDescendant(proofInput()))
+      .resolves.toMatchObject({ counts: { depth: 32, pages: 0, nodes: 33 } })
+    expect(boundaryFact).toHaveBeenCalledTimes(64)
+
+    const overBoundFact = vi.fn<OpenContentHierarchyProofSession['observeEntryParent']>(
+      async ({ kind, resourceGuid }) => {
+        if (kind === 'file') {
+          return {
+            child: { kind, resourceGuid },
+            parent: { kind: 'container', resourceGuid: 'folder-32' }
+          }
+        }
+        const index = Number(/^folder-(\d+)$/u.exec(resourceGuid)?.[1])
+        return {
+          child: { kind, resourceGuid },
+          parent: {
+            kind: 'container',
+            resourceGuid: index === 1 ? 'authorized-root-guid' : `folder-${String(index - 1)}`
+          }
+        }
+      }
+    )
+    const overBoundProvider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({
+        useHierarchyProofSession: hierarchyProofSession({ observeEntryParent: overBoundFact })
+      })
+    })
+
+    await expect(overBoundProvider.proveFileDescendant(proofInput()))
+      .rejects.toMatchObject({ detail: { code: 'bounds_exceeded', retry: 'never' } })
+    expect(overBoundFact).toHaveBeenCalledTimes(32)
+  })
+
+  it('fails closed on a hierarchy cycle, missing parent, ACL revoke, or changed binding', async () => {
+    const cycleFact = vi.fn<OpenContentHierarchyProofSession['observeEntryParent']>(
+      async ({ kind, resourceGuid }) => ({
+        child: { kind, resourceGuid },
+        parent: {
+          kind: 'container',
+          resourceGuid: kind === 'file'
+            ? 'folder-a'
+            : resourceGuid === 'folder-a' ? 'folder-b' : 'folder-a'
+        }
+      })
+    )
+    const cycleProvider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({
+        useHierarchyProofSession: hierarchyProofSession({ observeEntryParent: cycleFact })
+      })
+    })
+    await expect(cycleProvider.proveFileDescendant(proofInput()))
+      .rejects.toMatchObject({ detail: { code: 'invalid_reference', retry: 'never' } })
+
+    const missingParentFact = vi.fn<OpenContentHierarchyProofSession['observeEntryParent']>(
+      async ({ kind, resourceGuid }) => kind === 'file'
+        ? {
+            child: { kind, resourceGuid },
+            parent: { kind: 'container', resourceGuid: 'sibling-root-guid' }
+          }
+        : { child: { kind, resourceGuid } }
+    )
+    const missingParentProvider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({
+        useHierarchyProofSession: hierarchyProofSession({
+          observeEntryParent: missingParentFact
+        })
+      })
+    })
+    await expect(missingParentProvider.proveFileDescendant(proofInput()))
+      .rejects.toMatchObject({ detail: { code: 'invalid_reference', retry: 'never' } })
+    expect(missingParentFact).toHaveBeenCalledTimes(2)
+
+    const aclFact = vi.fn<OpenContentHierarchyProofSession['observeEntryParent']>()
+      .mockResolvedValueOnce({
+        child: { kind: 'file', resourceGuid: 'candidate-file-guid' },
+        parent: { kind: 'container', resourceGuid: 'intermediate-folder-guid' }
+      })
+      .mockRejectedValueOnce(new OpenContentConnectorError(
+        'unauthorized',
+        'The current ACL was revoked.'
+      ))
+    const aclProvider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({
+        useHierarchyProofSession: hierarchyProofSession({ observeEntryParent: aclFact })
+      })
+    })
+    await expect(aclProvider.proveFileDescendant(proofInput()))
+      .rejects.toMatchObject({ detail: { code: 'unauthorized' } })
+
+    const changedBindingProvider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({
+        useHierarchyProofSession: hierarchyProofSession({
+          observeEntryParent: vi.fn<OpenContentHierarchyProofSession['observeEntryParent']>(
+            async ({ kind, resourceGuid }) => ({
+              child: { kind, resourceGuid },
+              parent: { kind: 'container', resourceGuid: 'authorized-root-guid' }
+            })
+          ),
+          bindingAttestation: {
+            ...externalBinding,
+            bindingRevision: 'c'.repeat(64)
+          }
+        })
+      })
+    })
+    await expect(changedBindingProvider.proveFileDescendant(proofInput()))
+      .rejects.toMatchObject({ detail: { code: 'unauthorized' } })
+  })
+
+  it('fails closed when a candidate is reparented while its proof is in flight', async () => {
+    const observeEntryParent = vi.fn<OpenContentHierarchyProofSession['observeEntryParent']>()
+      .mockResolvedValueOnce({
+        child: { kind: 'file', resourceGuid: 'candidate-file-guid' },
+        parent: { kind: 'container', resourceGuid: 'authorized-root-guid' }
+      })
+      .mockResolvedValueOnce({
+        child: { kind: 'file', resourceGuid: 'candidate-file-guid' },
+        parent: { kind: 'container', resourceGuid: 'different-root-guid' }
+      })
+    const provider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({
+        useHierarchyProofSession: hierarchyProofSession({ observeEntryParent })
+      })
+    })
+
+    await expect(provider.proveFileDescendant(proofInput()))
+      .rejects.toMatchObject({ detail: { code: 'invalid_reference', retry: 'never' } })
+    expect(observeEntryParent).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails closed when the exact root ACL is revoked after its parent edge is proven', async () => {
+    const observeEntryParent = vi.fn<OpenContentHierarchyProofSession['observeEntryParent']>()
+      .mockResolvedValue({
+        child: { kind: 'file', resourceGuid: 'candidate-file-guid' },
+        parent: { kind: 'container', resourceGuid: 'authorized-root-guid' }
+      })
+    const observeContainer = vi.fn<OpenContentHierarchyProofSession['observeContainer']>()
+      .mockRejectedValue(new OpenContentConnectorError(
+        'unauthorized',
+        'The exact root ACL was revoked.'
+      ))
+    const provider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({
+        useHierarchyProofSession: hierarchyProofSession({
+          observeEntryParent,
+          observeContainer
+        })
+      })
+    })
+
+    await expect(provider.proveFileDescendant(proofInput()))
+      .rejects.toMatchObject({ detail: { code: 'unauthorized' } })
+    expect(observeEntryParent).toHaveBeenCalledTimes(2)
+    expect(observeContainer).toHaveBeenCalledWith({
+      resourceGuid: 'authorized-root-guid'
+    })
+  })
+
+  it('rejects mismatched Provider roots, wrong child facts, and non-canonical proof limits', async () => {
+    const observeEntryParent = vi.fn<OpenContentHierarchyProofSession['observeEntryParent']>()
+    const provider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({
+        useHierarchyProofSession: hierarchyProofSession({ observeEntryParent })
+      })
+    })
+    await expect(provider.proveFileDescendant({
+      ...proofInput(),
+      root: {
+        providerInstanceRef: 'opencontent-other-instance',
+        containerId: 'authorized-root-guid'
+      }
+    })).rejects.toMatchObject({ detail: { code: 'invalid_reference' } })
+    await expect(provider.proveFileDescendant({
+      ...proofInput(),
+      limits: { ...CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS, maxDepth: 31 } as never
+    })).rejects.toMatchObject({ detail: { code: 'invalid_input' } })
+    expect(observeEntryParent).not.toHaveBeenCalled()
+
+    observeEntryParent.mockResolvedValue({
+      child: { kind: 'container', resourceGuid: 'candidate-file-guid' },
+      parent: { kind: 'container', resourceGuid: 'authorized-root-guid' }
+    })
+    await expect(provider.proveFileDescendant(proofInput()))
+      .rejects.toMatchObject({ detail: { code: 'provider_contract_violation' } })
+  })
+
+  it('accepts the 10,000 ms boundary and rejects a fact returned after it', async () => {
+    const fact = vi.fn<OpenContentHierarchyProofSession['observeEntryParent']>()
+      .mockResolvedValue({
+        child: { kind: 'file', resourceGuid: 'candidate-file-guid' },
+        parent: { kind: 'container', resourceGuid: 'authorized-root-guid' }
+      })
+    const provider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({
+        useHierarchyProofSession: hierarchyProofSession({ observeEntryParent: fact })
+      })
+    })
+    const boundaryClock = vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValue(10_000)
+    await expect(provider.proveFileDescendant(proofInput()))
+      .resolves.toMatchObject({ counts: { elapsedMs: 10_000 } })
+    boundaryClock.mockRestore()
+
+    const lateClock = vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValue(10_001)
+    await expect(provider.proveFileDescendant(proofInput()))
+      .rejects.toMatchObject({ detail: { code: 'bounds_exceeded', retry: 'never' } })
+    lateClock.mockRestore()
   })
 
   it('keeps an ordinary safe read usable without inventing a binding expectation', async () => {
@@ -236,7 +589,7 @@ describe('OpenContent Content Space Provider', () => {
     expect(useTeamAdministration).not.toHaveBeenCalled()
   })
 
-  it('keeps ordinary and public Team governance operations PoC-only without attachment assets', async () => {
+  it('keeps hardened transfer operations PoC-only without packaged-live evidence', async () => {
     const provider = createOpenContentContentSpaceProvider({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       facade: facadeFixture({})
@@ -421,7 +774,7 @@ describe('OpenContent Content Space Provider', () => {
           observeEntry: vi.fn(),
           createFolder: vi.fn(),
           uploadNewFile: vi.fn(),
-          downloadFile: vi.fn()
+          downloadDispatch: vi.fn()
         })
       })
 
@@ -465,7 +818,7 @@ describe('OpenContent Content Space Provider', () => {
         observeEntry: vi.fn(),
         createFolder: vi.fn(),
         uploadNewFile: vi.fn(),
-        downloadFile: vi.fn()
+        downloadDispatch: vi.fn()
       })
     })
     const context = {
@@ -535,7 +888,7 @@ describe('OpenContent Content Space Provider', () => {
         observeEntry: vi.fn(),
         createFolder: vi.fn(),
         uploadNewFile: vi.fn(),
-        downloadFile: vi.fn()
+        downloadDispatch: vi.fn()
       })
     })
 
@@ -587,7 +940,7 @@ describe('OpenContent Content Space Provider', () => {
         observeEntry: vi.fn(),
         createFolder: vi.fn(),
         uploadNewFile: vi.fn(),
-        downloadFile: vi.fn()
+        downloadDispatch: vi.fn()
       })
     })
 
@@ -639,7 +992,7 @@ describe('OpenContent Content Space Provider', () => {
         observeEntry: vi.fn(),
         createFolder: vi.fn(),
         uploadNewFile: vi.fn(),
-        downloadFile: vi.fn()
+        downloadDispatch: vi.fn()
       })
     })
     const context = {
@@ -686,7 +1039,7 @@ describe('OpenContent Content Space Provider', () => {
         observeEntry: vi.fn(),
         createFolder: vi.fn(),
         uploadNewFile: vi.fn(),
-        downloadFile: vi.fn()
+        downloadDispatch: vi.fn()
       })
     })
     const context = {
@@ -734,7 +1087,7 @@ describe('OpenContent Content Space Provider', () => {
         observeEntry: vi.fn(),
         createFolder: vi.fn(),
         uploadNewFile: vi.fn(),
-        downloadFile: vi.fn()
+        downloadDispatch: vi.fn()
       })
     })
     const parent = {
@@ -791,7 +1144,7 @@ describe('OpenContent Content Space Provider', () => {
         observeEntry: vi.fn(),
         createFolder: vi.fn(),
         uploadNewFile: vi.fn(),
-        downloadFile: vi.fn()
+        downloadDispatch: vi.fn()
       })
     })
     const parent = {
@@ -835,7 +1188,7 @@ describe('OpenContent Content Space Provider', () => {
         observeEntry: vi.fn(),
         createFolder: vi.fn(),
         uploadNewFile: vi.fn(),
-        downloadFile: vi.fn()
+        downloadDispatch: vi.fn()
       })
     })
 
@@ -860,8 +1213,16 @@ describe('OpenContent Content Space Provider', () => {
     const createFolder = vi.fn<OpenContentContentSpaceFacade['createFolder']>()
       .mockResolvedValue({ folderGuid: 'created-folder-guid' })
     const uploadNewFile = vi.fn<OpenContentContentSpaceFacade['uploadNewFile']>()
-      .mockResolvedValue({ fileGuid: 'uploaded-file-guid' })
-    const downloadFile = vi.fn<OpenContentContentSpaceFacade['downloadFile']>()
+      .mockResolvedValue({
+        fileGuid: 'uploaded-file-guid',
+        writeAfterObservation: {
+          parentFolderGuid: 'team-folder-guid',
+          fileGuid: 'uploaded-file-guid',
+          name: 'result.txt',
+          size: bytes.byteLength
+        }
+      })
+    const downloadDispatch = vi.fn<FacadeDownloadDispatch>()
       .mockImplementation(async ({ write }) => {
         await write(bytes)
         return { bytesWritten: bytes.byteLength }
@@ -874,7 +1235,7 @@ describe('OpenContent Content Space Provider', () => {
         observeEntry: vi.fn(),
         createFolder,
         uploadNewFile,
-        downloadFile
+        downloadDispatch
       })
     })
     const parent = {
@@ -884,6 +1245,7 @@ describe('OpenContent Content Space Provider', () => {
     const context = {
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedExternalBinding: externalBinding,
       invocationId: 'invocation-opencontent-001',
       deadlineAt: new Date(Date.now() + 10_000).toISOString(),
       signal: new AbortController().signal,
@@ -910,18 +1272,89 @@ describe('OpenContent Content Space Provider', () => {
       reference: { fileId: 'uploaded-file-guid' }
     })
     const writes: Uint8Array[] = []
-    await expect(provider.downloadFile({
+    const downloadLease = await provider.authorizeDownload({
       context,
       reference: {
         providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
         fileId: 'uploaded-file-guid'
-      },
+      }
+    })
+    await expect(downloadLease.consume({
       destination: { write: async (chunk) => { writes.push(Uint8Array.from(chunk)) } }
     })).resolves.toMatchObject({
       invocationId: context.invocationId,
       bytesWritten: bytes.byteLength
     })
     expect(Buffer.concat(writes)).toEqual(Buffer.from(bytes))
+  })
+
+  it('classifies unknown or mismatched write receipts as outcome_unknown without retry', async () => {
+    const provider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({
+        uploadNewFile: vi.fn()
+          .mockRejectedValueOnce(new Error('transport disappeared after dispatch'))
+          .mockResolvedValueOnce({
+            fileGuid: '7001',
+            writeAfterObservation: {
+              parentFolderGuid: 'authorized-root-guid',
+              fileGuid: '7001',
+              name: 'result.txt',
+              size: 0
+            }
+          })
+          .mockResolvedValueOnce({
+            fileGuid: 'valid-upload-guid',
+            writeAfterObservation: {
+              parentFolderGuid: 'different-root-guid',
+              fileGuid: 'valid-upload-guid',
+              name: 'result.txt',
+              size: 0
+            }
+          }),
+        downloadDispatch: vi.fn().mockRejectedValue(new Error('read transport disappeared'))
+      })
+    })
+    const input = proofInput()
+    const parent = input.root
+    const source = {
+      name: 'result.txt',
+      size: 0,
+      read: async () => new Uint8Array()
+    }
+    await expect(provider.uploadNewFile({
+      context: input.context,
+      parent,
+      name: 'result.txt',
+      source
+    })).rejects.toMatchObject({
+      detail: { code: 'outcome_unknown', retry: 'never' }
+    })
+    await expect(provider.uploadNewFile({
+      context: input.context,
+      parent,
+      name: 'result.txt',
+      source
+    })).rejects.toMatchObject({
+      detail: { code: 'outcome_unknown', retry: 'never' }
+    })
+    await expect(provider.uploadNewFile({
+      context: input.context,
+      parent,
+      name: 'result.txt',
+      source
+    })).rejects.toMatchObject({
+      detail: { code: 'outcome_unknown', retry: 'never' }
+    })
+    const downloadLease = await provider.authorizeDownload({
+      context: input.context,
+      reference: input.candidate
+    })
+    await expect(downloadLease.consume({
+      destination: { write: async () => undefined }
+    })).rejects.toMatchObject({
+      detail: { code: 'provider_unavailable', retry: 'never' }
+    })
   })
 
   it.each(['2', '7', '19'])(
@@ -936,7 +1369,7 @@ describe('OpenContent Content Space Provider', () => {
           observeEntry: vi.fn(),
           createFolder,
           uploadNewFile: vi.fn(),
-          downloadFile: vi.fn()
+          downloadDispatch: vi.fn()
         })
       })
 
@@ -962,13 +1395,41 @@ describe('OpenContent Content Space Provider', () => {
   )
 })
 
+function proofInput() {
+  return {
+    context: {
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedExternalBinding: externalBinding,
+      invocationId: 'invocation-proof-fixture-0001',
+      deadlineAt: new Date(Date.now() + 10_000).toISOString(),
+      signal: new AbortController().signal,
+      assertPrincipalCurrent
+    },
+    root: {
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      containerId: 'authorized-root-guid'
+    },
+    candidate: {
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      fileId: 'candidate-file-guid'
+    },
+    limits: CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS
+  } as const
+}
+
+type FacadeFixtureOverrides = Partial<OpenContentContentSpaceFacade> & Readonly<{
+  downloadDispatch?: FacadeDownloadDispatch
+}>
+
 function facadeFixture(
-  overrides: Partial<OpenContentContentSpaceFacade>
+  overrides: FacadeFixtureOverrides
 ): OpenContentContentSpaceFacade {
   const useTeamAdministration: OpenContentContentSpaceFacade['useTeamAdministration'] =
     async () => {
       throw new Error('Team administration is outside this provider test.')
     }
+  const { downloadDispatch, ...facadeOverrides } = overrides
   return {
     attestExternalBinding: async (input) => Object.freeze({
       providerInstanceRef: input.providerInstanceRef,
@@ -977,12 +1438,39 @@ function facadeFixture(
       bindingRevision: 'b'.repeat(64)
     }),
     useTeamAdministration,
+    useHierarchyProofSession: hierarchyProofSession(),
     listRootFolders: vi.fn(),
     listFolderEntries: vi.fn(),
-    observeEntry: vi.fn(),
+    observeEntry: vi.fn<OpenContentContentSpaceFacade['observeEntry']>(
+      async ({ kind, resourceGuid }) => kind === 'container'
+        ? { kind, folderGuid: resourceGuid, label: 'Observed container' }
+        : { kind, fileGuid: resourceGuid, label: 'Observed file', size: 0 }
+    ),
     createFolder: vi.fn(),
     uploadNewFile: vi.fn(),
-    downloadFile: vi.fn(),
-    ...overrides
+    authorizeDownload: downloadDispatch
+      ? facadeAuthorizeDownloadUsing(downloadDispatch)
+      : vi.fn<OpenContentContentSpaceFacade['authorizeDownload']>(),
+    ...facadeOverrides
   }
+}
+
+function hierarchyProofSession(
+  overrides: Partial<OpenContentHierarchyProofSession> = {}
+): OpenContentContentSpaceFacade['useHierarchyProofSession'] & ReturnType<typeof vi.fn> {
+  const implementation: OpenContentContentSpaceFacade['useHierarchyProofSession'] =
+    async (input, operation) => operation(Object.freeze({
+      bindingAttestation: input.expectedBindingAttestation,
+      observeContainer: async ({ resourceGuid }) => Object.freeze({
+        kind: 'container' as const,
+        folderGuid: resourceGuid,
+        label: 'Observed proof root'
+      }),
+      observeEntryParent: async () => {
+        throw new Error('The hierarchy parent fact was not configured for this proof test.')
+      },
+      ...overrides
+    }))
+  return vi.fn(implementation) as unknown as
+    OpenContentContentSpaceFacade['useHierarchyProofSession'] & ReturnType<typeof vi.fn>
 }

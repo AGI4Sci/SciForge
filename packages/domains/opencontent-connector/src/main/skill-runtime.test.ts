@@ -29,9 +29,6 @@ import {
   OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR
 } from './bundled-assets.js'
 
-import {
-  OPENCONTENT_PROVIDER_INSTANCE_REF
-} from '../contract.js'
 import type {
   OpenContentContentSpaceFacade,
   OpenContentSupplierCommandTransport
@@ -43,6 +40,8 @@ import {
   createOpenContentSkillRuntimeSession,
   resolveOpenContentSkillRuntimeAssets
 } from './skill-runtime.js'
+
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo'
 
 const principal = Object.freeze({
   authority: 'sciforge.identity-access',
@@ -394,6 +393,7 @@ describe('OpenContent main-only skill runtime session', () => {
     }))
     const connections = connectionService(tokenCanary)
     const session = createOpenContentSkillRuntimeSession({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       connections,
       processPort: { run },
       assets: { mode: 'source', assetRoot: assetFixture.assetRoot },
@@ -441,6 +441,7 @@ describe('OpenContent main-only skill runtime session', () => {
   it('rejects another Provider Instance before opening the credential session', async () => {
     const connections = connectionService('token-canary')
     const session = createOpenContentSkillRuntimeSession({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       connections,
       processPort: { run: vi.fn() },
       assets: { mode: 'source', assetRoot: assetFixture.assetRoot },
@@ -468,6 +469,7 @@ describe('OpenContent main-only skill runtime session', () => {
       managedDataFiles: []
     }))
     const session = createOpenContentSkillRuntimeSession({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       connections: connectionService('token-canary'),
       processPort: { run },
       assets: { mode: 'source', assetRoot: assetFixture.assetRoot },

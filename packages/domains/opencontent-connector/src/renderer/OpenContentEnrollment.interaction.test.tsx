@@ -5,7 +5,6 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
   type OpenContentConnectionResult
 } from '../contract.js'
 import {
@@ -16,6 +15,8 @@ import type {
   OpenContentConnectionRendererClient,
   OpenContentUnbindResult
 } from './client.js'
+
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'test-opencontent-provider'
 
 const mountedRoots = new Set<Readonly<{
   root: Root

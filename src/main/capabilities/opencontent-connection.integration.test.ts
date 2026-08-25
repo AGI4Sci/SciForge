@@ -11,8 +11,7 @@ import type {
   DomainMainProviderCredentialStoreHost
 } from '@sciforge/domain-sdk/package-storage'
 import {
-  OPENCONTENT_CONNECTION_CAPABILITY_IDS,
-  OPENCONTENT_PROVIDER_INSTANCE_REF
+  OPENCONTENT_CONNECTION_CAPABILITY_IDS
 } from '@sciforge/domain-opencontent-connector/contract'
 import { createDomainMainEntry } from '@sciforge/domain-opencontent-connector/main'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
@@ -25,6 +24,7 @@ import {
   type CapabilityDefinition
 } from './registry'
 
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo'
 const TRUSTED_ORIGIN = 'https://tenant.example'
 const PASSWORD_CANARY = 'password-canary-do-not-return'
 const TOKEN_CANARY = 'opaque-token-canary-do-not-return'

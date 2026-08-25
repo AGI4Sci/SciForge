@@ -4,7 +4,6 @@ import { DomainMainProviderCredentialError } from '@sciforge/domain-sdk/package-
 import {
   OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION,
   OPENCONTENT_CONNECTION_CAPABILITY_IDS,
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
   OpenContentConnectorError,
   openContentExternalBindingAttestationSchema,
   openContentConnectionStatusSchema,
@@ -14,6 +13,7 @@ import {
   OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRACT,
   OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRIBUTION
 } from '../definition.js'
+import type { OpenContentContentSpaceFacade } from '../main-contract.js'
 import { createDomainMainEntry } from './index.js'
 import * as openContentMainModule from './index.js'
 import { createOpenContentCapabilityFactory } from './connection-capabilities.js'
@@ -31,6 +31,8 @@ import {
   createOpenContentTeamAdministration,
   type OpenContentTeamAdministration
 } from './team-administration.js'
+
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'test-opencontent-provider'
 
 const principal = Object.freeze({
   authority: 'sciforge.local-account',
@@ -59,8 +61,8 @@ describe('OpenContent connection capabilities', () => {
     expect(Object.keys(openContentMainModule)).toEqual(['createDomainMainEntry'])
   })
 
-  it('keeps the v3 internal facade version aligned with its manifest contract', () => {
-    expect(OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION).toBe('3.0.0')
+  it('keeps the v4 internal facade version aligned with its manifest contract', () => {
+    expect(OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION).toBe('4.0.0')
     expect(OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRACT).toMatchObject({
       serviceId: 'opencontent.content-space',
       contractVersion: OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION
@@ -246,6 +248,7 @@ describe('OpenContent connection capabilities', () => {
 describe('OpenContent main-only Content Space facade', () => {
   it('keeps SDK and Team operations available when private attachment assets are absent', () => {
     const facade = createOpenContentContentSpaceFacade({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       connections: connectionService(),
       getRuntime: facadeRuntime({} as OpenContentClient, teamAdministration())
     })
@@ -269,6 +272,7 @@ describe('OpenContent main-only Content Space facade', () => {
       }))
     ))
     const facade = createOpenContentContentSpaceFacade({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       connections,
       getRuntime: facadeRuntime({} as OpenContentClient, rawAdministration, {
         useSupplierTransport: async (_input, operation) => operation({
@@ -313,6 +317,7 @@ describe('OpenContent main-only Content Space facade', () => {
   it('exposes only the token-free external binding attestation from the current session', async () => {
     const connections = connectionService()
     const facade = createOpenContentContentSpaceFacade({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       connections,
       getRuntime: facadeRuntime({} as OpenContentClient, teamAdministration())
     })
@@ -343,6 +348,7 @@ describe('OpenContent main-only Content Space facade', () => {
       return { parentFolderGuid: input.parentFolderGuid, entries: [] }
     })
     const facade = createOpenContentContentSpaceFacade({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       connections,
       getRuntime: facadeRuntime(
         { listFolderEntries } as unknown as OpenContentClient,
@@ -369,6 +375,182 @@ describe('OpenContent main-only Content Space facade', () => {
       expect.any(Function)
     )
     expect(assertPrincipalCurrent).toHaveBeenCalledOnce()
+  })
+
+  it('returns an opaque one-use download lease and consumes it in a fresh current session', async () => {
+    const connections = connectionService()
+    let sessionNumber = 0
+    vi.mocked(connections.useCurrentSession).mockImplementation(async (_input, operation) => (
+      operation(Object.freeze({
+        token: `opaque-current-token-${++sessionNumber}`,
+        externalIdentityId: 9000041,
+        bindingAttestation
+      }))
+    ))
+    const authorizeDownload = vi.fn<OpenContentClient['authorizeDownload']>(
+      async ({ fileGuid }) => ({
+        fileGuid,
+        regionType: 1,
+        regionHash: 'opaque-region-hash',
+        regionUrl: ''
+      })
+    )
+    const bytes = Uint8Array.of(1, 2, 3)
+    const downloadAuthorizedFile = vi.fn<OpenContentClient['downloadAuthorizedFile']>(async ({
+      token,
+      authorization,
+      write
+    }) => {
+      expect(token).toBe('opaque-current-token-2')
+      expect(authorization.fileGuid).toBe('file-guid')
+      await write(bytes)
+      return { bytesWritten: bytes.byteLength }
+    })
+    const facade = createOpenContentContentSpaceFacade({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      connections,
+      getRuntime: facadeRuntime(
+        { authorizeDownload, downloadAuthorizedFile } as unknown as OpenContentClient,
+        teamAdministration()
+      )
+    })
+    const writes: Uint8Array[] = []
+    const lease = await facade.authorizeDownload({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedBindingAttestation: bindingAttestation,
+      fileGuid: 'file-guid',
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: () => undefined
+    })
+
+    expect(Object.keys(lease).sort()).toEqual(['consume', 'retire'])
+    expect(JSON.stringify(lease)).not.toMatch(/token|region|file-guid/u)
+    expect(authorizeDownload).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'opaque-current-token-1',
+      fileGuid: 'file-guid'
+    }))
+    expect(downloadAuthorizedFile).not.toHaveBeenCalled()
+
+    await expect(lease.consume({
+      write: async (chunk) => { writes.push(Uint8Array.from(chunk)) }
+    })).resolves.toEqual({ bytesWritten: bytes.byteLength })
+    await expect(lease.consume({ write: async () => undefined }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    await lease.retire()
+
+    expect(Buffer.concat(writes)).toEqual(Buffer.from(bytes))
+    expect(downloadAuthorizedFile).toHaveBeenCalledOnce()
+    expect(connections.useCurrentSession).toHaveBeenCalledTimes(2)
+    for (const [sessionInput] of vi.mocked(connections.useCurrentSession).mock.calls) {
+      expect(sessionInput).toMatchObject({
+        expectedBindingAttestation: bindingAttestation
+      })
+    }
+  })
+
+  it('keeps every token-free hierarchy proof observation in one exact current binding session', async () => {
+    const connections = connectionService()
+    vi.mocked(connections.useCurrentSession).mockImplementation(async (_input, operation) => (
+      operation(Object.freeze({
+        token: 'opaque-content-space-token',
+        externalIdentityId: 9000041,
+        bindingAttestation
+      }))
+    ))
+    const observeEntryParent = vi.fn<OpenContentClient['observeEntryParent']>()
+      .mockResolvedValue({
+        child: { kind: 'file', resourceGuid: 'candidate-file-guid' },
+        parent: { kind: 'container', resourceGuid: 'parent-folder-guid' }
+      })
+    const observeEntry = vi.fn<OpenContentClient['observeEntry']>()
+      .mockResolvedValue({
+        kind: 'container',
+        folderGuid: 'parent-folder-guid',
+        label: 'Authorized root'
+      })
+    const facade = createOpenContentContentSpaceFacade({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      connections,
+      getRuntime: facadeRuntime(
+        { observeEntry, observeEntryParent } as unknown as OpenContentClient,
+        teamAdministration()
+      )
+    })
+    const assertPrincipalCurrent = vi.fn(async () => { await Promise.resolve() })
+    const signal = new AbortController().signal
+    let retainedSession: Parameters<Parameters<
+      OpenContentContentSpaceFacade['useHierarchyProofSession']
+    >[1]>[0] | undefined
+
+    await expect(facade.useHierarchyProofSession({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedBindingAttestation: bindingAttestation,
+      signal,
+      assertPrincipalCurrent
+    }, async (session) => {
+      retainedSession = session
+      expect(session).not.toHaveProperty('token')
+      expect(Object.keys(session).sort()).toEqual([
+        'bindingAttestation',
+        'observeContainer',
+        'observeEntryParent'
+      ])
+      return {
+        binding: session.bindingAttestation,
+        parent: await session.observeEntryParent({
+          kind: 'file',
+          resourceGuid: 'candidate-file-guid'
+        }),
+        root: await session.observeContainer({
+          resourceGuid: 'parent-folder-guid'
+        })
+      }
+    })).resolves.toEqual({
+      binding: bindingAttestation,
+      parent: {
+        child: { kind: 'file', resourceGuid: 'candidate-file-guid' },
+        parent: { kind: 'container', resourceGuid: 'parent-folder-guid' }
+      },
+      root: {
+        kind: 'container',
+        folderGuid: 'parent-folder-guid',
+        label: 'Authorized root'
+      }
+    })
+    expect(connections.useCurrentSession).toHaveBeenCalledOnce()
+    expect(connections.useCurrentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principal,
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        expectedBindingAttestation: bindingAttestation,
+        signal,
+        assertPrincipalCurrent: expect.any(Function)
+      }),
+      expect.any(Function)
+    )
+    expect(observeEntryParent).toHaveBeenCalledWith({
+      token: 'opaque-content-space-token',
+      kind: 'file',
+      resourceGuid: 'candidate-file-guid',
+      signal,
+      assertPrincipalCurrent: expect.any(Function)
+    })
+    expect(observeEntry).toHaveBeenCalledWith({
+      token: 'opaque-content-space-token',
+      kind: 'container',
+      resourceGuid: 'parent-folder-guid',
+      signal,
+      assertPrincipalCurrent: expect.any(Function)
+    })
+    expect(JSON.stringify(await observeEntryParent.mock.results[0]?.value))
+      .not.toMatch(/token|parentFolderId/u)
+    await expect(retainedSession!.observeEntryParent({
+      kind: 'file',
+      resourceGuid: 'candidate-file-guid'
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+    expect(observeEntryParent).toHaveBeenCalledOnce()
   })
 
   it('lists ordinary Team roots through the canonical Team administration receipt contract', async () => {
@@ -426,6 +608,7 @@ describe('OpenContent main-only Content Space facade', () => {
       }))
     ))
     const facade = createOpenContentContentSpaceFacade({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       connections,
       getRuntime: facadeRuntime(
         createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch }),
@@ -466,6 +649,7 @@ describe('OpenContent main-only Content Space facade', () => {
 function capabilityDefinitions(connections: OpenContentConnectionService) {
   return createOpenContentCapabilityFactory({
     defineCapability: (options) => options,
+    providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
     connections
   }).createDefinitions()
 }

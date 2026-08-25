@@ -89,6 +89,23 @@ drift fails before the Provider operation or Connector-owned supplier
 subprocess. Account and display-name metadata may refresh without changing
 binding continuity.
 
+## V4 file-transfer boundary
+
+Hierarchy and entry observations are metadata facts only. A hierarchy proof is
+collected in one exact current session, is token-free outside the Connector,
+and grants no later read or write authority. A download performs the Provider's
+real `DownloadCheck` as a separate authorization step and returns only an
+opaque, one-use lease. Consuming that lease revalidates the Principal and
+binding, opens a fresh current session, performs the byte transfer, and then
+cannot be repeated. A denial during `DownloadCheck` fails before any destination
+write.
+
+`upload-new` first proves the destination name is absent, performs the real
+Provider upload without an overwrite fallback, and accepts success only after
+an exact write-after observation matches parent, file identity, name, and size.
+An indeterminate transport or mismatched observation is `outcome_unknown` and
+is never retried as a new mutation.
+
 See the [attachment distribution boundary](../../../docs/opencontent-attachment-distribution.md)
 for installation, integrity, packaging, and public-release rules, and the
 [Content Space architecture guide](../../../docs/content-space-architecture.md)

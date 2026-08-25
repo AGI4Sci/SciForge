@@ -4,9 +4,8 @@ import {
 } from '@sciforge/domain-sdk/principal'
 
 export const OPENCONTENT_PROVIDER_KIND = 'opencontent' as const
-export const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo' as const
 export const OPENCONTENT_CONTENT_SPACE_SERVICE_ID = 'opencontent.content-space' as const
-export const OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION = '3.0.0' as const
+export const OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION = '4.0.0' as const
 
 const openContentBindingDigestSchema = z.string().regex(/^[0-9a-f]{64}$/u)
 

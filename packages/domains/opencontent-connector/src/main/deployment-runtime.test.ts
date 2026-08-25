@@ -11,12 +11,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   OPENCONTENT_CONNECTION_CAPABILITY_IDS,
-  OPENCONTENT_CONTENT_SPACE_SERVICE_ID,
-  OPENCONTENT_PROVIDER_INSTANCE_REF
+  OPENCONTENT_CONTENT_SPACE_SERVICE_ID
 } from '../contract.js'
 import type { OpenContentContentSpaceFacade } from '../main-contract.js'
 import { OPENCONTENT_DEPLOYMENT_CONFIGURATION_DESCRIPTOR } from './deployment-config.js'
 import { createDomainMainEntry } from './index.js'
+
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo'
 
 const principal = Object.freeze({
   authority: 'sciforge.identity-access',
@@ -154,10 +155,15 @@ describe('OpenContent deployment runtime availability', () => {
       read: async () => Uint8Array.of(1),
       signal: new AbortController().signal
     })).rejects.toMatchObject({ code: 'provider_unavailable' })
-    await expect(facade!.downloadFile({
+    await expect(facade!.authorizeDownload({
       ...providerCall,
       fileGuid: 'file-guid',
-      write: async () => undefined,
+      expectedBindingAttestation: {
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        principal,
+        externalSubject: 'a'.repeat(64),
+        bindingRevision: 'b'.repeat(64)
+      },
       signal: new AbortController().signal
     })).rejects.toMatchObject({ code: 'provider_unavailable' })
     await expect(facade!.useTeamAdministration(providerCall, async () => undefined))

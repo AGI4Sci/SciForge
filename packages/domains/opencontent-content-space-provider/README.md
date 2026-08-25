@@ -29,6 +29,14 @@ remains `poc_only`, no native-document operation has a live-success claim, and
 `production_ready` remains zero. An `implemented` adapter path or successful
 sibling operation does not imply Agent eligibility.
 
+V4 keeps `observeEntry`, `uploadNewFile`, and download in that same
+`poc_only` / `verification_profile_required` state. Metadata observation is
+non-authorizing; download requires a real Provider `DownloadCheck` and an opaque
+one-use lease before Content Space may open the destination; upload-new requires
+an exact write-after observation and maps an indeterminate mutation outcome to
+`outcome_unknown`. None of those contracts is packaged-live evidence, so none
+is promoted to `production_ready`.
+
 - The six ordinary file operations, all ten Team Administration operations,
   nine safely contract-shaped native-document operations, and 40 of the 50
   extended operations are `poc_only` / `verification_profile_required` when

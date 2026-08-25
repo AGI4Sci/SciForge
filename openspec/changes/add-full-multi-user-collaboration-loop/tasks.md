@@ -33,8 +33,8 @@
 - [ ] 4.1 从 E1 donor 重写 generic `system-download`/`system-upload-new` 合同、Content Space capability/service、Domain SDK system grant 和源/packaged composition。
 - [ ] 4.2 实现 execution-bound Workspace relative path、realpath/symlink/no-overwrite/bounds 和 exact operation/resource transfer receipts；逐文件 bytes/SHA-256 可保留为诊断，但不作为本 PoC 门禁。
 - [ ] 4.3 实现 portable Project root/file resolver，metadata 仅验证 locator/ancestry，不授予 ACL；资源绑定 caller/Principal/Workspace/execution。
-- [ ] 4.4 在 OpenContent download 中接入真实 DownloadCheck，并保证授权结果早于 Host 打开目标；增加 metadata-visible-but-unauthorized 测试。
-- [ ] 4.5 在 OpenContent upload-new 中接入真实 Provider write、collision/unauthorized/outcome_unknown 分类和 exact write-after-observation。
+- [x] 4.4 在 OpenContent download 中接入真实 DownloadCheck，并保证授权结果早于 Host 打开目标；增加 metadata-visible-but-unauthorized 测试；V4 readiness 保持 `poc_only` / `verification_profile_required`。
+- [x] 4.5 在 OpenContent upload-new 中接入真实 Provider write、collision/unauthorized/outcome_unknown 分类和 exact write-after-observation；V4 readiness 保持 `poc_only` / `verification_profile_required`。
 - [ ] 4.6 复用真实 create/list/add/remove/list Team Administration 路径和 Provider Directory Principal Reference，不增加 Project/provider 特权端口或 identity inference。
 - [ ] 4.7 实现 exact finite provisioning batch approval 与 one-use per-operation proofs，任何 revision/operation drift 都要求重新确认。
 - [ ] 4.8 删除生产 Mock Content Space、fallback、metadata ACL helper 和重复传输入口；测试 mock 只从测试入口可达。

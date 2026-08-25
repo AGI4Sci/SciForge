@@ -28,7 +28,6 @@ import {
   defineProviderInstanceDirectoryEntry
 } from '@sciforge/domain-sdk/provider-composition'
 import {
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
   OPENCONTENT_PROVIDER_KIND
 } from '@sciforge/domain-opencontent-connector/contract'
 import type { OpenContentContentSpaceFacade } from '@sciforge/domain-opencontent-connector/main-contract'
@@ -38,6 +37,7 @@ import {
 
 import { createDomainMainEntry as createProviderMainEntry } from './index.js'
 
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo'
 const SYSTEM_USER_TOKEN = 'system-user-token-canary-00000001'
 const SITE = 'https://tenant.example'
 const DOCUMENT_HASH = 'a'.repeat(64)

@@ -23,8 +23,7 @@ import {
 } from '../contract.js'
 import type { OpenContentClient } from './opencontent-client.js'
 import {
-  requireOpenContentDeploymentRuntime,
-  requireOpenContentProviderInstance
+  requireOpenContentDeploymentRuntime
 } from './runtime.js'
 
 const storedPrincipalSchema = z.object({
@@ -249,7 +248,7 @@ export function createOpenContentConnectionService(options: Readonly<{
     signal?: AbortSignal
     assertPrincipalCurrent(): void | Promise<void>
   }>): Promise<OpenContentConnectionStatus> => {
-    requireOpenContentProviderInstance(input.providerInstanceRef)
+    requireConfiguredProviderInstance(input.providerInstanceRef, providerInstanceRef)
     const { client } = requireOpenContentDeploymentRuntime(options.getRuntime)
     await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
     await retryPendingCredentialCleanup(input.principal, input.assertPrincipalCurrent)
@@ -331,7 +330,7 @@ export function createOpenContentConnectionService(options: Readonly<{
     input,
     operation
   ) => {
-    requireOpenContentProviderInstance(input.providerInstanceRef)
+    requireConfiguredProviderInstance(input.providerInstanceRef, providerInstanceRef)
     const { client } = requireOpenContentDeploymentRuntime(options.getRuntime)
     let connectionId: string | undefined
     try {
@@ -411,7 +410,7 @@ export function createOpenContentConnectionService(options: Readonly<{
     attestExternalBinding,
     useCurrentSession,
     unbind: async (input) => {
-      requireOpenContentProviderInstance(input.providerInstanceRef)
+      requireConfiguredProviderInstance(input.providerInstanceRef, providerInstanceRef)
       return serialize(async () => {
         await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
         await retryPendingCredentialCleanup(input.principal, input.assertPrincipalCurrent)
@@ -454,7 +453,7 @@ export function createOpenContentConnectionService(options: Readonly<{
       })
     },
     bindExistingAccount: async (input) => {
-      requireOpenContentProviderInstance(input.providerInstanceRef)
+      requireConfiguredProviderInstance(input.providerInstanceRef, providerInstanceRef)
       const { client } = requireOpenContentDeploymentRuntime(options.getRuntime)
       return serialize(async () => {
         await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
@@ -794,4 +793,16 @@ function invalidStoredProviderInstance(): OpenContentConnectorError {
     'provider_contract_violation',
     'Stored OpenContent connection metadata names an unsupported Provider Instance.'
   )
+}
+
+function requireConfiguredProviderInstance(
+  selectedProviderInstanceRef: string,
+  installedProviderInstanceRef: string
+): void {
+  if (selectedProviderInstanceRef !== installedProviderInstanceRef) {
+    throw new OpenContentConnectorError(
+      'invalid_input',
+      'The selected OpenContent Provider Instance is not installed.'
+    )
+  }
 }

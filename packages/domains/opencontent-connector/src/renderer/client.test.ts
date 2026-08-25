@@ -3,13 +3,14 @@ import type { DomainRendererCapabilityInvoker } from '@sciforge/domain-sdk/host'
 
 import {
   OPENCONTENT_CONNECTION_CAPABILITY_IDS,
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
   openContentBindInputSchema,
   openContentConnectionResultSchema,
   openContentConnectionTargetInputSchema,
   openContentUnbindOutputSchema
 } from '../contract.js'
 import { createOpenContentConnectionRendererClient } from './client.js'
+
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'test-opencontent-provider'
 
 describe('OpenContent connection renderer client', () => {
   it('targets the selected Provider Instance for status, bind, and unbind', async () => {

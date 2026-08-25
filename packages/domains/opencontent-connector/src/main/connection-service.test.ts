@@ -10,7 +10,8 @@ import {
 
 import { createOpenContentClient, type OpenContentClient } from './opencontent-client.js'
 import { createOpenContentConnectionService } from './connection-service.js'
-import { OPENCONTENT_PROVIDER_INSTANCE_REF } from '../contract.js'
+
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'test-opencontent-provider'
 
 const principal = Object.freeze({
   authority: 'sciforge.identity-access',
@@ -367,9 +368,20 @@ describe('OpenContent connection service', () => {
         observeEntry: async ({ kind, resourceGuid }) => kind === 'container'
           ? { kind, folderGuid: resourceGuid, label: 'Folder' }
           : { kind, fileGuid: resourceGuid, label: 'File', size: 0 },
+        observeEntryParent: async ({ kind, resourceGuid }) => ({
+          child: { kind, resourceGuid }
+        }),
         createFolder: async () => ({ folderGuid: 'created-folder-guid' }),
-        uploadNewFile: async () => ({ fileGuid: 'uploaded-file-guid' }),
-        downloadFile: async () => ({ bytesWritten: 0 })
+        uploadNewFile: async ({ parentFolderGuid, name, size }) => ({
+          fileGuid: 'uploaded-file-guid',
+          writeAfterObservation: {
+            parentFolderGuid, fileGuid: 'uploaded-file-guid', name, size
+          }
+        }),
+        authorizeDownload: async ({ fileGuid }) => ({
+          fileGuid, regionType: 0, regionHash: 'fixture-region', regionUrl: ''
+        }),
+        downloadAuthorizedFile: async () => ({ bytesWritten: 0 })
       }),
       createConnectionId: () => `connection-${++sequence}`,
       now: () => new Date('2026-08-17T06:00:00.000Z')
@@ -607,9 +619,20 @@ describe('OpenContent connection service', () => {
         observeEntry: async ({ kind, resourceGuid }) => kind === 'container'
           ? { kind, folderGuid: resourceGuid, label: 'Folder' }
           : { kind, fileGuid: resourceGuid, label: 'File', size: 0 },
+        observeEntryParent: async ({ kind, resourceGuid }) => ({
+          child: { kind, resourceGuid }
+        }),
         createFolder: async () => ({ folderGuid: 'created-folder-guid' }),
-        uploadNewFile: async () => ({ fileGuid: 'uploaded-file-guid' }),
-        downloadFile: async () => ({ bytesWritten: 0 })
+        uploadNewFile: async ({ parentFolderGuid, name, size }) => ({
+          fileGuid: 'uploaded-file-guid',
+          writeAfterObservation: {
+            parentFolderGuid, fileGuid: 'uploaded-file-guid', name, size
+          }
+        }),
+        authorizeDownload: async ({ fileGuid }) => ({
+          fileGuid, regionType: 0, regionHash: 'fixture-region', regionUrl: ''
+        }),
+        downloadAuthorizedFile: async () => ({ bytesWritten: 0 })
       }),
       createConnectionId: () => 'connection-current'
     })
@@ -1007,9 +1030,20 @@ describe('OpenContent connection service', () => {
         observeEntry: async ({ kind, resourceGuid }) => kind === 'container'
           ? { kind, folderGuid: resourceGuid, label: 'Folder' }
           : { kind, fileGuid: resourceGuid, label: 'File', size: 0 },
+        observeEntryParent: async ({ kind, resourceGuid }) => ({
+          child: { kind, resourceGuid }
+        }),
         createFolder: async () => ({ folderGuid: 'created-folder-guid' }),
-        uploadNewFile: async () => ({ fileGuid: 'uploaded-file-guid' }),
-        downloadFile: async () => ({ bytesWritten: 0 })
+        uploadNewFile: async ({ parentFolderGuid, name, size }) => ({
+          fileGuid: 'uploaded-file-guid',
+          writeAfterObservation: {
+            parentFolderGuid, fileGuid: 'uploaded-file-guid', name, size
+          }
+        }),
+        authorizeDownload: async ({ fileGuid }) => ({
+          fileGuid, regionType: 0, regionHash: 'fixture-region', regionUrl: ''
+        }),
+        downloadAuthorizedFile: async () => ({ bytesWritten: 0 })
       }),
       createConnectionId: () => 'connection-current'
     })
@@ -1071,9 +1105,20 @@ describe('OpenContent connection service', () => {
         observeEntry: async ({ kind, resourceGuid }) => kind === 'container'
           ? { kind, folderGuid: resourceGuid, label: 'Folder' }
           : { kind, fileGuid: resourceGuid, label: 'File', size: 0 },
+        observeEntryParent: async ({ kind, resourceGuid }) => ({
+          child: { kind, resourceGuid }
+        }),
         createFolder: async () => ({ folderGuid: 'created-folder-guid' }),
-        uploadNewFile: async () => ({ fileGuid: 'uploaded-file-guid' }),
-        downloadFile: async () => ({ bytesWritten: 0 })
+        uploadNewFile: async ({ parentFolderGuid, name, size }) => ({
+          fileGuid: 'uploaded-file-guid',
+          writeAfterObservation: {
+            parentFolderGuid, fileGuid: 'uploaded-file-guid', name, size
+          }
+        }),
+        authorizeDownload: async ({ fileGuid }) => ({
+          fileGuid, regionType: 0, regionHash: 'fixture-region', regionUrl: ''
+        }),
+        downloadAuthorizedFile: async () => ({ bytesWritten: 0 })
       }),
       createConnectionId: () => 'connection-current'
     })
@@ -1214,9 +1259,20 @@ function stubClient(
     observeEntry: async ({ kind, resourceGuid }) => kind === 'container'
       ? { kind, folderGuid: resourceGuid, label: 'Folder' }
       : { kind, fileGuid: resourceGuid, label: 'File', size: 0 },
+    observeEntryParent: async ({ kind, resourceGuid }) => ({
+      child: { kind, resourceGuid }
+    }),
     createFolder: async () => ({ folderGuid: 'created-folder-guid' }),
-    uploadNewFile: async () => ({ fileGuid: 'uploaded-file-guid' }),
-    downloadFile: async () => ({ bytesWritten: 0 }),
+    uploadNewFile: async ({ parentFolderGuid, name, size }) => ({
+      fileGuid: 'uploaded-file-guid',
+      writeAfterObservation: {
+        parentFolderGuid, fileGuid: 'uploaded-file-guid', name, size
+      }
+    }),
+    authorizeDownload: async ({ fileGuid }) => ({
+      fileGuid, regionType: 0, regionHash: 'fixture-region', regionUrl: ''
+    }),
+    downloadAuthorizedFile: async () => ({ bytesWritten: 0 }),
     ...overrides
   }
 }
