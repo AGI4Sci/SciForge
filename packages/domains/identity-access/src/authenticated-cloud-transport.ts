@@ -25,7 +25,6 @@ const publicAuthenticatedCloudCommandSchema = restRequestSchema.superRefine(
       })
     }
     rejectSecretBearingJsonExtensions(request, context)
-    rejectCredentialChannelKeys(request, context, [])
   }
 )
 
@@ -39,7 +38,6 @@ const publicAuthenticatedCloudResponseSchema = restResponseSchema.superRefine(
       })
     }
     rejectSecretBearingJsonExtensions(response, context)
-    rejectCredentialChannelKeys(response, context, [])
   }
 )
 

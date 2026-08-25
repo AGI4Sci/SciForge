@@ -210,7 +210,20 @@ test('the Collaboration entry publishes one Coordinator command service backed b
       userId: TEST_IDS.userId,
       deviceId: TEST_IDS.deviceId
     }),
-    execute: async () => ({ contractVersion: 1, status: 200, body: {} })
+    execute: async (request) => ({
+      contractVersion: 1,
+      status: 503,
+      body: {
+        protocolVersion: '1.0',
+        type: 'rest.error',
+        requestId: request.payload.requestId,
+        error: createCollaborationError(
+          'provider_unavailable',
+          'Synthetic transport response.',
+          { requestId: request.payload.requestId }
+        )
+      }
+    })
   }
   const acquisitions: Array<Readonly<{ serviceId: string; contractVersion: string }>> = []
   const agentCloudRuntime = createTestAgentCloudRuntime({})

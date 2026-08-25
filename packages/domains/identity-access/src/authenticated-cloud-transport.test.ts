@@ -126,6 +126,26 @@ describe('authenticated Cloud transport contract', () => {
           details: { nested: [{ refreshToken: '[REDACTED]' }] }
         }
       }
+    }).success).toBe(true)
+    expect(authenticatedCloudResponseSchema.safeParse({
+      contractVersion: 1,
+      status: 401,
+      body: {
+        protocolVersion: '1.0',
+        type: 'rest.error',
+        requestId: TEST_IDS.requestId,
+        error: {
+          protocolVersion: '1.0',
+          type: 'error',
+          requestId: TEST_IDS.requestId,
+          code: 'authentication_required',
+          category: 'authentication',
+          httpStatus: 401,
+          retryable: false,
+          message: 'Authentication is required.',
+          details: { nested: [{ refreshToken: FORBIDDEN_TEST_VALUE }] }
+        }
+      }
     }).success).toBe(false)
     expect(authenticatedCloudResponseSchema.safeParse({
       contractVersion: 1,
