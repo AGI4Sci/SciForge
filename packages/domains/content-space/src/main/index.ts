@@ -1211,16 +1211,30 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
               bytes: transfer.bytes,
               sha256: transfer.sha256
             })
-            return contentSpaceSystemDownloadReceiptSchema.parse({
-              execution: systemExecutionBinding(context),
+            const execution = systemExecutionBinding(context)
+            const providerDigest = deferredProviderDigest()
+            const receiptFacts = Object.freeze({
+              operation: 'download' as const,
+              execution,
+              root: rootEnvelope,
               receipt: transfer.receipt,
               readAfterObservation,
               workspaceRelativePath,
+              observedAt: transfer.observedAt,
               bytes: transfer.bytes,
               sha256: transfer.sha256,
-              transferReceiptDigest: canonicalDigest(transfer.receipt),
-              observationDigest: canonicalDigest(readAfterObservation),
-              providerDigest: deferredProviderDigest()
+              providerDigest
+            })
+            return contentSpaceSystemDownloadReceiptSchema.parse({
+              ...receiptFacts,
+              transferReceiptDigest: canonicalDigest(receiptFacts),
+              observationDigest: canonicalDigest({
+                operation: receiptFacts.operation,
+                execution,
+                root: rootEnvelope,
+                observation: readAfterObservation,
+                observedAt: transfer.observedAt
+              })
             })
           })
       }),
@@ -1275,17 +1289,31 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
               name: transfer.writeAfterObservation.name,
               size: transfer.writeAfterObservation.size
             })
-            return contentSpaceSystemUploadNewReceiptSchema.parse({
-              execution: systemExecutionBinding(context),
+            const execution = systemExecutionBinding(context)
+            const providerDigest = deferredProviderDigest()
+            const receiptFacts = Object.freeze({
+              operation: 'upload-new' as const,
+              execution,
+              root: rootEnvelope,
               receipt: transfer.receipt,
               portableReference,
               writeAfterObservation,
               workspaceRelativePath,
+              observedAt: transfer.observedAt,
               bytes: transfer.bytes,
               sha256: transfer.sha256,
-              transferReceiptDigest: canonicalDigest(transfer.receipt),
-              observationDigest: canonicalDigest(writeAfterObservation),
-              providerDigest: deferredProviderDigest()
+              providerDigest
+            })
+            return contentSpaceSystemUploadNewReceiptSchema.parse({
+              ...receiptFacts,
+              transferReceiptDigest: canonicalDigest(receiptFacts),
+              observationDigest: canonicalDigest({
+                operation: receiptFacts.operation,
+                execution,
+                root: rootEnvelope,
+                observation: writeAfterObservation,
+                observedAt: transfer.observedAt
+              })
             })
           })
       }),

@@ -259,10 +259,16 @@ describe('Content Space public contract', () => {
       sha256
     }
     const download = {
+      operation: 'download' as const,
       execution,
+      root: contract.toPortableContentContainerReference({
+        providerInstanceRef: 'provider-instance-a',
+        containerId: 'root'
+      }),
       receipt: { invocationId, reference, bytesWritten: 5 },
       readAfterObservation,
       workspaceRelativePath: 'results/file.txt',
+      observedAt: '2026-08-25T12:00:00.000Z',
       bytes: 5,
       sha256,
       transferReceiptDigest: 'd'.repeat(64),
@@ -281,9 +287,25 @@ describe('Content Space public contract', () => {
       ...download,
       sha256: undefined
     })).toThrow()
+    expect(() => contract.contentSpaceSystemDownloadReceiptSchema.parse({
+      ...download,
+      root: contract.toPortableContentContainerReference({
+        providerInstanceRef: 'provider-instance-b',
+        containerId: 'root'
+      })
+    })).toThrow()
+    expect(() => contract.contentSpaceSystemDownloadReceiptSchema.parse({
+      ...download,
+      observedAt: undefined
+    })).toThrow()
 
     const upload = {
+      operation: 'upload-new' as const,
       execution,
+      root: contract.toPortableContentContainerReference({
+        providerInstanceRef: 'provider-instance-a',
+        containerId: 'root'
+      }),
       receipt: {
         invocationId,
         parent: { providerInstanceRef: 'provider-instance-a', containerId: 'root' },
@@ -302,6 +324,7 @@ describe('Content Space public contract', () => {
         size: 5
       },
       workspaceRelativePath: 'inputs/file.txt',
+      observedAt: '2026-08-25T12:00:00.000Z',
       bytes: 5,
       sha256,
       transferReceiptDigest: 'f'.repeat(64),
@@ -317,6 +340,13 @@ describe('Content Space public contract', () => {
       portableReference: contract.toPortableContentFileReference({
         ...reference,
         fileId: 'another-file'
+      })
+    })).toThrow()
+    expect(() => contract.contentSpaceSystemUploadNewReceiptSchema.parse({
+      ...upload,
+      root: contract.toPortableContentContainerReference({
+        providerInstanceRef: 'provider-instance-a',
+        containerId: 'another-root'
       })
     })).toThrow()
   })

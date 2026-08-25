@@ -816,10 +816,13 @@ export type ContentSpaceSystemDownloadObservation = z.infer<
 >
 
 export const contentSpaceSystemDownloadReceiptSchema = z.object({
+  operation: z.literal('download'),
   execution: contentSpaceSystemExecutionBindingSchema,
+  root: contentSpacePortableContainerReferenceEnvelopeSchema,
   receipt: downloadReceiptSchema,
   readAfterObservation: contentSpaceSystemDownloadObservationSchema,
   workspaceRelativePath: domainWorkspaceRelativePathSchema,
+  observedAt: z.string().datetime({ offset: true }),
   bytes: z.number().int().nonnegative().max(CONTENT_SPACE_LIMITS.maxFileBytes),
   sha256: contentSpaceSha256Schema,
   transferReceiptDigest: systemDigestSchema,
@@ -849,6 +852,7 @@ export const contentSpaceSystemDownloadReceiptSchema = z.object({
   }
   const observation = output.readAfterObservation
   if ('immutableVersionId' in output.receipt.reference ||
+    output.root.authority !== output.receipt.reference.providerInstanceRef ||
     observation.reference.authority !== output.receipt.reference.providerInstanceRef ||
     observation.reference.identity.fileId !== output.receipt.reference.fileId ||
     observation.bytes !== output.bytes || observation.sha256 !== output.sha256) {
@@ -860,11 +864,14 @@ export const contentSpaceSystemDownloadReceiptSchema = z.object({
   }
 }).readonly()
 export const contentSpaceSystemUploadNewReceiptSchema = z.object({
+  operation: z.literal('upload-new'),
   execution: contentSpaceSystemExecutionBindingSchema,
+  root: contentSpacePortableContainerReferenceEnvelopeSchema,
   receipt: uploadNewReceiptSchema,
   portableReference: contentSpacePortableFileReferenceEnvelopeSchema,
   writeAfterObservation: contentSpaceSystemUploadWriteAfterObservationSchema,
   workspaceRelativePath: domainWorkspaceRelativePathSchema,
+  observedAt: z.string().datetime({ offset: true }),
   bytes: z.number().int().nonnegative().max(CONTENT_SPACE_LIMITS.maxUploadBytes),
   sha256: contentSpaceSha256Schema,
   transferReceiptDigest: systemDigestSchema,
@@ -888,7 +895,9 @@ export const contentSpaceSystemUploadNewReceiptSchema = z.object({
     })
   }
   const observation = output.writeAfterObservation
-  if (observation.parent.authority !== output.receipt.parent.providerInstanceRef ||
+  if (output.root.authority !== output.receipt.parent.providerInstanceRef ||
+    output.root.identity.containerId !== output.receipt.parent.containerId ||
+    observation.parent.authority !== output.receipt.parent.providerInstanceRef ||
     observation.parent.identity.containerId !== output.receipt.parent.containerId ||
     observation.reference.authority !== output.portableReference.authority ||
     observation.reference.identity.fileId !== identity.fileId ||

@@ -29,6 +29,8 @@ import {
   CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
   CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID,
   ContentSpaceOperationError,
+  contentSpaceSystemDownloadResultSchema,
+  contentSpaceSystemUploadNewResultSchema,
   contentSpaceSuccess,
   defineContentSpaceProvider,
   toPortableContentContainerReference,
@@ -578,6 +580,7 @@ describe('Content Space main composition', () => {
     }))
 
     expect(upload.output).toMatchObject(contentSpaceSuccess({
+      operation: 'upload-new',
       execution: {
         callerId: 'renderer:test',
         principal,
@@ -586,6 +589,7 @@ describe('Content Space main composition', () => {
         executionContextDigest: 'b'.repeat(64),
         invocationId: 'invocation_content_space_system_upload_0001'
       },
+      root: toPortableContentContainerReference(ROOT),
       receipt: {
         invocationId: 'invocation_content_space_system_upload_0001',
         parent: ROOT,
@@ -601,6 +605,7 @@ describe('Content Space main composition', () => {
         size: uploadBytes.byteLength
       },
       workspaceRelativePath: 'inputs/uploaded.bin',
+      observedAt: expect.any(String),
       bytes: uploadBytes.byteLength,
       sha256: uploadSha256,
       transferReceiptDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
@@ -608,6 +613,21 @@ describe('Content Space main composition', () => {
       providerDigest: {
         status: 'deferred', reason: 'provider_digest_not_in_run0_contract'
       }
+    }))
+    const uploadResult = contentSpaceSystemUploadNewResultSchema.parse(upload.output)
+    if (!uploadResult.ok) throw new Error('Expected a system upload receipt.')
+    const {
+      transferReceiptDigest: uploadReceiptDigest,
+      observationDigest: uploadObservationDigest,
+      ...uploadReceiptFacts
+    } = uploadResult.value
+    expect(uploadReceiptDigest).toBe(canonicalDigestFixture(uploadReceiptFacts))
+    expect(uploadObservationDigest).toBe(canonicalDigestFixture({
+      operation: uploadResult.value.operation,
+      execution: uploadResult.value.execution,
+      root: uploadResult.value.root,
+      observation: uploadResult.value.writeAfterObservation,
+      observedAt: uploadResult.value.observedAt
     }))
     expect(openWorkspaceUploadSource).toHaveBeenCalledWith({
       relativePath: 'inputs/uploaded.bin',
@@ -636,6 +656,7 @@ describe('Content Space main composition', () => {
     }))
 
     expect(download.output).toMatchObject(contentSpaceSuccess({
+      operation: 'download',
       execution: {
         callerId: 'renderer:test',
         principal,
@@ -644,6 +665,7 @@ describe('Content Space main composition', () => {
         executionContextDigest: 'b'.repeat(64),
         invocationId: 'invocation_content_space_system_download_0001'
       },
+      root: toPortableContentContainerReference(ROOT),
       receipt: {
         invocationId: 'invocation_content_space_system_download_0001',
         reference: FILE,
@@ -656,6 +678,7 @@ describe('Content Space main composition', () => {
         sha256: downloadSha256
       },
       workspaceRelativePath: 'outputs/downloaded.bin',
+      observedAt: expect.any(String),
       bytes: downloadBytes.byteLength,
       sha256: downloadSha256,
       transferReceiptDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
@@ -663,6 +686,21 @@ describe('Content Space main composition', () => {
       providerDigest: {
         status: 'deferred', reason: 'provider_digest_not_in_run0_contract'
       }
+    }))
+    const downloadResult = contentSpaceSystemDownloadResultSchema.parse(download.output)
+    if (!downloadResult.ok) throw new Error('Expected a system download receipt.')
+    const {
+      transferReceiptDigest: downloadReceiptDigest,
+      observationDigest: downloadObservationDigest,
+      ...downloadReceiptFacts
+    } = downloadResult.value
+    expect(downloadReceiptDigest).toBe(canonicalDigestFixture(downloadReceiptFacts))
+    expect(downloadObservationDigest).toBe(canonicalDigestFixture({
+      operation: downloadResult.value.operation,
+      execution: downloadResult.value.execution,
+      root: downloadResult.value.root,
+      observation: downloadResult.value.readAfterObservation,
+      observedAt: downloadResult.value.observedAt
     }))
     expect(openWorkspaceDownloadDestination).toHaveBeenCalledWith({
       relativePath: 'outputs/downloaded.bin',
@@ -3158,4 +3196,22 @@ function contributionHost(
   contributions: readonly DomainMainContribution[]
 ): DomainMainContributionHost {
   return Object.freeze({ list: () => contributions })
+}
+
+function canonicalDigestFixture(value: unknown): string {
+  return createHash('sha256').update(canonicalJsonFixture(value)).digest('hex')
+}
+
+function canonicalJsonFixture(value: unknown): string {
+  if (value === null || typeof value === 'boolean' ||
+    typeof value === 'number' || typeof value === 'string') {
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJsonFixture).join(',')}]`
+  if (!value || typeof value !== 'object') throw new TypeError('Unsupported canonical fixture.')
+  return `{${Object.entries(value as Record<string, unknown>)
+    .filter(([, child]) => child !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJsonFixture(child)}`)
+    .join(',')}}`
 }

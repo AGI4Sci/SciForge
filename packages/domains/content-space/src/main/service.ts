@@ -160,12 +160,14 @@ export type ContentSpaceUploadTransferEvidence = Readonly<{
   writeAfterObservation: ContentSpaceUploadWriteAfterObservation
   bytes: number
   sha256: string
+  observedAt: string
 }>
 
 export type ContentSpaceDownloadTransferEvidence = Readonly<{
   receipt: DownloadReceipt
   bytes: number
   sha256: string
+  observedAt: string
 }>
 
 export type ContentSpaceSystemTransferPreflightProbe = Readonly<{
@@ -1113,7 +1115,8 @@ export class ContentSpaceService {
       receipt,
       writeAfterObservation,
       bytes: source.size,
-      sha256: sourceSha256.data
+      sha256: sourceSha256.data,
+      observedAt: this.#now().toISOString()
     })
   }
 
@@ -1347,7 +1350,8 @@ export class ContentSpaceService {
       return Object.freeze({
         receipt: canonicalReceipt,
         bytes: byteLength,
-        sha256: actualDigest
+        sha256: actualDigest,
+        observedAt: this.#now().toISOString()
       })
     } catch (error) {
       acceptingWrites = false

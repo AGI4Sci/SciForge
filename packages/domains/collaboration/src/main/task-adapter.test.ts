@@ -951,7 +951,9 @@ function contentDownloadResult(ordinal: number, workspaceId: string) {
   return {
     ok: true as const,
     value: {
+      operation: 'download' as const,
       execution: contentExecutionBinding(ordinal, workspaceId),
+      root: ROOT_LOCATOR,
       receipt: {
         invocationId,
         reference: {
@@ -967,6 +969,7 @@ function contentDownloadResult(ordinal: number, workspaceId: string) {
         sha256
       },
       workspaceRelativePath: 'input.csv',
+      observedAt: TEST_TIMESTAMP,
       bytes: 4,
       sha256,
       transferReceiptDigest: '5'.repeat(64),
@@ -990,7 +993,9 @@ function contentUploadResult(ordinal: number, workspaceId: string) {
   return {
     ok: true as const,
     value: {
+      operation: 'upload-new' as const,
       execution: contentExecutionBinding(ordinal, workspaceId),
+      root: ROOT_LOCATOR,
       receipt: {
         invocationId,
         parent: {
@@ -1012,6 +1017,7 @@ function contentUploadResult(ordinal: number, workspaceId: string) {
         size: 4
       },
       workspaceRelativePath: 'analysis.md',
+      observedAt: TEST_TIMESTAMP,
       bytes: 4,
       sha256: '7'.repeat(64),
       transferReceiptDigest: '8'.repeat(64),

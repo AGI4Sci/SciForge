@@ -1572,7 +1572,8 @@ describe('ContentSpaceService', () => {
         size: bytes.byteLength
       },
       bytes: bytes.byteLength,
-      sha256
+      sha256,
+      observedAt: now.toISOString()
     })
 
     expect(openSource).toHaveBeenCalledOnce()
@@ -1704,7 +1705,8 @@ describe('ContentSpaceService', () => {
         digest: { algorithm: 'sha256', value: sha256 }
       },
       bytes: bytes.byteLength,
-      sha256
+      sha256,
+      observedAt: now.toISOString()
     })
 
     expect(order).toEqual([

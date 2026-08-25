@@ -52034,6 +52034,15 @@ Downloads one freshly proven file to a new Workspace-relative destination.
                 "pattern": "^[a-f0-9]{64}$",
                 "type": "string"
               },
+              "observedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "operation": {
+                "const": "download",
+                "type": "string"
+              },
               "providerDigest": {
                 "additionalProperties": false,
                 "properties": {
@@ -52235,6 +52244,49 @@ Downloads one freshly proven file to a new Workspace-relative destination.
                 ],
                 "type": "object"
               },
+              "root": {
+                "additionalProperties": false,
+                "properties": {
+                  "authority": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  },
+                  "contractVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "identity": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "containerId": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "containerId"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "content-space.container-reference",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "contractVersion",
+                  "kind",
+                  "authority",
+                  "identity"
+                ],
+                "type": "object"
+              },
               "sha256": {
                 "pattern": "^[a-f0-9]{64}$",
                 "type": "string"
@@ -52251,10 +52303,13 @@ Downloads one freshly proven file to a new Workspace-relative destination.
             },
             "readOnly": true,
             "required": [
+              "operation",
               "execution",
+              "root",
               "receipt",
               "readAfterObservation",
               "workspaceRelativePath",
+              "observedAt",
               "bytes",
               "sha256",
               "transferReceiptDigest",
@@ -52972,6 +53027,15 @@ Uploads one real Workspace file as a new entry in an exact authorized root.
                 "pattern": "^[a-f0-9]{64}$",
                 "type": "string"
               },
+              "observedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "operation": {
+                "const": "upload-new",
+                "type": "string"
+              },
               "portableReference": {
                 "additionalProperties": false,
                 "properties": {
@@ -53110,6 +53174,49 @@ Uploads one real Workspace file as a new entry in an exact authorized root.
                 ],
                 "type": "object"
               },
+              "root": {
+                "additionalProperties": false,
+                "properties": {
+                  "authority": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  },
+                  "contractVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "identity": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "containerId": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "containerId"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "content-space.container-reference",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "contractVersion",
+                  "kind",
+                  "authority",
+                  "identity"
+                ],
+                "type": "object"
+              },
               "sha256": {
                 "pattern": "^[a-f0-9]{64}$",
                 "type": "string"
@@ -53235,11 +53342,14 @@ Uploads one real Workspace file as a new entry in an exact authorized root.
             },
             "readOnly": true,
             "required": [
+              "operation",
               "execution",
+              "root",
               "receipt",
               "portableReference",
               "writeAfterObservation",
               "workspaceRelativePath",
+              "observedAt",
               "bytes",
               "sha256",
               "transferReceiptDigest",
