@@ -23,8 +23,8 @@
     "test": "vitest run src --no-cache"
   },
   "dependencies": {
-    "@sciforge/collaboration-contracts": "0.1.0",
-    "@sciforge/collaboration-identity": "0.1.0",
+    "@sciforge/collaboration-contracts": "1.0.0",
+    "@sciforge/collaboration-identity": "0.2.0",
     "@sciforge/domain-sdk": "^0.2.1",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",

@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/collaboration-identity",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "license": "MIT",
   "type": "module",
@@ -25,7 +25,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sciforge/collaboration-contracts": "0.1.0",
+    "@sciforge/collaboration-contracts": "1.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { verifiedOidcClaimsSchema, type Device } from '@sciforge/collaboration-contracts'
-import type { CollaborationIdentityClient, IdentityAccessContext } from '@sciforge/collaboration-identity'
+import type { Device } from '@sciforge/collaboration-contracts'
+import {
+  verifiedOidcClaimsSchema,
+  type CollaborationIdentityClient,
+  type IdentityAccessContext
+} from '@sciforge/collaboration-identity'
 import { InMemoryCollaborationIdentityClient } from '@sciforge/collaboration-identity/testing'
 import type { DesktopIdentityStatus } from '../contract.js'
 import { DesktopDeviceService, cloudInstallationId } from './device-service.js'

@@ -2,9 +2,10 @@ import { createHash, randomBytes, webcrypto } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import {
   CollaborationIdentityClientError,
-  type CollaborationIdentityClient
+  type CollaborationIdentityClient,
+  type VerifiedOidcClaims
 } from '@sciforge/collaboration-identity'
-import type { MeResponse, VerifiedOidcClaims } from '@sciforge/collaboration-contracts'
+import type { MeResponse } from '@sciforge/collaboration-contracts'
 import type {
   DesktopIdentityActionResult,
   DesktopIdentityErrorCode,
