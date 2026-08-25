@@ -1392,7 +1392,7 @@ export class FakeCollaborationRepository {
   async updateTask(task, expectedRevision) {
     assertImmutableFields(this.state.tasks.get(task.taskId), task, [
       'taskId', 'projectId', 'createdByCoordinatorAgentId', 'title', 'objective',
-      'completionCriteria', 'dependencyTaskIds', 'fileIntent', 'maxRetries', 'coordinationRound', 'createdAt'
+      'completionCriteria', 'dependencyTaskIds', 'maxRetries', 'coordinationRound', 'createdAt'
     ], 'Task')
     revisionUpdate(this.state.tasks, task.taskId, task, expectedRevision)
   }

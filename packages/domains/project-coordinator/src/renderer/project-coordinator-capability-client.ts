@@ -3,6 +3,9 @@ import type { DomainRendererCapabilityInvoker } from '@sciforge/domain-sdk/host'
 import {
   PROJECT_COORDINATOR_CAPABILITY_IDS,
   projectCoordinatorCompleteInputSchema,
+  projectCoordinatorContentRecoveryAbandonInputSchema,
+  projectCoordinatorContentRecoveryObserveLinkInputSchema,
+  projectCoordinatorContentRecoveryRetrySuccessorInputSchema,
   projectCoordinatorHumanAnswerInputSchema,
   projectCoordinatorHumanNeededCreateInputSchema,
   projectCoordinatorMembershipAddInputSchema,
@@ -24,6 +27,9 @@ import {
   projectCoordinatorWorkspaceSchema,
   type ProjectCoordinatorPlanConfirmActivateInput,
   type ProjectCoordinatorCompleteInput,
+  type ProjectCoordinatorContentRecoveryAbandonInput,
+  type ProjectCoordinatorContentRecoveryObserveLinkInput,
+  type ProjectCoordinatorContentRecoveryRetrySuccessorInput,
   type ProjectCoordinatorHumanAnswerInput,
   type ProjectCoordinatorHumanNeededCreateInput,
   type ProjectCoordinatorMembershipAddInput,
@@ -107,6 +113,27 @@ const contentProvisioningApplyContract = Object.freeze({
   outputSchema: projectCoordinatorWorkspaceSchema
 })
 
+const contentRecoveryObserveLinkContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
+  effect: 'external-write' as const,
+  inputSchema: projectCoordinatorContentRecoveryObserveLinkInputSchema,
+  outputSchema: projectCoordinatorWorkspaceSchema
+})
+
+const contentRecoveryAbandonContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
+  effect: 'destructive' as const,
+  inputSchema: projectCoordinatorContentRecoveryAbandonInputSchema,
+  outputSchema: projectCoordinatorWorkspaceSchema
+})
+
+const contentRecoveryRetrySuccessorContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
+  effect: 'external-write' as const,
+  inputSchema: projectCoordinatorContentRecoveryRetrySuccessorInputSchema,
+  outputSchema: projectCoordinatorWorkspaceSchema
+})
+
 const membershipAddContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
   effect: 'external-write' as const,
@@ -159,6 +186,15 @@ export type ProjectCoordinatorRendererClient = Readonly<{
   confirmPlanAndActivate(input: ProjectCoordinatorPlanConfirmActivateInput): Promise<ProjectCoordinatorWorkspace>
   previewProvisioning(input: ProjectCoordinatorProvisioningPlanInput): Promise<ProjectCoordinatorProvisioningPlan>
   applyProvisioning(input: ProjectCoordinatorProvisioningApplyInput): Promise<ProjectCoordinatorWorkspace>
+  observeAndLinkRecovery(
+    input: ProjectCoordinatorContentRecoveryObserveLinkInput
+  ): Promise<ProjectCoordinatorWorkspace>
+  abandonRecovery(
+    input: ProjectCoordinatorContentRecoveryAbandonInput
+  ): Promise<ProjectCoordinatorWorkspace>
+  retryRecoverySuccessor(
+    input: ProjectCoordinatorContentRecoveryRetrySuccessorInput
+  ): Promise<ProjectCoordinatorWorkspace>
   addMember(input: ProjectCoordinatorMembershipAddInput): Promise<ProjectCoordinatorWorkspace>
   removeMember(input: ProjectCoordinatorMembershipRemoveInput): Promise<ProjectCoordinatorWorkspace>
   createHumanNeeded(input: ProjectCoordinatorHumanNeededCreateInput): Promise<ProjectCoordinatorWorkspace>
@@ -180,6 +216,15 @@ export function createProjectCoordinatorRendererClient(
     confirmPlanAndActivate: (input) => invoker.invoke(planConfirmActivateContract, input),
     previewProvisioning: (input) => invoker.invoke(contentProvisioningPlanContract, input),
     applyProvisioning: (input) => invoker.invoke(contentProvisioningApplyContract, input),
+    observeAndLinkRecovery: (input) => invoker.invoke(
+      contentRecoveryObserveLinkContract,
+      input
+    ),
+    abandonRecovery: (input) => invoker.invoke(contentRecoveryAbandonContract, input),
+    retryRecoverySuccessor: (input) => invoker.invoke(
+      contentRecoveryRetrySuccessorContract,
+      input
+    ),
     addMember: (input) => invoker.invoke(membershipAddContract, input),
     removeMember: (input) => invoker.invoke(membershipRemoveContract, input),
     createHumanNeeded: (input) => invoker.invoke(humanNeededCreateContract, input),

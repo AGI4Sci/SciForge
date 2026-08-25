@@ -20,6 +20,7 @@ import {
 } from './core.js'
 import {
   portableContentSpaceLocatorSchema,
+  taskFileDestinationNameSchema,
   taskFileIntentSchema
 } from './content-space-task-io.js'
 
@@ -162,6 +163,55 @@ export const taskResultOutputSchema = z.object({
   }
 })
 export type TaskResultOutput = z.infer<typeof taskResultOutputSchema>
+
+/**
+ * Provider-neutral evidence produced by the canonical Content Space recovery
+ * observation. It describes what the current Owner observed; it is neither a
+ * Provider credential nor reusable Content Space authority.
+ */
+export const taskRecoveryObservedOutputSchema = z.object({
+  schemaVersion: z.literal(1),
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  executionId: executionIdSchema,
+  assignmentTaskRevision: revisionSchema,
+  bindingRevision: revisionSchema,
+  logicalInvocationId: z.string().trim().min(1).max(128)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u),
+  requestDigest: sha256Schema,
+  rootLocator: portableContentSpaceLocatorSchema,
+  rootLocatorDigest: sha256Schema,
+  expectedName: taskFileDestinationNameSchema,
+  locator: portableContentSpaceLocatorSchema,
+  locatorDigest: sha256Schema,
+  contentObservationReceiptDigest: sha256Schema,
+  observationDigest: sha256Schema,
+  providerObservationDigest: sha256Schema,
+  observedAt: timestampSchema
+}).strict().superRefine((observation, context) => {
+  if (observation.rootLocator.kind !== 'content-space.container-reference') {
+    context.addIssue({
+      code: 'custom',
+      path: ['rootLocator', 'kind'],
+      message: 'Task recovery must observe beneath the exact Project Content root.'
+    })
+  }
+  if (observation.locator.kind !== 'content-space.file-reference') {
+    context.addIssue({
+      code: 'custom',
+      path: ['locator', 'kind'],
+      message: 'Task recovery can link only one exact observed Provider file.'
+    })
+  }
+  if (observation.rootLocator.authority !== observation.locator.authority) {
+    context.addIssue({
+      code: 'custom',
+      path: ['locator', 'authority'],
+      message: 'Task recovery root and output must use one exact Provider Instance.'
+    })
+  }
+})
+export type TaskRecoveryObservedOutput = z.infer<typeof taskRecoveryObservedOutputSchema>
 
 /** Immutable Worker submission for the current execution fence. */
 export const taskResultSubmissionSchema = z.object({

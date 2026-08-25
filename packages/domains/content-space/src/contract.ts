@@ -41,6 +41,9 @@ export const CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID =
 /** Provider-owned grant for one exact, live Human-confirmed administration batch. */
 export const CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID =
   'content-space.provisioning-batch' as const
+/** Narrow read-only grant for Human-driven exact output recovery observation. */
+export const CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_ID =
+  'content-space.recovery-observation' as const
 export const CONTENT_SPACE_SYSTEM_CAPABILITY_GRANTS = Object.freeze([
   CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID
 ] as const)
@@ -114,6 +117,7 @@ export const CONTENT_SPACE_CAPABILITY_IDS = Object.freeze({
   systemTransferPreflight: 'content-space.system-transfer-preflight',
   systemDownload: 'content-space.system-download',
   systemUploadNew: 'content-space.system-upload-new',
+  systemObserveExactOutput: 'content-space.system-observe-exact-output',
   authorizeAgentRoot: 'content-space.authorize-agent-root',
   agentListEntries: 'content-space.agent-list-entries',
   agentCreateFolder: 'content-space.agent-create-folder',
@@ -722,6 +726,13 @@ export const contentSpaceSystemUploadNewInputSchema = z.object({
   name: contentSpaceEntryNameSchema,
   workspaceRelativePath: domainWorkspaceRelativePathSchema
 }).strict().readonly()
+export const contentSpaceSystemObserveExactOutputInputSchema = z.object({
+  root: contentSpacePortableContainerReferenceEnvelopeSchema,
+  expectedName: contentSpaceEntryNameSchema,
+  logicalInvocationId: z.string().trim().min(1).max(128)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u),
+  requestDigest: contentSpaceSha256Schema
+}).strict().readonly()
 export const contentSpaceSystemTransferPreflightInputSchema = z.discriminatedUnion(
   'operation',
   [
@@ -744,6 +755,9 @@ export type ContentSpaceSystemUploadNewInput = z.infer<
 >
 export type ContentSpaceSystemTransferPreflightInput = z.infer<
   typeof contentSpaceSystemTransferPreflightInputSchema
+>
+export type ContentSpaceSystemObserveExactOutputInput = z.infer<
+  typeof contentSpaceSystemObserveExactOutputInputSchema
 >
 
 export const contentSpaceSystemUploadWriteAfterObservationSchema = z.object({
@@ -911,11 +925,60 @@ export const contentSpaceSystemUploadNewReceiptSchema = z.object({
   }
 }).readonly()
 
+export const contentSpaceSystemExactOutputObservationSchema = z.object({
+  parent: contentSpacePortableContainerReferenceEnvelopeSchema,
+  reference: contentSpacePortableFileReferenceEnvelopeSchema,
+  name: contentSpaceEntryNameSchema,
+  size: z.number().int().nonnegative().max(CONTENT_SPACE_LIMITS.maxFileBytes)
+}).strict().superRefine((observation, context) => {
+  if (observation.parent.authority !== observation.reference.authority) {
+    context.addIssue({
+      code: 'custom',
+      path: ['reference', 'authority'],
+      message: 'Recovered output parent and file must use one Provider Instance.'
+    })
+  }
+}).readonly()
+
+export const contentSpaceSystemObserveExactOutputReceiptSchema = z.object({
+  operation: z.literal('observe-exact-output'),
+  execution: contentSpaceSystemExecutionBindingSchema,
+  root: contentSpacePortableContainerReferenceEnvelopeSchema,
+  expectedName: contentSpaceEntryNameSchema,
+  logicalInvocationId: z.string().trim().min(1).max(128)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u),
+  requestDigest: contentSpaceSha256Schema,
+  portableReference: contentSpacePortableFileReferenceEnvelopeSchema,
+  observation: contentSpaceSystemExactOutputObservationSchema,
+  observedAt: z.string().datetime({ offset: true }),
+  providerObservationDigest: contentSpaceSha256Schema,
+  contentObservationReceiptDigest: contentSpaceSha256Schema,
+  observationDigest: contentSpaceSha256Schema
+}).strict().superRefine((receipt, context) => {
+  const observation = receipt.observation
+  if (
+    receipt.root.authority !== observation.parent.authority ||
+    receipt.root.identity.containerId !== observation.parent.identity.containerId ||
+    receipt.expectedName !== observation.name ||
+    receipt.portableReference.authority !== observation.reference.authority ||
+    receipt.portableReference.identity.fileId !== observation.reference.identity.fileId
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['observation'],
+      message: 'Recovered output observation must match the exact root, name and file identity.'
+    })
+  }
+}).readonly()
+
 export type ContentSpaceSystemDownloadReceipt = z.infer<
   typeof contentSpaceSystemDownloadReceiptSchema
 >
 export type ContentSpaceSystemUploadNewReceipt = z.infer<
   typeof contentSpaceSystemUploadNewReceiptSchema
+>
+export type ContentSpaceSystemObserveExactOutputReceipt = z.infer<
+  typeof contentSpaceSystemObserveExactOutputReceiptSchema
 >
 export type ContentSpaceSystemDownloadResult = ContentSpaceResult<
   ContentSpaceSystemDownloadReceipt
@@ -925,6 +988,9 @@ export type ContentSpaceSystemUploadNewResult = ContentSpaceResult<
 >
 export type ContentSpaceSystemTransferPreflightResult = ContentSpaceResult<
   ContentSpaceSystemTransferPreflightObservation
+>
+export type ContentSpaceSystemObserveExactOutputResult = ContentSpaceResult<
+  ContentSpaceSystemObserveExactOutputReceipt
 >
 export const contentSpaceAuthorizeAgentRootInputSchema = z.object({
   providerInstanceRef: providerInstanceRefSchema,
@@ -996,6 +1062,9 @@ export const contentSpaceSystemDownloadResultSchema = contentSpaceResultSchema(
 export const contentSpaceSystemUploadNewResultSchema = contentSpaceResultSchema(
   contentSpaceSystemUploadNewReceiptSchema
 )
+export const contentSpaceSystemObserveExactOutputResultSchema = contentSpaceResultSchema(
+  contentSpaceSystemObserveExactOutputReceiptSchema
+)
 export const contentSpaceSystemTransferPreflightResultSchema = contentSpaceResultSchema(
   contentSpaceSystemTransferPreflightObservationSchema
 )
@@ -1041,6 +1110,15 @@ export const CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT: DomainCapabilityContract<
   effect: 'external-write',
   inputSchema: contentSpaceSystemUploadNewInputSchema,
   outputSchema: contentSpaceSystemUploadNewResultSchema
+})
+export const CONTENT_SPACE_SYSTEM_OBSERVE_EXACT_OUTPUT_CONTRACT: DomainCapabilityContract<
+  ContentSpaceSystemObserveExactOutputInput,
+  ContentSpaceSystemObserveExactOutputResult
+> = Object.freeze({
+  actionId: CONTENT_SPACE_CAPABILITY_IDS.systemObserveExactOutput,
+  effect: 'read',
+  inputSchema: contentSpaceSystemObserveExactOutputInputSchema,
+  outputSchema: contentSpaceSystemObserveExactOutputResultSchema
 })
 export const CONTENT_SPACE_AUTHORIZE_AGENT_ROOT_CONTRACT: DomainCapabilityContract<
   z.infer<typeof contentSpaceAuthorizeAgentRootInputSchema>,

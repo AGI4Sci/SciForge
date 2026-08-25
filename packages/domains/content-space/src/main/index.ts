@@ -32,6 +32,7 @@ import {
   CONTENT_SPACE_PORTABLE_AUTHORITY_RESOLVER_CONTRACT,
   CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION,
   CONTENT_SPACE_PROVISIONING_BATCH_GRANT_CONTRIBUTION,
+  CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_CONTRIBUTION,
   CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition.js'
@@ -40,8 +41,10 @@ import {
   CONTENT_CONTAINER_REFERENCE_KIND,
   CONTENT_FILE_RESOURCE_KIND,
   CONTENT_SPACE_FEATURE_SELECTION_RESOURCE_KIND,
+  CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS,
   CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND,
   CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
+  CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_ID,
   CONTENT_SPACE_CAPABILITY_IDS,
   CONTENT_SPACE_LIMITS,
   CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID,
@@ -84,6 +87,9 @@ import {
   contentSpaceSystemExecutionBindingSchema,
   contentSpaceSystemDownloadReceiptSchema,
   contentSpaceSystemDownloadResultSchema,
+  contentSpaceSystemObserveExactOutputInputSchema,
+  contentSpaceSystemObserveExactOutputReceiptSchema,
+  contentSpaceSystemObserveExactOutputResultSchema,
   contentSpaceSystemTransferPreflightInputSchema,
   contentSpaceSystemTransferPreflightObservationSchema,
   contentSpaceSystemTransferPreflightResultSchema,
@@ -314,6 +320,14 @@ export function createDomainMainEntry(
           id: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
           eligibility: 'trusted-domain-runtime',
           description: 'Execute one exact Human-confirmed Content Space provisioning batch.'
+        })
+      },
+      {
+        ...CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_CONTRIBUTION,
+        value: defineDomainMainSystemCapabilityGrant({
+          id: CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_ID,
+          eligibility: 'trusted-domain-runtime',
+          description: 'Observe one exact existing output for Human-driven recovery without transfer authority.'
         })
       },
       {
@@ -1339,6 +1353,182 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
           })
       }),
       define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.systemObserveExactOutput,
+        audiences: ['system'],
+        scope: 'workspace',
+        title: 'Observe Exact Unknown Content Space Output',
+        description: 'Re-observes one exact no-overwrite output name after an uncertain Provider write without granting transfer authority.',
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        tags: ['system-recovery', 'outcome-unknown', 'observation', 'non-authorizing'],
+        inputSchema: contentSpaceSystemObserveExactOutputInputSchema,
+        outputSchema: contentSpaceSystemObserveExactOutputResultSchema,
+        handler: async (rawInput, context) => capabilityResult(async () => {
+          requireSystemRecoveryObservationAuthority(context)
+          const input = contentSpaceSystemObserveExactOutputInputSchema.parse(rawInput)
+          const execution = systemRecoveryObservationExecutionBinding(context)
+          const portableResources = requireSystemPortableResources(options.portableResources)
+          return withSystemPortableContainerReference(
+            portableResources,
+            input.root,
+            context.signal,
+            async (root) => {
+              const service = options.getService()
+              const initialProbe = await service.preflightSystemTransfer({
+                operation: 'upload-new',
+                root
+              }, writeCall(context))
+              if (initialProbe.status !== 'ready') {
+                throw operationError(
+                  'unauthorized',
+                  'The current Provider session cannot observe this upload authority.'
+                )
+              }
+
+              const matches: Array<Readonly<{
+                reference: ContentFileReference
+                name: string
+                size: number
+              }>> = []
+              const seenCursors = new Set<string>()
+              let cursor: string | undefined
+              let pageCount = 0
+              let nodeCount = 0
+              do {
+                pageCount += 1
+                if (pageCount > CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS.maxPages) {
+                  throw operationError(
+                    'bounds_exceeded',
+                    'The exact output observation exceeded its bounded page scan.'
+                  )
+                }
+                const page = await service.listEntries({
+                  parent: root,
+                  page: {
+                    ...(cursor ? { cursor } : {}),
+                    limit: CONTENT_SPACE_LIMITS.maxPageItems
+                  }
+                }, call(context, { root, reference: root }))
+                nodeCount += page.items.length
+                if (nodeCount > CONTENT_SPACE_FILE_DESCENDANT_PROOF_LIMITS.maxNodes) {
+                  throw operationError(
+                    'bounds_exceeded',
+                    'The exact output observation exceeded its bounded entry scan.'
+                  )
+                }
+                for (const entry of page.items) {
+                  if (entry.kind === 'file' && entry.label === input.expectedName) {
+                    matches.push(Object.freeze({
+                      reference: entry.reference,
+                      name: entry.label,
+                      size: entry.size
+                    }))
+                  }
+                }
+                cursor = page.nextCursor
+                if (cursor && seenCursors.has(cursor)) {
+                  throw operationError(
+                    'provider_unavailable',
+                    'The Provider repeated an exact-output observation cursor.'
+                  )
+                }
+                if (cursor) seenCursors.add(cursor)
+              } while (cursor)
+
+              if (matches.length !== 1) {
+                throw operationError(
+                  'invalid_target',
+                  matches.length === 0
+                    ? 'The exact unknown output was not observed.'
+                    : 'More than one output matched the exact no-overwrite name.'
+                )
+              }
+              const listed = matches[0]!
+              const observed = await service.observeEntry(
+                listed.reference,
+                call(context, { root, reference: listed.reference })
+              )
+              if (observed.entry.kind !== 'file' ||
+                !sameContentEntryReference(observed.entry.reference, listed.reference) ||
+                observed.entry.label !== listed.name ||
+                observed.entry.size !== listed.size) {
+                throw operationError(
+                  'provider_unavailable',
+                  'The exact output identity changed during recovery observation.'
+                )
+              }
+
+              const finalProbe = await service.preflightSystemTransfer({
+                operation: 'upload-new',
+                root
+              }, writeCall(context))
+              if (finalProbe.status !== 'ready' ||
+                finalProbe.providerObservationRevision !==
+                  initialProbe.providerObservationRevision) {
+                throw operationError(
+                  'unauthorized',
+                  'The current Provider session changed during recovery observation.'
+                )
+              }
+              try {
+                await context.assertPrincipalCurrent()
+              } catch {
+                throw operationError(
+                  'unauthorized',
+                  'The Host Principal changed during recovery observation.'
+                )
+              }
+
+              const observedAt = new Date().toISOString()
+              const portableReference = toPortableContentFileReference(listed.reference)
+              const observation = Object.freeze({
+                parent: input.root,
+                reference: portableReference,
+                name: listed.name,
+                size: listed.size
+              })
+              const providerObservationDigest = canonicalDigest({
+                contract: 'content-space.system-observe-exact-output.provider-observation.v1',
+                initialProviderObservationRevision: initialProbe.providerObservationRevision,
+                finalProviderObservationRevision: finalProbe.providerObservationRevision,
+                root: input.root,
+                observation
+              })
+              const receiptFacts = Object.freeze({
+                operation: 'observe-exact-output' as const,
+                execution,
+                root: input.root,
+                expectedName: input.expectedName,
+                logicalInvocationId: input.logicalInvocationId,
+                requestDigest: input.requestDigest,
+                portableReference,
+                observation,
+                observedAt,
+                providerObservationDigest
+              })
+              return contentSpaceSystemObserveExactOutputReceiptSchema.parse({
+                ...receiptFacts,
+                contentObservationReceiptDigest: canonicalDigest({
+                  contract: 'content-space.system-observe-exact-output.receipt.v1',
+                  ...receiptFacts
+                }),
+                observationDigest: canonicalDigest({
+                  contract: 'content-space.system-observe-exact-output.observation.v1',
+                  execution,
+                  root: input.root,
+                  expectedName: input.expectedName,
+                  logicalInvocationId: input.logicalInvocationId,
+                  requestDigest: input.requestDigest,
+                  observation,
+                  observedAt
+                })
+              })
+            }
+          )
+        })
+      }),
+      define({
         id: CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
         title: 'Authorize Agent Content Space Root',
         description: 'After Provider Instance and optional candidate-label discovery, confirms one exact Human-visible personal or shared library label and re-enumerates live state to establish the bounded root for this Agent context.',
@@ -2120,6 +2310,46 @@ function requireSystemTransferAuthority(context: ContentSpaceCapabilityContext):
   } catch {
     throw operationError('unauthorized', 'The Host Principal is no longer current.')
   }
+}
+
+function requireSystemRecoveryObservationAuthority(
+  context: ContentSpaceCapabilityContext
+): void {
+  if (context.caller.audience !== 'system' ||
+    !context.caller.principal ||
+    !context.caller.workspaceId?.trim() ||
+    !context.caller.principalSnapshotDigest ||
+    !context.caller.executionContextDigest ||
+    context.resource !== undefined ||
+    !context.caller.capabilityGrants?.includes(
+      CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_ID
+    ) ||
+    !context.invocationId ||
+    !(context.signal instanceof AbortSignal)) {
+    throw operationError(
+      'unauthorized',
+      'The Content Space recovery-observation grant and Workspace scope are required.'
+    )
+  }
+  try {
+    context.assertPrincipalCurrent()
+  } catch {
+    throw operationError('unauthorized', 'The Host Principal is no longer current.')
+  }
+}
+
+function systemRecoveryObservationExecutionBinding(
+  context: ContentSpaceCapabilityContext
+) {
+  requireSystemRecoveryObservationAuthority(context)
+  return contentSpaceSystemExecutionBindingSchema.parse({
+    callerId: context.caller.callerId,
+    principal: context.caller.principal,
+    principalSnapshotDigest: context.caller.principalSnapshotDigest,
+    workspaceId: context.caller.workspaceId,
+    executionContextDigest: context.caller.executionContextDigest,
+    invocationId: context.invocationId
+  })
 }
 
 function systemExecutionBinding(

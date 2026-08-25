@@ -69,6 +69,15 @@ export type CollaborationRuntimeOptions = Readonly<{
   now?: () => Date
 }>
 
+export function isWorkerTaskInboxPayload(payload: AgentInboxMessage['payload']): boolean {
+  return payload.type === 'task.offered' ||
+    payload.type === 'task.recovery.output_linked' ||
+    payload.type === 'task.recovery.abandoned' ||
+    payload.type === 'task.cancelled' ||
+    payload.type === 'task.updated' ||
+    payload.type === 'collaboration.state.changed'
+}
+
 export class CollaborationRuntime {
   private readonly store: CollaborationLocalStore
   private readonly settings: CollaborationSettingsService
@@ -152,12 +161,7 @@ export class CollaborationRuntime {
           }
           return
         }
-        if (
-          message.payload.type === 'task.offered' ||
-          message.payload.type === 'task.cancelled' ||
-          message.payload.type === 'task.updated' ||
-          message.payload.type === 'collaboration.state.changed'
-        ) {
+        if (isWorkerTaskInboxPayload(message.payload)) {
           await tasks.handleInbox(message)
           return
         }

@@ -27,6 +27,7 @@ import {
   projectSchema,
   projectWorkerAvailabilityViewSchema,
   taskExecutionSchema,
+  taskFileDestinationNameSchema,
   taskResultReviewFactsSchema,
   taskResultSubmissionSchema,
   taskReviewDecisionSchema,
@@ -50,6 +51,9 @@ export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   planConfirmActivate: 'project-coordinator.plan.confirm-activate',
   contentProvisioningPlan: 'project-coordinator.content-provisioning.plan',
   contentProvisioningApply: 'project-coordinator.content-provisioning.apply',
+  contentRecoveryObserveLink: 'project-coordinator.content-recovery.observe-link',
+  contentRecoveryAbandon: 'project-coordinator.content-recovery.abandon',
+  contentRecoveryRetrySuccessor: 'project-coordinator.content-recovery.retry-successor',
   membershipAdd: 'project-coordinator.membership.add',
   membershipRemove: 'project-coordinator.membership.remove',
   humanNeededCreate: 'project-coordinator.human-needed.create',
@@ -218,6 +222,32 @@ export const projectCoordinatorProvisioningApplyInputSchema = z.object({
   intentDigest: projectContentProvisioningIntentSchema.shape.intentDigest,
   attemptId: projectCoordinatorProvisioningAttemptIdSchema,
   confirmedPlanDigest: domainMainFiniteCapabilityBatchPlanDigestSchema
+}).strict().readonly()
+
+export const projectCoordinatorContentRecoveryObserveLinkInputSchema = z.object({
+  projectId: projectIdSchema,
+  recoveryActionId: visibleRecoveryActionSchema.shape.recoveryActionId
+}).strict().readonly()
+
+export const projectCoordinatorContentRecoveryAbandonInputSchema = z.object({
+  projectId: projectIdSchema,
+  recoveryActionId: visibleRecoveryActionSchema.shape.recoveryActionId,
+  reason: safeReasonSchema.refine((reason) => reason.length <= 500, {
+    message: 'A recovery abandon reason cannot exceed 500 characters.'
+  })
+}).strict().readonly()
+
+/**
+ * Human-reviewed recovery choices only. The package re-reads every Task,
+ * execution, authority, availability, and file-intent CAS fact before the
+ * current Coordinator Agent may create a successor execution.
+ */
+export const projectCoordinatorContentRecoveryRetrySuccessorInputSchema = z.object({
+  projectId: projectIdSchema,
+  recoveryActionId: visibleRecoveryActionSchema.shape.recoveryActionId,
+  assigneeAgentId: agentIdSchema,
+  nextOutputFileName: taskFileDestinationNameSchema,
+  offerExpiresAt: timestampSchema
 }).strict().readonly()
 
 export const projectCoordinatorMembershipAddInputSchema = z.object({
@@ -641,6 +671,15 @@ export type ProjectCoordinatorProvisioningPlan = z.infer<
 >
 export type ProjectCoordinatorProvisioningApplyInput = z.infer<
   typeof projectCoordinatorProvisioningApplyInputSchema
+>
+export type ProjectCoordinatorContentRecoveryObserveLinkInput = z.infer<
+  typeof projectCoordinatorContentRecoveryObserveLinkInputSchema
+>
+export type ProjectCoordinatorContentRecoveryAbandonInput = z.infer<
+  typeof projectCoordinatorContentRecoveryAbandonInputSchema
+>
+export type ProjectCoordinatorContentRecoveryRetrySuccessorInput = z.infer<
+  typeof projectCoordinatorContentRecoveryRetrySuccessorInputSchema
 >
 export type ProjectCoordinatorMembershipAddInput = z.infer<
   typeof projectCoordinatorMembershipAddInputSchema

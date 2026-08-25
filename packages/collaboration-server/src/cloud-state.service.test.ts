@@ -188,7 +188,7 @@ async function contentRecoveryProjectFixture(suffix: string) {
       ]
     }
   })
-  return { repository, service, owner, worker, ownerFact, workerFact, created }
+  return { repository, service, owner, worker, coordinator, ownerFact, workerFact, created }
 }
 
 async function activeTextOfferFixture(suffix: string) {
@@ -342,6 +342,319 @@ async function activeTextOfferFixture(suffix: string) {
     confirmedPlan,
     activeProject,
     offered
+  }
+}
+
+async function manualRecoveryFileOfferFixture(suffix: string) {
+  const fixture = await contentRecoveryProjectFixture(suffix)
+  const signing = generateKeyPairSync('ed25519')
+  const publicJwk = signing.publicKey.export({ format: 'jwk' })
+  const deviceKeyId = `${suffix}-owner-device-key`
+  await fixture.repository.transaction(async (tx) => {
+    const device = (await tx.getDeviceForUpdate(fixture.owner.deviceId))!
+    await tx.updateDevice({
+      ...device,
+      publicKeyJwk: {
+        kty: 'OKP',
+        crv: 'Ed25519',
+        alg: 'EdDSA',
+        use: 'sig',
+        kid: deviceKeyId,
+        x: publicJwk.x!
+      },
+      revision: device.revision + 1,
+      updatedAt: at.toISOString()
+    }, device.revision)
+  })
+  const workerAgent = await registeredAgent(
+    fixture.service,
+    fixture.worker.user,
+    fixture.worker.deviceId,
+    `${suffix}-worker`
+  )
+  const heartbeat = await heartbeatReadyAgent(
+    fixture.service,
+    workerAgent,
+    `idem_${suffix}_worker_heartbeat`
+  )
+  const availability = await fixture.service.publishWorkerAvailability(workerAgent, {
+    protocolVersion: '1.0',
+    type: 'worker.availability.publish',
+    requestId: `req_${suffix}_worker_availability`,
+    idempotencyKey: `idem_${suffix}_worker_availability`,
+    agentId: workerAgent.agentId,
+    expectedAgentRevision: heartbeat.revision,
+    connectionStatus: 'online',
+    lastHeartbeatAt: heartbeat.lastSeenAt,
+    runtimeReadiness: 'ready',
+    runtimeCapabilityTags: RUNTIME_CAPABILITY_TAGS,
+    acceptsNewOffers: true,
+    activeTaskCount: 0,
+    observedAt: at.toISOString()
+  })
+
+  const intent = fixture.created.provisioningIntent!
+  const provisioningRequestDigest = stableDigest({ suffix, operation: 'create-root' })
+  const preparedProvisioning = await fixture.service.prepareExternalOperation(fixture.owner.user, {
+    protocolVersion: '1.0',
+    type: 'external_operation.prepare',
+    requestId: `req_${suffix}_prepare_root`,
+    idempotencyKey: `idem_${suffix}_prepare_root`,
+    scope: 'project_provisioning',
+    projectId: fixture.created.project.projectId,
+    taskId: null,
+    executionId: null,
+    preparedTaskRevision: null,
+    preparedExecutionRevision: null,
+    provisioningIntentId: intent.provisioningIntentId,
+    provisioningRevision: intent.provisioningRevision,
+    logicalInvocationId: `${suffix}.create-root`,
+    operation: 'create_shared_container',
+    requestDigest: provisioningRequestDigest
+  })
+  const dispatchedProvisioning = await fixture.service.dispatchExternalOperation(fixture.owner.user, {
+    protocolVersion: '1.0',
+    type: 'external_operation.dispatch',
+    requestId: `req_${suffix}_dispatch_root`,
+    idempotencyKey: `idem_${suffix}_dispatch_root`,
+    journalEntryId: preparedProvisioning.contentRecoveryJournalEntryId,
+    expectedJournalRevision: preparedProvisioning.revision
+  })
+  const provisioningReceiptDigest = stableDigest({ suffix, receipt: 'create-root' })
+  const provisioningObservationDigest = stableDigest({ suffix, observation: 'create-root' })
+  const observedProvisioning = await fixture.service.observeExternalOperation(fixture.owner.user, {
+    protocolVersion: '1.0',
+    type: 'external_operation.observe',
+    requestId: `req_${suffix}_observe_root`,
+    idempotencyKey: `idem_${suffix}_observe_root`,
+    journalEntryId: dispatchedProvisioning.contentRecoveryJournalEntryId,
+    expectedJournalRevision: dispatchedProvisioning.revision,
+    outcome: 'observed_success',
+    receiptDigest: provisioningReceiptDigest,
+    observationDigest: provisioningObservationDigest,
+    safeFailureCode: null
+  })
+  const rootLocator = {
+    contractVersion: 1 as const,
+    kind: 'content-space.container-reference' as const,
+    authority: fixture.ownerFact.providerPrincipal.providerInstance.providerInstanceRef,
+    identity: { containerId: `${suffix}-root` }
+  }
+  const memberObservations = intent.desiredMembers.map((member, index) => ({
+    userId: member.userId,
+    providerPrincipalFactId: member.providerPrincipalFactId,
+    snapshottedFactRevision: member.snapshottedFactRevision,
+    principal: member.principal,
+    presence: 'present' as const,
+    observationDigest: stableDigest({ suffix, member: index }),
+    observedAt: at.toISOString()
+  }))
+  const attestation = signProvisioningAttestation({
+    format: 'sciforge.project-content-provisioning-attestation.v1',
+    provisioningAttestationId: `pca_${suffix.replaceAll('_', '')}01`,
+    projectId: fixture.created.project.projectId,
+    provisioningIntentId: intent.provisioningIntentId,
+    provisioningRevision: intent.provisioningRevision,
+    ownerUserId: fixture.owner.userId,
+    principalIdentityRevision: fixture.ownerFact.principalIdentityRevision,
+    providerBindingAttestationDigest: fixture.ownerFact.providerBindingAttestationDigest,
+    providerInstance: fixture.ownerFact.providerPrincipal.providerInstance,
+    rootLocator,
+    rootLocatorDigest: stableDigest(rootLocator),
+    observedOperations: [{
+      operationId: preparedProvisioning.logicalInvocationId,
+      operationRevision: observedProvisioning.journal.revision,
+      kind: 'create_shared_container',
+      subjectPrincipal: null,
+      requestDigest: provisioningRequestDigest,
+      receiptDigest: provisioningReceiptDigest,
+      outcome: 'observed_success',
+      safeFailureCode: null,
+      observedAt: at.toISOString()
+    }],
+    memberObservations,
+    memberSetDigest: createHash('sha256')
+      .update(canonicalProvisionedMemberSetBytes(memberObservations))
+      .digest('hex'),
+    observationStartedAt: at.toISOString(),
+    observationCompletedAt: at.toISOString()
+  }, signing, fixture.owner.deviceId, deviceKeyId, 2)
+  const activatedContent = await fixture.service.attestProjectContent(fixture.owner.user, {
+    protocolVersion: '1.0',
+    type: 'project.content.attest',
+    requestId: `req_${suffix}_attest_root`,
+    idempotencyKey: `idem_${suffix}_attest_root`,
+    projectId: fixture.created.project.projectId,
+    expectedProjectRevision: fixture.created.project.revision,
+    expectedProvisioningRevision: intent.provisioningRevision,
+    attestation
+  })
+
+  const fileIntent = {
+    schemaVersion: 1 as const,
+    bindingRevision: activatedContent.binding.revision,
+    inputs: [],
+    output: {
+      kind: 'content-space.output-new' as const,
+      target: 'project-binding-root' as const,
+      mode: 'upload-new' as const,
+      fileName: `${suffix}.recovery-1.md`,
+      mediaType: 'text/markdown',
+      maxBytes: 1_000_000
+    }
+  }
+  const tasks = [{
+    planItemId: 'item_recovery_output',
+    title: 'Recover one uncertain output',
+    objective: 'Link only a freshly observed exact Provider output.',
+    completionCriteria: ['The current execution submits one exact observed output.'],
+    dependencyPlanItemIds: [],
+    requiredCapabilityTags: ['research.execute'],
+    fileIntent
+  }]
+  const planFacts = {
+    projectId: fixture.created.project.projectId,
+    expectedProjectRevision: activatedContent.project.revision,
+    expectedCoordinatorAuthorityEpoch: activatedContent.project.coordinatorAuthorityEpoch,
+    supersedesProjectPlanId: null,
+    sourceInputLocators: [],
+    tasks,
+    rationale: 'Exercise one exact outcome-unknown recovery.',
+    runtimeProvenance: {
+      runtimeId: `runtime_${suffix}_coordinator`,
+      modelId: null,
+      generatedByCoordinatorAgentId: fixture.created.project.coordinatorAgentId,
+      generatedAt: at.toISOString()
+    }
+  }
+  const plan = await fixture.service.submitProjectPlan(fixture.coordinator, {
+    protocolVersion: '1.0',
+    type: 'project.plan.submit',
+    requestId: `req_${suffix}_plan_submit`,
+    idempotencyKey: `idem_${suffix}_plan_submit`,
+    ...planFacts,
+    planDigest: stableDigest(planFacts)
+  })
+  const projectAfterPlan = (await fixture.repository.getProject(fixture.created.project.projectId))!
+  const confirmedPlan = await fixture.service.confirmProjectPlan(fixture.owner.user, {
+    protocolVersion: '1.0',
+    type: 'project.plan.confirm',
+    requestId: `req_${suffix}_plan_confirm`,
+    idempotencyKey: `idem_${suffix}_plan_confirm`,
+    projectId: projectAfterPlan.projectId,
+    projectPlanId: plan.projectPlanId,
+    expectedProjectRevision: projectAfterPlan.revision,
+    expectedCoordinatorAuthorityEpoch: projectAfterPlan.coordinatorAuthorityEpoch,
+    expectedPlanRevision: plan.revision,
+    planDigest: plan.planDigest
+  })
+  const projectAfterConfirmation = (await fixture.repository.getProject(projectAfterPlan.projectId))!
+  const activeProject = await fixture.service.transitionProject(fixture.owner.user, {
+    protocolVersion: '1.0',
+    type: 'project.transition',
+    requestId: `req_${suffix}_activate`,
+    idempotencyKey: `idem_${suffix}_activate`,
+    projectId: projectAfterConfirmation.projectId,
+    expectedRevision: projectAfterConfirmation.revision,
+    expectedCoordinatorAuthorityEpoch: projectAfterConfirmation.coordinatorAuthorityEpoch,
+    expectedExecutionAuthorityEpoch: projectAfterConfirmation.executionAuthorityEpoch,
+    status: 'active'
+  })
+  const offered = await fixture.service.createTaskOffer(fixture.coordinator, {
+    protocolVersion: '1.0',
+    type: 'task.offer.create',
+    requestId: `req_${suffix}_offer`,
+    idempotencyKey: `idem_${suffix}_offer`,
+    projectId: activeProject.projectId,
+    expectedProjectRevision: activeProject.revision,
+    expectedCoordinatorAuthorityEpoch: activeProject.coordinatorAuthorityEpoch,
+    expectedExecutionAuthorityEpoch: activeProject.executionAuthorityEpoch,
+    projectPlanId: confirmedPlan.projectPlanId,
+    expectedPlanRevision: confirmedPlan.revision,
+    planItemId: tasks[0]!.planItemId,
+    assigneeAgentId: workerAgent.agentId,
+    expectedAvailabilityRevision: availability.revision,
+    offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
+  })
+  const accepted = await fixture.service.acceptTaskOffer(workerAgent, {
+    protocolVersion: '1.0',
+    type: 'task.offer.accept',
+    requestId: `req_${suffix}_accept`,
+    idempotencyKey: `idem_${suffix}_accept`,
+    taskOfferId: offered.offer.taskOfferId,
+    taskId: offered.task.taskId,
+    executionId: offered.execution.executionId,
+    expectedTaskRevision: offered.task.revision,
+    expectedExecutionRevision: offered.execution.revision,
+    expectedOfferRevision: offered.offer.revision
+  })
+  const running = await fixture.service.startTaskExecution(workerAgent, {
+    protocolVersion: '1.0',
+    type: 'task.execution.start',
+    requestId: `req_${suffix}_start`,
+    idempotencyKey: `idem_${suffix}_start`,
+    taskId: accepted.task.taskId,
+    executionId: accepted.execution.executionId,
+    expectedTaskRevision: accepted.task.revision,
+    expectedExecutionRevision: accepted.execution.revision,
+    startedAt: at.toISOString()
+  })
+  const requestDigest = stableDigest({
+    operation: 'upload_new',
+    rootLocator,
+    name: fileIntent.output.fileName,
+    projectId: activeProject.projectId,
+    taskId: running.task.taskId,
+    executionId: running.execution.executionId
+  })
+  const logicalInvocationId = `upload.${running.execution.executionId}.output`
+  const prepared = await fixture.service.prepareExternalOperation(workerAgent, {
+    protocolVersion: '1.0',
+    type: 'external_operation.prepare',
+    requestId: `req_${suffix}_prepare_upload`,
+    idempotencyKey: `idem_${suffix}_prepare_upload`,
+    scope: 'task_content_transfer',
+    projectId: activeProject.projectId,
+    taskId: running.task.taskId,
+    executionId: running.execution.executionId,
+    preparedTaskRevision: running.task.revision,
+    preparedExecutionRevision: running.execution.revision,
+    provisioningIntentId: null,
+    provisioningRevision: null,
+    logicalInvocationId,
+    operation: 'upload_new',
+    requestDigest
+  })
+  const dispatched = await fixture.service.dispatchExternalOperation(workerAgent, {
+    protocolVersion: '1.0',
+    type: 'external_operation.dispatch',
+    requestId: `req_${suffix}_dispatch_upload`,
+    idempotencyKey: `idem_${suffix}_dispatch_upload`,
+    journalEntryId: prepared.contentRecoveryJournalEntryId,
+    expectedJournalRevision: prepared.revision
+  })
+  const unknown = await fixture.service.observeExternalOperation(workerAgent, {
+    protocolVersion: '1.0',
+    type: 'external_operation.observe',
+    requestId: `req_${suffix}_unknown_upload`,
+    idempotencyKey: `idem_${suffix}_unknown_upload`,
+    journalEntryId: dispatched.contentRecoveryJournalEntryId,
+    expectedJournalRevision: dispatched.revision,
+    outcome: 'outcome_unknown',
+    receiptDigest: null,
+    observationDigest: null,
+    safeFailureCode: 'provider_outcome_unknown'
+  })
+  return {
+    ...fixture,
+    workerAgent,
+    availability,
+    activeProject,
+    rootLocator,
+    fileIntent,
+    requestDigest,
+    logicalInvocationId,
+    unknown
   }
 }
 
@@ -757,6 +1070,332 @@ describe('vNext Cloud application service', () => {
       .toEqual(removal.taskAuthorities)
     expect(await repository.listProjectContentReadiness(created.project.projectId)).toEqual(readinessBefore)
     expect(await repository.getProjectContentSpaceBinding(created.project.projectId)).toBeNull()
+  })
+
+  it('links only a fresh exact Task output observation and then accepts the same Worker execution result', async () => {
+    const fixture = await manualRecoveryFileOfferFixture('task_recovery_link')
+    const task = fixture.unknown.task!
+    const execution = fixture.unknown.execution!
+    const action = fixture.unknown.recoveryAction!
+    const journal = fixture.unknown.journal
+    const locator = {
+      contractVersion: 1 as const,
+      kind: 'content-space.file-reference' as const,
+      authority: fixture.rootLocator.authority,
+      identity: { fileId: 'recovered-output-linked-by-observation' }
+    }
+    const observation = {
+      schemaVersion: 1 as const,
+      projectId: fixture.activeProject.projectId,
+      taskId: task.taskId,
+      executionId: execution.executionId,
+      assignmentTaskRevision: execution.fence.assignmentTaskRevision,
+      bindingRevision: execution.fence.bindingRevision!,
+      logicalInvocationId: fixture.logicalInvocationId,
+      requestDigest: fixture.requestDigest,
+      rootLocator: fixture.rootLocator,
+      rootLocatorDigest: stableDigest(fixture.rootLocator),
+      expectedName: fixture.fileIntent.output.fileName,
+      locator,
+      locatorDigest: stableDigest(locator),
+      contentObservationReceiptDigest: '4'.repeat(64),
+      observationDigest: '5'.repeat(64),
+      providerObservationDigest: '6'.repeat(64),
+      observedAt: at.toISOString()
+    }
+    const command = {
+      protocolVersion: '1.0' as const,
+      type: 'task.recovery.link_observed_output' as const,
+      requestId: 'req_task_recovery_link_exact',
+      idempotencyKey: 'idem_task_recovery_link_exact',
+      projectId: fixture.activeProject.projectId,
+      taskId: task.taskId,
+      executionId: execution.executionId,
+      recoveryActionId: action.recoveryActionId,
+      journalEntryId: journal.contentRecoveryJournalEntryId,
+      expectedTaskRevision: task.revision,
+      expectedExecutionRevision: execution.revision,
+      expectedRecoveryActionRevision: action.revision,
+      expectedCoordinatorAuthorityEpoch: fixture.activeProject.coordinatorAuthorityEpoch,
+      observation
+    }
+
+    await expect(fixture.service.linkObservedRecoveryOutput(fixture.owner.user, {
+      ...command,
+      requestId: 'req_task_recovery_link_wrong_digest',
+      idempotencyKey: 'idem_task_recovery_link_wrong_digest',
+      observation: { ...observation, requestDigest: '7'.repeat(64) }
+    })).rejects.toMatchObject({ code: 'validation_failed' })
+
+    const linked = await fixture.service.linkObservedRecoveryOutput(fixture.owner.user, command)
+    const output = {
+      executionId: execution.executionId,
+      assignmentTaskRevision: observation.assignmentTaskRevision,
+      locator,
+      locatorDigest: observation.locatorDigest,
+      rootLocatorDigest: observation.rootLocatorDigest,
+      bindingRevision: observation.bindingRevision,
+      transferReceiptDigest: observation.contentObservationReceiptDigest,
+      observationDigest: observation.observationDigest,
+      preflightObservationDigest: observation.providerObservationDigest
+    }
+    expect(linked).toMatchObject({
+      task: { status: 'manual_recovery_required', revision: task.revision },
+      execution: { state: 'manual_recovery_required', revision: execution.revision },
+      journal: {
+        state: 'observed_success',
+        receiptDigest: observation.contentObservationReceiptDigest,
+        observationDigest: observation.observationDigest,
+        revision: journal.revision + 1
+      },
+      recoveryAction: { status: 'completed', revision: action.revision + 1 },
+      resource: {
+        role: 'output-file',
+        locator,
+        locatorDigest: observation.locatorDigest,
+        status: 'available'
+      }
+    })
+    const workerInbox = await fixture.repository.pullInbox(
+      { kind: 'agent', id: fixture.workerAgent.agentId },
+      0,
+      200,
+      at.toISOString()
+    )
+    expect(workerInbox.map(({ payload }) => payload)).toContainEqual(expect.objectContaining({
+      type: 'task.recovery.output_linked',
+      projectId: fixture.activeProject.projectId,
+      taskId: task.taskId,
+      executionId: execution.executionId,
+      recoveryActionId: action.recoveryActionId,
+      journalEntryId: journal.contentRecoveryJournalEntryId,
+      journalRevision: journal.revision + 1,
+      output
+    }))
+
+    const historicalRuntimeAt = new Date(at.getTime() - 48 * 60 * 60_000).toISOString()
+    const resultFacts = {
+      taskId: task.taskId,
+      executionId: execution.executionId,
+      expectedTaskRevision: task.revision,
+      expectedExecutionRevision: execution.revision,
+      summary: 'The exact observed recovery output is ready for Coordinator review.',
+      runtimeProvenance: {
+        runtimeId: 'runtime_task_recovery_worker',
+        modelId: null,
+        startedAt: historicalRuntimeAt,
+        completedAt: historicalRuntimeAt
+      },
+      outputs: [output],
+      recoveryJournalEntryIds: [journal.contentRecoveryJournalEntryId]
+    }
+    const submitted = await fixture.service.submitTaskResult(fixture.workerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.result.submit',
+      requestId: 'req_task_recovery_submit_result',
+      idempotencyKey: 'idem_task_recovery_submit_result',
+      ...resultFacts,
+      submissionDigest: stableDigest(resultFacts)
+    })
+    expect(submitted).toMatchObject({
+      task: { status: 'awaiting_review' },
+      execution: { state: 'result_submitted' },
+      submission: {
+        outputs: [output],
+        recoveryJournalEntryIds: [journal.contentRecoveryJournalEntryId]
+      }
+    })
+
+    const reviewProject = (await fixture.repository.getProject(fixture.activeProject.projectId))!
+    const reviewBase = {
+      protocolVersion: '1.0' as const,
+      type: 'task.result.review' as const,
+      projectId: fixture.activeProject.projectId,
+      taskId: submitted.task.taskId,
+      executionId: submitted.execution.executionId,
+      resultSubmissionId: submitted.submission.resultSubmissionId,
+      expectedProjectRevision: reviewProject.revision,
+      expectedTaskRevision: submitted.task.revision,
+      expectedExecutionRevision: submitted.execution.revision,
+      expectedResultRevision: submitted.submission.revision,
+      expectedCoordinatorAuthorityEpoch: fixture.activeProject.coordinatorAuthorityEpoch,
+      decision: 'request_revision' as const,
+      instruction: 'Revise the recovered report under one newly approved output name.',
+      nextAssigneeAgentId: fixture.workerAgent.agentId,
+      expectedNextAssigneeAvailabilityRevision: fixture.availability.revision,
+      nextOfferExpiresAt: new Date(at.getTime() + 60_000).toISOString()
+    }
+    await expect(fixture.service.reviewTaskResult(fixture.coordinator, {
+      ...reviewBase,
+      requestId: 'req_task_recovery_revision_same_name',
+      idempotencyKey: 'idem_task_recovery_revision_same_name',
+      nextFileIntent: fixture.fileIntent
+    })).rejects.toMatchObject({ code: 'validation_failed' })
+    const nextFileIntent = {
+      ...fixture.fileIntent,
+      output: { ...fixture.fileIntent.output, fileName: 'task-recovery-reviewed-2.md' }
+    }
+    const revised = await fixture.service.reviewTaskResult(fixture.coordinator, {
+      ...reviewBase,
+      requestId: 'req_task_recovery_revision_new_name',
+      idempotencyKey: 'idem_task_recovery_revision_new_name',
+      nextFileIntent
+    })
+    expect(revised.execution.executionId).toBe(submitted.execution.executionId)
+    expect(revised.execution).toMatchObject({
+      state: 'superseded',
+      fence: { status: 'fenced', reason: 'reassigned' }
+    })
+    expect(revised.offer?.executionId).not.toBe(submitted.execution.executionId)
+    expect((await fixture.repository.getTask(revised.task.taskId))?.fileIntent)
+      .toEqual(nextFileIntent)
+  })
+
+  it('abandons one exact Task recovery tuple and fences the Worker without claiming success', async () => {
+    const fixture = await manualRecoveryFileOfferFixture('task_recovery_abandon')
+    const task = fixture.unknown.task!
+    const execution = fixture.unknown.execution!
+    const action = fixture.unknown.recoveryAction!
+    const journal = fixture.unknown.journal
+    const command = {
+      protocolVersion: '1.0' as const,
+      type: 'task.recovery.abandon' as const,
+      requestId: 'req_task_recovery_abandon_exact',
+      idempotencyKey: 'idem_task_recovery_abandon_exact',
+      projectId: fixture.activeProject.projectId,
+      taskId: task.taskId,
+      executionId: execution.executionId,
+      recoveryActionId: action.recoveryActionId,
+      journalEntryId: journal.contentRecoveryJournalEntryId,
+      expectedTaskRevision: task.revision,
+      expectedExecutionRevision: execution.revision,
+      expectedRecoveryActionRevision: action.revision,
+      expectedCoordinatorAuthorityEpoch: fixture.activeProject.coordinatorAuthorityEpoch,
+      reason: 'The exact output was not observed; retry under a new execution and output name.'
+    }
+
+    await expect(fixture.service.abandonTaskRecovery(fixture.worker.user, {
+      ...command,
+      requestId: 'req_task_recovery_abandon_non_owner',
+      idempotencyKey: 'idem_task_recovery_abandon_non_owner'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+    const abandoned = await fixture.service.abandonTaskRecovery(fixture.owner.user, command)
+    expect(abandoned).toMatchObject({
+      task: { status: 'revision_requested', revision: task.revision + 1 },
+      execution: {
+        state: 'cancelled',
+        revision: execution.revision + 1,
+        fence: { status: 'fenced', reason: 'manual_recovery_abandoned' }
+      },
+      journal: { state: 'abandoned', revision: journal.revision + 1 },
+      recoveryAction: { status: 'completed', revision: action.revision + 1 }
+    })
+    const workerInbox = await fixture.repository.pullInbox(
+      { kind: 'agent', id: fixture.workerAgent.agentId },
+      0,
+      200,
+      at.toISOString()
+    )
+    expect(workerInbox.map(({ payload }) => payload)).toContainEqual(expect.objectContaining({
+      type: 'task.recovery.abandoned',
+      projectId: fixture.activeProject.projectId,
+      taskId: task.taskId,
+      executionId: execution.executionId,
+      recoveryActionId: action.recoveryActionId,
+      taskRevision: task.revision + 1,
+      executionRevision: execution.revision + 1,
+      reason: command.reason
+    }))
+  })
+
+  it('lets only the Coordinator Agent create a newly named successor after Human recovery abandon', async () => {
+    const fixture = await manualRecoveryFileOfferFixture('task_recovery_successor')
+    const task = fixture.unknown.task!
+    const execution = fixture.unknown.execution!
+    const action = fixture.unknown.recoveryAction!
+    const journal = fixture.unknown.journal
+    const abandoned = await fixture.service.abandonTaskRecovery(fixture.owner.user, {
+      protocolVersion: '1.0',
+      type: 'task.recovery.abandon',
+      requestId: 'req_task_recovery_successor_abandon',
+      idempotencyKey: 'idem_task_recovery_successor_abandon',
+      projectId: fixture.activeProject.projectId,
+      taskId: task.taskId,
+      executionId: execution.executionId,
+      recoveryActionId: action.recoveryActionId,
+      journalEntryId: journal.contentRecoveryJournalEntryId,
+      expectedTaskRevision: task.revision,
+      expectedExecutionRevision: execution.revision,
+      expectedRecoveryActionRevision: action.revision,
+      expectedCoordinatorAuthorityEpoch: fixture.activeProject.coordinatorAuthorityEpoch,
+      reason: 'The exact output was not observed; approve one newly named successor.'
+    })
+    const project = (await fixture.repository.getProject(fixture.activeProject.projectId))!
+    const base = {
+      protocolVersion: '1.0' as const,
+      type: 'task.offer.reassign' as const,
+      taskId: abandoned.task.taskId,
+      previousExecutionId: abandoned.execution.executionId,
+      expectedProjectRevision: project.revision,
+      expectedTaskRevision: abandoned.task.revision,
+      expectedExecutionRevision: abandoned.execution.revision,
+      expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: project.executionAuthorityEpoch,
+      assigneeAgentId: fixture.workerAgent.agentId,
+      expectedAvailabilityRevision: fixture.availability.revision,
+      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
+    }
+    await expect(fixture.service.reassignTaskOffer(fixture.coordinator, {
+      ...base,
+      requestId: 'req_task_recovery_successor_same_name',
+      idempotencyKey: 'idem_task_recovery_successor_same_name',
+      nextFileIntent: fixture.fileIntent
+    })).rejects.toMatchObject({ code: 'validation_failed' })
+    await expect(fixture.service.reassignTaskOffer(fixture.coordinator, {
+      ...base,
+      requestId: 'req_task_recovery_successor_fact_drift',
+      idempotencyKey: 'idem_task_recovery_successor_fact_drift',
+      nextFileIntent: {
+        ...fixture.fileIntent,
+        output: {
+          ...fixture.fileIntent.output,
+          fileName: 'recovered-output-successor-2.md',
+          maxBytes: fixture.fileIntent.output.maxBytes + 1
+        }
+      }
+    })).rejects.toMatchObject({ code: 'validation_failed' })
+
+    const nextFileIntent = {
+      ...fixture.fileIntent,
+      output: {
+        ...fixture.fileIntent.output,
+        fileName: 'recovered-output-successor-2.md'
+      }
+    }
+    await expect(fixture.service.reassignTaskOffer(fixture.workerAgent, {
+      ...base,
+      requestId: 'req_task_recovery_successor_worker_bypass',
+      idempotencyKey: 'idem_task_recovery_successor_worker_bypass',
+      nextFileIntent
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+    const successor = await fixture.service.reassignTaskOffer(fixture.coordinator, {
+      ...base,
+      requestId: 'req_task_recovery_successor_create',
+      idempotencyKey: 'idem_task_recovery_successor_create',
+      nextFileIntent
+    })
+    expect(successor.execution.executionId).not.toBe(abandoned.execution.executionId)
+    expect(successor.execution.fileIntent?.output.fileName).toBe(nextFileIntent.output.fileName)
+    expect(successor.task).toMatchObject({
+      currentExecutionId: successor.execution.executionId,
+      status: 'offered',
+      fileIntent: nextFileIntent
+    })
+    expect(await fixture.repository.getTaskExecution(abandoned.execution.executionId)).toMatchObject({
+      state: 'cancelled',
+      revision: abandoned.execution.revision,
+      fence: { status: 'fenced', reason: 'manual_recovery_abandoned' }
+    })
   })
 
   it('activates Project Content only after exact journal observations and a current Owner Device signature', async () => {
@@ -1270,7 +1909,8 @@ describe('vNext Cloud application service', () => {
       expectedExecutionAuthorityEpoch: transferred.executionAuthorityEpoch,
       assigneeAgentId: fixture.nextCoordinatorAgent.agentId,
       expectedAvailabilityRevision: fixture.nextAvailability.revision,
-      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
+      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString(),
+      nextFileIntent: null
     }
 
     await expect(fixture.service.reassignTaskOffer(fixture.nextCoordinatorAgent, {

@@ -95,13 +95,14 @@ const commands = [
     expectedExecutionAuthorityEpoch: 1,
     assigneeAgentId: TEST_IDS.secondAgentId,
     expectedAvailabilityRevision: 1,
-    offerExpiresAt: TEST_TIMESTAMP
+    offerExpiresAt: TEST_TIMESTAMP,
+    nextFileIntent: null
   }
 ] as const
 
 test('Coordinator Cloud command service exposes one closed Agent-command allowlist', () => {
   assert.equal(COORDINATOR_CLOUD_COMMAND_SERVICE_ID, 'sciforge.collaboration.coordinator-cloud-command')
-  assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '2.0.0')
+  assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '3.0.0')
   assert.deepEqual(commands.map((command) => coordinatorCloudCommandSchema.parse(command).type), [
     'project.plan.submit',
     'task.offer.create',

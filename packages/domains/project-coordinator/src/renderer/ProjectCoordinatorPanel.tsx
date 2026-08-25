@@ -18,10 +18,14 @@ import {
   X
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { taskFileDestinationNameSchema } from '@sciforge/collaboration-contracts'
 import type { DomainWorkbenchRightPanelSession } from '@sciforge/domain-sdk/host'
 
 import type {
   ProjectCoordinatorCompleteInput,
+  ProjectCoordinatorContentRecoveryAbandonInput,
+  ProjectCoordinatorContentRecoveryObserveLinkInput,
+  ProjectCoordinatorContentRecoveryRetrySuccessorInput,
   ProjectCoordinatorHumanAnswerInput,
   ProjectCoordinatorHumanNeededCreateInput,
   ProjectCoordinatorMembershipAddInput,
@@ -310,6 +314,30 @@ export function ProjectCoordinatorPanel({
     })
   }, [applyProjectWorkspace, client, runAction])
 
+  const observeAndLinkRecovery = useCallback((
+    input: ProjectCoordinatorContentRecoveryObserveLinkInput
+  ) => {
+    void runAction('recovery-observe-link', () => (
+      client.observeAndLinkRecovery(input)
+    ), applyProjectWorkspace)
+  }, [applyProjectWorkspace, client, runAction])
+
+  const abandonRecovery = useCallback((
+    input: ProjectCoordinatorContentRecoveryAbandonInput
+  ) => {
+    void runAction('recovery-abandon', () => (
+      client.abandonRecovery(input)
+    ), applyProjectWorkspace)
+  }, [applyProjectWorkspace, client, runAction])
+
+  const retryRecoverySuccessor = useCallback((
+    input: ProjectCoordinatorContentRecoveryRetrySuccessorInput
+  ) => {
+    void runAction('recovery-retry-successor', () => (
+      client.retryRecoverySuccessor(input)
+    ), applyProjectWorkspace)
+  }, [applyProjectWorkspace, client, runAction])
+
   const addMember = useCallback((input: ProjectCoordinatorMembershipAddInput) => {
     void runAction('membership-add', () => client.addMember(input), (next) => {
       applyProjectWorkspace(next)
@@ -434,11 +462,15 @@ export function ProjectCoordinatorPanel({
           canManage={workspace?.connection.state === 'ready' &&
             workspace.connection.userId === project?.project.ownerUserId}
           busy={Boolean(busyAction?.startsWith('provisioning-') ||
-            busyAction?.startsWith('membership-'))}
+            busyAction?.startsWith('membership-') ||
+            busyAction?.startsWith('recovery-'))}
           onPreview={previewProvisioning}
           onApply={applyProvisioning}
           onAddMember={addMember}
           onRemoveMember={removeMember}
+          onObserveAndLinkRecovery={observeAndLinkRecovery}
+          onAbandonRecovery={abandonRecovery}
+          onRetryRecoverySuccessor={retryRecoverySuccessor}
         />
       </div>
     </aside>
@@ -801,7 +833,8 @@ export function ProjectCoordinatorDecisionSection({
                   {
                     instruction: String(values.get('instruction') ?? ''),
                     nextAssigneeAgentId: selectedAgentId,
-                    nextOfferExpiresAt: String(values.get('offer-expires-at') ?? '')
+                    nextOfferExpiresAt: String(values.get('offer-expires-at') ?? ''),
+                    nextOutputFileName: String(values.get('next-output-file-name') ?? '')
                   }
                 )
                 if (input) onReviewResult(input)
@@ -824,6 +857,16 @@ export function ProjectCoordinatorDecisionSection({
                 ))}
               </select>
               <input name="offer-expires-at" aria-label={t('projectCoordinatorOfferExpiresAt')} placeholder="2026-08-26T01:08:00.000Z" className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+              {project.tasks.find(({ task }) => (
+                task.taskId === review.submission.taskId
+              ))?.task.fileIntent ? (
+                <input
+                  name="next-output-file-name"
+                  aria-label={t('projectCoordinatorNextOutputFileName')}
+                  placeholder={t('projectCoordinatorNextOutputFileName')}
+                  className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+                />
+              ) : null}
               <div className="flex gap-2">
                 <button name="decision" value="accept" type="submit" disabled={busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorAcceptResult')}</button>
                 <button name="decision" value="request_revision" type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorRequestRevision')}</button>
@@ -891,6 +934,7 @@ export function projectCoordinatorResultReviewInput(
     instruction: string
     nextAssigneeAgentId: string
     nextOfferExpiresAt: string
+    nextOutputFileName: string
   }>
 ): ProjectCoordinatorResultReviewInput | null {
   const review = project.reviews.find(({ submission }) => (
@@ -907,6 +951,21 @@ export function projectCoordinatorResultReviewInput(
       projectAvailability.agentId === revision.nextAssigneeAgentId
     )
   )
+  const parsedOutputName = task.task.fileIntent
+    ? taskFileDestinationNameSchema.safeParse(revision.nextOutputFileName)
+    : null
+  const nextFileIntent = task.task.fileIntent === null
+    ? revision.nextOutputFileName.trim() === '' ? null : undefined
+    : parsedOutputName?.success &&
+        parsedOutputName.data !== task.task.fileIntent.output.fileName
+      ? {
+          ...task.task.fileIntent,
+          output: {
+            ...task.task.fileIntent.output,
+            fileName: parsedOutputName.data
+          }
+        }
+      : undefined
   const base = {
     projectId: project.project.projectId,
     taskId: task.task.taskId,
@@ -926,7 +985,8 @@ export function projectCoordinatorResultReviewInput(
     expectedNextAssigneeAvailabilityRevision: null,
     nextOfferExpiresAt: null,
     nextFileIntent: null
-  } : revision.instruction.trim() && nextAgent && revision.nextOfferExpiresAt ? {
+  } : revision.instruction.trim() && nextAgent && revision.nextOfferExpiresAt &&
+      nextFileIntent !== undefined ? {
         ...base,
         decision,
         instruction: revision.instruction,
@@ -934,7 +994,7 @@ export function projectCoordinatorResultReviewInput(
         expectedNextAssigneeAvailabilityRevision:
           nextAgent.projectAvailability.availability.revision,
         nextOfferExpiresAt: revision.nextOfferExpiresAt,
-        nextFileIntent: task.task.fileIntent
+        nextFileIntent
       } : null
 }
 
@@ -987,7 +1047,10 @@ export function ProjectCoordinatorProvisioningSection({
   onPreview,
   onApply,
   onAddMember,
-  onRemoveMember
+  onRemoveMember,
+  onObserveAndLinkRecovery,
+  onAbandonRecovery,
+  onRetryRecoverySuccessor
 }: Readonly<{
   project?: ProjectCoordinatorProject
   plan: ProjectCoordinatorProvisioningPlan | null
@@ -997,10 +1060,14 @@ export function ProjectCoordinatorProvisioningSection({
   onApply(plan: ProjectCoordinatorProvisioningPlan): void
   onAddMember(input: ProjectCoordinatorMembershipAddInput): void
   onRemoveMember(input: ProjectCoordinatorMembershipRemoveInput): void
+  onObserveAndLinkRecovery(input: ProjectCoordinatorContentRecoveryObserveLinkInput): void
+  onAbandonRecovery(input: ProjectCoordinatorContentRecoveryAbandonInput): void
+  onRetryRecoverySuccessor(input: ProjectCoordinatorContentRecoveryRetrySuccessorInput): void
 }>): ReactElement {
   const { t } = useTranslation('common')
   const [selectedProviderFactId, setSelectedProviderFactId] = useState('')
   const [contentFreeUserId, setContentFreeUserId] = useState('')
+  const [recoveryAbandonReason, setRecoveryAbandonReason] = useState('')
   const provisioning = project?.provisioning
   const memberships = provisioning?.memberships ?? []
   const existingUserIds = new Set(
@@ -1013,7 +1080,30 @@ export function ProjectCoordinatorProvisioningSection({
     providerPrincipalFactId === selectedProviderFactId
   )) ?? eligibleProviderFacts[0]
   const provisioningState = provisioning?.binding?.status ?? provisioning?.intent?.state
-  const recoveryAction = provisioning?.recoveryActions[0]
+  const recoveryAction = provisioning?.recoveryActions.find(({ status }) => (
+    status === 'available'
+  ))
+  const taskRecoveryAction = recoveryAction?.taskId && recoveryAction.executionId &&
+    (recoveryAction.action === 'link_observed_output' ||
+      recoveryAction.action === 'abandon_execution')
+    ? recoveryAction
+    : undefined
+  const abandonedRecoveryAction = provisioning?.recoveryActions.find((candidate) => {
+    if (candidate.status !== 'completed' || candidate.audience !== 'coordinator' ||
+      candidate.taskId === null || candidate.executionId === null) return false
+    const taskView = project?.tasks.find(({ task }) => task.taskId === candidate.taskId)
+    const execution = taskView?.executions.find(({ executionId }) => (
+      executionId === candidate.executionId
+    ))
+    return taskView?.task.currentExecutionId === candidate.executionId &&
+      taskView.task.status === 'revision_requested' &&
+      taskView.task.fileIntent !== null &&
+      execution?.state === 'cancelled' &&
+      execution.fence.reason === 'manual_recovery_abandoned'
+  })
+  const abandonedTask = abandonedRecoveryAction?.taskId
+    ? project?.tasks.find(({ task }) => task.taskId === abandonedRecoveryAction.taskId)
+    : undefined
   const rootLost = provisioning?.binding?.status === 'degraded'
 
   const addExactMember = () => {
@@ -1056,6 +1146,9 @@ export function ProjectCoordinatorProvisioningSection({
             <div
               className="space-y-2 rounded border border-amber-500/40 bg-ds-bg p-2"
               data-default-visible-card="content-recovery"
+              {...(taskRecoveryAction
+                ? { 'data-task-recovery-action': taskRecoveryAction.recoveryActionId }
+                : {})}
             >
               <div className="font-medium">{t('projectCoordinatorContentRecovery')}</div>
               {provisioning.binding?.statusReason ? (
@@ -1068,7 +1161,47 @@ export function ProjectCoordinatorProvisioningSection({
                   {t('projectCoordinatorProvisioningNext')}: {recoveryAction.safeSummary}
                 </p>
               ) : null}
-              {canManage && project.project.contentMode === 'required' && provisioning.intent ? (
+              {canManage && taskRecoveryAction ? (
+                <div className="space-y-2">
+                  {taskRecoveryAction.action === 'link_observed_output' &&
+                    taskRecoveryAction.requiresFreshObservation ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onObserveAndLinkRecovery({
+                          projectId: project.project.projectId,
+                          recoveryActionId: taskRecoveryAction.recoveryActionId
+                        })}
+                        className="rounded bg-ds-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                      >
+                        {busy
+                          ? t('projectCoordinatorWorking')
+                          : t('projectCoordinatorObserveAndLinkOutput')}
+                      </button>
+                    ) : null}
+                  <input
+                    value={recoveryAbandonReason}
+                    onChange={(event) => setRecoveryAbandonReason(event.target.value)}
+                    placeholder={t('projectCoordinatorAbandonReason')}
+                    aria-label={t('projectCoordinatorAbandonReason')}
+                    className="w-full rounded border border-ds-border bg-ds-surface px-2 py-1 text-[10px]"
+                  />
+                  <button
+                    type="button"
+                    disabled={busy || !recoveryAbandonReason.trim()}
+                    onClick={() => onAbandonRecovery({
+                      projectId: project.project.projectId,
+                      recoveryActionId: taskRecoveryAction.recoveryActionId,
+                      reason: recoveryAbandonReason.trim()
+                    })}
+                    className="rounded border border-red-500/40 px-2 py-1 text-[11px] text-red-600 disabled:opacity-50"
+                  >
+                    {busy
+                      ? t('projectCoordinatorWorking')
+                      : t('projectCoordinatorAbandonExecution')}
+                  </button>
+                </div>
+              ) : canManage && project.project.contentMode === 'required' && provisioning.intent ? (
                 <button
                   type="button"
                   disabled={busy}
@@ -1077,6 +1210,83 @@ export function ProjectCoordinatorProvisioningSection({
                 >
                   {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorPreviewReconcile')}
                 </button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {abandonedRecoveryAction && abandonedTask?.task.fileIntent ? (
+            <div
+              className="space-y-2 rounded border border-amber-500/40 bg-ds-bg p-2"
+              data-default-visible-card="content-recovery-successor"
+              data-recovery-action-id={abandonedRecoveryAction.recoveryActionId}
+            >
+              <div className="font-medium">
+                {t('projectCoordinatorRecoverySuccessor')}
+              </div>
+              <p className="text-[11px] text-ds-muted">
+                {t('projectCoordinatorRecoverySuccessorSummary')}
+              </p>
+              <code className="block break-all text-[10px]">
+                {abandonedTask.task.fileIntent.output.fileName}
+              </code>
+              {canManage ? (
+                <form
+                  className="space-y-2"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    const values = new FormData(event.currentTarget)
+                    onRetryRecoverySuccessor({
+                      projectId: project!.project.projectId,
+                      recoveryActionId: abandonedRecoveryAction.recoveryActionId,
+                      assigneeAgentId: String(values.get('successor-agent') ?? ''),
+                      nextOutputFileName: String(
+                        values.get('next-output-file-name') ?? ''
+                      ),
+                      offerExpiresAt: String(values.get('successor-offer-expires-at') ?? '')
+                    })
+                  }}
+                >
+                  <select
+                    required
+                    name="successor-agent"
+                    defaultValue=""
+                    aria-label={t('projectCoordinatorNextAgent')}
+                    className="w-full rounded border border-ds-border bg-ds-surface px-2 py-1 text-[10px]"
+                  >
+                    <option value="">{t('projectCoordinatorChooseExactAgent')}</option>
+                    {project!.workerGroups.flatMap(({ agents }) => agents).map((agent) => (
+                      <option
+                        key={agent.projectAvailability.agentId}
+                        value={agent.projectAvailability.agentId}
+                      >
+                        {agent.displayName} · {agent.projectAvailability.agentId}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    required
+                    name="next-output-file-name"
+                    aria-label={t('projectCoordinatorNextOutputFileName')}
+                    placeholder={t('projectCoordinatorNextOutputFileName')}
+                    className="w-full rounded border border-ds-border bg-ds-surface px-2 py-1 text-[10px]"
+                  />
+                  <input
+                    required
+                    name="successor-offer-expires-at"
+                    aria-label={t('projectCoordinatorOfferExpiresAt')}
+                    placeholder="2026-08-27T01:08:00.000Z"
+                    className="w-full rounded border border-ds-border bg-ds-surface px-2 py-1 text-[10px]"
+                  />
+                  <button
+                    type="submit"
+                    disabled={busy}
+                    className="rounded bg-ds-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                  >
+                    {busy
+                      ? t('projectCoordinatorWorking')
+                      : t('projectCoordinatorApproveRecoveryRetry')}
+                  </button>
+                </form>
               ) : null}
             </div>
           ) : null}

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { join } from 'node:path'
 import type { z } from 'zod'
 import type { DomainMainAgentExecutionHost } from '@sciforge/domain-sdk/agent-execution'
 import type {
@@ -26,6 +27,9 @@ import {
 import {
   PROJECT_COORDINATOR_CAPABILITY_IDS,
   projectCoordinatorCompleteInputSchema,
+  projectCoordinatorContentRecoveryAbandonInputSchema,
+  projectCoordinatorContentRecoveryObserveLinkInputSchema,
+  projectCoordinatorContentRecoveryRetrySuccessorInputSchema,
   projectCoordinatorHumanAnswerInputSchema,
   projectCoordinatorHumanNeededCreateInputSchema,
   projectCoordinatorMembershipAddInputSchema,
@@ -63,6 +67,7 @@ import {
 } from './ports.js'
 import { ProjectCoordinatorStateStore } from './state.js'
 import { createProjectCoordinatorProvisioningPort } from './provisioning.js'
+import { createProjectCoordinatorRecoveryPort } from './recovery.js'
 
 export type ProjectCoordinatorCapabilityOptions = Readonly<{
   id: string
@@ -295,6 +300,78 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         })
       }),
       options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
+        version: '1.0.0',
+        title: 'Observe and link exact unknown Task output',
+        description: 'Re-reads the current recovery tuple, invokes the canonical Content Space exact observation, and links only the Host-derived portable output facts.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'content', 'recovery', 'outcome-unknown', 'observe-link'],
+        inputSchema: projectCoordinatorContentRecoveryObserveLinkInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.recovery.observeAndLink(
+            projectCoordinatorContentRecoveryObserveLinkInputSchema.parse(raw),
+            capabilityIdempotencyKey(
+              PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
+              context
+            )
+          ),
+          changed: true
+        })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
+        version: '1.0.0',
+        title: 'Abandon uncertain Task execution',
+        description: 'Fences the unresolved execution permanently from freshly read Cloud CAS facts without manufacturing a successful Provider observation.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'destructive',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'content', 'recovery', 'abandon', 'execution-fence'],
+        inputSchema: projectCoordinatorContentRecoveryAbandonInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.recovery.abandon(
+            projectCoordinatorContentRecoveryAbandonInputSchema.parse(raw),
+            capabilityIdempotencyKey(
+              PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
+              context
+            )
+          ),
+          changed: true
+        })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
+        version: '1.0.0',
+        title: 'Approve a freshly named recovery successor',
+        description: 'Re-reads the completed abandon facts and asks only the current Coordinator Agent to issue a new fenced execution with a new no-overwrite filename.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'content', 'recovery', 'successor', 'execution-fence'],
+        inputSchema: projectCoordinatorContentRecoveryRetrySuccessorInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.recovery.retrySuccessor(
+            projectCoordinatorContentRecoveryRetrySuccessorInputSchema.parse(raw),
+            capabilityIdempotencyKey(
+              PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
+              context
+            )
+          ),
+          changed: true
+        })
+      }),
+      options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
         version: '1.0.0',
         title: 'Add Project member pending Content provisioning',
@@ -495,12 +572,29 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
       return systemCapabilities
     }
   })
+  const recovery = createProjectCoordinatorRecoveryPort({
+    workspace,
+    transport,
+    coordinatorCloudCommands,
+    getCapabilities: () => {
+      if (!systemCapabilities) {
+        throw new Error('The Content Space recovery observation capability is unavailable.')
+      }
+      return systemCapabilities
+    },
+    workspaceRoot: () => join(
+      host.getUserDataDir(),
+      'project-coordinator',
+      'content-recovery'
+    )
+  })
   const ports: ProjectCoordinatorMainPorts = Object.freeze({
     workspace,
     plan,
     actions,
     provisioningAttestationSigning,
     provisioning,
+    recovery,
     coordinatorCloudCommands
   })
   const lifecycle: DomainMainRuntimeLifecycleContribution = Object.freeze({

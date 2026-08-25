@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  remoteSessionProjectionSchema
+  remoteSessionProjectionSchema,
+  type AgentInboxMessage
 } from '@sciforge/collaboration-contracts'
 import {
   agentNodeFixture,
@@ -16,7 +17,8 @@ import type { AuthenticatedCloudTransport } from '@sciforge/domain-identity-acce
 import { localProjectionFromRemote } from './projection-coordinator.js'
 import {
   CollaborationRuntime,
-  activeProjectionBindingsForSession
+  activeProjectionBindingsForSession,
+  isWorkerTaskInboxPayload
 } from './runtime.js'
 import {
   EMPTY_COLLABORATION_LOCAL_STATE,
@@ -46,6 +48,15 @@ test('a closed Topic history does not block outbound mirroring for the active To
     activeProjectionBindingsForSession([closed, active], 'codex', 'fixed-thread-1'),
     [active]
   )
+})
+
+test('runtime routes durable exact-output recovery and abandonment to the Worker adapter', () => {
+  for (const type of ['task.recovery.output_linked', 'task.recovery.abandoned'] as const) {
+    assert.equal(isWorkerTaskInboxPayload({ type } as AgentInboxMessage['payload']), true)
+  }
+  assert.equal(isWorkerTaskInboxPayload({
+    type: 'human.answer.received'
+  } as AgentInboxMessage['payload']), false)
 })
 
 test('the active runtime mirrors completed assistant progress before after-turn finalization', async () => {

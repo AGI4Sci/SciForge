@@ -39,9 +39,13 @@ import {
 import { CollaborationTaskAdapter } from './task-adapter.js'
 
 const OFFER_ID = 'ofr_Offer0000001'
+const SUPERSEDING_EXECUTION_ID = 'exe_Exec00000002'
 const FILE_BINDING_REVISION = 3
 const INPUT_RESOURCE_ID = 'rrf_InputFile0001'
 const OUTPUT_ROOT_RESOURCE_ID = 'rrf_OutputRoot001'
+const RECOVERY_OUTPUT_RESOURCE_ID = 'rrf_RecoveryOutput0001'
+const RECOVERY_DOWNLOAD_JOURNAL_ID = 'crj_WorkerDownload0001'
+const RECOVERY_JOURNAL_ID = 'crj_WorkerJournal9999'
 const ROOT_LOCATOR = {
   contractVersion: 1 as const,
   kind: 'content-space.container-reference' as const,
@@ -835,6 +839,112 @@ test('restart after Provider dispatch records outcome unknown and requires manua
   assert.equal(recovered?.lateOutcomes[0]?.outcome, 'outcome_unknown')
 })
 
+test('a linked exact Provider observation submits the preserved Worker result without rerunning Runtime or upload', async () => {
+  const cloud = new FakeWorkerCloud('running', true)
+  const recovery = manualRecoveryFixture(cloud)
+  let agentRuns = 0
+  let contentInvocations = 0
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => {
+      agentRuns += 1
+      throw new Error('Human-linked recovery must not rerun Agent Runtime.')
+    }
+  }, recovery.initial, capabilityInvoker(async () => {
+    contentInvocations += 1
+    throw new Error('Human-linked recovery must not repeat a Provider transfer.')
+  }))
+
+  await created.adapter.handleInbox(recovery.linkedMessage)
+
+  const recovered = created.store.snapshot().taskRuns[0]
+  assert.equal(agentRuns, 0)
+  assert.equal(contentInvocations, 0)
+  assert.equal(recovered?.state, 'completed')
+  const uploadJournal = recovered?.externalJournal.find(({ operation }) => operation === 'upload_new')
+  assert.equal(uploadJournal?.state, 'observed_success')
+  assert.equal(uploadJournal?.cloudJournal?.state, 'observed_success')
+  assert.equal(
+    uploadJournal?.cloudJournal?.revision,
+    recovery.linkedMessage.payload.type === 'task.recovery.output_linked'
+      ? recovery.linkedMessage.payload.journalRevision
+      : -1
+  )
+  assert.deepEqual(recovered?.outputs, [recovery.output])
+  assert.deepEqual(recovered?.recoveryJournalEntryIds, [
+    RECOVERY_DOWNLOAD_JOURNAL_ID,
+    RECOVERY_JOURNAL_ID
+  ])
+  assert.equal(
+    recovered?.resources.some(({ resourceRefId }) => resourceRefId === RECOVERY_OUTPUT_RESOURCE_ID),
+    true
+  )
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.result.submit'
+  ])
+
+  await created.adapter.handleInbox(agentInboxMessageSchema.parse({
+    ...recovery.linkedMessage,
+    inboxMessageId: 'ibx_RecoveryLinkedDuplicate',
+    sequence: recovery.linkedMessage.sequence + 1
+  }))
+  assert.equal(agentRuns, 0)
+  assert.equal(contentInvocations, 0)
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.result.submit'
+  ])
+})
+
+test('a recovery link is rejected after the exact execution has been superseded', async () => {
+  const cloud = new FakeWorkerCloud('running', true)
+  const recovery = manualRecoveryFixture(cloud)
+  cloud.supersedeManualRecovery()
+  const created = await createRunner(cloud, neverAgent(), recovery.initial)
+
+  await assert.rejects(
+    created.adapter.handleInbox(recovery.linkedMessage),
+    /exact current manual-recovery execution/u
+  )
+
+  assert.equal(created.store.snapshot().taskRuns[0]?.state, 'manual-recovery')
+  assert.equal(cloud.commands.includes('task.result.submit'), false)
+})
+
+test('an exact recovery abandonment fences the local Worker journal without Runtime, Provider, or result writes', async () => {
+  const cloud = new FakeWorkerCloud('running', true)
+  const recovery = manualRecoveryFixture(cloud)
+  const abandoned = cloud.abandonManualRecovery()
+  let agentRuns = 0
+  let contentInvocations = 0
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => {
+      agentRuns += 1
+      throw new Error('Abandoned recovery must not rerun Agent Runtime.')
+    }
+  }, recovery.initial, capabilityInvoker(async () => {
+    contentInvocations += 1
+    throw new Error('Abandoned recovery must not invoke Content Space.')
+  }))
+  const message = recoveryAbandonedMessage(abandoned.task, abandoned.execution)
+
+  await created.adapter.handleInbox(message)
+  await created.adapter.handleInbox(agentInboxMessageSchema.parse({
+    ...message,
+    inboxMessageId: 'ibx_RecoveryAbandonedDuplicate',
+    sequence: message.sequence + 1
+  }))
+
+  const run = created.store.snapshot().taskRuns[0]
+  assert.equal(agentRuns, 0)
+  assert.equal(contentInvocations, 0)
+  assert.equal(run?.state, 'fenced')
+  assert.equal(run?.task?.status, 'revision_requested')
+  assert.equal(run?.execution?.state, 'cancelled')
+  assert.equal(run?.execution?.fence.reason, 'manual_recovery_abandoned')
+  assert.equal(cloud.commands.includes('task.result.submit'), false)
+})
+
 test('restart after accept starts and completes the same execution without accepting it twice', async () => {
   const cloud = new FakeWorkerCloud('accepted')
   const initial = emptyState()
@@ -1143,6 +1253,215 @@ async function createRunner(
   return { adapter, store }
 }
 
+function manualRecoveryFixture(cloud: FakeWorkerCloud) {
+  const localTask = structuredClone(cloud.task)
+  const localExecution = structuredClone(cloud.execution)
+  const localCloudPreflight = cloud.preflight()
+  const fileIntent = localExecution.fileIntent
+  if (!fileIntent) throw new Error('Manual recovery fixture requires a file execution.')
+  const outputLocator = {
+    contractVersion: 1 as const,
+    kind: 'content-space.file-reference' as const,
+    authority: ROOT_LOCATOR.authority,
+    identity: { fileId: 'analysis-output-recovered' }
+  }
+  const output = {
+    executionId: localExecution.executionId,
+    assignmentTaskRevision: fileIntent.assignmentTaskRevision,
+    locator: outputLocator,
+    locatorDigest: digestFixture(outputLocator),
+    rootLocatorDigest: ROOT_LOCATOR_DIGEST,
+    bindingRevision: FILE_BINDING_REVISION,
+    transferReceiptDigest: '8'.repeat(64),
+    observationDigest: '9'.repeat(64),
+    preflightObservationDigest: '3'.repeat(64)
+  }
+  const resource = cloudResourceRefSchema.parse({
+    schemaVersion: 1,
+    type: 'resource_ref',
+    resourceRefId: RECOVERY_OUTPUT_RESOURCE_ID,
+    projectId: localTask.projectId,
+    taskId: localTask.taskId,
+    executionId: localExecution.executionId,
+    assignmentTaskRevision: fileIntent.assignmentTaskRevision,
+    bindingRevision: FILE_BINDING_REVISION,
+    intentDigest: fileIntent.declarationDigest,
+    role: 'output-file',
+    ordinal: 2,
+    locator: outputLocator,
+    locatorDigest: output.locatorDigest,
+    status: 'available',
+    invalidatedAt: null,
+    revision: 1,
+    createdAt: TEST_LATER_TIMESTAMP,
+    updatedAt: TEST_LATER_TIMESTAMP
+  })
+  const downloadCloudJournal = externalOperationRecoveryJournalEntrySchema.parse({
+    schemaVersion: 1,
+    type: 'external_operation_recovery_journal_entry',
+    contentRecoveryJournalEntryId: RECOVERY_DOWNLOAD_JOURNAL_ID,
+    scope: 'task_content_transfer',
+    projectId: localTask.projectId,
+    taskId: localTask.taskId,
+    executionId: localExecution.executionId,
+    preparedTaskRevision: localTask.revision,
+    preparedExecutionRevision: localExecution.revision,
+    provisioningIntentId: null,
+    provisioningRevision: null,
+    logicalInvocationId: `download.${localExecution.executionId}.recovered-input`,
+    operation: 'download',
+    state: 'observed_success',
+    requestDigest: 'a'.repeat(64),
+    receiptDigest: '4'.repeat(64),
+    observationDigest: '5'.repeat(64),
+    safeFailureCode: null,
+    preparedAt: TEST_TIMESTAMP,
+    dispatchedAt: TEST_TIMESTAMP,
+    resolvedAt: TEST_TIMESTAMP,
+    revision: 3,
+    createdAt: TEST_TIMESTAMP,
+    updatedAt: TEST_TIMESTAMP
+  })
+  const uploadCloudJournal = externalOperationRecoveryJournalEntrySchema.parse({
+    schemaVersion: 1,
+    type: 'external_operation_recovery_journal_entry',
+    contentRecoveryJournalEntryId: RECOVERY_JOURNAL_ID,
+    scope: 'task_content_transfer',
+    projectId: localTask.projectId,
+    taskId: localTask.taskId,
+    executionId: localExecution.executionId,
+    preparedTaskRevision: localTask.revision,
+    preparedExecutionRevision: localExecution.revision,
+    provisioningIntentId: null,
+    provisioningRevision: null,
+    logicalInvocationId: `upload.${localExecution.executionId}.output`,
+    operation: 'upload_new',
+    state: 'outcome_unknown',
+    requestDigest: TEST_HASH,
+    receiptDigest: null,
+    observationDigest: null,
+    safeFailureCode: 'provider_outcome_unknown',
+    preparedAt: TEST_TIMESTAMP,
+    dispatchedAt: TEST_TIMESTAMP,
+    resolvedAt: null,
+    revision: 3,
+    createdAt: TEST_TIMESTAMP,
+    updatedAt: TEST_LATER_TIMESTAMP
+  })
+
+  cloud.enterManualRecovery(resource)
+  const initial = emptyState()
+  initial.tasks = [localTask]
+  initial.taskRuns = [durableTaskRun(cloud, {
+    task: localTask,
+    execution: localExecution,
+    latestPreflight: {
+      cloud: localCloudPreflight,
+      outcome: 'allowed',
+      reasons: [],
+      contentTransferReadiness: [],
+      evaluatedAt: TEST_TIMESTAMP
+    },
+    expectedTaskRevision: localTask.revision,
+    expectedExecutionRevision: localExecution.revision,
+    state: 'manual-recovery',
+    resources: fileResources(fileIntent.assignmentTaskRevision),
+    agentJournal: [{
+      logicalInvocationId: `agent.${localExecution.executionId}.1`,
+      clientDirectiveId: 'collab-worker-recovery-preserved-runtime',
+      state: 'observed_success',
+      preparedAt: TEST_TIMESTAMP,
+      dispatchedAt: TEST_TIMESTAMP,
+      observedAt: TEST_TIMESTAMP,
+      runtimeId: 'codex',
+      threadId: 'worker-recovery-thread',
+      turnId: 'worker-recovery-turn',
+      runtimeState: 'completed',
+      safeResultText: JSON.stringify({
+        schemaVersion: 1,
+        outcome: 'completed',
+        summary: 'Recovered file analysis is ready.'
+      }),
+      safeError: null
+    }],
+    externalJournal: [{
+      logicalInvocationId: downloadCloudJournal.logicalInvocationId,
+      operation: 'download',
+      workspaceRelativePath: 'input.csv',
+      requestDigest: downloadCloudJournal.requestDigest,
+      state: 'observed_success',
+      cloudJournal: downloadCloudJournal,
+      receiptDigest: downloadCloudJournal.receiptDigest,
+      observationDigest: downloadCloudJournal.observationDigest,
+      preparedAt: TEST_TIMESTAMP,
+      effectDispatchedAt: TEST_TIMESTAMP,
+      observedAt: TEST_TIMESTAMP,
+      safeFailureCode: null,
+      safeError: null
+    }, {
+      logicalInvocationId: uploadCloudJournal.logicalInvocationId,
+      operation: 'upload_new',
+      workspaceRelativePath: 'analysis.md',
+      requestDigest: uploadCloudJournal.requestDigest,
+      state: 'outcome_unknown',
+      cloudJournal: uploadCloudJournal,
+      receiptDigest: null,
+      observationDigest: null,
+      preparedAt: TEST_TIMESTAMP,
+      effectDispatchedAt: TEST_TIMESTAMP,
+      observedAt: TEST_LATER_TIMESTAMP,
+      safeFailureCode: 'provider_outcome_unknown',
+      safeError: 'Provider outcome is unknown.',
+    }],
+    outputs: [],
+    recoveryJournalEntryIds: [RECOVERY_DOWNLOAD_JOURNAL_ID],
+    resultSummary: 'Recovered file analysis is ready.',
+    startedAt: TEST_TIMESTAMP,
+    completedAt: TEST_LATER_TIMESTAMP,
+    error: 'Provider outcome is unknown; manual recovery is required.'
+  })]
+  const linkedMessage = agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    inboxMessageId: 'ibx_RecoveryLinked0001',
+    sequence: 20,
+    payload: {
+      protocolVersion: '1.0',
+      type: 'task.recovery.output_linked',
+      projectId: localTask.projectId,
+      taskId: localTask.taskId,
+      executionId: localExecution.executionId,
+      recoveryActionId: TEST_IDS.recoveryActionId,
+      journalEntryId: uploadCloudJournal.contentRecoveryJournalEntryId,
+      logicalInvocationId: uploadCloudJournal.logicalInvocationId,
+      resourceRefId: resource.resourceRefId,
+      taskRevision: cloud.task.revision,
+      executionRevision: cloud.execution.revision,
+      journalRevision: uploadCloudJournal.revision + 1,
+      output
+    }
+  })
+  return { initial, linkedMessage, output }
+}
+
+function recoveryAbandonedMessage(task: Task, execution: TaskExecution) {
+  return agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    inboxMessageId: 'ibx_RecoveryAbandoned01',
+    sequence: 30,
+    payload: {
+      protocolVersion: '1.0',
+      type: 'task.recovery.abandoned',
+      projectId: task.projectId,
+      taskId: task.taskId,
+      executionId: execution.executionId,
+      recoveryActionId: TEST_IDS.recoveryActionId,
+      taskRevision: task.revision,
+      executionRevision: execution.revision,
+      reason: 'The exact Provider output could not be observed.'
+    }
+  })
+}
+
 function durableTaskRun(
   cloud: FakeWorkerCloud,
   overrides: Partial<CollaborationLocalState['taskRuns'][number]> = {}
@@ -1197,12 +1516,13 @@ class FakeWorkerCloud {
   >>()
   private recoveryJournalOrdinal = 0
   private preflightDenied = false
+  private readonly recoveryResources = new Map<string, ReturnType<typeof cloudResourceRefSchema.parse>>()
 
   constructor(
     state: 'offered' | 'accepted' | 'running' = 'offered',
     private readonly fileMode = false
   ) {
-    this.task = makeTask(state, state === 'offered' ? 1 : 3)
+    this.task = makeTask(state, state === 'offered' ? 1 : 3, fileMode)
     this.execution = makeExecution(state, this.task.revision, fileMode)
   }
 
@@ -1211,7 +1531,12 @@ class FakeWorkerCloud {
     requestedExecutionRevision = this.execution.revision
   ) {
     const decisionReasons = [
-      ...(this.preflightDenied ? ['execution_fenced' as const] : []),
+      ...(this.preflightDenied || this.execution.fence.status === 'fenced'
+        ? ['execution_fenced' as const]
+        : []),
+      ...(this.task.currentExecutionId === this.execution.executionId
+        ? []
+        : ['execution_not_current' as const]),
       ...(requestedTaskRevision === this.task.revision ? [] : ['task_revision_mismatch' as const]),
       ...(requestedExecutionRevision === this.execution.revision
         ? []
@@ -1305,9 +1630,10 @@ class FakeWorkerCloud {
           }
         }
         if (request.type === 'resource.get' && this.fileMode) {
-          const resource = fileResources(this.execution.fence.assignmentTaskRevision).find(({ resourceRefId }) => (
-            resourceRefId === request.resourceRefId
-          ))
+          const resource = this.recoveryResources.get(request.resourceRefId) ??
+            fileResources(this.execution.fence.assignmentTaskRevision).find(({ resourceRefId }) => (
+              resourceRefId === request.resourceRefId
+            ))
           if (!resource) throw new Error('Unknown ResourceRef.')
           return entityResponse(request, resource)
         }
@@ -1446,6 +1772,68 @@ class FakeWorkerCloud {
     this.preflightDenied = true
   }
 
+  enterManualRecovery(resource: ReturnType<typeof cloudResourceRefSchema.parse>): void {
+    assert.equal(this.fileMode, true)
+    this.execution = taskExecutionSchema.parse({
+      ...this.execution,
+      state: 'manual_recovery_required',
+      stateRevision: this.execution.stateRevision + 1,
+      fence: {
+        ...this.execution.fence,
+        status: 'fenced',
+        reason: 'manual_recovery_required',
+        fencedAt: TEST_LATER_TIMESTAMP
+      },
+      terminalAt: TEST_LATER_TIMESTAMP,
+      revision: this.execution.revision + 1,
+      updatedAt: TEST_LATER_TIMESTAMP
+    })
+    this.task = taskSchema.parse({
+      ...this.task,
+      status: 'manual_recovery_required',
+      currentExecutionState: 'manual_recovery_required',
+      revision: this.task.revision + 1,
+      updatedAt: TEST_LATER_TIMESTAMP
+    })
+    this.recoveryResources.set(resource.resourceRefId, resource)
+  }
+
+  supersedeManualRecovery(): void {
+    assert.equal(this.execution.state, 'manual_recovery_required')
+    this.task = taskSchema.parse({
+      ...this.task,
+      currentExecutionId: SUPERSEDING_EXECUTION_ID,
+      currentExecutionState: 'offered',
+      status: 'offered',
+      executionCount: 2,
+      revision: this.task.revision + 1,
+      updatedAt: TEST_LATER_TIMESTAMP
+    })
+  }
+
+  abandonManualRecovery(): Readonly<{ task: Task; execution: TaskExecution }> {
+    assert.equal(this.execution.state, 'manual_recovery_required')
+    this.execution = taskExecutionSchema.parse({
+      ...this.execution,
+      state: 'cancelled',
+      stateRevision: this.execution.stateRevision + 1,
+      fence: {
+        ...this.execution.fence,
+        reason: 'manual_recovery_abandoned'
+      },
+      revision: this.execution.revision + 1,
+      updatedAt: TEST_LATER_TIMESTAMP
+    })
+    this.task = taskSchema.parse({
+      ...this.task,
+      status: 'revision_requested',
+      currentExecutionState: 'cancelled',
+      revision: this.task.revision + 1,
+      updatedAt: TEST_LATER_TIMESTAMP
+    })
+    return { task: this.task, execution: this.execution }
+  }
+
   answerHumanNeeded(): void {
     assert.equal(this.execution.state, 'needs_human')
     this.advance('running')
@@ -1477,7 +1865,7 @@ class FakeWorkerCloud {
       },
       fileIntent: this.fileMode ? fileExecutionIntent(assignmentTaskRevision) : null
     })
-    this.task = makeTask(state, taskRevision)
+    this.task = makeTask(state, taskRevision, this.fileMode)
   }
 
   private requireRecoveryJournal(journalEntryId: string) {
@@ -1487,7 +1875,7 @@ class FakeWorkerCloud {
   }
 }
 
-function makeTask(state: FakeWorkerTaskState, revision: number): Task {
+function makeTask(state: FakeWorkerTaskState, revision: number, fileMode = false): Task {
   return taskSchema.parse({
     schemaVersion: 1,
     type: 'task',
@@ -1498,7 +1886,7 @@ function makeTask(state: FakeWorkerTaskState, revision: number): Task {
     objective: 'Produce the agreed concise result.',
     completionCriteria: ['Return a reviewable summary'],
     dependencyTaskIds: [],
-    fileIntent: null,
+    fileIntent: fileMode ? taskFileIntent() : null,
     currentExecutionId: TEST_IDS.executionId,
     currentExecutionState: state,
     status: state === 'failed'
@@ -1604,6 +1992,28 @@ function fileExecutionIntent(assignmentTaskRevision: number) {
     inputs: [{ resourceRefId: INPUT_RESOURCE_ID, destinationName: 'input.csv' }],
     output: {
       rootResourceRefId: OUTPUT_ROOT_RESOURCE_ID,
+      fileName: 'analysis.md',
+      mediaType: 'text/markdown',
+      maxBytes: 1_000_000
+    }
+  }
+}
+
+function taskFileIntent() {
+  return {
+    schemaVersion: 1 as const,
+    bindingRevision: FILE_BINDING_REVISION,
+    inputs: [{
+      kind: 'content-space.input-file' as const,
+      locator: FILE_LOCATOR,
+      destinationName: 'input.csv',
+      expectedSemanticRevision: null,
+      expectedMediaType: 'text/csv'
+    }],
+    output: {
+      kind: 'content-space.output-new' as const,
+      target: 'project-binding-root' as const,
+      mode: 'upload-new' as const,
       fileName: 'analysis.md',
       mediaType: 'text/markdown',
       maxBytes: 1_000_000

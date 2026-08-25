@@ -23,6 +23,9 @@ export const CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_CONTRIBUTION = contributionFor(
 export const CONTENT_SPACE_PROVISIONING_BATCH_GRANT_CONTRIBUTION = contributionById(
   'main', 'content-space.provisioning-batch'
 )
+export const CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_CONTRIBUTION = contributionById(
+  'main', 'content-space.recovery-observation'
+)
 export const CONTENT_SPACE_CONTAINER_REFERENCE_CODEC_CONTRIBUTION = contributionById(
   'main', 'content-space.container-reference-codec'
 )

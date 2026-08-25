@@ -29,8 +29,10 @@ import {
   CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
   CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND,
   CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
+  CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_ID,
   CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID,
   ContentSpaceOperationError,
+  contentSpaceSystemObserveExactOutputResultSchema,
   contentSpaceSystemDownloadResultSchema,
   contentSpaceSystemUploadNewResultSchema,
   contentSpaceSuccess,
@@ -57,6 +59,7 @@ import {
   CONTENT_SPACE_CAPABILITY_FACTORY_CONTRIBUTION,
   CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION,
   CONTENT_SPACE_PROVISIONING_BATCH_GRANT_CONTRIBUTION,
+  CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_CONTRIBUTION,
   CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_CONTRIBUTION
 } from '../definition.js'
 import {
@@ -173,7 +176,7 @@ describe('Content Space main composition', () => {
     expect(createProvider).not.toHaveBeenCalled()
   })
 
-  it('contributes provider-owned transfer and provisioning grants with exact delegated actions', async () => {
+  it('contributes provider-owned transfer, recovery-observation, and provisioning grants', async () => {
     const entry = createDomainMainEntry(mainHost())
     const transferGrant = entry.contributions.find(({ id }) =>
       id === CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_CONTRIBUTION.id
@@ -194,6 +197,16 @@ describe('Content Space main composition', () => {
       kind: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_CONTRIBUTION.kind,
       value: {
         id: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
+        eligibility: 'trusted-domain-runtime'
+      }
+    })
+    expect(entry.contributions.find(({ id }) =>
+      id === CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_CONTRIBUTION.id
+    )).toMatchObject({
+      id: CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_CONTRIBUTION.id,
+      kind: CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_CONTRIBUTION.kind,
+      value: {
+        id: CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_ID,
         eligibility: 'trusted-domain-runtime'
       }
     })
@@ -228,6 +241,17 @@ describe('Content Space main composition', () => {
       effect: 'external-write',
       approval: 'none',
       concurrency: { revision: 'none', idempotency: 'required' }
+    })
+    expect(definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.systemObserveExactOutput
+    )).toMatchObject({
+      id: 'content-space.system-observe-exact-output',
+      audiences: ['system'],
+      scope: 'workspace',
+      effect: 'read',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' }
     })
     expect([
       CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
@@ -307,6 +331,239 @@ describe('Content Space main composition', () => {
     expect(openDownloadDestination).not.toHaveBeenCalled()
     expect(openWorkspaceUploadSource).not.toHaveBeenCalled()
     expect(openWorkspaceDownloadDestination).not.toHaveBeenCalled()
+  })
+
+  it('observes one exact unknown upload output through a process-local current-session resource', async () => {
+    const expectedName = 'meeting-minutes.recovery-1.md'
+    const recoveredFile = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      fileId: 'recovered-output-one'
+    })
+    const portableResources = portableResourcesFixture()
+    const listEntries = vi.fn<ContentSpaceProvider['listEntries']>(async ({ parent, page }) =>
+      page.cursor
+        ? {
+            parent,
+            items: [{
+              kind: 'file' as const,
+              reference: recoveredFile,
+              label: expectedName,
+              size: 37
+            }]
+          }
+        : {
+            parent,
+            items: [{
+              kind: 'file' as const,
+              reference: {
+                providerInstanceRef: PROVIDER_INSTANCE_REF,
+                fileId: 'unrelated-output'
+              },
+              label: 'unrelated.md',
+              size: 9
+            }],
+            nextCursor: 'recovery-page-two'
+          }
+    )
+    const observeEntry = vi.fn<ContentSpaceProvider['observeEntry']>(async ({ reference }) => ({
+      entry: 'containerId' in reference
+        ? { kind: 'container' as const, reference, label: 'Root' }
+        : { kind: 'file' as const, reference, label: expectedName, size: 37 },
+      capabilities: [
+        { operation: 'list-entries', readiness: 'production_ready', reasonCode: 'available' },
+        { operation: 'observe-entry', readiness: 'production_ready', reasonCode: 'available' },
+        { operation: 'upload-new', readiness: 'production_ready', reasonCode: 'available' }
+      ]
+    }))
+    const attestExternalBinding = vi.fn(async () => externalBinding)
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost({
+        portableResources,
+        fileTransfers: unusedFileTransfers()
+      })).contributions,
+      contributionHost([
+        ...providerContributions(() => providerFixture({
+          attestExternalBinding,
+          listEntries,
+          observeEntry
+        })),
+        systemVerificationProfileContribution(
+          'fixture-recovery-observation',
+          'upload-new',
+          64
+        )
+      ])
+    )
+
+    const result = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.systemObserveExactOutput
+    ).handler({
+      root: toPortableContentContainerReference(ROOT),
+      expectedName,
+      logicalInvocationId: 'logical-recovery-upload-0001',
+      requestDigest: 'c'.repeat(64)
+    }, capabilityContext(undefined, 'system', {
+      callerId: 'domain:project-coordinator',
+      workspaceId: 'workspace-one',
+      capabilityGrants: [CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_ID],
+      principalSnapshotDigest: 'd'.repeat(64),
+      executionContextDigest: 'e'.repeat(64),
+      invocationId: 'invocation_recovery_observation_0001'
+    }))
+
+    expect(contentSpaceSystemObserveExactOutputResultSchema.parse(result.output)).toMatchObject(
+      contentSpaceSuccess({
+        operation: 'observe-exact-output',
+        execution: {
+          callerId: 'domain:project-coordinator',
+          principal,
+          principalSnapshotDigest: 'd'.repeat(64),
+          workspaceId: 'workspace-one',
+          executionContextDigest: 'e'.repeat(64),
+          invocationId: 'invocation_recovery_observation_0001'
+        },
+        root: toPortableContentContainerReference(ROOT),
+        expectedName,
+        logicalInvocationId: 'logical-recovery-upload-0001',
+        requestDigest: 'c'.repeat(64),
+        portableReference: toPortableContentFileReference(recoveredFile),
+        observation: {
+          parent: toPortableContentContainerReference(ROOT),
+          reference: toPortableContentFileReference(recoveredFile),
+          name: expectedName,
+          size: 37
+        },
+        observedAt: expect.any(String),
+        providerObservationDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        contentObservationReceiptDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        observationDigest: expect.stringMatching(/^[a-f0-9]{64}$/u)
+      })
+    )
+    expect(JSON.stringify(result.output)).not.toMatch(
+      /token|credential|https?:|externalSubject|bindingRevision|\/private\//u
+    )
+    expect(listEntries).toHaveBeenCalledTimes(2)
+    expect(observeEntry).toHaveBeenCalledWith(expect.objectContaining({
+      reference: recoveredFile
+    }))
+    expect(attestExternalBinding).toHaveBeenCalledTimes(4)
+    expect(portableResources.materialize).toHaveBeenCalledTimes(1)
+    expect(portableResources.discard).toHaveBeenCalledTimes(1)
+    expect(portableResources.liveCount()).toBe(0)
+  })
+
+  it('rejects missing, duplicate, or identity-drifted recovery observations without retaining authority', async () => {
+    const expectedName = 'meeting-minutes.recovery-2.md'
+    const fileOne = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      fileId: 'recovered-output-one'
+    })
+    const fileTwo = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      fileId: 'recovered-output-two'
+    })
+    const portableResources = portableResourcesFixture()
+    let duplicate = true
+    const listEntries = vi.fn<ContentSpaceProvider['listEntries']>(async ({ parent }) => ({
+      parent,
+      items: duplicate
+        ? [fileOne, fileTwo].map((reference) => ({
+            kind: 'file' as const,
+            reference,
+            label: expectedName,
+            size: 11
+          }))
+        : [{
+            kind: 'file' as const,
+            reference: fileOne,
+            label: expectedName,
+            size: 11
+          }]
+    }))
+    const observeEntry = vi.fn<ContentSpaceProvider['observeEntry']>(async ({ reference }) => ({
+      entry: 'containerId' in reference
+        ? { kind: 'container' as const, reference, label: 'Root' }
+        : {
+            kind: 'file' as const,
+            reference: fileTwo,
+            label: expectedName,
+            size: 11
+          },
+      capabilities: [
+        { operation: 'list-entries', readiness: 'production_ready', reasonCode: 'available' },
+        { operation: 'observe-entry', readiness: 'production_ready', reasonCode: 'available' },
+        { operation: 'upload-new', readiness: 'production_ready', reasonCode: 'available' }
+      ]
+    }))
+    const createProvider = vi.fn(() => providerFixture({
+      attestExternalBinding: async () => externalBinding,
+      listEntries,
+      observeEntry
+    }))
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost({
+        portableResources,
+        fileTransfers: unusedFileTransfers()
+      })).contributions,
+      contributionHost([
+        ...providerContributions(createProvider),
+        systemVerificationProfileContribution(
+          'fixture-recovery-rejection',
+          'upload-new',
+          64
+        )
+      ])
+    )
+    const action = definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.systemObserveExactOutput
+    )
+    const input = {
+      root: toPortableContentContainerReference(ROOT),
+      expectedName,
+      logicalInvocationId: 'logical-recovery-upload-0002',
+      requestDigest: 'f'.repeat(64)
+    } as const
+
+    const unauthorized = await action.handler(input, capabilityContext(undefined, 'system', {
+      workspaceId: 'workspace-one',
+      capabilityGrants: [CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID]
+    }))
+    expect(unauthorized.output).toMatchObject({
+      ok: false,
+      error: { code: 'unauthorized', retry: 'never' }
+    })
+    expect(createProvider).not.toHaveBeenCalled()
+    expect(portableResources.materialize).not.toHaveBeenCalled()
+
+    const authority = {
+      workspaceId: 'workspace-one',
+      capabilityGrants: [CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_ID]
+    } as const
+    const duplicated = await action.handler(input, capabilityContext(undefined, 'system', authority))
+    expect(duplicated.output).toMatchObject({
+      ok: false,
+      error: { code: 'invalid_target', retry: 'never' }
+    })
+    expect(observeEntry).toHaveBeenCalled()
+    expect(observeEntry.mock.calls.every(([{ reference }]) =>
+      'containerId' in reference
+    )).toBe(true)
+    expect(portableResources.liveCount()).toBe(0)
+
+    duplicate = false
+    const drifted = await action.handler(input, capabilityContext(undefined, 'system', {
+      ...authority,
+      invocationId: 'invocation_recovery_observation_drift_0002'
+    }))
+    expect(drifted.output).toMatchObject({
+      ok: false,
+      error: { code: 'provider_unavailable', retry: 'never' }
+    })
+    expect(portableResources.materialize).toHaveBeenCalledTimes(2)
+    expect(portableResources.discard).toHaveBeenCalledTimes(2)
+    expect(portableResources.liveCount()).toBe(0)
   })
 
   it('runs a production-ready Provider transfer without a static verification profile', async () => {
@@ -3120,6 +3377,19 @@ function mainHost(overrides: Partial<DomainMainHost> = {}): DomainMainHost {
     defineCapability: (options: unknown) => options,
     portableResources: portableResourcesFixture(),
     ...overrides
+  })
+}
+
+function unusedFileTransfers(): NonNullable<DomainMainHost['fileTransfers']> {
+  return Object.freeze({
+    openUploadSource: vi.fn(async () => { throw new Error('unused UI upload source') }),
+    openDownloadDestination: vi.fn(async () => { throw new Error('unused UI download destination') }),
+    openWorkspaceUploadSource: vi.fn(async () => {
+      throw new Error('recovery observation must not open a Workspace upload source')
+    }),
+    openWorkspaceDownloadDestination: vi.fn(async () => {
+      throw new Error('recovery observation must not open a Workspace download destination')
+    })
   })
 }
 

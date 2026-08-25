@@ -2457,10 +2457,11 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
   async updateTask(task: StoredTask, expectedRevision: number): Promise<void> {
     const result = await this.sql.query(
       `UPDATE sciforge_collaboration.tasks
-       SET current_execution_id=$2,current_execution_state=$3,status=$4,execution_count=$5,
-           revision=$6,updated_at=$7,completed_at=$8
-       WHERE task_id=$1 AND revision=$9 AND $6=$9+1`,
-      [task.taskId, task.currentExecutionId, task.currentExecutionState, task.status,
+       SET file_intent=$2::jsonb,current_execution_id=$3,current_execution_state=$4,status=$5,
+           execution_count=$6,revision=$7,updated_at=$8,completed_at=$9
+       WHERE task_id=$1 AND revision=$10 AND $7=$10+1`,
+      [task.taskId, task.fileIntent === null ? null : JSON.stringify(task.fileIntent),
+        task.currentExecutionId, task.currentExecutionState, task.status,
         task.executionCount, task.revision, task.updatedAt, task.completedAt, expectedRevision]
     )
     expectRevision(result.rowCount)

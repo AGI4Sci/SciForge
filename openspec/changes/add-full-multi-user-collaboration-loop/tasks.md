@@ -54,7 +54,7 @@
 - [x] 6.2 从 B donor 重写 Project create/focus、Runtime plan、按 User 分组的 Worker availability、精确 Agent 选择和 Task dispatch UI。
 - [x] 6.3 实现 plan confirmation/edit、pending approval 默认可见、HumanNeeded Owner answer、accept/request-revision 和 Project completion UI。
 - [x] 6.4 实现 Owner Desktop provisioning/reconcile orchestrator、Device-signed attestation、dynamic add/removal pending 和 Owner root loss recovery HCI。
-- [ ] 6.5 实现 outcome_unknown exact observation/link-or-abandon 流程，禁止无 observation 的 mark-success。
+- [x] 6.5 实现 outcome_unknown exact observation/link-or-abandon 流程，禁止无 observation 的 mark-success。
 - [ ] 6.6 实现 Coordinator transfer HCI 和旧 Coordinator fencing 反馈；与 identity/collaboration/content-space 只通过标准 contracts/contributions 组合。
 
 ## 7. 既有 A 测试环境蓝绿升级

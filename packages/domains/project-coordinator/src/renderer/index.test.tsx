@@ -101,6 +101,9 @@ test('panel surface is limited to Plan, Worker selection, Task, review, and prov
       applyProvisioning: async () => { throw new Error('unused') },
       addMember: async () => { throw new Error('unused') },
       removeMember: async () => { throw new Error('unused') },
+      observeAndLinkRecovery: async () => { throw new Error('unused') },
+      abandonRecovery: async () => { throw new Error('unused') },
+      retryRecoverySuccessor: async () => { throw new Error('unused') },
       createHumanNeeded: async () => { throw new Error('unused') },
       answerHumanNeeded: async () => { throw new Error('unused') },
       reviewResult: async () => { throw new Error('unused') },
@@ -293,6 +296,22 @@ test('renderer provisioning client keeps the reviewed full plan behind its confi
     expectedProjectRevision: 4,
     expectedMembershipRevision: 2
   })
+  await client.observeAndLinkRecovery({
+    projectId: plan.projectId,
+    recoveryActionId: 'rca_TaskRecovery001'
+  })
+  await client.abandonRecovery({
+    projectId: plan.projectId,
+    recoveryActionId: 'rca_TaskRecovery001',
+    reason: 'The exact output cannot be verified.'
+  })
+  await client.retryRecoverySuccessor({
+    projectId: plan.projectId,
+    recoveryActionId: 'rca_TaskRecovery001',
+    assigneeAgentId: 'agt_WorkerAgent001',
+    nextOutputFileName: 'meeting-summary.recovery-2.md',
+    offerExpiresAt: '2026-08-27T01:08:00.000Z'
+  })
 
   assert.deepEqual(invoked, [
     {
@@ -334,6 +353,34 @@ test('renderer provisioning client keeps the reviewed full plan behind its confi
         expectedProjectRevision: 4,
         expectedMembershipRevision: 2
       }
+    },
+    {
+      actionId: 'project-coordinator.content-recovery.observe-link',
+      effect: 'external-write',
+      input: {
+        projectId: plan.projectId,
+        recoveryActionId: 'rca_TaskRecovery001'
+      }
+    },
+    {
+      actionId: 'project-coordinator.content-recovery.abandon',
+      effect: 'destructive',
+      input: {
+        projectId: plan.projectId,
+        recoveryActionId: 'rca_TaskRecovery001',
+        reason: 'The exact output cannot be verified.'
+      }
+    },
+    {
+      actionId: 'project-coordinator.content-recovery.retry-successor',
+      effect: 'external-write',
+      input: {
+        projectId: plan.projectId,
+        recoveryActionId: 'rca_TaskRecovery001',
+        assigneeAgentId: 'agt_WorkerAgent001',
+        nextOutputFileName: 'meeting-summary.recovery-2.md',
+        offerExpiresAt: '2026-08-27T01:08:00.000Z'
+      }
     }
   ])
   assert.equal('operations' in (invoked[1] as { input: object }).input, false)
@@ -348,7 +395,10 @@ test('content-required provisioning, membership fences, and root recovery are de
     onPreview: () => undefined,
     onApply: () => undefined,
     onAddMember: () => undefined,
-    onRemoveMember: () => undefined
+    onRemoveMember: () => undefined,
+    onObserveAndLinkRecovery: () => undefined,
+    onAbandonRecovery: () => undefined,
+    onRetryRecoverySuccessor: () => undefined
   }))
   assert.match(pendingMarkup, /data-default-visible-card="content-provisioning"/u)
   assert.match(pendingMarkup, /projectCoordinatorPreviewProvisioning/u)
@@ -365,7 +415,10 @@ test('content-required provisioning, membership fences, and root recovery are de
     onPreview: () => undefined,
     onApply: () => undefined,
     onAddMember: () => undefined,
-    onRemoveMember: () => undefined
+    onRemoveMember: () => undefined,
+    onObserveAndLinkRecovery: () => undefined,
+    onAbandonRecovery: () => undefined,
+    onRetryRecoverySuccessor: () => undefined
   }))
   assert.match(reviewedMarkup, /data-default-visible-card="content-provisioning-confirmation"/u)
   assert.match(reviewedMarkup, /content-space\.authorize-provider-administration/u)
@@ -383,7 +436,15 @@ test('content-required provisioning, membership fences, and root recovery are de
         statusReason: 'owner_access_lost'
       },
       recoveryActions: [{
-        actionId: 'reconcile_provider_membership',
+        recoveryActionId: 'rca_RootRecovery001',
+        projectId: project.project.projectId,
+        taskId: null,
+        executionId: null,
+        journalEntryId: 'crj_RootRecovery001',
+        audience: 'owner',
+        action: 'rebind_content_root',
+        status: 'available',
+        requiresFreshObservation: true,
         safeSummary: 'Re-authorize the exact shared root before retrying membership changes.'
       }]
     }
@@ -395,12 +456,126 @@ test('content-required provisioning, membership fences, and root recovery are de
     onPreview: () => undefined,
     onApply: () => undefined,
     onAddMember: () => undefined,
-    onRemoveMember: () => undefined
+    onRemoveMember: () => undefined,
+    onObserveAndLinkRecovery: () => undefined,
+    onAbandonRecovery: () => undefined,
+    onRetryRecoverySuccessor: () => undefined
   }))
   assert.match(recoveryMarkup, /data-default-visible-card="content-recovery"/u)
   assert.match(recoveryMarkup, /owner_access_lost/u)
   assert.match(recoveryMarkup, /Re-authorize the exact shared root/u)
   assert.match(recoveryMarkup, /projectCoordinatorPreviewReconcile/u)
+
+  const taskRecovery = {
+    ...project,
+    provisioning: {
+      ...project.provisioning,
+      recoveryActions: [{
+        recoveryActionId: 'rca_TaskRecovery001',
+        projectId: project.project.projectId,
+        taskId: 'tsk_RecoveryTask001',
+        executionId: 'exe_RecoveryExec001',
+        journalEntryId: 'crj_TaskRecovery001',
+        audience: 'coordinator',
+        action: 'link_observed_output',
+        status: 'available',
+        requiresFreshObservation: true,
+        safeSummary: 'Observe the exact output or abandon this execution.'
+      }]
+    }
+  } as never
+  const taskRecoveryMarkup = renderToStaticMarkup(createElement(
+    ProjectCoordinatorProvisioningSection,
+    {
+      project: taskRecovery,
+      plan: null,
+      busy: false,
+      onPreview: () => undefined,
+      onApply: () => undefined,
+      onAddMember: () => undefined,
+      onRemoveMember: () => undefined,
+      onObserveAndLinkRecovery: () => undefined,
+      onAbandonRecovery: () => undefined,
+      onRetryRecoverySuccessor: () => undefined
+    }
+  ))
+  assert.match(taskRecoveryMarkup, /data-task-recovery-action="rca_TaskRecovery001"/u)
+  assert.match(taskRecoveryMarkup, /projectCoordinatorObserveAndLinkOutput/u)
+  assert.match(taskRecoveryMarkup, /projectCoordinatorAbandonExecution/u)
+  assert.match(taskRecoveryMarkup, /projectCoordinatorAbandonReason/u)
+
+  const abandonedTaskRecovery = {
+    ...project,
+    workerGroups: [{
+      userId: 'usr_Worker00000001',
+      displayName: 'Worker User',
+      agents: [{
+        displayName: 'Worker Desktop',
+        projectAvailability: {
+          agentId: 'agt_WorkerAgent001',
+          availability: { revision: 7 }
+        }
+      }]
+    }],
+    tasks: [{
+      task: {
+        taskId: 'tsk_RecoveryTask001',
+        currentExecutionId: 'exe_RecoveryExec001',
+        status: 'revision_requested',
+        fileIntent: {
+          schemaVersion: 1,
+          bindingRevision: 3,
+          inputs: [],
+          output: {
+            kind: 'content-space.output-new',
+            target: 'project-binding-root',
+            mode: 'upload-new',
+            fileName: 'meeting-summary.recovery-1.md',
+            mediaType: 'text/markdown',
+            maxBytes: 65_536
+          }
+        }
+      },
+      executions: [{
+        executionId: 'exe_RecoveryExec001',
+        state: 'cancelled',
+        fence: { reason: 'manual_recovery_abandoned' }
+      }]
+    }],
+    provisioning: {
+      ...project.provisioning,
+      recoveryActions: [{
+        recoveryActionId: 'rca_TaskRecovery001',
+        projectId: project.project.projectId,
+        taskId: 'tsk_RecoveryTask001',
+        executionId: 'exe_RecoveryExec001',
+        journalEntryId: 'crj_TaskRecovery001',
+        audience: 'coordinator',
+        action: 'link_observed_output',
+        status: 'completed',
+        requiresFreshObservation: true,
+        safeSummary: 'The uncertain execution was abandoned and requires a fresh successor.'
+      }]
+    }
+  } as never
+  const successorMarkup = renderToStaticMarkup(createElement(
+    ProjectCoordinatorProvisioningSection,
+    {
+      project: abandonedTaskRecovery,
+      plan: null,
+      busy: false,
+      onPreview: () => undefined,
+      onApply: () => undefined,
+      onAddMember: () => undefined,
+      onRemoveMember: () => undefined,
+      onObserveAndLinkRecovery: () => undefined,
+      onAbandonRecovery: () => undefined,
+      onRetryRecoverySuccessor: () => undefined
+    }
+  ))
+  assert.match(successorMarkup, /data-default-visible-card="content-recovery-successor"/u)
+  assert.match(successorMarkup, /name="next-output-file-name"/u)
+  assert.match(successorMarkup, /projectCoordinatorApproveRecoveryRetry/u)
 })
 
 test('an awaiting-confirmation Plan renders its Owner action as a default-visible card', () => {
@@ -518,26 +693,50 @@ test('decision HCI derives exact review and completion CAS facts from the visibl
     reviewProject,
     'rsu_MeetingResult01',
     'accept',
-    { instruction: '', nextAssigneeAgentId: '', nextOfferExpiresAt: '' }
-  )
-  const revised = projectCoordinatorResultReviewInput(
     {
-      ...reviewProject,
-      workerGroups: [{
-        agents: [{
-          projectAvailability: {
-            agentId: 'agt_Worker0000002',
-            availability: { revision: 7 }
-          }
-        }]
+      instruction: '',
+      nextAssigneeAgentId: '',
+      nextOfferExpiresAt: '',
+      nextOutputFileName: ''
+    }
+  )
+  const fileIntent = {
+    schemaVersion: 1 as const,
+    bindingRevision: 3,
+    inputs: [],
+    output: {
+      kind: 'content-space.output-new' as const,
+      target: 'project-binding-root' as const,
+      mode: 'upload-new' as const,
+      fileName: 'training-plan-comparison.revision-1.md',
+      mediaType: 'text/markdown',
+      maxBytes: 65_536
+    }
+  }
+  const fileReviewProject = {
+    ...reviewProject,
+    tasks: [{
+      ...reviewProject.tasks[0],
+      task: { ...reviewProject.tasks[0]!.task, fileIntent }
+    }],
+    workerGroups: [{
+      agents: [{
+        projectAvailability: {
+          agentId: 'agt_Worker0000002',
+          availability: { revision: 7 }
+        }
       }]
-    } as never,
+    }]
+  } as never
+  const revised = projectCoordinatorResultReviewInput(
+    fileReviewProject,
     'rsu_MeetingResult01',
     'request_revision',
     {
       instruction: 'Re-run with the confirmed assumptions.',
       nextAssigneeAgentId: 'agt_Worker0000002',
-      nextOfferExpiresAt: '2026-08-26T01:08:00.000Z'
+      nextOfferExpiresAt: '2026-08-26T01:08:00.000Z',
+      nextOutputFileName: 'training-plan-comparison.revision-2.md'
     }
   )
   assert.deepEqual(accepted, {
@@ -558,6 +757,24 @@ test('decision HCI derives exact review and completion CAS facts from the visibl
     nextFileIntent: null
   })
   assert.equal(revised?.expectedNextAssigneeAvailabilityRevision, 7)
+  assert.deepEqual(revised?.nextFileIntent, {
+    ...fileIntent,
+    output: {
+      ...fileIntent.output,
+      fileName: 'training-plan-comparison.revision-2.md'
+    }
+  })
+  assert.equal(projectCoordinatorResultReviewInput(
+    fileReviewProject,
+    'rsu_MeetingResult01',
+    'request_revision',
+    {
+      instruction: 'Re-run with the confirmed assumptions.',
+      nextAssigneeAgentId: 'agt_Worker0000002',
+      nextOfferExpiresAt: '2026-08-26T01:08:00.000Z',
+      nextOutputFileName: fileIntent.output.fileName
+    }
+  ), null)
 
   const completionProject = decisionProjectFixture('completion')
   assert.deepEqual(projectCoordinatorCompletionInput(completionProject, 'Final bounded summary.'), {

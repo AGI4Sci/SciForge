@@ -454,7 +454,8 @@ function coordinatorReassignCommand(): RestRequest {
     expectedExecutionAuthorityEpoch: 1,
     assigneeAgentId: TEST_IDS.secondAgentId,
     expectedAvailabilityRevision: 1,
-    offerExpiresAt: TEST_LATER_TIMESTAMP
+    offerExpiresAt: TEST_LATER_TIMESTAMP,
+    nextFileIntent: null
   }
 }
 

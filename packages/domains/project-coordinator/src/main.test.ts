@@ -51,6 +51,7 @@ test('workspace read remains a strict non-writing coordination capability', asyn
         signFactualPayload: async () => { throw new Error('unused') }
       },
       provisioning: coordinatorProvisioningPort(),
+      recovery: coordinatorRecoveryPort(),
       coordinatorCloudCommands: coordinatorCloudCommandService(),
       actions: coordinatorActionPort()
     }
@@ -72,6 +73,7 @@ test('workspace read remains a strict non-writing coordination capability', asyn
 
 test('main entry acquires Identity reads/signing and Collaboration Agent command mediation', async () => {
   let executeCalls = 0
+  let userDataDirCalls = 0
   const acquired: Array<{ serviceId: string; contractVersion: string }> = []
   const transport: AuthenticatedCloudTransport = {
     status: () => ({
@@ -99,7 +101,10 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
     }
   }
   const host: DomainMainHost = {
-    getUserDataDir: () => '/tmp/sciforge-project-coordinator-test',
+    getUserDataDir: () => {
+      userDataDirCalls += 1
+      return '/tmp/sciforge-project-coordinator-test'
+    },
     defineCapability: (input) => input,
     openPath: async () => undefined,
     packageSettings: {
@@ -119,6 +124,7 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
     }
   }
   const entry = createDomainMainEntry<ProjectCoordinatorCapabilityOptions>(host)
+  assert.equal(userDataDirCalls, 0, 'registry construction must not instantiate recovery Workspace state')
   assert.equal(entry.contributions.length, 2)
   assert.deepEqual(acquired, [
     {
@@ -146,6 +152,9 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
     PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningPlan,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
@@ -155,7 +164,12 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
   ])
   assert.deepEqual(
     (entry.contributions[1] as { contract?: unknown }).contract,
-    { requestedSystemCapabilityGrants: ['content-space.provisioning-batch'] }
+    {
+      requestedSystemCapabilityGrants: [
+        'content-space.provisioning-batch',
+        'content-space.recovery-observation'
+      ]
+    }
   )
   assert.equal(coordinatorInboxSubscribed, true)
   assert.equal(executeCalls, 0)
@@ -232,6 +246,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
       signFactualPayload: async () => { throw new Error('unused') }
     },
     provisioning: coordinatorProvisioningPort(),
+    recovery: coordinatorRecoveryPort(),
     coordinatorCloudCommands: coordinatorCloudCommandService(),
     actions: coordinatorActionPort()
   }
@@ -251,6 +266,9 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
     PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningPlan,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
@@ -300,5 +318,13 @@ function coordinatorProvisioningPort() {
     apply: async () => { throw new Error('unused') },
     addMember: async () => { throw new Error('unused') },
     removeMember: async () => { throw new Error('unused') }
+  })
+}
+
+function coordinatorRecoveryPort() {
+  return Object.freeze({
+    observeAndLink: async () => { throw new Error('unused') },
+    abandon: async () => { throw new Error('unused') },
+    retrySuccessor: async () => { throw new Error('unused') }
   })
 }

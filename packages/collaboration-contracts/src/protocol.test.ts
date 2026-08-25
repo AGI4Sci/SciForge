@@ -90,6 +90,131 @@ describe('discriminated transport unions', () => {
     }).type).toBe('project.content.recovery.abandon')
   })
 
+  it('links Task recovery only from one exact Content Space observation', () => {
+    const rootLocator = {
+      contractVersion: 1 as const,
+      kind: 'content-space.container-reference' as const,
+      authority: 'opencontent.run0',
+      identity: { containerId: 'project-recovery-root' }
+    }
+    const locator = {
+      contractVersion: 1 as const,
+      kind: 'content-space.file-reference' as const,
+      authority: rootLocator.authority,
+      identity: { fileId: 'observed-recovery-output' }
+    }
+    const observation = {
+      schemaVersion: 1 as const,
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      assignmentTaskRevision: 4,
+      bindingRevision: 2,
+      logicalInvocationId: `upload.${TEST_IDS.executionId}.output`,
+      requestDigest: '1'.repeat(64),
+      rootLocator,
+      rootLocatorDigest: '2'.repeat(64),
+      expectedName: 'meeting-minutes.recovery-1.md',
+      locator,
+      locatorDigest: '3'.repeat(64),
+      contentObservationReceiptDigest: '4'.repeat(64),
+      observationDigest: '5'.repeat(64),
+      providerObservationDigest: '6'.repeat(64),
+      observedAt: TEST_TIMESTAMP
+    }
+    const command = {
+      protocolVersion: '1.0' as const,
+      type: 'task.recovery.link_observed_output' as const,
+      requestId: TEST_IDS.requestId,
+      idempotencyKey: 'idem_task_recovery_link_observed_01',
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      recoveryActionId: TEST_IDS.recoveryActionId,
+      journalEntryId: TEST_IDS.contentRecoveryJournalEntryId,
+      expectedTaskRevision: 5,
+      expectedExecutionRevision: 6,
+      expectedRecoveryActionRevision: 1,
+      expectedCoordinatorAuthorityEpoch: 2,
+      observation
+    }
+
+    expect(restRequestSchema.parse(command)).toEqual(command)
+    expect(restRequestSchema.safeParse({
+      ...command,
+      observation: undefined,
+      output: {
+        executionId: TEST_IDS.executionId,
+        assignmentTaskRevision: 4,
+        locator,
+        locatorDigest: '3'.repeat(64),
+        rootLocatorDigest: '2'.repeat(64),
+        bindingRevision: 2,
+        transferReceiptDigest: '4'.repeat(64),
+        observationDigest: '5'.repeat(64),
+        preflightObservationDigest: '6'.repeat(64)
+      },
+      humanObservationDigest: '5'.repeat(64)
+    }).success).toBe(false)
+    expect(restRequestSchema.safeParse({
+      ...command,
+      type: 'task.recovery.mark_success'
+    }).success).toBe(false)
+  })
+
+  it('delivers exact linked-output and abandonment recovery facts to the Worker Inbox', () => {
+    const output = {
+      executionId: TEST_IDS.executionId,
+      assignmentTaskRevision: 4,
+      locator: {
+        contractVersion: 1 as const,
+        kind: 'content-space.file-reference' as const,
+        authority: 'opencontent.run0',
+        identity: { fileId: 'observed-recovery-output' }
+      },
+      locatorDigest: '3'.repeat(64),
+      rootLocatorDigest: '2'.repeat(64),
+      bindingRevision: 2,
+      transferReceiptDigest: '4'.repeat(64),
+      observationDigest: '5'.repeat(64),
+      preflightObservationDigest: '6'.repeat(64)
+    }
+    const linked = {
+      protocolVersion: '1.0' as const,
+      type: 'task.recovery.output_linked' as const,
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      recoveryActionId: TEST_IDS.recoveryActionId,
+      journalEntryId: TEST_IDS.contentRecoveryJournalEntryId,
+      logicalInvocationId: `upload.${TEST_IDS.executionId}.output`,
+      resourceRefId: TEST_IDS.resourceRefId,
+      taskRevision: 5,
+      executionRevision: 6,
+      journalRevision: 4,
+      output
+    }
+    const abandoned = {
+      protocolVersion: '1.0' as const,
+      type: 'task.recovery.abandoned' as const,
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      recoveryActionId: TEST_IDS.recoveryActionId,
+      taskRevision: 6,
+      executionRevision: 7,
+      reason: 'The exact observed output was absent; retry under a new execution and name.'
+    }
+
+    expect(agentInboxPayloadSchema.parse(linked)).toEqual(linked)
+    expect(agentInboxPayloadSchema.parse(abandoned)).toEqual(abandoned)
+    expect(agentInboxPayloadSchema.safeParse({
+      ...linked,
+      output: undefined,
+      markSuccess: true
+    }).success).toBe(false)
+  })
+
   it('exports named strict Owner workflow commands without caller-authored identity fields', () => {
     const transfer = {
       protocolVersion: '1.0',

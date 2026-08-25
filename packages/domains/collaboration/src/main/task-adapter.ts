@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { chmod, mkdir } from 'node:fs/promises'
 import {
   cloudResourceRefSchema,
+  externalOperationRecoveryJournalEntrySchema,
   restRequestSchema,
   restResponseSchema,
   taskOfferRejectionReasonSchema,
@@ -14,7 +15,10 @@ import {
   type RestResponse,
   type Task,
   type TaskExecution,
+  type TaskExecutionPreflight,
   type TaskOfferedPayload,
+  type TaskRecoveryAbandonedPayload,
+  type TaskRecoveryOutputLinkedPayload,
   type TaskResultOutput
 } from '@sciforge/collaboration-contracts'
 import {
@@ -176,6 +180,14 @@ export class CollaborationTaskAdapter {
       await this.acceptOffer(payload, message.recipientAgentId)
       return
     }
+    if (payload.type === 'task.recovery.output_linked') {
+      await this.acceptRecoveryOutputLinked(payload, message.recipientAgentId, message.createdAt)
+      return
+    }
+    if (payload.type === 'task.recovery.abandoned') {
+      await this.acceptRecoveryAbandoned(payload, message.recipientAgentId)
+      return
+    }
     if (payload.type === 'human.answer.received') {
       await this.acceptHumanAnswer(payload.answer, message.recipientAgentId)
       return
@@ -275,6 +287,237 @@ export class CollaborationTaskAdapter {
     // pre-offer count while this exact execution is awaiting HCI or preflight.
     await this.publishAvailability('online')
     this.schedule(payload.executionId)
+  }
+
+  private async acceptRecoveryOutputLinked(
+    payload: TaskRecoveryOutputLinkedPayload,
+    recipientAgentId: string,
+    linkedAt: string
+  ): Promise<void> {
+    this.requireLocalInboxRecipient(recipientAgentId)
+    let run = this.findRun(payload.executionId)
+    if (!run) throw new Error('Local Worker recovery journal was not found.')
+    requireRecoveryMessageTuple(run, payload)
+
+    if (hasExactAppliedRecoveryLink(run, payload)) {
+      if (run.state === 'completed') return
+      if (run.state !== 'manual-recovery') {
+        throw new Error('Recovery output was already linked outside the exact manual-recovery state.')
+      }
+      if (this.hasDeliveredResultSubmission(run)) {
+        await this.completeRecoveredRun(run.offer.executionId)
+        return
+      }
+      await this.submitRecoveredResult(run)
+      return
+    }
+    if (run.state !== 'manual-recovery') {
+      throw new Error('Only the exact local manual-recovery execution may link an observed output.')
+    }
+
+    const journal = requireUnknownRecoveryJournal(run, payload)
+    const { task, preflight } = await this.readExactRecoveryCloudState(
+      payload.taskId,
+      payload.executionId,
+      payload.taskRevision,
+      payload.executionRevision,
+      'manual_recovery_required'
+    )
+    const resource = await this.readCloudResource(payload.resourceRefId)
+    validateRecoveryOutput(run, task, preflight, journal, payload, resource)
+    const observedCloudJournal = externalOperationRecoveryJournalEntrySchema.parse({
+      ...requireCloudJournal(journal),
+      state: 'observed_success',
+      receiptDigest: payload.output.transferReceiptDigest,
+      observationDigest: payload.output.observationDigest,
+      safeFailureCode: null,
+      resolvedAt: linkedAt,
+      revision: payload.journalRevision,
+      updatedAt: linkedAt
+    })
+
+    await this.options.store.transact((draft) => {
+      const current = requireDraftRun(draft.taskRuns, payload.executionId)
+      if (current.state !== 'manual-recovery') {
+        throw new Error('Worker recovery state changed before the observed output was persisted.')
+      }
+      const currentJournal = requireUnknownRecoveryJournal(current, payload)
+      if (current.resources.some((candidate) => (
+        candidate.role === 'output-file' && candidate.resourceRefId !== resource.resourceRefId
+      ))) {
+        throw new Error('A different output ResourceRef is already bound to this execution.')
+      }
+      Object.assign(currentJournal, {
+        state: 'observed_success',
+        cloudJournal: observedCloudJournal,
+        receiptDigest: payload.output.transferReceiptDigest,
+        observationDigest: payload.output.observationDigest,
+        observedAt: linkedAt,
+        safeFailureCode: null,
+        safeError: null
+      })
+      current.task = task
+      current.execution = preflight.execution
+      current.latestPreflight = {
+        cloud: preflight,
+        outcome: 'denied',
+        reasons: ['cloud_denied', 'execution_mismatch'],
+        contentTransferReadiness: [],
+        evaluatedAt: preflight.evaluatedAt
+      }
+      current.expectedTaskRevision = payload.taskRevision
+      current.expectedExecutionRevision = payload.executionRevision
+      current.resources = [
+        ...current.resources.filter(({ resourceRefId }) => resourceRefId !== resource.resourceRefId),
+        resource
+      ]
+      current.outputs = [payload.output]
+      if (!current.recoveryJournalEntryIds.includes(payload.journalEntryId)) {
+        current.recoveryJournalEntryIds.push(payload.journalEntryId)
+      }
+      current.updatedAt = linkedAt
+      draft.tasks = [...draft.tasks.filter(({ taskId }) => taskId !== task.taskId), task]
+    })
+    run = this.requireRun(payload.executionId)
+    await this.submitRecoveredResult(run)
+  }
+
+  private async acceptRecoveryAbandoned(
+    payload: TaskRecoveryAbandonedPayload,
+    recipientAgentId: string
+  ): Promise<void> {
+    this.requireLocalInboxRecipient(recipientAgentId)
+    const run = this.findRun(payload.executionId)
+    // Cloud also notifies a distinct Coordinator Agent. That Agent has no
+    // Worker journal for this execution and only needs the generic Project refresh.
+    if (!run) return
+    requireRecoveryMessageTuple(run, payload)
+    if (
+      run.state === 'fenced' &&
+      run.task?.revision === payload.taskRevision &&
+      run.task.status === 'revision_requested' &&
+      run.execution?.revision === payload.executionRevision &&
+      run.execution.state === 'cancelled' &&
+      run.execution.fence.reason === 'manual_recovery_abandoned'
+    ) return
+    if (run.state !== 'manual-recovery') {
+      throw new Error('Only the exact local manual-recovery execution may be abandoned.')
+    }
+    if (!run.externalJournal.some((entry) => (
+      entry.cloudJournal?.projectId === payload.projectId &&
+      entry.cloudJournal.taskId === payload.taskId &&
+      entry.cloudJournal.executionId === payload.executionId &&
+      (entry.state === 'outcome_unknown' || entry.state === 'observed_failure')
+    ))) {
+      throw new Error('The exact unresolved local recovery journal was not found.')
+    }
+    const { task, preflight } = await this.readExactRecoveryCloudState(
+      payload.taskId,
+      payload.executionId,
+      payload.taskRevision,
+      payload.executionRevision,
+      'cancelled'
+    )
+    const completedAt = preflight.execution.terminalAt ?? this.now().toISOString()
+    await this.updateRun(payload.executionId, {
+      task,
+      execution: preflight.execution,
+      expectedTaskRevision: payload.taskRevision,
+      expectedExecutionRevision: payload.executionRevision,
+      state: 'fenced',
+      completedAt,
+      error: payload.reason
+    })
+    this.controllers.get(payload.executionId)?.abort(payload.reason)
+    await this.publishAvailability('online')
+  }
+
+  private requireLocalInboxRecipient(recipientAgentId: string): void {
+    const localAgentId = this.options.localAgentId()
+    if (!localAgentId || recipientAgentId !== localAgentId) {
+      throw new Error('Recovery Inbox recipient does not match this Agent Device.')
+    }
+  }
+
+  private async readExactRecoveryCloudState(
+    taskId: string,
+    executionId: string,
+    taskRevision: number,
+    executionRevision: number,
+    expectedExecutionState: 'manual_recovery_required' | 'cancelled'
+  ): Promise<Readonly<{ task: Task; preflight: TaskExecutionPreflight }>> {
+    const response = await this.options.connection.executeAsAgent(restRequestSchema.parse({
+      protocolVersion: '1.0',
+      requestId: collaborationRequestId(),
+      type: 'task.execution.preflight.get',
+      taskId,
+      executionId,
+      expectedTaskRevision: taskRevision,
+      expectedExecutionRevision: executionRevision
+    }))
+    if (response.type === 'rest.error') throw new Error(response.error.message)
+    if (response.type !== 'rest.task_execution_preflight') {
+      throw new Error(`Task recovery preflight returned unexpected ${response.type}.`)
+    }
+    const preflight = response.preflight
+    const task = await this.readTask(taskId)
+    const revisionOrIdentityDrift = preflight.currentTaskRevision !== taskRevision ||
+      preflight.requestedTaskRevision !== taskRevision ||
+      preflight.requestedExecutionRevision !== executionRevision ||
+      preflight.execution.revision !== executionRevision ||
+      preflight.projectId !== task.projectId ||
+      preflight.taskId !== task.taskId ||
+      preflight.executionId !== executionId ||
+      preflight.currentExecutionId !== executionId ||
+      task.revision !== taskRevision ||
+      task.currentExecutionId !== executionId ||
+      preflight.execution.taskId !== taskId
+    const denialReasons = new Set(preflight.decision.reasons)
+    if (
+      revisionOrIdentityDrift ||
+      preflight.decision.outcome !== 'denied' ||
+      !denialReasons.has('execution_fenced') ||
+      denialReasons.has('execution_not_current') ||
+      denialReasons.has('task_revision_mismatch') ||
+      denialReasons.has('execution_revision_mismatch')
+    ) {
+      throw new Error('Recovery does not target the exact current manual-recovery execution.')
+    }
+    if (expectedExecutionState === 'manual_recovery_required') {
+      if (
+        denialReasons.size !== 1 ||
+        task.status !== 'manual_recovery_required' ||
+        task.currentExecutionState !== 'manual_recovery_required' ||
+        preflight.execution.state !== 'manual_recovery_required' ||
+        preflight.execution.fence.status !== 'fenced' ||
+        preflight.execution.fence.reason !== 'manual_recovery_required'
+      ) {
+        throw new Error('Recovery does not target the exact current manual-recovery execution.')
+      }
+    } else if (
+      task.status !== 'revision_requested' ||
+      task.currentExecutionState !== 'cancelled' ||
+      preflight.execution.state !== 'cancelled' ||
+      preflight.execution.fence.status !== 'fenced' ||
+      preflight.execution.fence.reason !== 'manual_recovery_abandoned'
+    ) {
+      throw new Error('Cloud abandonment does not match the exact fenced execution.')
+    }
+    return { task, preflight }
+  }
+
+  private async readCloudResource(resourceRefId: string): Promise<CloudResourceRef> {
+    const response = await this.options.connection.executeAsAgent(restRequestSchema.parse({
+      protocolVersion: '1.0',
+      requestId: collaborationRequestId(),
+      type: 'resource.get',
+      resourceRefId
+    }))
+    if (response.type === 'rest.error') throw new Error(response.error.message)
+    if (response.type !== 'rest.entity' || response.entity.type !== 'resource_ref') {
+      throw new Error(`Recovery ResourceRef query returned unexpected ${response.type}.`)
+    }
+    return cloudResourceRefSchema.parse(response.entity)
   }
 
   async fenceLocalAgent(agentId: string, reason: string): Promise<void> {
@@ -1151,12 +1394,32 @@ export class CollaborationTaskAdapter {
       await this.markFenced(run, `Result preflight denied: ${preflight.reasons.join(', ')}`)
       return
     }
+    await this.sendResultSubmission(run, true)
+  }
+
+  private async submitRecoveredResult(run: CollaborationTaskRun): Promise<void> {
+    const execution = requireExecution(run)
+    const task = requireTask(run)
+    if (
+      run.state !== 'manual-recovery' ||
+      task.status !== 'manual_recovery_required' ||
+      execution.state !== 'manual_recovery_required' ||
+      execution.fence.status !== 'fenced' ||
+      execution.fence.reason !== 'manual_recovery_required' ||
+      run.outputs.length !== 1 ||
+      run.recoveryJournalEntryIds.length === 0
+    ) {
+      throw new Error('Recovered result submission requires the exact persisted manual-recovery facts.')
+    }
+    await this.sendResultSubmission(run, false)
+  }
+
+  private resultSubmissionFacts(run: CollaborationTaskRun) {
     const latestAgent = [...run.agentJournal].reverse().find((entry) => entry.state === 'observed_success')
     if (!latestAgent?.runtimeId || !run.startedAt || !run.resultSummary) {
-      await this.failExecution(run, 'runtime_provenance_missing', 'Runtime provenance is incomplete.')
-      return
+      throw new Error('Runtime provenance is incomplete.')
     }
-    const submissionFacts = {
+    return {
       taskId: run.offer.taskId,
       executionId: run.offer.executionId,
       expectedTaskRevision: run.expectedTaskRevision,
@@ -1171,6 +1434,40 @@ export class CollaborationTaskAdapter {
       outputs: run.outputs,
       recoveryJournalEntryIds: run.recoveryJournalEntryIds
     }
+  }
+
+  private hasDeliveredResultSubmission(run: CollaborationTaskRun): boolean {
+    const expectedFacts = this.resultSubmissionFacts(run)
+    const expectedKey = idempotencyKey('task.result.submit', expectedFacts)
+    return this.options.store.snapshot().outbox.some((entry) => {
+      if (entry.kind !== 'task.result' || entry.state !== 'delivered' || !entry.response) return false
+      const request = restRequestSchema.safeParse(entry.body)
+      const response = restResponseSchema.safeParse(entry.response)
+      if (
+        !request.success ||
+        request.data.type !== 'task.result.submit' ||
+        request.data.idempotencyKey !== expectedKey ||
+        !response.success ||
+        response.data.type !== 'rest.entity' ||
+        response.data.requestId !== request.data.requestId ||
+        response.data.entity.type !== 'task_result_submission'
+      ) return false
+      return canonicalJson(taskResultRequestFacts(request.data)) === canonicalJson(expectedFacts)
+    })
+  }
+
+  private async sendResultSubmission(
+    run: CollaborationTaskRun,
+    markSubmitting: boolean
+  ): Promise<void> {
+    let submissionFacts
+    try {
+      submissionFacts = this.resultSubmissionFacts(run)
+    } catch (error) {
+      if (!markSubmitting) throw error
+      await this.failExecution(run, 'runtime_provenance_missing', 'Runtime provenance is incomplete.')
+      return
+    }
     const request = restRequestSchema.parse({
       protocolVersion: '1.0', requestId: collaborationRequestId(),
       type: 'task.result.submit',
@@ -1178,10 +1475,14 @@ export class CollaborationTaskAdapter {
       ...submissionFacts,
       submissionDigest: digest(canonicalJson(submissionFacts))
     })
-    await this.updateRun(run.offer.executionId, { state: 'submitting' })
+    if (markSubmitting) await this.updateRun(run.offer.executionId, { state: 'submitting' })
     const response = await this.options.outbox.enqueueAndWait('task.result', request)
     requireResponseEntity(response, 'task_result_submission')
-    await this.updateRun(run.offer.executionId, {
+    await this.completeRecoveredRun(run.offer.executionId)
+  }
+
+  private async completeRecoveredRun(executionId: string): Promise<void> {
+    await this.updateRun(executionId, {
       state: 'completed', completedAt: this.now().toISOString(), error: null
     })
     await this.publishAvailability('online')
@@ -1651,6 +1952,125 @@ function requireCloudJournal(
   return journal.cloudJournal
 }
 
+function requireRecoveryMessageTuple(
+  run: CollaborationTaskRun,
+  payload: TaskRecoveryOutputLinkedPayload | TaskRecoveryAbandonedPayload
+): void {
+  if (
+    run.offer.projectId !== payload.projectId ||
+    run.offer.taskId !== payload.taskId ||
+    run.offer.executionId !== payload.executionId ||
+    run.offer.recipientAgentId !== run.execution?.assigneeAgentId
+  ) {
+    throw new Error('Recovery Inbox message does not match the immutable local execution tuple.')
+  }
+}
+
+function requireUnknownRecoveryJournal(
+  run: CollaborationTaskRun,
+  payload: TaskRecoveryOutputLinkedPayload
+): CollaborationExternalOperationJournal {
+  const journal = run.externalJournal.find((candidate) => (
+    candidate.logicalInvocationId === payload.logicalInvocationId &&
+    candidate.cloudJournal?.contentRecoveryJournalEntryId === payload.journalEntryId
+  ))
+  if (!journal) throw new Error('The exact local Provider recovery journal was not found.')
+  const cloudJournal = requireCloudJournal(journal)
+  if (
+    journal.operation !== 'upload_new' ||
+    journal.state !== 'outcome_unknown' ||
+    cloudJournal.scope !== 'task_content_transfer' ||
+    cloudJournal.projectId !== payload.projectId ||
+    cloudJournal.taskId !== payload.taskId ||
+    cloudJournal.executionId !== payload.executionId ||
+    cloudJournal.logicalInvocationId !== payload.logicalInvocationId ||
+    cloudJournal.operation !== 'upload_new' ||
+    cloudJournal.state !== 'outcome_unknown' ||
+    cloudJournal.revision + 1 !== payload.journalRevision ||
+    cloudJournal.requestDigest !== journal.requestDigest
+  ) {
+    throw new Error('The recovery link does not match the exact unresolved Provider invocation.')
+  }
+  return journal
+}
+
+function hasExactAppliedRecoveryLink(
+  run: CollaborationTaskRun,
+  payload: TaskRecoveryOutputLinkedPayload
+): boolean {
+  const journal = run.externalJournal.find((candidate) => (
+    candidate.logicalInvocationId === payload.logicalInvocationId &&
+    candidate.cloudJournal?.contentRecoveryJournalEntryId === payload.journalEntryId
+  ))
+  const cloudJournal = journal?.cloudJournal
+  const resource = run.resources.find(({ resourceRefId }) => resourceRefId === payload.resourceRefId)
+  return Boolean(
+    journal?.state === 'observed_success' &&
+    journal.receiptDigest === payload.output.transferReceiptDigest &&
+    journal.observationDigest === payload.output.observationDigest &&
+    cloudJournal?.state === 'observed_success' &&
+    cloudJournal.revision === payload.journalRevision &&
+    cloudJournal.receiptDigest === payload.output.transferReceiptDigest &&
+    cloudJournal.observationDigest === payload.output.observationDigest &&
+    run.outputs.length === 1 &&
+    canonicalJson(run.outputs[0]) === canonicalJson(payload.output) &&
+    run.recoveryJournalEntryIds.includes(payload.journalEntryId) &&
+    resource?.role === 'output-file' &&
+    resource.status === 'available' &&
+    resource.locatorDigest === payload.output.locatorDigest &&
+    canonicalJson(resource.locator) === canonicalJson(payload.output.locator)
+  )
+}
+
+function validateRecoveryOutput(
+  run: CollaborationTaskRun,
+  task: Task,
+  preflight: TaskExecutionPreflight,
+  journal: CollaborationExternalOperationJournal,
+  payload: TaskRecoveryOutputLinkedPayload,
+  resource: CloudResourceRef
+): void {
+  const execution = preflight.execution
+  const fileIntent = execution.fileIntent
+  const binding = preflight.contentBinding
+  const cloudJournal = requireCloudJournal(journal)
+  if (
+    preflight.taskKind !== 'file' ||
+    task.fileIntent === null ||
+    !fileIntent ||
+    !binding ||
+    binding.status !== 'active' ||
+    binding.rootLocator === null ||
+    binding.rootLocatorDigest === null ||
+    binding.revision !== fileIntent.bindingRevision ||
+    task.fileIntent.bindingRevision !== fileIntent.bindingRevision ||
+    payload.output.executionId !== execution.executionId ||
+    payload.output.assignmentTaskRevision !== fileIntent.assignmentTaskRevision ||
+    payload.output.bindingRevision !== fileIntent.bindingRevision ||
+    payload.output.rootLocatorDigest !== binding.rootLocatorDigest ||
+    digest(canonicalJson(binding.rootLocator)) !== binding.rootLocatorDigest ||
+    journal.workspaceRelativePath !== fileIntent.output.fileName ||
+    cloudJournal.requestDigest !== journal.requestDigest ||
+    resource.resourceRefId !== payload.resourceRefId ||
+    resource.projectId !== payload.projectId ||
+    resource.taskId !== payload.taskId ||
+    resource.executionId !== payload.executionId ||
+    resource.assignmentTaskRevision !== fileIntent.assignmentTaskRevision ||
+    resource.bindingRevision !== fileIntent.bindingRevision ||
+    resource.intentDigest !== fileIntent.declarationDigest ||
+    resource.role !== 'output-file' ||
+    resource.ordinal !== fileIntent.inputs.length + 1 ||
+    resource.status !== 'available' ||
+    resource.locatorDigest !== payload.output.locatorDigest ||
+    resource.locatorDigest !== digest(canonicalJson(resource.locator)) ||
+    canonicalJson(resource.locator) !== canonicalJson(payload.output.locator) ||
+    resource.locator.authority !== binding.rootLocator.authority ||
+    run.offer.recipientAgentId !== execution.assigneeAgentId
+  ) {
+    throw new Error('Observed output does not match the exact current execution, root, journal and ResourceRef.')
+  }
+}
+
 function requireContentRoot(run: CollaborationTaskRun) {
   const root = run.latestPreflight?.cloud.contentBinding?.rootLocator
   if (!root) throw new Error('Project content root is not ready.')
@@ -1685,6 +2105,22 @@ function offerCommandFacts(run: CollaborationTaskRun) {
     expectedTaskRevision: run.expectedTaskRevision,
     expectedExecutionRevision: run.expectedExecutionRevision,
     expectedOfferRevision: run.offer.offerRevision
+  }
+}
+
+function taskResultRequestFacts(request: Extract<
+  ReturnType<typeof restRequestSchema.parse>,
+  { type: 'task.result.submit' }
+>) {
+  return {
+    taskId: request.taskId,
+    executionId: request.executionId,
+    expectedTaskRevision: request.expectedTaskRevision,
+    expectedExecutionRevision: request.expectedExecutionRevision,
+    summary: request.summary,
+    runtimeProvenance: request.runtimeProvenance,
+    outputs: request.outputs,
+    recoveryJournalEntryIds: request.recoveryJournalEntryIds
   }
 }
 

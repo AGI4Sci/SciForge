@@ -79,6 +79,7 @@ import {
 } from './contract.js'
 import { ProjectCoordinatorStateStore } from './state.js'
 import type { ProjectCoordinatorProvisioningPort } from './provisioning.js'
+import type { ProjectCoordinatorRecoveryPort } from './recovery.js'
 
 export type ProjectCoordinatorWorkspacePort = Readonly<{
   readWorkspace(input: ProjectCoordinatorWorkspaceReadInput): Promise<ProjectCoordinatorWorkspace>
@@ -136,6 +137,7 @@ export type ProjectCoordinatorMainPorts = Readonly<{
   plan: ProjectCoordinatorPlanPort
   provisioningAttestationSigning: ProjectContentProvisioningAttestationSigningPort
   provisioning: ProjectCoordinatorProvisioningPort
+  recovery: ProjectCoordinatorRecoveryPort
   coordinatorCloudCommands: CoordinatorCloudCommandService
   actions: ProjectCoordinatorActionPort
 }>

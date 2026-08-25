@@ -3476,20 +3476,53 @@ export class CollaborationService {
       expectRevision(action.revision, input.expectedRecoveryActionRevision)
       const journal = required(await tx.getExternalOperationJournalByIdForUpdate(input.journalEntryId), 'Recovery journal entry')
       requireExactRecoveryTuple(action, journal, project, task, execution)
-      if (action.status !== 'available' || action.action !== 'link_observed_output' || journal.state !== 'outcome_unknown') {
+      if (
+        action.status !== 'available' ||
+        action.action !== 'link_observed_output' ||
+        !action.requiresFreshObservation ||
+        journal.state !== 'outcome_unknown'
+      ) {
         fail('invalid_state_transition', 'This recovery action cannot link an observed output.')
       }
       const binding = required(await tx.getProjectContentSpaceBindingForUpdate(project.projectId), 'Project Content binding')
-      const output = input.output
+      const observation = input.observation
       if (
-        output.executionId !== execution.executionId ||
-        output.assignmentTaskRevision !== execution.fence.assignmentTaskRevision ||
-        output.bindingRevision !== binding.revision || binding.status !== 'active' ||
-        output.rootLocatorDigest !== binding.rootLocatorDigest ||
-        stableDigest(output.locator) !== output.locatorDigest ||
-        output.observationDigest !== input.humanObservationDigest
+        task.fileIntent === null ||
+        journal.operation !== 'upload_new' ||
+        observation.projectId !== project.projectId ||
+        observation.taskId !== task.taskId ||
+        observation.executionId !== execution.executionId ||
+        observation.assignmentTaskRevision !== execution.fence.assignmentTaskRevision ||
+        observation.bindingRevision !== binding.revision ||
+        binding.status !== 'active' ||
+        binding.rootLocator === null ||
+        binding.rootLocatorDigest === null ||
+        observation.rootLocatorDigest !== binding.rootLocatorDigest ||
+        stableDigest(observation.rootLocator) !== observation.rootLocatorDigest ||
+        stableDigest(binding.rootLocator) !== binding.rootLocatorDigest ||
+        stableDigest(observation.rootLocator) !== stableDigest(binding.rootLocator) ||
+        observation.expectedName !== task.fileIntent.output.fileName ||
+        observation.logicalInvocationId !== journal.logicalInvocationId ||
+        observation.requestDigest !== journal.requestDigest ||
+        observation.locator.authority !== observation.rootLocator.authority ||
+        stableDigest(observation.locator) !== observation.locatorDigest
       ) {
-        fail('validation_failed', 'The Human-observed output does not match the exact execution and active Content root.')
+        fail(
+          'validation_failed',
+          'The fresh Content Space observation does not match the exact invocation, output name, execution and active root.'
+        )
+      }
+      requireBoundedObservationTime(observation.observedAt, at)
+      const output = {
+        executionId: execution.executionId,
+        assignmentTaskRevision: observation.assignmentTaskRevision,
+        locator: observation.locator,
+        locatorDigest: observation.locatorDigest,
+        rootLocatorDigest: observation.rootLocatorDigest,
+        bindingRevision: observation.bindingRevision,
+        transferReceiptDigest: observation.contentObservationReceiptDigest,
+        observationDigest: observation.observationDigest,
+        preflightObservationDigest: observation.providerObservationDigest
       }
       const observedJournal: StoredExternalOperationJournal = { ...journal, state: 'observed_success',
         receiptDigest: output.transferReceiptDigest, observationDigest: output.observationDigest,
@@ -3513,7 +3546,14 @@ export class CollaborationService {
       const message = await this.appendInbox(tx, { kind: 'agent', id: execution.assigneeAgentId },
         'task.recovery.output_linked', { protocolVersion: '1.0', type: 'task.recovery.output_linked',
           projectId: project.projectId, taskId: task.taskId, executionId: execution.executionId,
-          recoveryActionId: completedAction.recoveryActionId, resourceRefId: resource.resourceRefId }, at)
+          recoveryActionId: completedAction.recoveryActionId,
+          journalEntryId: observedJournal.contentRecoveryJournalEntryId,
+          logicalInvocationId: observedJournal.logicalInvocationId,
+          resourceRefId: resource.resourceRefId,
+          taskRevision: task.revision,
+          executionRevision: execution.revision,
+          journalRevision: observedJournal.revision,
+          output }, at)
       return { response: { task, execution, journal: observedJournal,
         recoveryAction: completedAction, resource }, resourceKind: 'visible_recovery_action',
         resourceId: completedAction.recoveryActionId,
@@ -3567,14 +3607,37 @@ export class CollaborationService {
       await tx.updateTaskExecution(abandonedExecution, execution.revision)
       await tx.updateTask(updatedTask, task.revision)
       await tx.invalidateCloudResourceRefs(task.taskId, execution.executionId, at)
-      const message = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId },
-        'task.recovery.abandoned', { protocolVersion: '1.0', type: 'task.recovery.abandoned',
-          projectId: project.projectId, taskId: task.taskId, executionId: execution.executionId,
-          recoveryActionId: completedAction.recoveryActionId, reason: input.reason }, at)
+      const payload = { protocolVersion: '1.0' as const, type: 'task.recovery.abandoned' as const,
+        projectId: project.projectId, taskId: task.taskId, executionId: execution.executionId,
+        recoveryActionId: completedAction.recoveryActionId,
+        taskRevision: updatedTask.revision,
+        executionRevision: abandonedExecution.revision,
+        reason: input.reason }
+      const workerMessage = await this.appendInbox(
+        tx,
+        { kind: 'agent', id: execution.assigneeAgentId },
+        'task.recovery.abandoned',
+        payload,
+        at
+      )
+      const coordinatorMessage = execution.assigneeAgentId === project.coordinatorAgentId
+        ? workerMessage
+        : await this.appendInbox(
+            tx,
+            { kind: 'agent', id: project.coordinatorAgentId },
+            'task.recovery.abandoned',
+            payload,
+            at
+          )
       return { response: { task: updatedTask, execution: abandonedExecution,
         journal: abandonedJournal, recoveryAction: completedAction }, resourceKind: 'visible_recovery_action',
         resourceId: completedAction.recoveryActionId,
-        notifications: [{ recipient: message.recipient, sequence: message.sequence }] }
+        notifications: [
+          { recipient: workerMessage.recipient, sequence: workerMessage.sequence },
+          ...(coordinatorMessage === workerMessage
+            ? []
+            : [{ recipient: coordinatorMessage.recipient, sequence: coordinatorMessage.sequence }])
+        ] }
     }).then((response) => ({ task: response.task as StoredTask,
       execution: response.execution as StoredTaskExecution,
       journal: response.journal as StoredExternalOperationJournal,
@@ -4067,17 +4130,27 @@ export class CollaborationService {
       }
       if (task.executionCount >= task.maxRetries + 1) fail('budget_exhausted', 'The Task retry budget is exhausted.')
       if (Date.parse(input.offerExpiresAt) <= Date.parse(at)) fail('validation_failed', 'The next Task offer expiry must be in the future.')
+      const nextFileIntent = await requireNewlyNamedSuccessorFileIntent(
+        tx,
+        task,
+        input.nextFileIntent
+      )
       const eligibility = await requireEligibleAssignee({ tx, project,
         assigneeAgentId: input.assigneeAgentId,
         expectedAvailabilityRevision: input.expectedAvailabilityRevision,
-        fileIntent: task.fileIntent,
+        fileIntent: nextFileIntent,
         requiredCapabilityTags: [], at })
       const assignmentTaskRevision = task.revision + 1
       const executionId = newId('exe')
       const artifacts = deriveAssignmentArtifacts({ project, taskId: task.taskId, executionId,
-        assignmentTaskRevision, fileIntent: task.fileIntent, binding: eligibility.binding, at })
+        assignmentTaskRevision, fileIntent: nextFileIntent, binding: eligibility.binding, at })
       if (previous.fileIntent !== null) await tx.invalidateCloudResourceRefs(task.taskId, previous.executionId, at)
-      const superseded = fenceTaskExecution(previous, 'superseded', 'reassigned', at)
+      const preserveRecoveryAbandon = previous.state === 'cancelled' &&
+        previous.fence.status === 'fenced' &&
+        previous.fence.reason === 'manual_recovery_abandoned'
+      const superseded = preserveRecoveryAbandon
+        ? previous
+        : fenceTaskExecution(previous, 'superseded', 'reassigned', at)
       const execution: StoredTaskExecution = {
         executionId, taskId: task.taskId, projectId: task.projectId, attempt: previous.attempt + 1,
         offeredByCoordinatorAgentId: actor.agentId,
@@ -4099,9 +4172,10 @@ export class CollaborationService {
         revision: 1, createdAt: at, updatedAt: at
       }
       const updatedTask: StoredTask = { ...task, currentExecutionId: executionId, currentExecutionState: 'offered',
-        status: 'offered', executionCount: task.executionCount + 1, revision: assignmentTaskRevision,
+        status: 'offered', fileIntent: nextFileIntent,
+        executionCount: task.executionCount + 1, revision: assignmentTaskRevision,
         completedAt: null, updatedAt: at }
-      await tx.updateTaskExecution(superseded, previous.revision)
+      if (!preserveRecoveryAbandon) await tx.updateTaskExecution(superseded, previous.revision)
       await tx.insertTaskExecution(execution)
       await tx.insertTaskOffer(offer)
       if (artifacts.resources.length > 0) await tx.insertCloudResourceRefs(artifacts.resources)
@@ -4278,7 +4352,6 @@ export class CollaborationService {
     input: CloudCommand<'task.result.submit'>
   ): Promise<Readonly<{ task: StoredTask; execution: StoredTaskExecution; submission: StoredTaskResultSubmission }>> {
     return this.commit(actor, 'task.result.submit', input.idempotencyKey, input, async (tx, at) => {
-      requireBoundedObservationTime(input.runtimeProvenance.completedAt, at)
       const submissionFacts = {
         taskId: input.taskId,
         executionId: input.executionId,
@@ -4303,6 +4376,11 @@ export class CollaborationService {
         execution.fence.status === 'fenced' &&
         execution.fence.reason === 'manual_recovery_required' &&
         task.currentExecutionId === execution.executionId
+      if (humanRecovered) {
+        requireNonFutureObservationTime(input.runtimeProvenance.completedAt, at)
+      } else {
+        requireBoundedObservationTime(input.runtimeProvenance.completedAt, at)
+      }
       if (!humanRecovered) assertOpenCurrentExecution(project, task, execution)
       await requireCurrentExecutionAuthority(tx, project, execution, at)
       if (!humanRecovered && (execution.state !== 'running' || task.status !== 'in_progress')) {
@@ -4383,12 +4461,13 @@ export class CollaborationService {
         recoveryJournalEntryIds: input.recoveryJournalEntryIds,
         submissionDigest: input.submissionDigest,
         revision: 1,
-        submittedAt: input.runtimeProvenance.completedAt,
+        submittedAt: humanRecovered ? at : input.runtimeProvenance.completedAt,
         createdAt: at,
         updatedAt: at
       }
+      const resultTransitionAt = humanRecovered ? at : input.runtimeProvenance.completedAt
       const updatedExecution: StoredTaskExecution = {
-        ...fenceTaskExecution(execution, 'result_submitted', 'result_submitted', input.runtimeProvenance.completedAt),
+        ...fenceTaskExecution(execution, 'result_submitted', 'result_submitted', resultTransitionAt),
         currentResultSubmissionId: submission.resultSubmissionId,
         updatedAt: at
       }
@@ -4481,20 +4560,22 @@ export class CollaborationService {
           completedAt: at, revision: task.revision + 1, updatedAt: at }
       } else {
         if (task.executionCount >= task.maxRetries + 1) fail('budget_exhausted', 'The Task retry budget is exhausted.')
-        if (stableDigest(input.nextFileIntent) !== stableDigest(task.fileIntent)) {
-          fail('validation_failed', 'Request-revision cannot alter the immutable Task file declaration.')
-        }
+        const nextFileIntent = await requireNewlyNamedSuccessorFileIntent(
+          tx,
+          task,
+          input.nextFileIntent
+        )
         const eligibility = await requireEligibleAssignee({ tx, project,
           assigneeAgentId: input.nextAssigneeAgentId!,
           expectedAvailabilityRevision: input.expectedNextAssigneeAvailabilityRevision!,
-          fileIntent: task.fileIntent, requiredCapabilityTags: [], at })
+          fileIntent: nextFileIntent, requiredCapabilityTags: [], at })
         if (Date.parse(input.nextOfferExpiresAt!) <= Date.parse(at)) {
           fail('validation_failed', 'The revision offer expiry must be in the future.')
         }
         const assignmentTaskRevision = task.revision + 1
         nextExecutionId = newId('exe')
         const artifacts = deriveAssignmentArtifacts({ project, taskId: task.taskId, executionId: nextExecutionId,
-          assignmentTaskRevision, fileIntent: task.fileIntent, binding: eligibility.binding, at })
+          assignmentTaskRevision, fileIntent: nextFileIntent, binding: eligibility.binding, at })
         updatedExecution = {
           ...execution,
           state: 'superseded',
@@ -4526,7 +4607,7 @@ export class CollaborationService {
           rejectionReason: null, safeReasonDetail: null, revision: 1, createdAt: at, updatedAt: at }
         updatedTask = { ...task, status: 'offered', currentExecutionId: nextExecutionId,
           currentExecutionState: 'offered', executionCount: task.executionCount + 1,
-          revision: assignmentTaskRevision, updatedAt: at }
+          fileIntent: nextFileIntent, revision: assignmentTaskRevision, updatedAt: at }
         await tx.insertTaskExecution(nextExecution)
         await tx.insertTaskOffer(nextOffer)
         if (artifacts.resources.length > 0) await tx.insertCloudResourceRefs(artifacts.resources)
@@ -5450,6 +5531,14 @@ function requireBoundedObservationTime(observedAt: string, committedAt: string):
   }
 }
 
+function requireNonFutureObservationTime(observedAt: string, committedAt: string): void {
+  const observed = Date.parse(observedAt)
+  const committed = Date.parse(committedAt)
+  if (!Number.isFinite(observed) || observed > committed + 5 * 60_000) {
+    fail('validation_failed', 'The recovered factual observation time is invalid or in the future.')
+  }
+}
+
 function requireProjectOwner(project: StoredProject, actor: UserActor): void {
   if (project.ownerUserId !== actor.userId) {
     fail('permission_denied', 'Only the current Project Owner OIDC User may perform this command.')
@@ -5963,6 +6052,46 @@ function deriveAssignmentArtifacts(input: Readonly<{
     }
   }
   return { resources, executionFileIntent }
+}
+
+async function requireNewlyNamedSuccessorFileIntent(
+  tx: CollaborationTransaction,
+  task: StoredTask,
+  nextFileIntent: TaskFileIntent | null
+): Promise<TaskFileIntent | null> {
+  if (task.fileIntent === null) {
+    if (nextFileIntent !== null) {
+      fail('validation_failed', 'A text Task successor cannot introduce a file intent.')
+    }
+    return null
+  }
+  if (nextFileIntent === null) {
+    fail('validation_failed', 'A file Task successor requires one newly named file intent.')
+  }
+  const currentWithoutName = {
+    ...task.fileIntent,
+    output: { ...task.fileIntent.output, fileName: undefined }
+  }
+  const nextWithoutName = {
+    ...nextFileIntent,
+    output: { ...nextFileIntent.output, fileName: undefined }
+  }
+  if (stableDigest(currentWithoutName) !== stableDigest(nextWithoutName)) {
+    fail(
+      'validation_failed',
+      'A successor may change only the safe output name; every other file intent fact is immutable.'
+    )
+  }
+  if (nextFileIntent.output.fileName === task.fileIntent.output.fileName) {
+    fail('validation_failed', 'A file Task successor must use a new no-overwrite output name.')
+  }
+  const executions = await tx.listTaskExecutions(task.taskId)
+  if (executions.some((execution) => (
+    execution.fileIntent?.output.fileName === nextFileIntent.output.fileName
+  ))) {
+    fail('validation_failed', 'The successor output name was already assigned to this Task history.')
+  }
+  return nextFileIntent
 }
 
 async function requireTaskOfferBundle(

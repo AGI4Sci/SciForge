@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.collaboration",
     "displayName": "Collaboration",
-    "version": "3.0.0",
+    "version": "3.1.0",
     "hostApi": {
       "minimum": "1.5.0",
       "maximumExclusive": "2.0.0"
@@ -20,7 +20,7 @@
     "collaboration.coordinator-cloud-command": {
       "location": "main.internal-service-descriptor",
       "serviceId": "sciforge.collaboration.coordinator-cloud-command",
-      "contractVersion": "2.0.0",
+      "contractVersion": "3.0.0",
       "allowedConsumerModuleIds": [
         "sciforge.project-coordinator"
       ]
@@ -64,7 +64,7 @@
         {
           "kind": "main.extension",
           "id": "collaboration.coordinator-cloud-command",
-          "version": "2.0.0",
+          "version": "3.0.0",
           "priority": 72
         }
       ]

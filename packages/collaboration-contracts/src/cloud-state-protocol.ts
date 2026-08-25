@@ -69,6 +69,7 @@ import {
   projectPlanTaskSchema,
   projectPlanStateSchema,
   taskResultOutputSchema,
+  taskRecoveryObservedOutputSchema,
   taskResultRuntimeProvenanceSchema,
   taskResultSubmissionSchema,
   taskReviewDecisionKindSchema,
@@ -525,7 +526,8 @@ export const taskOfferReassignCommandSchema = z.object({
   expectedExecutionAuthorityEpoch: revisionSchema,
   assigneeAgentId: agentIdSchema,
   expectedAvailabilityRevision: revisionSchema,
-  offerExpiresAt: timestampSchema
+  offerExpiresAt: timestampSchema,
+  nextFileIntent: taskFileIntentSchema.nullable()
 }).strict()
 export type TaskOfferReassignCommand = z.infer<typeof taskOfferReassignCommandSchema>
 
@@ -648,8 +650,7 @@ export const taskRecoveryLinkObservedOutputCommandSchema = z.object({
   expectedExecutionRevision: revisionSchema,
   expectedRecoveryActionRevision: revisionSchema,
   expectedCoordinatorAuthorityEpoch: revisionSchema,
-  output: taskResultOutputSchema,
-  humanObservationDigest: sha256Schema
+  observation: taskRecoveryObservedOutputSchema
 }).strict()
 
 export const taskRecoveryAbandonCommandSchema = z.object({

@@ -66,13 +66,22 @@ Worker 只有在当前 `executionId` 仍 active、Task revision 匹配、Device/
 
 ### Requirement: outcome_unknown 必须进入持久人工恢复
 
-任何无法证明外部写成功或失败的 timeout、cancellation、transport loss 或 receipt mismatch SHALL 记录 durable operation journal，并把 Task/execution 置为 `manual_recovery_required`。Coordinator HCI SHALL 允许 Owner/Coordinator 通过 canonical Content Space observation/reconcile 精确查找输出；只有观察到与原请求完全一致的资源时才能关联该输出，否则 SHALL abandon 旧 execution 并以新 `executionId` 和新输出名称重试。系统 SHALL NOT 提供无 observation 的“标记成功”。
+任何无法证明外部写成功或失败的 timeout、cancellation、transport loss 或 receipt mismatch SHALL 记录 durable operation journal，并把 Task/execution 置为 `manual_recovery_required`。Coordinator HCI SHALL 允许 Owner/Coordinator 通过 canonical Content Space observation/reconcile 精确查找输出；只有观察到与原请求完全一致的资源时才能关联该输出，否则 SHALL abandon 旧 execution，包括 Content binding 已 degraded 的情形。精确人工恢复 MAY 使用超过普通 24 小时提交窗口、但不得晚于当前 Cloud 时间的原始 Runtime observation。系统 SHALL NOT 提供无 observation 的“标记成功”。
+
+放弃后，Coordinator HCI SHALL 默认显示可批准的 successor retry。Human SHALL 只批准该动作，不得直接创建 execution；仅当前 Coordinator Agent 的 successor/revision 命令可请求 Cloud 创建新 `executionId`。该命令 SHALL 为文件 Task 提供一个从未在该 Task 历史中使用的新安全输出名称，并 SHALL 保持 binding revision、input locators、output target/mode/media type/max bytes 等其他 file intent 事实不变。Cloud SHALL 保留旧 execution 的 `manual_recovery_abandoned` fence 并拒绝其后续写入；不得保留复用旧文件名的兼容路径。
 
 #### Scenario: 上传响应丢失但文件实际存在
 
 - **WHEN** Coordinator reconcile 观察到 exact Provider Instance、parent、name 和 resource identity 与 invocation receipt 一致，并由 Human 确认关联该 observed output
 - **THEN** HCI MAY 将该 observed output 关联到原 execution 并继续审阅
 - **AND** 关联动作 SHALL 记录 Human、observation 和 revision provenance。
+
+#### Scenario: degraded binding 下放弃并批准新 execution
+
+- **WHEN** exact observation 无法完成且 Project Content binding 已 degraded
+- **THEN** Coordinator HCI SHALL 仍允许放弃旧 execution，并默认显示 successor retry 批准入口
+- **AND** Human 批准后仅当前 Coordinator Agent SHALL 以新文件名请求新 execution，Cloud SHALL 生成新 `executionId` 并继续 fence 旧 execution
+- **AND** 相同或历史文件名、非名称 file intent 漂移、非 Coordinator Agent 命令和旧 execution 写入 SHALL 全部被拒绝。
 
 ### Requirement: 文件完整性是系统验收事实
 

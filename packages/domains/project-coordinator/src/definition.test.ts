@@ -43,7 +43,12 @@ test('manifest composes independent main and renderer entrypoints', () => {
     domainPackageDefinition.contributionContracts[
       PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION.id
     ],
-    { requestedSystemCapabilityGrants: ['content-space.provisioning-batch'] }
+    {
+      requestedSystemCapabilityGrants: [
+        'content-space.provisioning-batch',
+        'content-space.recovery-observation'
+      ]
+    }
   )
 })
 
@@ -87,7 +92,7 @@ test('publishable dependencies target the frozen Host and domain contract majors
   ) as { dependencies: Record<string, string> }
   assert.equal(packageJson.dependencies['@sciforge/collaboration-contracts'], '2.0.0')
   assert.equal(packageJson.dependencies['@sciforge/domain-collaboration'], '^3.0.0')
-  assert.equal(packageJson.dependencies['@sciforge/domain-content-space'], '^4.5.0')
+  assert.equal(packageJson.dependencies['@sciforge/domain-content-space'], '^4.6.0')
   assert.equal(packageJson.dependencies['@sciforge/domain-identity-access'], '^2.0.0')
   assert.equal(packageJson.dependencies['@sciforge/domain-sdk'], '^0.2.3')
 })

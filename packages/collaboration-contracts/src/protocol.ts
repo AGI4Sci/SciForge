@@ -3,6 +3,7 @@ import {
   agentIdSchema,
   assuranceLevelSchema,
   challengeIdSchema,
+  contentRecoveryJournalEntryIdSchema,
   deviceIdSchema,
   humanEndpointIdSchema,
   humanRequestIdSchema,
@@ -24,6 +25,7 @@ import {
   providerOpaqueIdSchema,
   providerPrincipalFactIdSchema,
   receiptIdSchema,
+  recoveryActionIdSchema,
   remoteApprovalIdSchema,
   requestIdSchema,
   resourceRefIdSchema,
@@ -77,6 +79,7 @@ import {
   projectContentProvisioningIntentSchema,
   providerDirectoryPrincipalFactSchema
 } from './project-content.js'
+import { taskResultOutputSchema } from './project-review.js'
 import {
   restProjectCoordinationResponseSchema,
   restProjectPageResponseSchema
@@ -234,6 +237,39 @@ export const projectEndpointUpdatedPayloadSchema = z.object({
 }).strict()
 export type ProjectEndpointUpdatedPayload = z.infer<typeof projectEndpointUpdatedPayloadSchema>
 
+export const taskRecoveryOutputLinkedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('task.recovery.output_linked'),
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  executionId: executionIdSchema,
+  recoveryActionId: recoveryActionIdSchema,
+  journalEntryId: contentRecoveryJournalEntryIdSchema,
+  logicalInvocationId: z.string().trim().min(1).max(128)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u),
+  resourceRefId: resourceRefIdSchema,
+  taskRevision: revisionSchema,
+  executionRevision: revisionSchema,
+  journalRevision: revisionSchema,
+  output: taskResultOutputSchema
+}).strict()
+export type TaskRecoveryOutputLinkedPayload = z.infer<
+  typeof taskRecoveryOutputLinkedPayloadSchema
+>
+
+export const taskRecoveryAbandonedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('task.recovery.abandoned'),
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  executionId: executionIdSchema,
+  recoveryActionId: recoveryActionIdSchema,
+  taskRevision: revisionSchema,
+  executionRevision: revisionSchema,
+  reason: z.string().trim().min(1).max(500)
+}).strict()
+export type TaskRecoveryAbandonedPayload = z.infer<typeof taskRecoveryAbandonedPayloadSchema>
+
 export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
   z.object({
     ...agentInboxEnvelopeShape,
@@ -250,6 +286,8 @@ export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
   }).strict(),
   personalMessageReceivedPayloadSchema,
   taskOfferedPayloadSchema,
+  taskRecoveryOutputLinkedPayloadSchema,
+  taskRecoveryAbandonedPayloadSchema,
   projectionUpdatedPayloadSchema,
   projectEndpointUpdatedPayloadSchema,
   z.object({

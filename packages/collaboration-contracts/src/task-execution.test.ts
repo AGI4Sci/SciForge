@@ -256,9 +256,12 @@ describe('Coordinator authority epoch', () => {
       expectedExecutionAuthorityEpoch: 2,
       assigneeAgentId: TEST_IDS.secondAgentId,
       expectedAvailabilityRevision: 9,
-      offerExpiresAt: TEST_LATER_TIMESTAMP
+      offerExpiresAt: TEST_LATER_TIMESTAMP,
+      nextFileIntent: null
     }
     expect(restRequestSchema.safeParse(reassign).success).toBe(true)
+    const { nextFileIntent: _nextFileIntent, ...withoutNextFileIntent } = reassign
+    expect(restRequestSchema.safeParse(withoutNextFileIntent).success).toBe(false)
     const { expectedAvailabilityRevision: _availability, ...withoutAvailability } = reassign
     expect(restRequestSchema.safeParse(withoutAvailability).success).toBe(false)
     const { expectedProjectRevision: _projectRevision, ...withoutProjectRevision } = reassign

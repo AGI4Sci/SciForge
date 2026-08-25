@@ -120,7 +120,7 @@ describe('Content Space public contract', () => {
     })).toThrow()
   })
 
-  it('publishes one grant and effect-honest system transfer and root-authorization contracts', () => {
+  it('publishes narrow effect-honest system transfer and recovery-observation contracts', () => {
     expect(contract.CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID)
       .toBe('content-space.system-transfer')
     expect(contract.CONTENT_SPACE_SYSTEM_CAPABILITY_GRANTS)
@@ -128,6 +128,8 @@ describe('Content Space public contract', () => {
     expect(Object.isFrozen(contract.CONTENT_SPACE_SYSTEM_CAPABILITY_GRANTS)).toBe(true)
     expect(contract.CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID)
       .toBe('content-space.provisioning-batch')
+    expect(contract.CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_ID)
+      .toBe('content-space.recovery-observation')
     expect(contract.CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT).toMatchObject({
       actionId: 'content-space.system-transfer-preflight',
       effect: 'read'
@@ -139,6 +141,10 @@ describe('Content Space public contract', () => {
     expect(contract.CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT).toMatchObject({
       actionId: 'content-space.system-upload-new',
       effect: 'external-write'
+    })
+    expect(contract.CONTENT_SPACE_SYSTEM_OBSERVE_EXACT_OUTPUT_CONTRACT).toMatchObject({
+      actionId: 'content-space.system-observe-exact-output',
+      effect: 'read'
     })
     expect(contract.CONTENT_SPACE_AUTHORIZE_AGENT_ROOT_CONTRACT).toMatchObject({
       actionId: 'content-space.authorize-agent-root',

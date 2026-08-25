@@ -4,6 +4,9 @@ import test from 'node:test'
 import {
   PROJECT_COORDINATOR_CAPABILITY_IDS,
   projectCoordinatorActivationSchema,
+  projectCoordinatorContentRecoveryAbandonInputSchema,
+  projectCoordinatorContentRecoveryObserveLinkInputSchema,
+  projectCoordinatorContentRecoveryRetrySuccessorInputSchema,
   projectCoordinatorMembershipAddInputSchema,
   projectCoordinatorMembershipRemoveInputSchema,
   projectCoordinatorProvisioningApplyInputSchema,
@@ -275,4 +278,59 @@ test('dynamic member writes carry exact Cloud identities and never Provider cred
     ...remove,
     providerPrincipalId: 'caller-must-not-supply'
   }))
+})
+
+test('Task output recovery HCI supplies only the visible action identity or an abandon reason', () => {
+  const observe = {
+    projectId: 'prj_Project000001',
+    recoveryActionId: 'rca_TaskRecovery001'
+  }
+  assert.deepEqual(projectCoordinatorContentRecoveryObserveLinkInputSchema.parse(observe), observe)
+  assert.throws(() => projectCoordinatorContentRecoveryObserveLinkInputSchema.parse({
+    ...observe,
+    executionId: 'exe_CallerChosen001'
+  }))
+  assert.throws(() => projectCoordinatorContentRecoveryObserveLinkInputSchema.parse({
+    ...observe,
+    observationDigest: 'a'.repeat(64)
+  }))
+
+  const abandon = {
+    ...observe,
+    reason: 'The exact output cannot be verified; abandon this fenced execution.'
+  }
+  assert.deepEqual(projectCoordinatorContentRecoveryAbandonInputSchema.parse(abandon), abandon)
+  assert.throws(() => projectCoordinatorContentRecoveryAbandonInputSchema.parse({
+    ...abandon,
+    expectedExecutionRevision: 7
+  }))
+  assert.equal(
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
+    'project-coordinator.content-recovery.observe-link'
+  )
+  assert.equal(
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
+    'project-coordinator.content-recovery.abandon'
+  )
+
+  const retry = {
+    projectId: 'prj_Project000001',
+    recoveryActionId: 'rca_TaskRecovery001',
+    assigneeAgentId: 'agt_WorkerAgent001',
+    nextOutputFileName: 'architecture-review.recovery-2.md',
+    offerExpiresAt: '2026-08-27T09:00:00.000Z'
+  }
+  assert.deepEqual(projectCoordinatorContentRecoveryRetrySuccessorInputSchema.parse(retry), retry)
+  assert.throws(() => projectCoordinatorContentRecoveryRetrySuccessorInputSchema.parse({
+    ...retry,
+    previousExecutionId: 'exe_CallerChosen001'
+  }))
+  assert.throws(() => projectCoordinatorContentRecoveryRetrySuccessorInputSchema.parse({
+    ...retry,
+    expectedTaskRevision: 7
+  }))
+  assert.equal(
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
+    'project-coordinator.content-recovery.retry-successor'
+  )
 })
