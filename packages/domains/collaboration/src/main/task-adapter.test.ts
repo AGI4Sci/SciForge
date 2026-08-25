@@ -184,6 +184,45 @@ test('automatic offer rejects before acceptance when the canonical AgentRuntime 
   ])
 })
 
+test('a terminal AgentRuntime failure is journaled and fails only the current execution', async () => {
+  const cloud = new FakeWorkerCloud()
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => ({
+      runtimeId: 'codex',
+      threadId: 'worker-failed-thread',
+      turnId: 'worker-failed-turn',
+      state: 'failed',
+      text: 'Bounded Runtime failure.'
+    })
+  }, initial)
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle(TEST_IDS.executionId)
+
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.offer.accept',
+    'task.execution.start',
+    'task.execution.fail'
+  ])
+  const run = created.store.snapshot().taskRuns[0]
+  assert.equal(run?.state, 'failed')
+  assert.equal(run?.execution?.state, 'failed')
+  assert.equal(run?.agentJournal.length, 1)
+  assert.equal(run?.agentJournal[0]?.state, 'observed_failure')
+  assert.equal(run?.agentJournal[0]?.runtimeId, 'codex')
+  assert.equal(run?.agentJournal[0]?.threadId, 'worker-failed-thread')
+  assert.equal(run?.agentJournal[0]?.turnId, 'worker-failed-turn')
+  assert.equal(run?.agentJournal[0]?.runtimeState, 'failed')
+  assert.equal(run?.lateOutcomes.length, 0)
+})
+
 test('file offer uses the generic token-free Content preflight and rejects provider-not-ready closed', async () => {
   const cloud = new FakeWorkerCloud('offered', true)
   const capabilityCalls: string[] = []
@@ -264,7 +303,7 @@ test('file execution journals Cloud and local dispatch before one real generic d
   }]
   const created = await createRunner(cloud, {
     runtimeReadiness: readyRuntimeReadiness,
-    run: async () => {
+    run: async (request) => {
       const run = store.snapshot().taskRuns[0]
       assert.equal(
         run?.externalJournal.filter(({ operation, state }) => (
@@ -273,6 +312,22 @@ test('file execution journals Cloud and local dispatch before one real generic d
         1,
         'Agent may start only after the exact input download was durably observed.'
       )
+      assert.equal(request.workspaceRoot, run?.workspaceRoot)
+      assert.match(request.clientDirectiveId ?? '', /^collab-worker-[a-f0-9]{48}$/u)
+      assert.equal(request.interaction, 'reviewable')
+      assert.equal(request.mode, 'agent')
+      assert.equal(request.runtimeId, undefined)
+      assert.equal(request.threadId, undefined)
+      assert.deepEqual(request.metadata, {
+        source: 'collaboration.worker-task',
+        projectId: TEST_IDS.projectId,
+        taskId: TEST_IDS.taskId,
+        executionId: TEST_IDS.executionId,
+        taskRevision: run?.expectedTaskRevision,
+        executionRevision: run?.expectedExecutionRevision
+      })
+      assert.match(request.prompt, /input\.csv/u)
+      assert.match(request.prompt, /analysis\.md/u)
       return {
         runtimeId: 'codex',
         threadId: 'worker-file-thread',
@@ -295,8 +350,33 @@ test('file execution journals Cloud and local dispatch before one real generic d
     CONTENT_SPACE_SYSTEM_DOWNLOAD_CONTRACT.actionId,
     CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT.actionId
   ])
+  for (const call of transferCalls) {
+    assert.equal(JSON.stringify(call.input).includes('/tmp/'), false)
+    const options = call.options as Readonly<{
+      workspaceId?: string
+      idempotencyKey?: string
+      systemExecutionContext?: unknown
+      signal?: AbortSignal
+    }> | undefined
+    assert.equal(options?.workspaceId, `/tmp/sciforge-worker-${TEST_IDS.executionId}`)
+    assert.match(options?.idempotencyKey ?? '', /^content_[a-f0-9]{48}$/u)
+    assert.deepEqual(options?.systemExecutionContext, {
+      contractVersion: 1,
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      executionRevision: 3
+    })
+    assert.equal(options?.signal?.aborted, false)
+  }
   const run = store.snapshot().taskRuns[0]
   assert.equal(run?.state, 'completed')
+  assert.equal(run?.agentJournal.length, 1)
+  assert.equal(run?.agentJournal[0]?.state, 'observed_success')
+  assert.equal(run?.agentJournal[0]?.runtimeId, 'codex')
+  assert.equal(run?.agentJournal[0]?.threadId, 'worker-file-thread')
+  assert.equal(run?.agentJournal[0]?.turnId, 'worker-file-turn')
+  assert.equal(run?.agentJournal[0]?.runtimeState, 'completed')
   assert.deepEqual(run?.externalJournal.map(({ state }) => state), [
     'observed_success',
     'observed_success'
@@ -650,6 +730,10 @@ class FakeWorkerCloud {
           this.advance('running')
           return entityResponse(request, this.execution)
         }
+        if (request.type === 'task.execution.fail') {
+          this.advance('failed')
+          return entityResponse(request, this.execution)
+        }
         if (request.type === 'external_operation.prepare') {
           this.recoveryJournalOrdinal += 1
           const entry = externalOperationRecoveryJournalEntrySchema.parse({
@@ -729,10 +813,10 @@ class FakeWorkerCloud {
     this.recoveryJournals.set(entry.contentRecoveryJournalEntryId, entry)
   }
 
-  private advance(state: 'accepted' | 'rejected' | 'running'): void {
+  private advance(state: 'accepted' | 'rejected' | 'running' | 'failed'): void {
     const taskRevision = this.task.revision + 1
     const assignmentTaskRevision = this.execution.fence.assignmentTaskRevision
-    const terminal = state === 'rejected'
+    const terminal = state === 'rejected' || state === 'failed'
     this.execution = taskExecutionSchema.parse({
       ...this.execution,
       state,
@@ -740,13 +824,13 @@ class FakeWorkerCloud {
       revision: this.execution.revision + 1,
       updatedAt: TEST_LATER_TIMESTAMP,
       acceptedAt: state === 'rejected' ? null : TEST_LATER_TIMESTAMP,
-      startedAt: state === 'running' ? TEST_LATER_TIMESTAMP : null,
+      startedAt: state === 'running' || state === 'failed' ? TEST_LATER_TIMESTAMP : null,
       terminalAt: terminal ? TEST_LATER_TIMESTAMP : null,
       fence: {
         ...this.execution.fence,
         assignmentTaskRevision,
         status: terminal ? 'fenced' : 'open',
-        reason: terminal ? 'offer_rejected' : null,
+        reason: state === 'rejected' ? 'offer_rejected' : state === 'failed' ? 'execution_failed' : null,
         fencedAt: terminal ? TEST_LATER_TIMESTAMP : null
       },
       fileIntent: this.fileMode ? fileExecutionIntent(assignmentTaskRevision) : null
@@ -761,7 +845,7 @@ class FakeWorkerCloud {
   }
 }
 
-function makeTask(state: 'offered' | 'accepted' | 'rejected' | 'running', revision: number): Task {
+function makeTask(state: 'offered' | 'accepted' | 'rejected' | 'running' | 'failed', revision: number): Task {
   return taskSchema.parse({
     schemaVersion: 1,
     type: 'task',
@@ -775,10 +859,14 @@ function makeTask(state: 'offered' | 'accepted' | 'rejected' | 'running', revisi
     fileIntent: null,
     currentExecutionId: TEST_IDS.executionId,
     currentExecutionState: state,
-    status: state === 'running' || state === 'accepted' ? 'in_progress' : 'offered',
+    status: state === 'failed'
+      ? 'failed'
+      : state === 'running' || state === 'accepted'
+        ? 'in_progress'
+        : 'offered',
     executionCount: 1,
     maxRetries: 2,
-    completedAt: null,
+    completedAt: state === 'failed' ? TEST_LATER_TIMESTAMP : null,
     revision,
     createdAt: TEST_TIMESTAMP,
     updatedAt: TEST_LATER_TIMESTAMP

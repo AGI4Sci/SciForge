@@ -55,6 +55,14 @@
 - 把 Coordinator 与 Worker 全部留在同一大包。Worker registration/presence/Inbox/local execution 留在 `domain-collaboration`；计划/选择/复审/provisioning HCI 留在 `domain-project-coordinator`。
 - 生产 subscriber 没有 publisher、UI 默认折叠审批、创建后不聚焦等“测试通过但用户闭环不可见”的路径。
 
+### B 精确 commits 的 Stage 2 处置
+
+- `79200c70` 的 Coordinator workbench、`f23c6788` 的 Cloud finalization、`32be3a74` 的 Coordinator approval recovery 分别归属 Coordinator HCI/完成/恢复工作，不作为 Worker runner 实现移植。
+- `4a48efa7` 中旧 `project-coordinator/worker-runner` 的 Runtime 终态失败、execution fence 和恢复测试按行为拆分：Runtime 终态失败已迁移为当前 `domain-collaboration` execution journal characterization；accept 后恢复与迟到结果留给 5.5，不提前计入 5.4。
+- `0b1e8043` 的 Agent outbox/WSS recovery characterization 留给 5.5；其中 Coordinator planner characterization 已由当前 Coordinator package 独立承接。
+- `42d1d9ee` 新增的 `collaboration-identity` Token/session ownership 与最终 Identity 合同冲突，已拒绝；它不作为 Worker runner 的认证入口。
+- 当前唯一 Worker runner 是 recovery commit `b9e34cf7` 写入 `domain-collaboration` 的 canonical task adapter。它消费 runtime-neutral Agent execution Host、当前 execution journal 和 generic Content Space system contracts。旧 `task.transition`、`resource.create`、专用 ContentSpacePort 与 `project-coordinator/worker-runner` 均不迁移，也不保留 shim。
+
 ## C：Identity donor
 
 审计 commit：`15a45319`，已在当前基线。
