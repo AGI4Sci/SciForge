@@ -2,12 +2,15 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  AuthenticationService,
   CollaborationService,
   toAgent,
   toInboxMessage,
   toProjection
 } from '../packages/collaboration-server/src/index.ts'
+import {
+  createAgentCredentialBootstrap,
+  seedOidcUserDevice
+} from '../packages/collaboration-server/src/test-fixtures/collaboration-identity.ts'
 import {
   CollaborationLocalStore,
   ProjectionCoordinator,
@@ -21,6 +24,8 @@ import {
   FakeCollaborationStateBackend,
   FakeHumanEndpointDeliveryWorker,
   FakeHumanProvider,
+  fakeAgentActor,
+  fakeHumanEndpointActor,
   FakeServiceProjectionOutbox
 } from '../test-fixtures/collaboration/fake-adapters.mjs'
 
@@ -32,48 +37,54 @@ async function waitUntil(predicate, label) {
   assert.fail(`timed out waiting for ${label}`)
 }
 
-async function bindParticipant(service, authentication) {
-  const begun = await service.beginPairing({
+async function bindParticipant(service, repository, clock) {
+  const identity = await seedOidcUserDevice(repository, '全链路用户', clock.now())
+  const begun = await service.createEndpointChallenge(identity.user, {
     provider: 'fake-im',
     realmId: 'fake-realm',
-    requestedDisplayName: '全链路用户',
-    idempotencyKey: 'full-path-begin-pairing'
+    expectedProviderUserId: 'full-path-provider-user',
+    idempotencyKey: 'full-path-create-endpoint-challenge'
   })
-  const verified = await service.verifyPairingFromProvider({
+  const verified = await service.verifyEndpointChallengeFromProvider({
     provider: 'fake-im',
     realmId: 'fake-realm',
     providerUserId: 'full-path-provider-user',
     providerEventId: 'full-path-pairing-event',
+    challengeId: begun.challengeId,
     challengeCode: begun.challengeCode,
     assurance: 'strong'
   })
-  const redeemed = await service.redeemPairing({
-    pollSecret: begun.pollSecret,
-    idempotencyKey: 'full-path-redeem-pairing'
-  })
+  assert.equal((await service.getEndpointChallenge(identity.user, begun.challengeId)).type,
+    'endpoint.challenge.verified')
+  const endpoint = await repository.getEndpoint(verified.humanEndpointId)
   return {
-    userId: verified.userId,
+    userId: identity.userId,
+    deviceId: identity.deviceId,
     humanEndpointId: verified.humanEndpointId,
-    userActor: await authentication.resolveBearer(redeemed.userCredential),
-    endpointActor: await authentication.resolveProviderIdentity('fake-im', 'fake-realm', 'full-path-provider-user')
+    endpointActor: fakeHumanEndpointActor(endpoint),
+    userActor: identity.user
   }
 }
 
 test('10.2 canonical Fake provider → server → fixed desktop Session → server → provider survives retry and offline delivery', async () => {
   const clock = new FakeClock()
   const repository = new FakeCollaborationRepository()
-  const authentication = new AuthenticationService(repository, clock.now)
   const service = new CollaborationService({ repository, now: clock.now })
   const provider = new FakeHumanProvider()
-  const participant = await bindParticipant(service, authentication)
+  const participant = await bindParticipant(service, repository, clock)
+  const bootstrap = createAgentCredentialBootstrap()
   const registered = await service.registerAgent(participant.userActor, {
-    installationId: 'ins_FullPath000001',
+    deviceId: participant.deviceId,
     displayName: '全链路 Agent',
     nodeType: 'desktop',
     capabilities: ['agent-runtime'],
+    credentialBootstrapPublicKey: bootstrap.publicKey,
     idempotencyKey: 'full-path-register-agent'
   })
-  const agentActor = await authentication.resolveBearer(registered.deviceCredential)
+  const issuedCredential = bootstrap.open(registered.sealedCredential)
+  assert.match(issuedCredential, /^agent\.[A-Za-z0-9_-]+$/u)
+  const agentActor = fakeAgentActor(registered.agent)
+  const endpointActor = participant.endpointActor
   const locator = {
     type: 'provider_locator',
     provider: 'fake-im',
@@ -141,7 +152,7 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
     localAgentId: () => registered.agent.agentId,
     now: clock.now
   })
-  provider.onEvent((event) => service.acceptPersonalProviderMessage(participant.endpointActor, event))
+  provider.onEvent((event) => service.acceptPersonalProviderMessage(endpointActor, event))
 
   const mobileEvent = {
     locator,
@@ -179,7 +190,7 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
 
   const interruptedDelivery = new FakeHumanEndpointDeliveryWorker({
     service,
-    actor: participant.endpointActor,
+    actor: endpointActor,
     provider
   })
   await assert.rejects(() => interruptedDelivery.drain(), { code: 'resource_offline' })
@@ -189,7 +200,7 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
   provider.setOnline(true)
   const recoveredDelivery = new FakeHumanEndpointDeliveryWorker({
     service,
-    actor: participant.endpointActor,
+    actor: endpointActor,
     provider
   })
   await recoveredDelivery.drain()
@@ -211,7 +222,7 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
   })
   const desktopDelivery = new FakeHumanEndpointDeliveryWorker({
     service,
-    actor: participant.endpointActor,
+    actor: endpointActor,
     provider,
     afterSequence: recoveredDelivery.afterSequence
   })
