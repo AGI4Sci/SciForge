@@ -60,27 +60,23 @@ describe('secure provider credential architecture', () => {
     expect(providerIpc.map(({ path }) => path)).toEqual([])
   })
 
-  it('allows the provider facade only in the SDK, canonical Host, acceptance driver, and owning connector main', () => {
+  it('keeps the retired provider facade out of the Connector and collaboration packages', () => {
     const users = productionSources()
       .filter(({ source }) => /providerCredentials|DomainMainProviderCredential/u.test(source))
       .map(({ path }) => path)
     expect(users).toEqual([
       'src/main/domain-package-storage.ts',
       'src/main/provider-credential-acceptance.ts',
-      'packages/domains/opencontent-connector/src/main/connection-capabilities.ts',
-      'packages/domains/opencontent-connector/src/main/connection-service.ts',
-      'packages/domains/opencontent-connector/src/main/index.ts',
       'packages/domain-sdk/src/package-storage.ts'
     ])
   })
 
-  it('keeps existing package-secret consumers on the canonical non-provider lifecycle', () => {
+  it('keeps Collaboration outside every Host secret lifecycle', () => {
     const collaboration = productionSources()
       .filter(({ path }) => path.startsWith('packages/domains/collaboration/src/'))
       .map(({ source }) => source)
       .join('\n')
-    expect(collaboration).toContain('packageSecrets.read')
-    expect(collaboration).toContain('packageSecrets.write')
+    expect(collaboration).not.toContain('packageSecrets')
     expect(collaboration).not.toContain('providerCredentials')
     expect(collaboration).not.toContain('safeStorage')
   })

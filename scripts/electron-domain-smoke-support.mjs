@@ -52,10 +52,53 @@ export const CONTENT_SPACE_SMOKE_CAPABILITY_IDS = Object.freeze([
   'content-space.open-portal-target',
   'content-space.observe-immutable-version'
 ])
+export const COLLABORATION_SMOKE_CAPABILITY_IDS = Object.freeze([
+  'collaboration.status.read',
+  'collaboration.connection.configure',
+  'collaboration.connection.connect',
+  'collaboration.endpoint.challenge.start',
+  'collaboration.endpoint.challenge.poll',
+  'collaboration.agent.register',
+  'collaboration.participant.primary-agent.select',
+  'collaboration.projection.link',
+  'collaboration.projection.update',
+  'collaboration.projection.share',
+  'collaboration.sync.retry',
+  'collaboration.task.list',
+  'collaboration.worker.acceptance-policy.update',
+  'collaboration.task.offer.decide',
+  'collaboration.managed-container.inspect',
+  'collaboration.managed-container.provision',
+  'collaboration.managed-container.archive'
+])
+export const PROJECT_COORDINATOR_SMOKE_CAPABILITY_IDS = Object.freeze([
+  'project-coordinator.workspace.read',
+  'project-coordinator.project.create',
+  'project-coordinator.plan-draft.read',
+  'project-coordinator.plan-draft.generate',
+  'project-coordinator.plan-draft.edit',
+  'project-coordinator.plan.submit',
+  'project-coordinator.plan.confirm-activate',
+  'project-coordinator.content-provisioning.plan',
+  'project-coordinator.content-provisioning.apply',
+  'project-coordinator.content-recovery.observe-link',
+  'project-coordinator.content-recovery.abandon',
+  'project-coordinator.content-recovery.retry-successor',
+  'project-coordinator.membership.add',
+  'project-coordinator.membership.remove',
+  'project-coordinator.human-needed.create',
+  'project-coordinator.human-needed.answer',
+  'project-coordinator.coordinator.transfer',
+  'project-coordinator.artifact-review.prepare',
+  'project-coordinator.result.review',
+  'project-coordinator.project.complete'
+])
 export const REQUIRED_CAPABILITY_IDS = Object.freeze([
   ...IDENTITY_SMOKE_CAPABILITY_IDS,
   ...CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS,
   ...CONTENT_SPACE_SMOKE_CAPABILITY_IDS,
+  ...COLLABORATION_SMOKE_CAPABILITY_IDS,
+  ...PROJECT_COORDINATOR_SMOKE_CAPABILITY_IDS,
   'browser-preview.open',
   'browser-preview.read',
   'browser-preview.navigate',
@@ -494,6 +537,25 @@ async function smokeRendererWorkflow({
     throw new Error('Content Space did not expose a unique installed Provider Instance directory.')
   }
 
+  const collaborationStatus = await api.capabilities.invoke({
+    request: { actionId: 'collaboration.status.read', input: {} }
+  })
+  if (collaborationStatus.actionId !== 'collaboration.status.read' ||
+    collaborationStatus.output?.connection?.configured !== false ||
+    collaborationStatus.output?.connection?.state !== 'unconfigured') {
+    throw new Error('Collaboration did not preserve the isolated profile as unconfigured.')
+  }
+
+  const projectCoordinatorWorkspace = await api.capabilities.invoke({
+    request: { actionId: 'project-coordinator.workspace.read', input: {} }
+  })
+  if (projectCoordinatorWorkspace.actionId !== 'project-coordinator.workspace.read' ||
+    projectCoordinatorWorkspace.output?.connection?.state !== 'cloud_unavailable' ||
+    !Array.isArray(projectCoordinatorWorkspace.output?.projects) ||
+    projectCoordinatorWorkspace.output.projects.length !== 0) {
+    throw new Error('Project Coordinator did not fail closed while Cloud identity was unconfigured.')
+  }
+
   const paperRadarStatus = await api.capabilities.invoke({
     request: { actionId: 'paper-radar.status', input: {} }
   })
@@ -689,6 +751,12 @@ async function smokeRendererWorkflow({
     contentSpaceProviderActionId: contentSpaceProviders.actionId,
     contentSpaceProviderInstanceRef: providerInstanceRefs[0],
     contentSpaceProviderInstanceCount: providerInstanceRefs.length,
+    collaborationActionId: collaborationStatus.actionId,
+    collaborationConfigured: collaborationStatus.output.connection.configured,
+    collaborationConnectionState: collaborationStatus.output.connection.state,
+    projectCoordinatorActionId: projectCoordinatorWorkspace.actionId,
+    projectCoordinatorConnectionState: projectCoordinatorWorkspace.output.connection.state,
+    projectCoordinatorProjectCount: projectCoordinatorWorkspace.output.projects.length,
     datasetLoopCreated: true,
     datasetLoopWorkflowCount: builtWorkflowIds.length,
     paperRadarActionId: paperRadarStatus.actionId,
@@ -746,6 +814,16 @@ export function validateSmokeResult(result, { expectedRendererUrl }) {
     !Number.isSafeInteger(result.contentSpaceProviderInstanceCount) ||
     result.contentSpaceProviderInstanceCount < 1) {
     throw new Error('Content Space Provider Instance directory was not available.')
+  }
+  if (result.collaborationActionId !== 'collaboration.status.read' ||
+    result.collaborationConfigured !== false ||
+    result.collaborationConnectionState !== 'unconfigured') {
+    throw new Error('Collaboration isolated profile did not remain unconfigured.')
+  }
+  if (result.projectCoordinatorActionId !== 'project-coordinator.workspace.read' ||
+    result.projectCoordinatorConnectionState !== 'cloud_unavailable' ||
+    result.projectCoordinatorProjectCount !== 0) {
+    throw new Error('Project Coordinator isolated profile did not fail closed while Cloud identity was unconfigured.')
   }
   if (result.paperRadarActionId !== 'paper-radar.status') throw new Error('Paper Radar status action mismatch.')
   if (result.workspacePreviewActionId !== 'workspace-preview.list') throw new Error('Workspace Preview list action mismatch.')

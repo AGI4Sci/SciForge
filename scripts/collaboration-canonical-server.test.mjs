@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { generateKeyPairSync } from 'node:crypto'
 import test from 'node:test'
 
 import { projectCreateCommandSchema } from '@sciforge/collaboration-contracts'
@@ -70,6 +71,36 @@ async function bindUser(rig, slot, providerUserId = `provider-user-${slot.toLowe
     actor: identity.user,
     challengeCode: begun.challengeCode
   }
+}
+
+async function addActiveDevice(rig, participant, slot) {
+  const suffix = stableDigest(`${participant.userId}\u0000${slot}`).slice(0, 24)
+  const timestamp = rig.clock.now().toISOString()
+  const signing = generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' })
+  const deviceId = `dev_${suffix}`
+  await rig.repository.transaction(async (tx) => {
+    await tx.insertDevice({
+      deviceId,
+      userId: participant.userId,
+      installationId: `ins_${suffix}`,
+      displayName: `${slot} Device`,
+      platform: { os: 'macos', arch: 'arm64', appVersion: '0.1.0-test' },
+      publicKeyJwk: {
+        kty: 'OKP',
+        crv: 'Ed25519',
+        alg: 'EdDSA',
+        use: 'sig',
+        kid: `device-${suffix}`,
+        x: signing.x
+      },
+      capabilitySummary: ['research.execute'],
+      status: 'active',
+      revision: 1,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    })
+  })
+  return { ...participant, deviceId }
 }
 
 async function activatePersonalContainer(rig, owner, containerId) {
@@ -406,14 +437,16 @@ test('2.6 canonical receipts, repository rows, audit and replay responses never 
   )))
 })
 
-test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idempotency, inbox recovery and handoff', async () => {
+test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idempotency, inbox recovery and Owner-owned handoff', async () => {
   const rig = createServiceRig()
   const a = await bindUser(rig, 'A')
   const b = await bindUser(rig, 'B')
   const c = await bindUser(rig, 'C')
   const agentA = await registerAgent(rig, a, 'A')
+  const agentA2 = await registerAgent(rig, await addActiveDevice(rig, a, 'A2'), 'A2')
   const agentB = await registerAgent(rig, b, 'B')
   const agentC = await registerAgent(rig, c, 'C')
+  const availabilityA2 = await publishAvailability(rig, agentA2, 'ledger_a2')
   const availabilityB = await publishAvailability(rig, agentB, 'ledger_b')
   const availabilityC = await publishAvailability(rig, agentC, 'ledger_c')
   const tasks = [
@@ -489,13 +522,21 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
 
   project = await rig.repository.getProject(project.projectId)
   const currentAvailabilityC = await rig.repository.getWorkerAvailability(agentC.agent.agentId)
-  const handedOff = await restarted.transferCoordinator(a.actor, {
-    protocolVersion: '1.0', type: 'project.transfer_coordinator', requestId: 'req_handoff_a_to_c',
+  await expectCode('permission_denied', () => restarted.transferCoordinator(a.actor, {
+    protocolVersion: '1.0', type: 'project.transfer_coordinator', requestId: 'req_handoff_a_to_c_denied',
     projectId: project.projectId, expectedRevision: project.revision,
     expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
     coordinatorAgentId: agentC.agent.agentId,
     expectedCoordinatorAvailabilityRevision: currentAvailabilityC.revision,
-    idempotencyKey: 'idem_handoff_a_to_c'
+    idempotencyKey: 'idem_handoff_a_to_c_denied'
+  }))
+  const handedOff = await restarted.transferCoordinator(a.actor, {
+    protocolVersion: '1.0', type: 'project.transfer_coordinator', requestId: 'req_handoff_a_to_a2',
+    projectId: project.projectId, expectedRevision: project.revision,
+    expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+    coordinatorAgentId: agentA2.agent.agentId,
+    expectedCoordinatorAvailabilityRevision: availabilityA2.revision,
+    idempotencyKey: 'idem_handoff_a_to_a2'
   })
   const currentAvailabilityB = await rig.repository.getWorkerAvailability(agentB.agent.agentId)
   await expectCode('permission_denied', () => createOffer(rig, { coordinator: agentA, project: handedOff,
@@ -515,15 +556,15 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
     expectedCoordinatorAuthorityEpoch: pausedAfterHandoff.coordinatorAuthorityEpoch,
     supersedesProjectPlanId: active.plan.projectPlanId, sourceInputLocators: [], tasks: [handoffTask],
     rationale: 'The new Coordinator re-establishes an exact confirmed plan under its authority epoch.',
-    runtimeProvenance: { runtimeId: 'runtime_handoff_c', modelId: null,
-      generatedByCoordinatorAgentId: agentC.agent.agentId, generatedAt: rig.clock.now().toISOString() }
+    runtimeProvenance: { runtimeId: 'runtime_handoff_a2', modelId: null,
+      generatedByCoordinatorAgentId: agentA2.agent.agentId, generatedAt: rig.clock.now().toISOString() }
   }
-  const submittedHandoffPlan = await restarted.submitProjectPlan(agentC.actor, {
+  const submittedHandoffPlan = await restarted.submitProjectPlan(agentA2.actor, {
     protocolVersion: '1.0', type: 'project.plan.submit', requestId: 'req_handoff_plan_submit',
     idempotencyKey: 'idem_handoff_plan_submit', ...handoffPlanFacts,
     planDigest: stableDigest(handoffPlanFacts)
   })
-  const confirmedHandoffPlan = await restarted.confirmProjectPlan(c.actor, {
+  const confirmedHandoffPlan = await restarted.confirmProjectPlan(a.actor, {
     protocolVersion: '1.0', type: 'project.plan.confirm', requestId: 'req_handoff_plan_confirm',
     idempotencyKey: 'idem_handoff_plan_confirm', projectId: pausedAfterHandoff.projectId,
     projectPlanId: submittedHandoffPlan.projectPlanId, expectedProjectRevision: pausedAfterHandoff.revision + 1,
@@ -539,7 +580,7 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
     expectedExecutionAuthorityEpoch: confirmedHandoffProject.executionAuthorityEpoch,
     status: 'active'
   })
-  const newCoordinatorOffer = await createOffer(rig, { coordinator: agentC, project: resumedAfterHandoff,
+  const newCoordinatorOffer = await createOffer(rig, { coordinator: agentA2, project: resumedAfterHandoff,
     plan: confirmedHandoffPlan, assignee: agentB, availability: currentAvailabilityB,
     planItemId: 'item_after_handoff', key: 'new_coordinator' })
   assert.equal(newCoordinatorOffer.execution.assigneeAgentId, agentB.agent.agentId)

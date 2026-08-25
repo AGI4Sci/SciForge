@@ -14,6 +14,7 @@ import {
   createApplicationDomainCatalog
 } from './application-composition'
 import { createNonSecretPackageStorageForTest } from './domain-package-storage.test-helper'
+import { createUnavailablePortableResourcesForTest } from './domain-main-host.test-helper'
 
 const temporaryDirectories: string[] = []
 
@@ -29,6 +30,8 @@ describe('installed Paper Radar domain package', () => {
     temporaryDirectories.push(userDataDir)
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => userDataDir,
+      getDeviceId: () => 'device-paper-radar-domain-test',
+      portableResourcesFor: createUnavailablePortableResourcesForTest(),
       packageStorageFor: createNonSecretPackageStorageForTest(),
       capabilityInvokerFor: () => ({
         invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') },

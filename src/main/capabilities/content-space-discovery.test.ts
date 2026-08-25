@@ -62,6 +62,8 @@ import {
 } from '../modules/application-composition'
 import { createNonSecretPackageStorageForTest } from
   '../modules/domain-package-storage.test-helper'
+import { createUnavailablePortableResourcesForTest } from
+  '../modules/domain-main-host.test-helper'
 import {
   activateMainRuntimeContributions,
   createMainSystemCapabilityInvokerFactory
@@ -1254,6 +1256,7 @@ function createTestApplicationCatalog(
   return createApplicationDomainCatalog({
     getUserDataDir: () => userDataDir,
     getDeviceId: () => 'content-space-discovery-test-device',
+    portableResourcesFor: createUnavailablePortableResourcesForTest(),
     packageStorageFor: createNonSecretPackageStorageForTest(),
     capabilityInvokerFor: () => Object.freeze({
       invoke: async () => {

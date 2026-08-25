@@ -24,10 +24,13 @@ import {
   isAppCapabilityContributionFactory
 } from '../modules'
 import { createNonSecretPackageStorageForTest } from '../modules/domain-package-storage.test-helper'
+import { createUnavailablePortableResourcesForTest } from '../modules/domain-main-host.test-helper'
 
 function createRegistry(dependencies: AppCapabilityDependencies) {
   const catalog = createApplicationDomainCatalog({
     getUserDataDir: () => '/tmp/sciforge-test',
+    getDeviceId: () => 'device-app-registry-test',
+    portableResourcesFor: createUnavailablePortableResourcesForTest(),
     packageStorageFor: createNonSecretPackageStorageForTest(),
     capabilityInvokerFor: () => ({
       invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') },
@@ -165,6 +168,8 @@ describe('app capability registry', () => {
     } as unknown as AppCapabilityDependencies
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => '/tmp/sciforge-test',
+      getDeviceId: () => 'device-app-registry-test',
+      portableResourcesFor: createUnavailablePortableResourcesForTest(),
       packageStorageFor: createNonSecretPackageStorageForTest(),
       capabilityInvokerFor: () => ({
         invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') },

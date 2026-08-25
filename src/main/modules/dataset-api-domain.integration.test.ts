@@ -14,6 +14,7 @@ import {
   createApplicationDomainCatalog
 } from './application-composition'
 import { createNonSecretPackageStorageForTest } from './domain-package-storage.test-helper'
+import { createUnavailablePortableResourcesForTest } from './domain-main-host.test-helper'
 
 const temporaryDirectories: string[] = []
 
@@ -29,6 +30,8 @@ describe('installed Dataset API domain package', () => {
     temporaryDirectories.push(workspaceRoot)
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => workspaceRoot,
+      getDeviceId: () => 'device-dataset-api-domain-test',
+      portableResourcesFor: createUnavailablePortableResourcesForTest(),
       packageStorageFor: createNonSecretPackageStorageForTest(),
       capabilityInvokerFor: () => ({
         invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') },

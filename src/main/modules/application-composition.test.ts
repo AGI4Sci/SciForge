@@ -19,6 +19,7 @@ import {
   listMainCapabilityDomainPolicies
 } from './main-contributions'
 import { createNonSecretPackageStorageForTest } from './domain-package-storage.test-helper'
+import { createUnavailablePortableResourcesForTest } from './domain-main-host.test-helper'
 
 describe('application domain composition', () => {
   it('composes explicit host-core and installed package capabilities through one catalog', () => {
@@ -26,6 +27,7 @@ describe('application domain composition', () => {
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => '/tmp/sciforge-domain-composition-test',
       getDeviceId: () => 'device-composition-test',
+      portableResourcesFor: createUnavailablePortableResourcesForTest(),
       packageStorageFor: createNonSecretPackageStorageForTest(),
       capabilityInvokerFor: (owner) => {
         packageInvokerOwners.push(owner)
@@ -87,6 +89,7 @@ describe('application domain composition', () => {
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-composition-test',
+      portableResourcesFor: createUnavailablePortableResourcesForTest(),
       getAppVersion: () => {
         appVersionReads += 1
         return '9.8.7-host'

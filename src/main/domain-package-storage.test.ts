@@ -117,7 +117,7 @@ describe('domain package storage', () => {
     await expect(storage.secrets.read('device.credential')).resolves.toBeNull()
   })
 
-  it('restores the identity session and Device key in a separate process', async () => {
+  it('restores owner-scoped generic package secrets in a separate process', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-identity-secrets-process-'))
     temporaryDirectories.push(userDataDir)
 
@@ -128,8 +128,8 @@ describe('domain package storage', () => {
     expect(restored).toMatchObject({ ok: true, mode: 'read' })
     expect(restored.pid).not.toBe(written.pid)
     const encrypted = await readFile(await storedSecretsPath(userDataDir), 'utf8')
-    expect(encrypted).not.toContain('fixture-refresh-session-cross-process')
-    expect(encrypted).not.toContain('fixture-device-private-key-cross-process')
+    expect(encrypted).not.toContain('fixture-primary-secret-cross-process')
+    expect(encrypted).not.toContain('fixture-secondary-secret-cross-process')
   })
 
   it('fails closed when operating-system encryption is unavailable', async () => {
@@ -396,7 +396,7 @@ async function runIdentitySecretsProcess(
   mode: 'write' | 'read',
   userDataDir: string
 ): Promise<{ ok: true; mode: string; pid: number }> {
-  const fixturePath = resolve('scripts/fixtures/identity-package-secrets-process.mjs')
+  const fixturePath = resolve('scripts/fixtures/package-secrets-process.mjs')
   const child = spawn(process.execPath, ['--import', 'tsx', fixturePath, mode, userDataDir], {
     cwd: process.cwd(),
     stdio: ['ignore', 'pipe', 'pipe']

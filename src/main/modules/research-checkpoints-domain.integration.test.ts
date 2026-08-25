@@ -55,6 +55,7 @@ import {
   listMainArtifactConsumers
 } from './runtime-contributions'
 import { createNonSecretPackageStorageForTest } from './domain-package-storage.test-helper'
+import { createUnavailablePortableResourcesForTest } from './domain-main-host.test-helper'
 
 const temporaryDirectories: string[] = []
 
@@ -459,6 +460,7 @@ async function createProductionCrashComposition(
   const catalog = createApplicationDomainCatalog({
     getUserDataDir: () => userDataDir,
     getDeviceId: () => 'device-crash-replay-test',
+    portableResourcesFor: createUnavailablePortableResourcesForTest(),
     getAppVersion: () => '0.1.0',
     textSanitizer: { sanitizeText: (value) => value },
     packageStorageFor: createNonSecretPackageStorageForTest(),
