@@ -23,10 +23,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@sciforge/collaboration-contracts": "1.0.0",
+    "@sciforge/collaboration-contracts": "2.0.0",
     "@sciforge/domain-content-space": "^4.0.0",
     "@sciforge/domain-identity-access": "^2.0.0",
-    "@sciforge/domain-sdk": "^0.3.0",
+    "@sciforge/domain-sdk": "^0.2.3",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-i18next": "^15.7.4",
