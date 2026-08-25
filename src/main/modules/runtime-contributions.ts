@@ -9,6 +9,7 @@ import {
   MAIN_EXTENSION_CONTRIBUTION_KIND,
   MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
   MAIN_SYSTEM_CAPABILITY_GRANT_CONTRIBUTION_KIND,
+  domainMainFiniteCapabilityBatchPlanSchema,
   domainMainRuntimeLifecycleContractSchema,
   domainMainExtensionContractSchema,
   isDomainArtifactConsumer,
@@ -202,6 +203,37 @@ function createSystemCapabilityInvoker(
   createInvocationId: () => string
 ): DomainMainSystemCapabilityInvoker {
   return Object.freeze({
+    createApprovedBatch: (rawPlan) => {
+      const plan = domainMainFiniteCapabilityBatchPlanSchema.parse(rawPlan)
+      const batch = broker.createHostApprovedBatch({
+        callerId,
+        capabilityGrants: [...systemCapabilityGrants]
+      }, plan)
+      return Object.freeze({
+        revision: batch.revision,
+        planDigest: batch.planDigest,
+        invoke: async (operationId, contract, invokeOptions) => {
+          const operation = plan.operations.find((candidate) =>
+            candidate.operationId === operationId
+          )
+          try {
+            if (!operation || operation.actionId !== contract.actionId) {
+              throw new Error('The capability contract does not match the finite batch operation.')
+            }
+            contract.inputSchema.parse(operation.input)
+            const result = await batch.invoke(operationId, {
+              actionId: contract.actionId,
+              effect: contract.effect
+            }, invokeOptions)
+            return contract.outputSchema.parse(result.output)
+          } catch (error) {
+            batch.discard()
+            throw error
+          }
+        },
+        discard: () => batch.discard()
+      })
+    },
     invoke: async (contract, input, invokeOptions) => {
       const definition = broker.registry.require(contract.actionId)
       if (definition.descriptor.effect !== contract.effect) {

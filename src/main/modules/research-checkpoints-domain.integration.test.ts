@@ -466,6 +466,10 @@ async function createProductionCrashComposition(
       invoke: (contract, input, options) => {
         if (!capabilityInvokers) throw new Error('Test capability broker is not ready.')
         return capabilityInvokers.forDomain(owner).invoke(contract, input, options)
+      },
+      createApprovedBatch: (plan) => {
+        if (!capabilityInvokers) throw new Error('Test capability broker is not ready.')
+        return capabilityInvokers.forDomain(owner).createApprovedBatch(plan)
       }
     })
   })

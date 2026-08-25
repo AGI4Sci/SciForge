@@ -2,6 +2,10 @@ import { createHash, randomBytes } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { z } from 'zod'
 import {
+  domainMainFiniteCapabilityBatchPlanSchema,
+  type DomainMainFiniteCapabilityBatchPlan
+} from '@sciforge/domain-sdk/host'
+import {
   principalContextSnapshotSchema,
   principalSnapshotSchema,
   type PrincipalContextSnapshot,
@@ -196,6 +200,7 @@ export type CapabilityResourceInvocationBinding = Readonly<{
 
 type ActiveCapabilityInvocationState = {
   active: boolean
+  approvedBatchCreated: boolean
   invocation: ActiveCapabilityInvocation
   resourceTransaction: InvocationResourceTransaction
 }
@@ -218,6 +223,45 @@ type HostSystemCapabilityCaller = Readonly<{
   approvals?: CapabilityCallerContextInput['approvals']
 }>
 
+type HostApprovedBatchOperationContract = Readonly<{
+  actionId: string
+  effect: CapabilityDefinition['descriptor']['effect']
+}>
+
+type HostApprovedBatchIssuedResource = Readonly<{
+  resource: CapabilityResourceHandle
+  resourceRef: string
+  resourceKind: string
+}>
+
+type HostApprovedBatchResourceLineage = {
+  resourceRef: string
+  resourceKind: string
+  current: CapabilityResourceHandle
+}
+
+type HostApprovedBatchOperationState = {
+  plan: DomainMainFiniteCapabilityBatchPlan['operations'][number]
+  consumed: boolean
+}
+
+export type HostApprovedCapabilityBatch = Readonly<{
+  revision: string
+  planDigest: string
+  invoke(
+    operationId: string,
+    contract: HostApprovedBatchOperationContract,
+    options?: Readonly<{ signal?: AbortSignal }>
+  ): Promise<CapabilityInvocationResult>
+  discard(): void
+}>
+
+type CapabilityInvokeAsOptions = Readonly<{
+  signal?: AbortSignal
+  approvedBatchOperation?: HostApprovedBatchOperationState
+  captureIssuedResources?: (resources: readonly HostApprovedBatchIssuedResource[]) => void
+}>
+
 function opaqueId(prefix: 'cap' | 'res' | 'audit' | 'event'): string {
   return `${prefix}_${randomBytes(24).toString('base64url')}`
 }
@@ -233,6 +277,46 @@ function stableJson(value: CapabilityJsonValue): string {
 
 function canonicalDigest(value: CapabilityJsonValue): string {
   return createHash('sha256').update(stableJson(value)).digest('hex')
+}
+
+function batchOutputSelectorKey(
+  selector: Extract<
+    NonNullable<DomainMainFiniteCapabilityBatchPlan['operations'][number]['resource']>,
+    { kind: 'operation-output' }
+  >
+): string {
+  return stableJson(capabilityJsonValueSchema.parse({
+    operationId: selector.operationId,
+    path: selector.path
+  }))
+}
+
+function batchOutputPathValue(
+  output: CapabilityJsonValue,
+  path: readonly (string | number)[]
+): CapabilityJsonValue {
+  let value: CapabilityJsonValue = output
+  for (const segment of path) {
+    if (Array.isArray(value)) {
+      if (typeof segment !== 'number' || !Object.hasOwn(value, segment)) {
+        throw new CapabilityBrokerError(
+          'delegated_batch_resource_drift',
+          'A planned batch output path is unavailable.'
+        )
+      }
+      value = value[segment]!
+      continue
+    }
+    if (!value || typeof value !== 'object' || typeof segment !== 'string' ||
+      !Object.hasOwn(value, segment)) {
+      throw new CapabilityBrokerError(
+        'delegated_batch_resource_drift',
+        'A planned batch output path is unavailable.'
+      )
+    }
+    value = value[segment]!
+  }
+  return value
 }
 
 /**
@@ -821,10 +905,326 @@ export class CapabilityBroker {
     return this.#invokeAs(caller, rawRequest, options)
   }
 
+  /**
+   * Captures one immutable finite plan from the exact active Human-confirmed
+   * invocation. The returned object is process-local; its operation proofs are
+   * Broker-owned closures and are never serialized into a package contract.
+   */
+  createHostApprovedBatch(
+    rawCaller: Pick<HostSystemCapabilityCaller, 'callerId' | 'capabilityGrants'>,
+    rawPlan: DomainMainFiniteCapabilityBatchPlan
+  ): HostApprovedCapabilityBatch {
+    const plan = domainMainFiniteCapabilityBatchPlanSchema.parse(rawPlan)
+    const capabilityGrants = z.array(capabilityIdSchema).max(128).superRefine(
+      (grants, context) => {
+        if (new Set(grants).size !== grants.length) {
+          context.addIssue({ code: 'custom', message: 'Capability grants must be unique.' })
+        }
+      }
+    ).parse(rawCaller.capabilityGrants ?? [])
+    if (!capabilityGrants.includes(plan.requiredSystemCapabilityGrant)) {
+      throw new CapabilityBrokerError(
+        'delegated_batch_grant_denied',
+        `The package does not hold system capability grant ${plan.requiredSystemCapabilityGrant}.`
+      )
+    }
+
+    const outerState = this.#activeInvocation.getStore()
+    const outer = outerState?.invocation
+    if (
+      !outerState?.active || !outer || outer.caller.audience === 'system' ||
+      outer.approval !== 'confirmation' || outer.approved !== true ||
+      !outer.invocationId || !outer.caller.principal
+    ) {
+      throw new CapabilityBrokerError(
+        'delegated_batch_approval_denied',
+        'A finite batch requires one exact active Human-confirmed invocation.'
+      )
+    }
+    if (outerState.approvedBatchCreated) {
+      throw new CapabilityBrokerError(
+        'delegated_batch_already_created',
+        'The active Human confirmation has already been bound to a finite batch.'
+      )
+    }
+    if (outer.caller.workspaceId !== plan.workspaceId) {
+      throw new CapabilityBrokerError(
+        'delegated_batch_workspace_drift',
+        'A finite batch cannot change the approved Workspace scope.'
+      )
+    }
+
+    const baseCaller = this.#parseCaller({
+      audience: 'system',
+      callerId: rawCaller.callerId,
+      ...(plan.workspaceId ? { workspaceId: plan.workspaceId } : {})
+    })
+    if (!baseCaller.principal || callerPrincipalLease(baseCaller) !== callerPrincipalLease(outer.caller)) {
+      throw new CapabilityBrokerError(
+        'principal_changed',
+        'The current Principal no longer matches the Human-confirmed batch authority.'
+      )
+    }
+    const caller: CapabilityCallerContext = Object.freeze({
+      ...baseCaller,
+      capabilityGrants: Object.freeze(capabilityGrants)
+    })
+
+    // Binding happens before descriptor validation so an operation/contract
+    // correction cannot reuse the same Human confirmation.
+    outerState.approvedBatchCreated = true
+    const operationStates = plan.operations.map((operation) => ({
+      plan: operation,
+      consumed: false
+    }))
+    const operationIndexes = new Map(
+      operationStates.map((operation, index) => [operation.plan.operationId, index])
+    )
+    const definitions = new Map<string, CapabilityDefinition>()
+    const fixedLineages = new Map<string, HostApprovedBatchResourceLineage>()
+    const outputSelectors = new Map<string, Extract<
+      NonNullable<DomainMainFiniteCapabilityBatchPlan['operations'][number]['resource']>,
+      { kind: 'operation-output' }
+    >>()
+
+    for (const [index, operationState] of operationStates.entries()) {
+      const operation = operationState.plan
+      const definition = this.registry.get(operation.actionId)
+      if (!definition ||
+        definition.descriptor.delegatedBatchGrant !== plan.requiredSystemCapabilityGrant ||
+        !definition.descriptor.audiences.includes('system')) {
+        throw new CapabilityBrokerError(
+          'delegated_batch_operation_denied',
+          `Capability ${operation.actionId} is not delegated by the exact batch grant.`
+        )
+      }
+      if (definition.descriptor.principalTransition !== undefined ||
+        definition.descriptor.approval === 'system') {
+        throw new CapabilityBrokerError(
+          'delegated_batch_operation_denied',
+          `Capability ${operation.actionId} cannot enter a Human-confirmed finite batch.`
+        )
+      }
+      if (definition.descriptor.effect === 'read') {
+        if (operation.idempotencyKey !== undefined) {
+          throw new CapabilityBrokerError(
+            'delegated_batch_operation_drift',
+            `Read operation ${operation.operationId} cannot declare an idempotency key.`
+          )
+        }
+      } else if (!operation.idempotencyKey) {
+        throw new CapabilityBrokerError(
+          'delegated_batch_operation_drift',
+          `Mutation ${operation.operationId} requires one exact idempotency key.`
+        )
+      }
+      const resourceScoped = definition.descriptor.scope === 'resource'
+      if (resourceScoped !== (operation.resource !== undefined)) {
+        throw new CapabilityBrokerError(
+          'delegated_batch_operation_drift',
+          `Operation ${operation.operationId} does not match its capability resource scope.`
+        )
+      }
+      if (definition.descriptor.scope === 'workspace' && !plan.workspaceId) {
+        throw new CapabilityBrokerError(
+          'delegated_batch_workspace_drift',
+          `Workspace operation ${operation.operationId} requires the approved Workspace.`
+        )
+      }
+      definitions.set(operation.operationId, definition)
+
+      if (operation.resource?.kind === 'fixed') {
+        const { state } = this.#resolveHandle(caller, operation.resource.resource)
+        if (!definition.descriptor.resourceKinds.includes(state.resourceKind)) {
+          throw new CapabilityBrokerError(
+            'delegated_batch_resource_drift',
+            `Fixed resource for ${operation.operationId} has an incompatible kind.`
+          )
+        }
+        fixedLineages.set(operation.operationId, {
+          resourceRef: state.resourceRef,
+          resourceKind: state.resourceKind,
+          current: operation.resource.resource
+        })
+      }
+      if (operation.resource?.kind === 'operation-output') {
+        const sourceIndex = operationIndexes.get(operation.resource.operationId)
+        const sourceDefinition = sourceIndex === undefined
+          ? undefined
+          : definitions.get(operation.resource.operationId)
+        if (sourceIndex === undefined || sourceIndex >= index || !sourceDefinition ||
+          !sourceDefinition.descriptor.producedResourceKinds?.some((kind) =>
+            definition.descriptor.resourceKinds.includes(kind)
+          )) {
+          throw new CapabilityBrokerError(
+            'delegated_batch_resource_drift',
+            `Resource ancestry for ${operation.operationId} is not declared by an earlier operation.`
+          )
+        }
+        outputSelectors.set(batchOutputSelectorKey(operation.resource), operation.resource)
+      }
+    }
+
+    const planDigest = canonicalDigest(capabilityJsonValueSchema.parse(plan))
+    const outputLineages = new Map<string, HostApprovedBatchResourceLineage>()
+    let status: 'active' | 'executing' | 'completed' | 'invalidated' = 'active'
+    let nextIndex = 0
+    const invalidate = (): void => { status = 'invalidated' }
+    const assertOuterActive = (): void => {
+      if (!outerState.active || this.#activeInvocation.getStore() !== outerState) {
+        invalidate()
+        throw new CapabilityBrokerError(
+          'delegated_batch_expired',
+          'The finite batch no longer belongs to the active Human-confirmed invocation.'
+        )
+      }
+      this.assertPrincipalCurrent(outer.caller.principal, outer.caller.principalContextVersion)
+    }
+    const assertLineageCurrent = (
+      lineage: HostApprovedBatchResourceLineage
+    ): CapabilityResourceHandle => {
+      const { state } = this.#resolveHandle(caller, lineage.current)
+      if (state.resourceRef !== lineage.resourceRef ||
+        state.resourceKind !== lineage.resourceKind ||
+        state.semanticRevision !== lineage.current.semanticRevision) {
+        invalidate()
+        throw new CapabilityBrokerError(
+          'delegated_batch_resource_drift',
+          'The exact batch resource revision or ancestry changed.'
+        )
+      }
+      return lineage.current
+    }
+
+    return Object.freeze({
+      revision: plan.revision,
+      planDigest,
+      invoke: async (operationId, contract, options = {}) => {
+        if (status !== 'active') {
+          throw new CapabilityBrokerError(
+            status === 'completed' ? 'delegated_batch_consumed' : 'delegated_batch_invalidated',
+            'The finite batch has no reusable operation proof.'
+          )
+        }
+        assertOuterActive()
+        const operationState = operationStates[nextIndex]
+        const definition = operationState ? definitions.get(operationState.plan.operationId) : undefined
+        if (!operationState || !definition || operationState.consumed ||
+          operationId !== operationState.plan.operationId ||
+          contract.actionId !== operationState.plan.actionId ||
+          contract.effect !== definition.descriptor.effect) {
+          invalidate()
+          throw new CapabilityBrokerError(
+            'delegated_batch_operation_drift',
+            'A finite batch operation changed identity, contract, or order.'
+          )
+        }
+
+        const resourceSelector = operationState.plan.resource
+        let resource: CapabilityResourceHandle | undefined
+        let inputLineage: HostApprovedBatchResourceLineage | undefined
+        if (resourceSelector?.kind === 'fixed') {
+          inputLineage = fixedLineages.get(operationState.plan.operationId)
+        } else if (resourceSelector?.kind === 'operation-output') {
+          inputLineage = outputLineages.get(batchOutputSelectorKey(resourceSelector))
+        }
+        if (resourceSelector && !inputLineage) {
+          invalidate()
+          throw new CapabilityBrokerError(
+            'delegated_batch_resource_drift',
+            'The exact earlier operation did not produce the planned resource.'
+          )
+        }
+        if (inputLineage) resource = assertLineageCurrent(inputLineage)
+
+        const invocationId = definition.descriptor.effect === 'read'
+          ? undefined
+          : operationState.plan.idempotencyKey
+        const operationCaller: CapabilityCallerContext = Object.freeze({
+          ...caller,
+          approvals: definition.descriptor.approval === 'none' || !invocationId
+            ? []
+            : [{
+                actionId: definition.descriptor.id,
+                invocationId,
+                mode: definition.descriptor.approval as 'confirmation'
+              }]
+        })
+        const request: CapabilityInvocationRequest = {
+          actionId: operationState.plan.actionId,
+          ...(invocationId ? { invocationId } : {}),
+          ...(resource ? { resource } : {}),
+          ...(resource && definition.descriptor.concurrency.revision === 'optimistic'
+            ? { expectedRevision: resource.semanticRevision }
+            : {}),
+          input: capabilityJsonValueSchema.parse(operationState.plan.input)
+        }
+        operationState.consumed = true
+        status = 'executing'
+        let issuedResources: readonly HostApprovedBatchIssuedResource[] = Object.freeze([])
+        try {
+          const result = await this.#invokeAs(operationCaller, request, {
+            signal: options.signal,
+            approvedBatchOperation: operationState,
+            captureIssuedResources: (resources) => { issuedResources = resources }
+          })
+          assertOuterActive()
+
+          if (inputLineage && result.resource) {
+            const { state } = this.#resolveHandle(caller, result.resource)
+            if (state.resourceRef !== inputLineage.resourceRef) {
+              throw new CapabilityBrokerError(
+                'delegated_batch_resource_drift',
+                'A batch mutation returned a different resource ancestry.'
+              )
+            }
+            for (const lineage of [...fixedLineages.values(), ...outputLineages.values()]) {
+              if (lineage.resourceRef === state.resourceRef) lineage.current = result.resource
+            }
+          }
+
+          for (const [selectorKey, selector] of outputSelectors) {
+            if (selector.operationId !== operationState.plan.operationId) continue
+            const rawHandle = batchOutputPathValue(result.output, selector.path)
+            const handle = capabilityResourceHandleSchema.parse(rawHandle)
+            if (!result.replayed && !issuedResources.some(({ resource: issued }) =>
+              issued.token === handle.token
+            )) {
+              throw new CapabilityBrokerError(
+                'delegated_batch_resource_drift',
+                'A planned output resource was not issued by the exact batch operation.'
+              )
+            }
+            const { state } = this.#resolveHandle(caller, handle)
+            if (!definition.descriptor.producedResourceKinds?.includes(state.resourceKind)) {
+              throw new CapabilityBrokerError(
+                'delegated_batch_resource_drift',
+                'A planned output resource has an undeclared kind.'
+              )
+            }
+            outputLineages.set(selectorKey, {
+              resourceRef: state.resourceRef,
+              resourceKind: state.resourceKind,
+              current: handle
+            })
+          }
+
+          nextIndex += 1
+          status = nextIndex === operationStates.length ? 'completed' : 'active'
+          return result
+        } catch (error) {
+          invalidate()
+          throw error
+        }
+      },
+      discard: invalidate
+    })
+  }
+
   async #invokeAs(
     caller: CapabilityCallerContext,
     rawRequest: CapabilityInvocationRequest,
-    options: { signal?: AbortSignal }
+    options: CapabilityInvokeAsOptions
   ): Promise<CapabilityInvocationResult> {
     const requestResult = capabilityInvocationRequestSchema.safeParse(rawRequest)
     if (!requestResult.success) {
@@ -842,6 +1242,27 @@ export class CapabilityBroker {
         throw new CapabilityBrokerError('unknown_capability', `Capability ${request.actionId} is not registered.`)
       }
       this.#authorizeAudience(caller, definition)
+      if (caller.audience === 'system' && definition.descriptor.delegatedBatchGrant) {
+        const proof = options.approvedBatchOperation
+        const plannedInvocationId = definition.descriptor.effect === 'read'
+          ? undefined
+          : proof?.plan.idempotencyKey
+        if (!proof || !proof.consumed ||
+          proof.plan.actionId !== request.actionId ||
+          plannedInvocationId !== request.invocationId ||
+          stableJson(capabilityJsonValueSchema.parse(proof.plan.input)) !== stableJson(request.input) ||
+          !caller.capabilityGrants?.includes(definition.descriptor.delegatedBatchGrant)) {
+          throw new CapabilityBrokerError(
+            'delegated_batch_proof_denied',
+            `Capability ${definition.descriptor.id} requires its exact one-use batch proof.`
+          )
+        }
+      } else if (options.approvedBatchOperation !== undefined) {
+        throw new CapabilityBrokerError(
+          'delegated_batch_proof_denied',
+          'A finite batch proof cannot authorize this capability audience.'
+        )
+      }
       resource = this.#authorizeScope(caller, definition, request)
       releaseResourcePin = resource ? this.#pinResource(resource) : undefined
       this.#authorizeApproval(caller, definition, request.invocationId)
@@ -981,6 +1402,7 @@ export class CapabilityBroker {
         releaseResourcePinForRetirement: executionRelease,
         captureAcceptedPrincipalLease: (lease) => { acceptedResultPrincipalLease = lease },
         capturePostDispatchMutation: (value) => { postDispatchMutation = value },
+        captureIssuedResources: options.captureIssuedResources,
         prepareDelivery: async () => {
           if (executionRelease) {
             await executionRelease().catch(this.#reportCleanupError)
@@ -1218,6 +1640,7 @@ export class CapabilityBroker {
     releaseResourcePinForRetirement?: () => Promise<void>
     captureAcceptedPrincipalLease?: (lease: string) => void
     capturePostDispatchMutation?: (value: boolean) => void
+    captureIssuedResources?: (resources: readonly HostApprovedBatchIssuedResource[]) => void
     prepareDelivery?: () => Promise<void>
     assertDelivery?: (result: CapabilityInvocationResult) => void
     cleanupAfterFailure?: () => Promise<void>
@@ -1230,7 +1653,19 @@ export class CapabilityBroker {
       const result = await this.#executeWithResourceTransaction(options, resourceTransaction)
       await options.prepareDelivery?.()
       options.assertDelivery?.(result)
+      const issuedResources = Object.freeze(resourceTransaction.issuances.map((issuance) =>
+        Object.freeze({
+          resource: capabilityResourceHandleSchema.parse({
+            token: issuance.grant.token,
+            semanticRevision: issuance.grant.semanticRevision,
+            expiresAt: issuance.grant.expiresAt
+          }),
+          resourceRef: issuance.resource.resourceRef,
+          resourceKind: issuance.resource.resourceKind
+        })
+      ))
       this.#commitInvocationResourceTransaction(resourceTransaction)
+      options.captureIssuedResources?.(issuedResources)
       return result
     } catch (error) {
       await options.cleanupAfterFailure?.()
@@ -1278,6 +1713,7 @@ export class CapabilityBroker {
       )
       const activeState: ActiveCapabilityInvocationState = {
         active: true,
+        approvedBatchCreated: false,
         resourceTransaction,
         invocation: Object.freeze({
           caller,

@@ -129,6 +129,7 @@ type CapabilityDefinition = Readonly<{
   tags: readonly string[]
   effect: 'read' | 'workspace-write' | 'external-write' | 'destructive'
   approval: 'none' | 'confirmation'
+  delegatedBatchGrant?: string
   autonomousWrite?: 'resource-authorized'
   concurrency: Readonly<{ revision: 'none'; idempotency: 'none' | 'required' }>
   inputSchema: Readonly<{
@@ -235,11 +236,11 @@ describe('Content Space main composition', () => {
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember
     ].map((actionId) => definition(definitions, actionId))).toEqual([
-      expect.objectContaining({ delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
-      expect.objectContaining({ delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
-      expect.objectContaining({ delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
-      expect.objectContaining({ delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
-      expect.objectContaining({ delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID })
+      expect.objectContaining({ audiences: ['agent', 'system'], delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
+      expect.objectContaining({ audiences: ['agent', 'system'], delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
+      expect.objectContaining({ audiences: ['agent', 'system'], delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
+      expect.objectContaining({ audiences: ['agent', 'system'], delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
+      expect.objectContaining({ audiences: ['agent', 'system'], delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID })
     ])
   })
 
@@ -1291,7 +1292,9 @@ describe('Content Space main composition', () => {
         expect(['external-write', 'destructive']).toContain(capability.effect)
       } else if (autonomousResourceWriteIds.has(capability.id)) {
         expect(capability).toMatchObject({
-          audiences: ['agent'],
+          audiences: capability.delegatedBatchGrant
+            ? ['agent', 'system']
+            : ['agent'],
           scope: 'resource',
           approval: 'none',
           autonomousWrite: 'resource-authorized',

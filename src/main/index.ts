@@ -1167,16 +1167,19 @@ app
         let scopedInvoker: ReturnType<
           ReturnType<typeof createMainSystemCapabilityInvokerFactory>['forDomain']
         > | null = null
-        return Object.freeze({
-          invoke: (contract, input, options) => {
-            if (!scopedInvoker) {
-              if (!domainSystemCapabilityInvokers) {
-                throw new Error('The Host capability broker is not ready.')
-              }
-              scopedInvoker = domainSystemCapabilityInvokers.forDomain(owner)
+        const getScopedInvoker = () => {
+          if (!scopedInvoker) {
+            if (!domainSystemCapabilityInvokers) {
+              throw new Error('The Host capability broker is not ready.')
             }
-            return scopedInvoker.invoke(contract, input, options)
+            scopedInvoker = domainSystemCapabilityInvokers.forDomain(owner)
           }
+          return scopedInvoker
+        }
+        return Object.freeze({
+          invoke: (contract, input, options) =>
+            getScopedInvoker().invoke(contract, input, options),
+          createApprovedBatch: (plan) => getScopedInvoker().createApprovedBatch(plan)
         })
       },
       packageStorageFor: (owner) => domainPackageStorage.forOwner(owner),

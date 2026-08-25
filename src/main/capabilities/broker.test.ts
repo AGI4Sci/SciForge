@@ -242,6 +242,31 @@ describe('CapabilityRegistry', () => {
       outputSchema: z.object({ ok: z.boolean() }).strict(),
       handler: async () => ({ output: { ok: true } })
     })).toThrow(/Principal transitions/)
+
+    const delegatedBase = {
+      id: 'content.delegated-batch-operation',
+      version: '1',
+      title: 'Delegated batch operation',
+      description: 'Exercises the finite Human-confirmed batch descriptor constraints.',
+      audiences: ['agent', 'system'] as CapabilityAudience[],
+      scope: 'global' as const,
+      effect: 'external-write' as const,
+      approval: 'confirmation' as const,
+      delegatedBatchGrant: 'content.provisioning-batch',
+      concurrency: { revision: 'none' as const, idempotency: 'required' as const },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    }
+    expect(() => defineCapability({ ...delegatedBase, audiences: ['agent'] }))
+      .toThrow(/system audience/iu)
+    expect(() => defineCapability({ ...delegatedBase, approval: 'system' }))
+      .toThrow(/cannot delegate system approval/iu)
+    expect(() => defineCapability({
+      ...delegatedBase,
+      audiences: ['ui', 'system'],
+      principalTransition: 'host-authority'
+    })).toThrow(/cannot delegate Host Principal transitions/iu)
   })
 
   it('allows approval-free Agent writes only under explicit resource authority', async () => {

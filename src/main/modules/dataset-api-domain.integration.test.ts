@@ -31,7 +31,8 @@ describe('installed Dataset API domain package', () => {
       getUserDataDir: () => workspaceRoot,
       packageStorageFor: createNonSecretPackageStorageForTest(),
       capabilityInvokerFor: () => ({
-        invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+        invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') },
+        createApprovedBatch: () => { throw new Error('Domain system capabilities are unavailable in this test.') }
       })
     })
     const broker = new CapabilityBroker(

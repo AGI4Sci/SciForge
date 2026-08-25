@@ -86,6 +86,15 @@ to explicit recovery instead of treating the first page as the full roster.
 The public page contract deliberately retains `nextCursor` so no layer can
 erase that fact.
 
+The grant is declaration eligibility, not standing administration authority.
+Only an active Human-confirmed outer Host invocation may capture one immutable
+revision and exact ordered plan. The Host retains process-local, one-use proofs;
+Content Space receives neither proof tokens nor Project state, and every step
+still enters its ordinary capability, service and pinned Provider operation.
+Operation/order/input, Principal, Workspace, resource ancestry or semantic
+revision drift invalidates every remaining proof. A corrected plan or changed
+provisioning revision therefore requires a new Human confirmation.
+
 Outside that exact approved administration batch, delegated resources
 authorize non-destructive ordinary writes only. Every native-document or
 extended operation declared `destructive` requires fresh per-invocation Human

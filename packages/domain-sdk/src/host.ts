@@ -7,6 +7,7 @@ import type {
   DomainRendererFileTransferHost
 } from './file-transfer.js'
 import {
+  domainPackageJsonValueSchema,
   domainPackageModuleIdSchema,
   domainPackagePermissionIdSchema,
   domainPackageStableVersionSchema,
@@ -30,6 +31,7 @@ import type {
 } from './package-storage.js'
 import type { TrustedDomainProcessEntryInput } from './process-entry.js'
 import {
+  domainCapabilityResourceHandleSchema,
   domainWorkbenchRightPanelPlacementSchema,
   type DomainCapabilityResourceHandle,
   type DomainRendererSessionResource,
@@ -423,6 +425,98 @@ export type DomainCapabilityContract<TInput, TOutput> = Readonly<{
   outputSchema: z.ZodType<TOutput>
 }>
 
+function deepFreezeHostContract<Value>(value: Value): Value {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value)
+    for (const nested of Object.values(value)) deepFreezeHostContract(nested)
+  }
+  return value
+}
+
+const domainMainFiniteCapabilityBatchOperationIdSchema = z.string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$/u)
+
+const domainMainFiniteCapabilityBatchOutputPathSegmentSchema = z.union([
+  z.string().trim().min(1).max(192),
+  z.number().int().nonnegative().max(10_000)
+])
+
+export const domainMainFiniteCapabilityBatchResourceSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('fixed'),
+    resource: domainCapabilityResourceHandleSchema
+  }).strict(),
+  z.object({
+    kind: z.literal('operation-output'),
+    operationId: domainMainFiniteCapabilityBatchOperationIdSchema,
+    path: z.array(domainMainFiniteCapabilityBatchOutputPathSegmentSchema).min(1).max(16)
+  }).strict()
+])
+
+export const domainMainFiniteCapabilityBatchOperationSchema = z.object({
+  operationId: domainMainFiniteCapabilityBatchOperationIdSchema,
+  actionId: domainPackagePermissionIdSchema,
+  idempotencyKey: z.string().trim().min(1).max(256).optional(),
+  input: domainPackageJsonValueSchema,
+  resource: domainMainFiniteCapabilityBatchResourceSchema.optional()
+}).strict()
+
+/**
+ * One immutable, process-local operation plan derived from a current Human
+ * confirmation. Project/revision meaning remains package-owned; the Host binds
+ * the exact string, ordered operations, inputs, and resource ancestry without
+ * interpreting that domain state.
+ */
+export const domainMainFiniteCapabilityBatchPlanSchema = z.object({
+  requiredSystemCapabilityGrant: domainPackagePermissionIdSchema,
+  revision: z.string().trim().min(1).max(256),
+  workspaceId: z.string().trim().min(1).max(1_024).optional(),
+  operations: z.array(domainMainFiniteCapabilityBatchOperationSchema).min(1).max(64)
+}).strict().superRefine((plan, context) => {
+  const operationIndexes = new Map<string, number>()
+  plan.operations.forEach((operation, index) => {
+    if (operationIndexes.has(operation.operationId)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['operations', index, 'operationId'],
+        message: 'Finite capability batch operation IDs must be unique.'
+      })
+      return
+    }
+    operationIndexes.set(operation.operationId, index)
+    if (operation.resource?.kind !== 'operation-output') return
+    const sourceIndex = operationIndexes.get(operation.resource.operationId)
+    if (sourceIndex === undefined || sourceIndex >= index) {
+      context.addIssue({
+        code: 'custom',
+        path: ['operations', index, 'resource', 'operationId'],
+        message: 'A batch resource must come from an earlier operation.'
+      })
+    }
+  })
+}).transform((plan) => deepFreezeHostContract(plan))
+
+export type DomainMainFiniteCapabilityBatchPlan = z.infer<
+  typeof domainMainFiniteCapabilityBatchPlanSchema
+>
+
+export type DomainMainApprovedCapabilityBatch = Readonly<{
+  revision: string
+  /** Digest of the exact Host-captured plan; it is audit identity, not authority. */
+  planDigest: string
+  /** Executes only the next enumerated operation and consumes its Host-owned proof. */
+  invoke<TInput, TOutput>(
+    operationId: string,
+    contract: DomainCapabilityContract<TInput, TOutput>,
+    options?: Readonly<{ signal?: AbortSignal }>
+  ): Promise<TOutput>
+  /** Irrevocably drops every unconsumed proof in this process-local batch. */
+  discard(): void
+}>
+
 export type DomainMainSystemCapabilityInvoker = Readonly<{
   /**
    * Invokes a capability through host policy. This system-facing surface has no
@@ -453,6 +547,13 @@ export type DomainMainSystemCapabilityInvoker = Readonly<{
       }>
     }>
   ): Promise<TOutput>
+  /**
+   * Derives one finite batch from the exact active Human-confirmed invocation.
+   * The package cannot mint, inspect, persist, or replay per-operation proofs.
+   */
+  createApprovedBatch(
+    plan: DomainMainFiniteCapabilityBatchPlan
+  ): DomainMainApprovedCapabilityBatch
 }>
 
 export type DomainMainTextReasoner = Readonly<{

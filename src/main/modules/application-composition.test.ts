@@ -30,7 +30,8 @@ describe('application domain composition', () => {
       capabilityInvokerFor: (owner) => {
         packageInvokerOwners.push(owner)
         return Object.freeze({
-          invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+          invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') },
+          createApprovedBatch: () => { throw new Error('Domain system capabilities are unavailable in this test.') }
         })
       }
     })
@@ -94,7 +95,8 @@ describe('application domain composition', () => {
       isPackaged: () => true,
       packageStorageFor: createNonSecretPackageStorageForTest(),
       capabilityInvokerFor: () => ({
-        invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+        invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') },
+        createApprovedBatch: () => { throw new Error('Domain system capabilities are unavailable in this test.') }
       })
     })
     const lifecycle = catalog.listContributions(

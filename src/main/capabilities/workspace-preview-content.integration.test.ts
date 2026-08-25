@@ -45,7 +45,8 @@ describe('Workspace Preview capability content transport integration', () => {
         getUserDataDir: () => root,
         packageStorageFor: createNonSecretPackageStorageForTest(),
         capabilityInvokerFor: () => ({
-          invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+          invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') },
+          createApprovedBatch: () => { throw new Error('Domain system capabilities are unavailable in this test.') }
         })
       })
       const broker = new CapabilityBroker(createApplicationCapabilityRegistry(catalog, {

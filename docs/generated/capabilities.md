@@ -75,14 +75,14 @@ Registered actions: **278**
 | `collaboration.task.list` | 1.0.0 | ui | read | none | global |
 | `collaboration.task.offer.decide` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.worker.acceptance-policy.update` | 1.0.0 | ui | external-write | confirmation | global |
-| `content-space.agent-admin-add-member` | 2.0.0 | agent | external-write | confirmation | resource |
-| `content-space.agent-admin-create-space` | 1.0.0 | agent | external-write | none | resource |
-| `content-space.agent-admin-list-members` | 2.0.0 | agent | read | none | resource |
+| `content-space.agent-admin-add-member` | 2.0.0 | agent, system | external-write | confirmation | resource |
+| `content-space.agent-admin-create-space` | 1.0.0 | agent, system | external-write | none | resource |
+| `content-space.agent-admin-list-members` | 2.0.0 | agent, system | read | none | resource |
 | `content-space.agent-admin-list-spaces` | 1.0.0 | agent | read | none | resource |
 | `content-space.agent-admin-observe-space` | 1.0.0 | agent | read | none | resource |
 | `content-space.agent-admin-open-root` | 1.0.0 | agent | read | none | resource |
 | `content-space.agent-admin-pin-space` | 1.0.0 | agent | external-write | confirmation | resource |
-| `content-space.agent-admin-remove-member` | 2.0.0 | agent | destructive | confirmation | resource |
+| `content-space.agent-admin-remove-member` | 2.0.0 | agent, system | destructive | confirmation | resource |
 | `content-space.agent-admin-unpin-space` | 1.0.0 | agent | external-write | confirmation | resource |
 | `content-space.agent-admin-update-space` | 1.0.0 | agent | external-write | confirmation | resource |
 | `content-space.agent-create-folder` | 1.0.0 | agent | external-write | none | resource |
@@ -98,7 +98,7 @@ Registered actions: **278**
 | `content-space.agent-upload-new` | 1.0.0 | agent | external-write | none | resource |
 | `content-space.authorize-agent-root` | 1.0.0 | agent | external-write | confirmation | global |
 | `content-space.authorize-feature-selection` | 1.0.0 | agent | read | none | resource |
-| `content-space.authorize-provider-administration` | 1.0.0 | agent | external-write | confirmation | global |
+| `content-space.authorize-provider-administration` | 1.0.0 | agent, system | external-write | confirmation | global |
 | `content-space.create-folder` | 1.0.0 | ui | external-write | confirmation | global |
 | `content-space.describe-capabilities` | 1.0.0 | ui, agent, system | read | none | global |
 | `content-space.download` | 1.0.0 | ui | external-write | confirmation | global |
@@ -305,7 +305,7 @@ Reads one integrity-checked package screenshot as a renderer-safe data URL.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -403,7 +403,7 @@ Captures an explicitly registered visual target through Host redaction policy.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -744,7 +744,7 @@ Deletes one comment thread and unreferenced package evidence.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -799,7 +799,7 @@ Reads feedback submission state for one comment thread.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -982,7 +982,7 @@ Publishes explicitly disclosed product feedback through the configured gateway.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -1306,7 +1306,7 @@ Reads one anchored comment thread.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -2122,7 +2122,7 @@ Lists package-owned comment threads through a bounded filter.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -2957,7 +2957,7 @@ Persists one validated comment thread and immutable evidence references.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -4509,7 +4509,7 @@ Exports selected version histories and content-addressed snapshot objects.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -4741,7 +4741,7 @@ Exports selected version histories as a V2 directory bundle.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -4983,7 +4983,7 @@ Verifies and atomically imports a portable artifact version bundle.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -5307,7 +5307,7 @@ Verifies bundle manifest, references, and snapshot object digests.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -5511,7 +5511,7 @@ Verifies either portable bundle format and reports the detected format.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -5723,7 +5723,7 @@ Atomically commits one or more immutable artifact versions.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -6810,7 +6810,7 @@ Commits versions with staged content and system-owned deterministic identities.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -7963,7 +7963,7 @@ Compares content, metadata, media type, and pinned dependencies.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -8576,7 +8576,7 @@ Reads one bounded integrity-checked range from a snapshot version.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -8875,7 +8875,7 @@ Returns one exact version, stable reference, current state, and local ordinal.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -9490,7 +9490,7 @@ Reads the durable ordered artifact lifecycle event stream.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -9757,7 +9757,7 @@ Checks observed workspace sources for missing, restored, or changed content.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -10075,7 +10075,7 @@ Lists immutable versions in the caller workspace.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -10705,7 +10705,7 @@ Lists immutable versions with research filters, ordinals, and current state.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -11378,7 +11378,7 @@ Writes verified version bytes to a caller-workspace destination.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -11758,7 +11758,7 @@ Hashes a workspace file and records a referenced or snapshotted version.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -12766,7 +12766,7 @@ Reads integrity-checked bytes for one pinned artifact version.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -13382,7 +13382,7 @@ Recommits historical bytes as a new current version without rewriting history.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -14218,7 +14218,7 @@ Discards an uncommitted staged object owned by the system caller.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -14401,7 +14401,7 @@ Appends one integrity-checked sequential chunk to a staged object.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -14617,7 +14617,7 @@ Creates a caller-bound bounded streaming object upload.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -14826,7 +14826,7 @@ Verifies and seals a staged object for single-use commit.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -15038,7 +15038,7 @@ Applies revisioned Biology Room operations using the canonical service.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -15121,7 +15121,7 @@ Creates a Biology Room in the caller workspace and returns a scoped resource han
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -15209,7 +15209,7 @@ Returns bounded revision history for the current Biology Room.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -15293,7 +15293,7 @@ Lists Biology Rooms in the caller workspace.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -15370,7 +15370,7 @@ Loads a Biology Room manifest and returns its scoped resource handle.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -15447,7 +15447,7 @@ Observes a Biology Room and returns a scoped resource handle.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -15544,7 +15544,7 @@ Opens the room for a workspace biology asset, creating it when needed.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -15659,7 +15659,7 @@ Refreshes source-backed assets in the current Biology Room.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -15730,7 +15730,7 @@ Moves the canonical browser page backward in history.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -15797,7 +15797,7 @@ Clicks one revision-bound target or one viewport point.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "anyOf": [
@@ -15896,7 +15896,7 @@ Closes exactly one pane-owned Playwright browser page and profile.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -15947,7 +15947,7 @@ Replaces a non-password field through a revision-bound target.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -16027,7 +16027,7 @@ Moves the canonical browser page forward in history.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -16094,7 +16094,7 @@ Navigates the page to one explicit HTTP(S) URL.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -16170,7 +16170,7 @@ Creates the canonical Playwright page for a visible SciForge browser panel.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -16274,7 +16274,7 @@ Presses one allowlisted key through a revision-bound target.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -16369,7 +16369,7 @@ Reads a bounded accessibility snapshot. Page content is untrusted data.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -16531,7 +16531,7 @@ Reloads the canonical browser page.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -16598,7 +16598,7 @@ Selects an option through a revision-bound target.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -16678,7 +16678,7 @@ Issues a read-only resource for one session change snapshot.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -16770,7 +16770,7 @@ Registers the active Identity Device as an Agent through Identity-owned private 
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -16904,7 +16904,7 @@ Stores a non-secret HTTPS service location and loads its provider-neutral catalo
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -17018,7 +17018,7 @@ Connects, disconnects, or explicitly recovers the Agent device connection.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -17135,7 +17135,7 @@ Reads the authenticated OIDC User endpoint challenge until the exact provider id
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -17258,7 +17258,7 @@ Starts a short-lived provider identity challenge without returning its polling s
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -17351,7 +17351,7 @@ Destructively archives the authenticated user managed Channel and pauses its fix
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -17687,7 +17687,7 @@ Reads or refreshes the authenticated user managed Channel and locator status.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "oneOf": [
@@ -18034,7 +18034,7 @@ Creates or repairs the authenticated user managed Channel through the durable pr
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "oneOf": [
@@ -18393,7 +18393,7 @@ Selects an active Agent owned by the current user without guessing from presence
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -18686,7 +18686,7 @@ Creates a stable personal Topic projection for an explicit existing or new local
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "oneOf": [
@@ -19067,7 +19067,7 @@ Updates the explicit sender user allowlist while retaining the original executin
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -19290,7 +19290,7 @@ Explicitly renames, pauses, resumes, closes, or relinks a stable projection.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "oneOf": [
@@ -19631,7 +19631,7 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -20752,7 +20752,7 @@ Explicitly reconciles durable connection, inbox, outbox, projection, or Task sta
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -20880,7 +20880,7 @@ Reads local canonical cloud Task projections and restart reconciliation state.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -21055,7 +21055,7 @@ Accepts or explicitly rejects one exact manual Worker execution offer.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "oneOf": [
@@ -21156,7 +21156,7 @@ Stores manual or automatic Task offer handling for this exact local Agent Device
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -21220,7 +21220,7 @@ Stores manual or automatic Task offer handling for this exact local Agent Device
 Adds one Provider directory user to the exact authorized shared root.
 
 - Version: `2.0.0`
-- Audiences: agent
+- Audiences: agent, system
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: resource
@@ -21233,7 +21233,8 @@ Adds one Provider directory user to the exact authorized shared root.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
+  "delegatedBatchGrant": "content-space.provisioning-batch",
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -21454,7 +21455,7 @@ Adds one Provider directory user to the exact authorized shared root.
 Creates one personal or shared content space through the authorized Provider and returns an exact root resource.
 
 - Version: `1.0.0`
-- Audiences: agent
+- Audiences: agent, system
 - Effect: `external-write`
 - Approval: none
 - Scope: resource
@@ -21468,7 +21469,8 @@ Creates one personal or shared content space through the authorized Provider and
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
+  "delegatedBatchGrant": "content-space.provisioning-batch",
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -21694,7 +21696,7 @@ Creates one personal or shared content space through the authorized Provider and
 Lists members for the exact authorized shared-content root.
 
 - Version: `2.0.0`
-- Audiences: agent
+- Audiences: agent, system
 - Effect: `read`
 - Approval: none
 - Scope: resource
@@ -21707,7 +21709,8 @@ Lists members for the exact authorized shared-content root.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
+  "delegatedBatchGrant": "content-space.provisioning-batch",
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -21953,7 +21956,7 @@ Lists personal and shared content spaces through the exact authorized Provider a
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -22187,7 +22190,7 @@ Reads administration state for the exact authorized Content Space root.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -22376,7 +22379,7 @@ Resolves the exact authorized Content Space root through Provider administration
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -22548,7 +22551,7 @@ Pins the exact authorized root through its Provider administration feature.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -22724,7 +22727,7 @@ Pins the exact authorized root through its Provider administration feature.
 Removes one Provider directory user from the exact authorized shared root.
 
 - Version: `2.0.0`
-- Audiences: agent
+- Audiences: agent, system
 - Effect: `destructive`
 - Approval: confirmation
 - Scope: resource
@@ -22737,7 +22740,8 @@ Removes one Provider directory user from the exact authorized shared root.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
+  "delegatedBatchGrant": "content-space.provisioning-batch",
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -22976,7 +22980,7 @@ Unpins the exact authorized root through its Provider administration feature.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -23165,7 +23169,7 @@ Updates the exact authorized root without allowing the request to replace its Pr
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -23365,7 +23369,7 @@ Creates one folder beneath the exact authorized Agent directory. Before operatin
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -23564,7 +23568,7 @@ Downloads one authorized file to a confirmed new Workspace-relative destination.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -23811,7 +23815,7 @@ Executes one contracted extended operation against the exact Broker-authorized C
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "anyOf": [
@@ -24599,7 +24603,7 @@ Executes one contracted extended operation against the exact Broker-authorized C
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "anyOf": [
@@ -28218,7 +28222,7 @@ Executes one contracted extended operation against the exact Broker-authorized C
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "anyOf": [
@@ -30407,7 +30411,7 @@ Lists direct children beneath one Human-authorized Agent directory scope. Use ea
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -30739,7 +30743,7 @@ Executes one provider-native document operation against the exact Broker-authori
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -33588,7 +33592,7 @@ Executes one provider-native document operation against the exact Broker-authori
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -36437,7 +36441,7 @@ Executes one provider-native document operation against the exact Broker-authori
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -39287,7 +39291,7 @@ Executes one provider-native document operation against the exact Broker-authori
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -42137,7 +42141,7 @@ Uploads one confirmed Workspace-relative file beneath the exact Agent directory.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -42348,7 +42352,7 @@ After Provider Instance and optional candidate-label discovery, confirms one exa
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -42538,7 +42542,7 @@ Creates one short-lived Broker selection for an exact typed multi-resource exten
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "anyOf": [
@@ -48871,7 +48875,7 @@ Creates one short-lived Broker selection for an exact typed multi-resource exten
 Confirms one Provider administration scope for this Agent and Principal. Root update, pin, unpin, add-member, and remove-member mutations still require fresh per-operation confirmation.
 
 - Version: `1.0.0`
-- Audiences: agent
+- Audiences: agent, system
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -48884,7 +48888,8 @@ Confirms one Provider administration scope for this Agent and Principal. Root up
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
+  "delegatedBatchGrant": "content-space.provisioning-batch",
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -49058,7 +49063,7 @@ Creates one new folder without overwrite at an explicit parent.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -49279,7 +49284,7 @@ Reads operation readiness for one pinned Provider Instance.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -49520,7 +49525,7 @@ Downloads bytes only to a Host-owned no-overwrite destination.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -49841,7 +49846,7 @@ After listing Provider Instances, lists one bounded page of Human-visible person
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -50059,7 +50064,7 @@ Lists one bounded container page from an explicit Provider Instance.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -50282,7 +50287,7 @@ Lists one bounded page of direct children for an explicit container.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -50595,7 +50600,7 @@ First lists explicit trusted Provider Instances; use its returned providerInstan
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -50768,7 +50773,7 @@ Reads provider-neutral metadata for an exact Content Space reference.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -51206,7 +51211,7 @@ Issues an ArtifactReference only from exact Provider proof.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -51446,7 +51451,7 @@ Opens one short-lived Host-validated target in the system browser.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -51586,7 +51591,7 @@ Converts a bounded HTTPS Provider target into a Host-owned handle.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -51827,7 +51832,7 @@ Downloads one freshly proven file to a new Workspace-relative destination.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -52421,7 +52426,7 @@ Reads a fresh token-free current-session readiness fact for one exact transfer i
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "oneOf": [
@@ -52858,7 +52863,7 @@ Uploads one real Workspace file as a new entry in an exact authorized root.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -53461,7 +53466,7 @@ Uploads one bounded Host-selected file without overwrite.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -53693,7 +53698,7 @@ Starts a host-controlled system shell inside the active workspace.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -53808,7 +53813,7 @@ Stops and releases an owned controlled process.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -53865,7 +53870,7 @@ Reads a bounded output stream from an owned controlled process.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -54000,7 +54005,7 @@ Updates terminal dimensions for an owned controlled process.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -54066,7 +54071,7 @@ Writes bounded input to an owned controlled process.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -54127,7 +54132,7 @@ Compiles confirmed conversational data requirements into editable Create Loop wo
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -54525,7 +54530,7 @@ Checks JavaScript, Python, or Bash node syntax.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -54631,7 +54636,7 @@ Exports one workflow as a portable Create Loop document with secrets removed.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -54688,7 +54693,7 @@ Exports one run as the canonical portable sciforge.rerun.v1 resource.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -55791,7 +55796,7 @@ Validates and normalizes one portable Create Loop workflow document.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -55887,7 +55892,7 @@ Reads the canonical node workflow definitions and package revision.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -55990,7 +55995,7 @@ Resolves a package-owned human approval pause.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -56064,7 +56069,7 @@ Runs one node workflow through the package-owned runtime.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -57124,7 +57129,7 @@ Runs one node in the context of its persisted workflow.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -57230,7 +57235,7 @@ Atomically saves node workflows, modules, presets, hooks, and runtime settings.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -57394,7 +57399,7 @@ Reads active runs, node statuses, results, and pending approvals.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -57781,7 +57786,7 @@ Stops one active workflow run and releases its pending operations.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -57881,7 +57886,7 @@ Executes one node against bounded mock JSON without adding run history.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -58210,7 +58215,7 @@ Lists built-in public biology data providers, transports, metadata access, raw-d
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -58364,7 +58369,7 @@ Records broker-approved user confirmation of an exact immutable draft plan.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -58505,7 +58510,7 @@ Deduplicates records by explicit structured keys and preserves removed duplicate
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -58696,7 +58701,7 @@ Executes every operation in a confirmed plan with durable step checkpoints.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -58836,7 +58841,7 @@ Applies structured filter conditions and writes deterministic included and exclu
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -59059,7 +59064,7 @@ Converts explicit edge records into deterministic node, edge, graph-summary, and
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -59289,7 +59294,7 @@ Maps identifiers using a workspace mapping artifact with explicit cardinality an
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -59544,7 +59549,7 @@ Runs a bounded UniProt mapping job, persists provenance, and applies the mapping
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -59816,7 +59821,7 @@ Joins two structured artifacts with explicit key mappings and deterministic unma
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -60064,7 +60069,7 @@ Lists API-backed dataset databases registered in the caller workspace.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -60206,7 +60211,7 @@ Lists workspace-scoped S3-compatible object stores and credential readiness with
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -60336,7 +60341,7 @@ Lists a bounded page of objects and common prefixes within a registered object-s
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -60496,7 +60501,7 @@ Writes bounded generated records as a checksummed Dataset artifact with generati
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -60760,7 +60765,7 @@ Reads structured metadata from a registered dataset database and can persist the
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -60989,7 +60994,7 @@ Reads S3-compatible object metadata without downloading the object body.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -61136,7 +61141,7 @@ Streams a complete or ranged S3-compatible object into a checksummed workspace a
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -61325,7 +61330,7 @@ Creates an immutable draft data-preparation plan for review.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -61605,7 +61610,7 @@ Profiles JSON, JSONL, CSV, TSV, or FASTA data and persists a bounded report.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -61776,7 +61781,7 @@ Publishes confirmed-plan artifacts with manifest, schema, quality report, checks
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -61950,7 +61955,7 @@ Downloads validated raw data from a registered database into a checksummed works
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -62203,7 +62208,7 @@ Registers an API-backed database with separate metadata and raw-data endpoint te
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -62425,7 +62430,7 @@ Registers an S3-compatible object store using credential environment-variable re
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -62634,7 +62639,7 @@ Registers an executable built-in biology provider preset in the caller workspace
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -62793,7 +62798,7 @@ Resumes a failed or interrupted confirmed plan from its checksum-verified checkp
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -62937,7 +62942,7 @@ Selects, renames, defaults, and requires structured fields without arbitrary cod
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -63149,7 +63154,7 @@ Profiles SDF or mmCIF structure data with format-aware parsers.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -63312,7 +63317,7 @@ Validates SDF or mmCIF records and persists a quality report.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -63486,7 +63491,7 @@ Applies allow-listed deterministic normalization and scalar transformations.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -64048,7 +64053,7 @@ Validates schema, record, range, uniqueness, missingness, and FASTA integrity co
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -64294,7 +64299,7 @@ Projects one pinned snapshot to PROV, RO-Crate, DataCite, audit, and reproductio
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -64833,7 +64838,7 @@ Adjusts scheduling priority without creating another update path.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -65371,7 +65376,7 @@ Resolves a pinned provenance tuple to a verified workspace-local file.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -65637,7 +65642,7 @@ Reads durable Evidence snapshot state without requiring the UI sidecar.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -66165,7 +66170,7 @@ Queues one durable Evidence-only update for a completed agent thread.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -66752,7 +66757,7 @@ Reads the last committed Evidence graph and its separate pending delta.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -67296,7 +67301,7 @@ Creates a manual checkpoint through the controlled version-control provider.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -67544,7 +67549,7 @@ Lists package-owned checkpoints in the caller workspace.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -67775,7 +67780,7 @@ Previews restoring one checkpoint without changing the workspace.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -68012,7 +68017,7 @@ Captures a rescue checkpoint, then restores the selected checkpoint.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -68232,7 +68237,7 @@ Registers this installation as a SciForge Cloud Device.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -68737,7 +68742,7 @@ Issues the canonical observable Desktop cloud identity resource.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -69277,7 +69282,7 @@ Starts Authorization Code with PKCE in the system browser.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -69782,7 +69787,7 @@ Revokes the refresh session and clears local cloud credentials.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -70287,7 +70292,7 @@ Requires a fresh browser authentication for the current cloud User.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -70792,7 +70797,7 @@ Reloads the current User Device list from SciForge Cloud.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -71297,7 +71302,7 @@ Revokes one Device owned by the authenticated cloud User.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -71811,7 +71816,7 @@ Backs up an unavailable Identity database before establishing a fresh one.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -71984,7 +71989,7 @@ Creates and selects a display-only Local Account on this installation.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -72141,7 +72146,7 @@ Persists dismissal of the optional Local Account first-run prompt.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -72289,7 +72294,7 @@ Clears Local Account selection without changing installation-local data.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -72438,7 +72443,7 @@ Reads the current installation-local account selection state.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -72617,7 +72622,7 @@ Lists display-only Local Accounts stored in this installation.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -72886,7 +72891,7 @@ Changes a Local Account display name without changing its user ID.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -73048,7 +73053,7 @@ Selects an existing display-only Local Account on this installation.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -73206,7 +73211,7 @@ Validates and binds one existing OpenContent account to the current Principal.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -73517,7 +73522,7 @@ Reads the current Principal connection status for OpenContent.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -73827,7 +73832,7 @@ Removes this node-local OpenContent credential and connection metadata.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -74071,7 +74076,7 @@ Generates a digest from the local Paper Radar index for a profile or keyword set
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -74317,7 +74322,7 @@ Lists the locally configured Paper Radar profiles.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -74461,7 +74466,7 @@ Creates or updates one local Paper Radar profile.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -74654,7 +74659,7 @@ Ranks papers from the local Paper Radar index for a profile or keyword set.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -74896,7 +74901,7 @@ Synchronizes and generates a Paper Radar review for one profile.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -75192,7 +75197,7 @@ Searches the local Paper Radar index with bounded filters.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -75403,7 +75408,7 @@ Returns the current status and local index statistics for Paper Radar.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -75479,7 +75484,7 @@ Synchronizes a bounded arXiv paper set into the local Paper Radar index.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -75610,7 +75615,7 @@ Synchronizes a bounded bioRxiv paper set into the local Paper Radar index.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -75732,7 +75737,7 @@ Synchronizes papers matching one configured Paper Radar profile.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -75874,7 +75879,7 @@ CAS-updates Plan items and exact visible Worker Agent choices.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -76680,7 +76685,7 @@ Runs the configured local Agent Runtime and persists one reviewable non-secret d
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -77268,7 +77273,7 @@ Reads the package-owned non-secret draft for one exact Project.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -77767,7 +77772,7 @@ Confirms the exact immutable Plan as the Coordinator Human and activates from fr
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -81736,7 +81741,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -86124,7 +86129,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -90247,7 +90252,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -94187,7 +94192,7 @@ Resolves one provenance-verified Project Claim evidence file.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -94500,7 +94505,7 @@ Creates or updates the Project research goal and schedules canonical recompilati
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -95227,7 +95232,7 @@ Submits one idempotent durable Project update from committed Evidence snapshots.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -96067,7 +96072,7 @@ Reads the canonical committed Project graph and current update state.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -96784,7 +96789,7 @@ Reads the Remote SSH targets authorized for the caller workspace.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -96871,7 +96876,7 @@ Updates the Remote SSH targets authorized for the caller workspace.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -96977,7 +96982,7 @@ Cancels an active Remote SSH command owned by the caller workspace.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -97040,7 +97045,7 @@ Executes a confirmed script on the authorized target through system OpenSSH.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -97249,7 +97254,7 @@ Authorizes this target as a network-egress hop for the caller workspace.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -97306,7 +97311,7 @@ Downloads one remote file into a workspace-relative destination.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -97507,7 +97512,7 @@ Uploads one workspace-relative file to the authorized target.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -97708,7 +97713,7 @@ Opens the configured VPN environment console for interactive sign-in.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -97813,7 +97818,7 @@ Ensures the configured VPN environment is available and running.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -97936,7 +97941,7 @@ Reads the configured VPN environment provider and connection state for one labor
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -98053,7 +98058,7 @@ Stops the configured VPN environment while retaining its persistent state.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -98176,7 +98181,7 @@ Deletes one Remote SSH laboratory group.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -98242,7 +98247,7 @@ Lists the laboratory groups configured for Remote SSH.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -98396,7 +98401,7 @@ Creates or updates one Remote SSH laboratory group.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -98628,7 +98633,7 @@ Creates ~/.ssh/config when needed and opens it with the configured local editor.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -98677,7 +98682,7 @@ Deletes one logical OpenSSH target.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -98743,7 +98748,7 @@ Tests final-target reachability through the canonical OpenSSH alias.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -98837,7 +98842,7 @@ Creates or updates one logical OpenSSH target.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -99040,7 +99045,7 @@ Lists full Remote SSH target configuration for the management UI.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -99180,7 +99185,7 @@ Lists Remote SSH targets authorized for the caller workspace.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -99325,7 +99330,7 @@ Lists VirtualBox virtual machines available for Remote SSH laboratory isolation.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -99414,7 +99419,7 @@ Authorizes a private Remote Workspace host session on this target.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -99612,7 +99617,7 @@ Reads selected durable turns and saves an explicitly incomplete legacy checkpoin
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -100204,7 +100209,7 @@ Lists bounded durable turn summaries and computes a selection-bound transcript d
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -100452,7 +100457,7 @@ Lists bounded committed checkpoint versions without scanning Artifact history.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -101997,7 +102002,7 @@ Reads a committed checkpoint by recording or exact Artifact Version.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -103490,7 +103495,7 @@ Explicitly rebases or discards one stale checkpoint while preserving immutable h
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -104346,7 +104351,7 @@ Restores historical bytes and advances the owning recording to the exact new cur
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -104721,7 +104726,7 @@ Opts the exact workspace runtime/thread into durable Research Checkpoints.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -105011,7 +105016,7 @@ Reads the latest exact recording binding for one runtime/thread.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -105291,7 +105296,7 @@ Stops automatic checkpoint creation without deleting immutable history.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -105578,7 +105583,7 @@ Reads durable pending/committed/conflict/failure status for one producing turn.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -106399,7 +106404,7 @@ Builds a deterministic local job-loop trace without submitting external work.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -106592,7 +106597,7 @@ Reports the deterministic local fixture provider; no real scheduler is configure
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -106662,7 +106667,7 @@ Compares output, data, statistics, transforms, style, sources, and environment.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -107167,7 +107172,7 @@ Maps structured data without rendering and records explicit transformations and 
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -113077,7 +113082,7 @@ Renders a versioned PNG with exact data, statistics, recipe, environment, manife
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -121256,7 +121261,7 @@ Reruns exact historical inputs and reports replication or divergence without rea
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -128846,7 +128851,7 @@ Checks the deterministic renderer and its supported scientific templates.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -129192,7 +129197,7 @@ Returns an opaque resource for the currently visible SciForge surface.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -129259,7 +129264,7 @@ Creates or updates a package-safe reference in the owned Git repository.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -129337,7 +129342,7 @@ Captures the current owned workspace without changing its files or index.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -129500,7 +129505,7 @@ Reads a bounded diff between revisions in the owned Git workspace.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -129583,7 +129588,7 @@ Lists bounded SciForge snapshots in the owned Git repository.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -129729,7 +129734,7 @@ Opens an owner-bound Git workspace through the host version-control provider.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -129820,7 +129825,7 @@ Reads the bounded patch for a prospective workspace restore.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -129904,7 +129909,7 @@ Reads bounded file content from a revision in the owned Git workspace.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -129979,7 +129984,7 @@ Destructively restores the owned workspace to a selected revision.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -130054,7 +130059,7 @@ Reads the bounded change status of an owned Git workspace.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -130151,7 +130156,7 @@ Atomically accepts the active candidate and preserves the previous image as a ba
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -131531,7 +131536,7 @@ Extracts a manuscript visual style from one reference image and applies it to th
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -132672,7 +132677,7 @@ Stages one non-destructive candidate after validated image-generation QA.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -134209,7 +134214,7 @@ Exports the current open annotations and immutable source context for revision.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -135009,7 +135014,7 @@ Opens or creates the canonical Visual Review document and optionally stages one 
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -136277,7 +136282,7 @@ Reads one existing canonical Visual Review document without creating it.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -137403,7 +137408,7 @@ Reads one bounded workspace image for the package-owned review surface.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -137467,7 +137472,7 @@ Rejects the active candidate without replacing the source image.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -138847,7 +138852,7 @@ Replaces the structured annotation set for one Visual Review document.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -140382,7 +140387,7 @@ Updates the canonical visual nodes, truth locks, or style reference.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -141656,7 +141661,7 @@ Deletes one annotation thread through the canonical document annotation provider
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -141740,7 +141745,7 @@ Explicitly imports an annotation package into the canonical provider.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -141824,7 +141829,7 @@ Returns annotations from the canonical provider for the open document.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -141893,7 +141898,7 @@ Changes thread resolution state through the canonical document annotation provid
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -141976,7 +141981,7 @@ Generates review annotations after the caller confirms the editable review promp
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -142123,7 +142128,7 @@ Adds improvement guidance to an existing review annotation after confirmation.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -142211,7 +142216,7 @@ Creates or updates an annotation through the canonical document annotation provi
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -142523,7 +142528,7 @@ Applies one schema-validated edit using the canonical Workspace Preview host.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -143298,7 +143303,7 @@ Returns structured transport information for an open preview asset.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -143367,7 +143372,7 @@ Exports the current preview through the canonical provider.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -143472,7 +143477,7 @@ Invokes an action advertised by the current Workspace Preview observation.
     "idempotency": "required",
     "revision": "optimistic"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -143570,7 +143575,7 @@ Lists the canonical Workspace Preview providers registered in SciForge.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -143637,7 +143642,7 @@ Opens a workspace file with the canonical Workspace Preview host and returns a s
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -143772,7 +143777,7 @@ Prepares a bounded derived artifact using the canonical preview provider.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -143973,7 +143978,7 @@ Reads a bounded byte range from a prepared preview artifact.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -144082,7 +144087,7 @@ Reads a bounded byte range from the current preview asset.
     "idempotency": "none",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
@@ -144175,7 +144180,7 @@ Releases an open Workspace Preview session.
     "idempotency": "required",
     "revision": "none"
   },
-  "contractVersion": 2,
+  "contractVersion": 3,
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,

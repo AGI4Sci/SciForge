@@ -30,7 +30,8 @@ function createRegistry(dependencies: AppCapabilityDependencies) {
     getUserDataDir: () => '/tmp/sciforge-test',
     packageStorageFor: createNonSecretPackageStorageForTest(),
     capabilityInvokerFor: () => ({
-      invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+      invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') },
+      createApprovedBatch: () => { throw new Error('Domain system capabilities are unavailable in this test.') }
     })
   })
   return createApplicationCapabilityRegistry(catalog, dependencies)
@@ -166,7 +167,8 @@ describe('app capability registry', () => {
       getUserDataDir: () => '/tmp/sciforge-test',
       packageStorageFor: createNonSecretPackageStorageForTest(),
       capabilityInvokerFor: () => ({
-        invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+        invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') },
+        createApprovedBatch: () => { throw new Error('Domain system capabilities are unavailable in this test.') }
       })
     })
     const contributions = catalog.listContributions(

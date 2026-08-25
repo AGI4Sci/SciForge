@@ -369,6 +369,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
 
   type AgentResourceRecord = Readonly<{
     resourceId: string
+    audience: 'agent' | 'system'
     root: ContentContainerReference
     reference: ContentEntryReference
     callerId: string
@@ -386,6 +387,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
   })
   type AgentAdministrationResourceRecord = Readonly<{
     resourceId: string
+    audience: 'agent' | 'system'
     providerInstanceRef: string
     callerId: string
     principal: PrincipalSnapshot
@@ -396,6 +398,19 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
     }
   }>
   const agentAdministrationResources = new Map<string, AgentAdministrationResourceRecord>()
+  const provisioningResourceAudience = (
+    context: ContentSpaceCapabilityContext
+  ): 'agent' | 'system' => {
+    if (context.caller.audience === 'agent') return 'agent'
+    if (context.caller.audience === 'system' &&
+      context.caller.capabilityGrants?.includes(CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID)) {
+      return 'system'
+    }
+    throw operationError(
+      'unauthorized',
+      'An Agent invocation or an exact Host-approved provisioning batch is required.'
+    )
+  }
   type AgentFeatureSelectionRecord = Readonly<{
     resourceId: string
     root: ContentContainerReference
@@ -474,8 +489,9 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
   ): AgentResourceRecord => {
     const resourceId = context.resource?.resourceId
     const record = resourceId ? agentResources.get(resourceId) : undefined
+    const audience = provisioningResourceAudience(context)
     if (
-      context.caller.audience !== 'agent' || !record ||
+      !record || record.audience !== audience ||
       record.callerId !== context.caller.callerId ||
       !samePrincipalSnapshot(record.principal, context.caller.principal) ||
       record.workspaceId !== context.caller.workspaceId ||
@@ -494,9 +510,8 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
     root: ContentContainerReference,
     reference: ContentEntryReference
   ) => {
-    if (context.caller.audience !== 'agent' || !context.caller.principal) {
-      throw operationError('unauthorized', 'Only a current Agent Principal can receive this scope.')
-    }
+    const audience = provisioningResourceAudience(context)
+    if (!context.caller.principal) throw operationError('unauthorized', 'A current Principal is required.')
     if (agentResources.size >= MAX_AGENT_RESOURCE_RECORDS) {
       throw operationError('bounds_exceeded', 'The Agent Content Space scope table is full.')
     }
@@ -506,6 +521,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
     }
     const record: AgentResourceRecord = Object.freeze({
       resourceId,
+      audience,
       root,
       reference,
       callerId: context.caller.callerId,
@@ -522,13 +538,13 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
           ? CONTENT_CONTAINER_RESOURCE_KIND
           : CONTENT_FILE_RESOURCE_KIND,
         ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
-        audiences: ['agent'],
+        audiences: [record.audience],
         semanticRevision: agentResourceRevision(record),
         expiresInMs: 15 * 60_000,
         retireAfterLastHandleExpires: true,
         observe: async (caller, observationContext) => {
           if (
-            caller.audience !== 'agent' || caller.callerId !== record.callerId ||
+            caller.audience !== record.audience || caller.callerId !== record.callerId ||
             caller.workspaceId !== record.workspaceId ||
             !caller.principal ||
             !samePrincipalSnapshot(caller.principal, record.principal)
@@ -538,7 +554,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
           const observation = await options.getService().observeEntry(record.reference, {
             reauthorizedPrincipal: caller.principal,
             assertPrincipalCurrent,
-            audience: 'agent',
+            audience: record.audience,
             verificationBinding: verificationBinding(record),
             ...(observationContext.signal ? { signal: observationContext.signal } : {})
           })
@@ -759,15 +775,15 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
     context: ContentSpaceCapabilityContext,
     providerInstanceRef: string
   ) => {
-    if (context.caller.audience !== 'agent' || !context.caller.principal) {
-      throw operationError('unauthorized', 'Only a current Agent Principal can receive this scope.')
-    }
+    const audience = provisioningResourceAudience(context)
+    if (!context.caller.principal) throw operationError('unauthorized', 'A current Principal is required.')
     if (agentAdministrationResources.size >= MAX_AGENT_RESOURCE_RECORDS) {
       throw operationError('bounds_exceeded', 'The Provider administration scope table is full.')
     }
     const resourceId = `content-space-admin-${randomUUID()}`
     const record: AgentAdministrationResourceRecord = Object.freeze({
       resourceId,
+      audience,
       providerInstanceRef,
       callerId: context.caller.callerId,
       principal: context.caller.principal,
@@ -784,12 +800,12 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         resourceId,
         resourceKind: CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND,
         ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
-        audiences: ['agent'],
+        audiences: [record.audience],
         semanticRevision: agentResourceRevision(record),
         expiresInMs: 15 * 60_000,
         retireAfterLastHandleExpires: true,
         observe: (caller) => {
-          if (caller.audience !== 'agent' || caller.callerId !== record.callerId ||
+          if (caller.audience !== record.audience || caller.callerId !== record.callerId ||
             caller.workspaceId !== record.workspaceId || !caller.principal ||
             !samePrincipalSnapshot(caller.principal, record.principal)) {
             throw operationError('unauthorized', 'The Provider administration scope changed.')
@@ -815,7 +831,8 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
   ): AgentAdministrationResourceRecord => {
     const resourceId = context.resource?.resourceId
     const record = resourceId ? agentAdministrationResources.get(resourceId) : undefined
-    if (context.caller.audience !== 'agent' || !record ||
+    const audience = provisioningResourceAudience(context)
+    if (!record || record.audience !== audience ||
       context.resource?.resourceKind !== CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND ||
       context.resource?.workspaceId !== record.workspaceId ||
       record.callerId !== context.caller.callerId ||
@@ -1639,7 +1656,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         id: CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
         title: 'Authorize Content Space Provider Administration',
         description: 'Confirms one Provider administration scope for this Agent and Principal. Root update, pin, unpin, add-member, and remove-member mutations still require fresh per-operation confirmation.',
-        audiences: ['agent'],
+        audiences: ['agent', 'system'],
         effect: 'external-write',
         approval: 'confirmation',
         delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
@@ -1693,7 +1710,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace,
         title: 'Create Content Space',
         description: 'Creates one personal or shared content space through the authorized Provider and returns an exact root resource.',
-        audiences: ['agent'],
+        audiences: ['agent', 'system'],
         scope: 'resource',
         resourceKinds: [CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND],
         producedResourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
@@ -1867,7 +1884,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         version: '2.0.0',
         title: 'List Authorized Content Space Members',
         description: 'Lists members for the exact authorized shared-content root.',
-        audiences: ['agent'],
+        audiences: ['agent', 'system'],
         scope: 'resource',
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
         effect: 'read',
@@ -1895,7 +1912,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         version: '2.0.0',
         title: 'Add Authorized Content Space Member',
         description: 'Adds one Provider directory user to the exact authorized shared root.',
-        audiences: ['agent'],
+        audiences: ['agent', 'system'],
         scope: 'resource',
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
         effect: 'external-write',
@@ -1923,7 +1940,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         version: '2.0.0',
         title: 'Remove Authorized Content Space Member',
         description: 'Removes one Provider directory user from the exact authorized shared root.',
-        audiences: ['agent'],
+        audiences: ['agent', 'system'],
         scope: 'resource',
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
         effect: 'destructive',

@@ -995,12 +995,432 @@ describe('main runtime contributions', () => {
     await expect(pending).resolves.toEqual({ cancelled: true })
     expect(handlerSignal).toBe(controller.signal)
   })
+
+  it('derives one exact finite batch from one Human confirmation and consumes each operation once', async () => {
+    const principal = Object.freeze({
+      authority: 'sciforge.identity-access',
+      subject: 'owner-1',
+      assurance: 'cloud-authenticated' as const,
+      deviceId: 'device-1',
+      identityVersion: 7
+    })
+    const grantId = 'fixture.provisioning-batch'
+    const calls: string[] = []
+    let providerChange: ((change: { semanticRevision: string }) => void) | undefined
+    const resourceOutputSchema = z.object({
+      resource: z.object({
+        token: z.string(),
+        semanticRevision: z.string(),
+        expiresAt: z.string()
+      }).strict()
+    }).strict()
+    const okOutputSchema = z.object({ ok: z.boolean() }).strict()
+    const authorize = defineCapability({
+      id: 'fixture.provision.authorize',
+      version: '1.0.0',
+      title: 'Authorize provider',
+      description: 'Issues an exact provider administration resource.',
+      audiences: ['agent', 'system'],
+      scope: 'global',
+      producedResourceKinds: ['fixture.provider-administration'],
+      effect: 'external-write',
+      approval: 'confirmation',
+      delegatedBatchGrant: grantId,
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ provider: z.string() }).strict(),
+      outputSchema: resourceOutputSchema,
+      handler: async (_input, context) => {
+        calls.push('authorize')
+        return {
+          output: {
+            resource: context.issueResource({
+              resourceId: 'provider-1',
+              resourceKind: 'fixture.provider-administration',
+              audiences: ['system'],
+              semanticRevision: 'provider-1',
+              observe: async () => ({ state: {}, semanticRevision: 'provider-1' })
+            })
+          }
+        }
+      }
+    })
+    const create = defineCapability({
+      id: 'fixture.provision.create',
+      version: '1.0.0',
+      title: 'Create root',
+      description: 'Creates one exact shared root from provider administration authority.',
+      audiences: ['agent', 'system'],
+      scope: 'resource',
+      resourceKinds: ['fixture.provider-administration'],
+      producedResourceKinds: ['fixture.root'],
+      effect: 'external-write',
+      approval: 'none',
+      delegatedBatchGrant: grantId,
+      autonomousWrite: 'resource-authorized',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ label: z.string() }).strict(),
+      outputSchema: resourceOutputSchema,
+      handler: async (_input, context) => {
+        calls.push(`create:${context.resource?.resourceId}`)
+        return {
+          output: {
+            resource: context.issueResource({
+              resourceId: 'root-1',
+              resourceKind: 'fixture.root',
+              audiences: ['system'],
+              semanticRevision: 'root-1',
+              observe: async () => ({ state: {}, semanticRevision: 'root-1' }),
+              subscribeChanges: (listener) => {
+                providerChange = listener
+                return () => { providerChange = undefined }
+              }
+            })
+          },
+          changed: true,
+          semanticRevision: 'provider-2'
+        }
+      }
+    })
+    const list = defineCapability({
+      id: 'fixture.provision.list',
+      version: '1.0.0',
+      title: 'List members',
+      description: 'Reads the exact shared-root membership.',
+      audiences: ['agent', 'system'],
+      scope: 'resource',
+      resourceKinds: ['fixture.root'],
+      effect: 'read',
+      approval: 'none',
+      delegatedBatchGrant: grantId,
+      concurrency: { revision: 'none', idempotency: 'none' },
+      inputSchema: z.object({ phase: z.enum(['before', 'after']) }).strict(),
+      outputSchema: okOutputSchema,
+      handler: async (input, context) => {
+        calls.push(`list:${input.phase}:${context.resource?.resourceId}`)
+        return { output: { ok: true } }
+      }
+    })
+    const add = defineCapability({
+      id: 'fixture.provision.add',
+      version: '1.0.0',
+      title: 'Add member',
+      description: 'Adds one exact member to the exact shared root.',
+      audiences: ['agent', 'system'],
+      scope: 'resource',
+      resourceKinds: ['fixture.root'],
+      effect: 'external-write',
+      approval: 'confirmation',
+      delegatedBatchGrant: grantId,
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ member: z.string() }).strict(),
+      outputSchema: okOutputSchema,
+      handler: async (input, context) => {
+        calls.push(`add:${input.member}:${context.resource?.resourceId}`)
+        return { output: { ok: true }, changed: true, semanticRevision: 'root-2' }
+      }
+    })
+    const registry = new CapabilityRegistry([authorize, create, list, add])
+    const broker = new CapabilityBroker(registry, {
+      resolveCurrentPrincipal: () => principal
+    })
+    const invoker = createMainSystemCapabilityInvokerFactory(broker)
+      .forDomain(
+        { moduleId: 'fixture.coordinator', moduleVersion: '1.0.0' },
+        [grantId]
+      )
+    const authorizeContract = {
+      actionId: authorize.descriptor.id,
+      effect: authorize.descriptor.effect,
+      inputSchema: authorize.inputSchema,
+      outputSchema: authorize.outputSchema
+    }
+    const createContract = {
+      actionId: create.descriptor.id,
+      effect: create.descriptor.effect,
+      inputSchema: create.inputSchema,
+      outputSchema: create.outputSchema
+    }
+    const listContract = {
+      actionId: list.descriptor.id,
+      effect: list.descriptor.effect,
+      inputSchema: list.inputSchema,
+      outputSchema: list.outputSchema
+    }
+    const addContract = {
+      actionId: add.descriptor.id,
+      effect: add.descriptor.effect,
+      inputSchema: add.inputSchema,
+      outputSchema: add.outputSchema
+    }
+    let replayRejected = false
+    let secondBatchRejected = false
+    let planDigest = ''
+    const outer = defineCapability({
+      id: 'fixture.project.provision',
+      version: '1.0.0',
+      title: 'Provision Project content',
+      description: 'Represents the one complete Human-confirmed immutable plan.',
+      audiences: ['ui'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ revision: z.literal(7) }).strict(),
+      outputSchema: z.object({ completed: z.boolean() }).strict(),
+      handler: async () => {
+        const batch = invoker.createApprovedBatch({
+          requiredSystemCapabilityGrant: grantId,
+          revision: 'project-1:7',
+          operations: [
+            {
+              operationId: 'authorize',
+              actionId: authorize.descriptor.id,
+              idempotencyKey: 'authorize-7',
+              input: { provider: 'provider-1' }
+            },
+            {
+              operationId: 'create',
+              actionId: create.descriptor.id,
+              idempotencyKey: 'create-7',
+              input: { label: 'Project 1' },
+              resource: { kind: 'operation-output', operationId: 'authorize', path: ['resource'] }
+            },
+            {
+              operationId: 'list-before',
+              actionId: list.descriptor.id,
+              input: { phase: 'before' },
+              resource: { kind: 'operation-output', operationId: 'create', path: ['resource'] }
+            },
+            {
+              operationId: 'add',
+              actionId: add.descriptor.id,
+              idempotencyKey: 'add-7-member-1',
+              input: { member: 'provider-user-1' },
+              resource: { kind: 'operation-output', operationId: 'create', path: ['resource'] }
+            },
+            {
+              operationId: 'list-after',
+              actionId: list.descriptor.id,
+              input: { phase: 'after' },
+              resource: { kind: 'operation-output', operationId: 'create', path: ['resource'] }
+            }
+          ]
+        })
+        planDigest = batch.planDigest
+        await batch.invoke('authorize', authorizeContract)
+        await batch.invoke('create', createContract)
+        await batch.invoke('list-before', listContract)
+        await batch.invoke('add', addContract)
+        await batch.invoke('list-after', listContract)
+        try {
+          await batch.invoke('list-after', listContract)
+        } catch {
+          replayRejected = true
+        }
+        try {
+          invoker.createApprovedBatch({
+            requiredSystemCapabilityGrant: grantId,
+            revision: 'project-1:8',
+            operations: [{
+              operationId: 'authorize',
+              actionId: authorize.descriptor.id,
+              idempotencyKey: 'authorize-8',
+              input: { provider: 'provider-1' }
+            }]
+          })
+        } catch {
+          secondBatchRejected = true
+        }
+        return { output: { completed: true } }
+      }
+    })
+    registry.register(outer)
+
+    await expect(broker.invoke({
+      audience: 'ui',
+      callerId: 'window:1',
+      approvals: [{
+        actionId: outer.descriptor.id,
+        invocationId: 'outer-project-1-revision-7',
+        mode: 'confirmation'
+      }]
+    }, {
+      actionId: outer.descriptor.id,
+      invocationId: 'outer-project-1-revision-7',
+      input: { revision: 7 }
+    })).resolves.toMatchObject({ output: { completed: true } })
+
+    expect(calls).toEqual([
+      'authorize',
+      'create:provider-1',
+      'list:before:root-1',
+      'add:provider-user-1:root-1',
+      'list:after:root-1'
+    ])
+    expect(planDigest).toMatch(/^[a-f0-9]{64}$/u)
+    expect(replayRejected).toBe(true)
+    expect(secondBatchRejected).toBe(true)
+    expect(providerChange).toBeTypeOf('function')
+  })
+
+  it('invalidates a finite batch on operation or resource revision drift and requires a new confirmation', async () => {
+    const principal = Object.freeze({
+      authority: 'sciforge.identity-access',
+      subject: 'owner-2',
+      assurance: 'cloud-authenticated' as const,
+      deviceId: 'device-2',
+      identityVersion: 3
+    })
+    const grantId = 'fixture.reconcile-batch'
+    const read = defineCapability({
+      id: 'fixture.reconcile.read',
+      version: '1.0.0',
+      title: 'Read exact root',
+      description: 'Reads one exact root revision for finite-batch drift tests.',
+      audiences: ['agent', 'system'],
+      scope: 'resource',
+      resourceKinds: ['fixture.root'],
+      effect: 'read',
+      approval: 'none',
+      delegatedBatchGrant: grantId,
+      concurrency: { revision: 'none', idempotency: 'none' },
+      inputSchema: z.object({ step: z.number().int() }).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    })
+    const registry = new CapabilityRegistry([read])
+    const broker = new CapabilityBroker(registry, {
+      resolveCurrentPrincipal: () => principal
+    })
+    let publishProviderChange: ((change: { semanticRevision: string }) => void) | undefined
+    const resource = broker.issueResourceHandle({
+      audience: 'system',
+      callerId: 'domain-runtime:fixture.reconciler'
+    }, {
+      resourceId: 'root-2',
+      resourceKind: 'fixture.root',
+      audiences: ['system'],
+      semanticRevision: 'root-revision-1',
+      observe: async () => ({ state: {}, semanticRevision: 'root-revision-1' }),
+      subscribeChanges: (listener) => {
+        publishProviderChange = listener
+        return () => { publishProviderChange = undefined }
+      }
+    })
+    const invoker = createMainSystemCapabilityInvokerFactory(broker)
+      .forDomain(
+        { moduleId: 'fixture.reconciler', moduleVersion: '1.0.0' },
+        [grantId]
+      )
+    const contract = {
+      actionId: read.descriptor.id,
+      effect: 'read' as const,
+      inputSchema: read.inputSchema,
+      outputSchema: read.outputSchema
+    }
+    const resultSchema = z.object({
+      firstRejected: z.boolean(),
+      retryRejected: z.boolean(),
+      replacementRejected: z.boolean()
+    }).strict()
+    const orderOuter = defineCapability({
+      id: 'fixture.reconcile.order',
+      version: '1.0.0',
+      title: 'Confirm ordered reconcile',
+      description: 'Confirms one exact ordered reconcile plan.',
+      audiences: ['ui'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ revision: z.literal(1) }).strict(),
+      outputSchema: resultSchema,
+      handler: async () => {
+        const plan = {
+          requiredSystemCapabilityGrant: grantId,
+          revision: 'reconcile:1',
+          operations: [1, 2].map((step) => ({
+            operationId: `read-${step}`,
+            actionId: read.descriptor.id,
+            input: { step },
+            resource: { kind: 'fixed' as const, resource }
+          }))
+        }
+        const batch = invoker.createApprovedBatch(plan)
+        let firstRejected = false
+        let retryRejected = false
+        let replacementRejected = false
+        try { await batch.invoke('read-2', contract) } catch { firstRejected = true }
+        try { await batch.invoke('read-1', contract) } catch { retryRejected = true }
+        try { invoker.createApprovedBatch({ ...plan, revision: 'reconcile:2' }) } catch {
+          replacementRejected = true
+        }
+        return { output: { firstRejected, retryRejected, replacementRejected } }
+      }
+    })
+    const revisionOuter = defineCapability({
+      id: 'fixture.reconcile.revision',
+      version: '1.0.0',
+      title: 'Confirm revision reconcile',
+      description: 'Confirms one exact resource revision for reconcile.',
+      audiences: ['ui'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ revision: z.literal(1) }).strict(),
+      outputSchema: resultSchema,
+      handler: async () => {
+        const plan = {
+          requiredSystemCapabilityGrant: grantId,
+          revision: 'reconcile:resource-1',
+          operations: [{
+            operationId: 'read-1',
+            actionId: read.descriptor.id,
+            input: { step: 1 },
+            resource: { kind: 'fixed' as const, resource }
+          }]
+        }
+        const batch = invoker.createApprovedBatch(plan)
+        publishProviderChange?.({ semanticRevision: 'root-revision-2' })
+        let firstRejected = false
+        let retryRejected = false
+        let replacementRejected = false
+        try { await batch.invoke('read-1', contract) } catch { firstRejected = true }
+        try { await batch.invoke('read-1', contract) } catch { retryRejected = true }
+        try { invoker.createApprovedBatch({ ...plan, revision: 'reconcile:resource-2' }) } catch {
+          replacementRejected = true
+        }
+        return { output: { firstRejected, retryRejected, replacementRejected } }
+      }
+    })
+    registry.registerAll([orderOuter, revisionOuter])
+
+    const invokeOuter = (definition: typeof orderOuter, invocationId: string) => broker.invoke({
+      audience: 'ui',
+      callerId: 'window:2',
+      approvals: [{ actionId: definition.descriptor.id, invocationId, mode: 'confirmation' }]
+    }, {
+      actionId: definition.descriptor.id,
+      invocationId,
+      input: { revision: 1 }
+    })
+    await expect(invokeOuter(orderOuter, 'order-confirmation-1')).resolves.toMatchObject({
+      output: { firstRejected: true, retryRejected: true, replacementRejected: true }
+    })
+    await expect(invokeOuter(revisionOuter, 'revision-confirmation-1')).resolves.toMatchObject({
+      output: { firstRejected: true, retryRejected: true, replacementRejected: true }
+    })
+  })
 })
 
 function runtimeHost(
   capabilityInvokers: ReturnType<typeof createMainSystemCapabilityInvokerFactory> = {
     forDomain: vi.fn(() => ({
-      invoke: vi.fn(async (_contract, input) => input)
+      invoke: vi.fn(async (_contract, input) => input),
+      createApprovedBatch: vi.fn(() => {
+        throw new Error('not used')
+      })
     }))
   }
 ) {

@@ -293,6 +293,9 @@ function identityApplicationIpcFixture(root: string) {
     capabilityInvokerFor: () => Object.freeze({
       invoke: async () => {
         throw new Error('Nested domain capabilities are unavailable in this test.')
+      },
+      createApprovedBatch: () => {
+        throw new Error('Nested domain capabilities are unavailable in this test.')
       }
     })
   })

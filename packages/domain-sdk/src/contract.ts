@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 export const DOMAIN_PACKAGE_CONTRACT_VERSION = 1
-export const DOMAIN_PACKAGE_HOST_API_VERSION = '1.6.0'
+export const DOMAIN_PACKAGE_HOST_API_VERSION = '1.7.0'
 export const DOMAIN_PACKAGE_IMPLICIT_RUNTIME_PATHS = Object.freeze([
   'package.json',
   'sciforge.domain.json'

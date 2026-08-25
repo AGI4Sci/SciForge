@@ -240,6 +240,17 @@ consumer allowlist. Sandboxed or transport callers cannot request or carry these
 Packages that require lifecycle grants or resource navigation declare Host API `1.1.0` as their
 minimum; older Hosts reject those packages during catalog registration.
 
+Host API `1.7.0` adds one finite Human-confirmed batch primitive for trusted main packages. A
+package that holds the provider-owned system grant may call `createApprovedBatch` only while its
+exact outer capability invocation is actively covered by Human confirmation. The Host freezes at
+most 64 ordered operations, their inputs, logical invocation IDs, Workspace, revision string and
+fixed/earlier-output resource ancestry. It keeps each one-use operation proof in a process-local
+closure: packages receive no token, serializable authority or replayable handle. A standing system
+grant cannot invoke a batch-delegated capability by itself. Changed order, action/effect, input,
+resource revision/ancestry, Principal, Workspace, or outer invocation invalidates all remaining
+proofs; the same confirmation cannot create a corrected or replacement batch. `planDigest` is
+audit identity only and is never authority.
+
 ## Execution provenance and reproducibility
 
 `@sciforge/domain-sdk/reproducibility` is the process-neutral contract shared by executable
