@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 
 import type { SqlPool } from './postgres.js'
 
-export const COLLABORATION_SCHEMA_VERSION = 13
+export const COLLABORATION_SCHEMA_VERSION = 14
 
 export type CollaborationSchemaRoute =
   | 'fresh-v4'
@@ -13,6 +13,7 @@ export type CollaborationSchemaRoute =
   | 'a-v11'
   | 'current-v12'
   | 'current-v13'
+  | 'current-v14'
 
 export const COLLABORATION_SOURCE_CATALOG_FINGERPRINTS = {
   'upstream-v4': '0577af72da028cee0f45daf6bbf8dad873f9ff2fde578662ffb30d50629b9843',
@@ -42,7 +43,8 @@ const BASELINE_MIGRATIONS = [
 const FORWARD_MIGRATIONS = [
   '0011_a_content_space_execution_identity.sql',
   '0012_oidc_only_endpoint_agent_authority.sql',
-  '0013_full_multi_user_loop.sql'
+  '0013_full_multi_user_loop.sql',
+  '0014_pre_provider_provisioning_binding.sql'
 ] as const
 
 const exactColumns = {
@@ -291,19 +293,23 @@ export async function runCollaborationMigrations(
       throw new Error(`collaboration_schema_source_fingerprint_mismatch:${route}`)
     }
   }
-  if (facts.version !== 11 && facts.version !== 12 && facts.version !== COLLABORATION_SCHEMA_VERSION) {
+  if (![11, 12, 13, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[0])
     facts = await readLineageFacts(pool)
   }
-  if (facts.version !== 12 && facts.version !== COLLABORATION_SCHEMA_VERSION) {
+  if (![12, 13, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[1])
     facts = await readLineageFacts(pool)
   }
-  if (facts.version !== COLLABORATION_SCHEMA_VERSION) {
+  if (![13, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[2])
+    facts = await readLineageFacts(pool)
+  }
+  if (facts.version !== COLLABORATION_SCHEMA_VERSION) {
+    await applyMigration(pool, FORWARD_MIGRATIONS[3])
   }
   const current = await readLineageFacts(pool)
-  assertRoute(current, 'current-v13')
+  assertRoute(current, 'current-v14')
   const fingerprint = await collaborationSchemaFingerprint(pool)
   if (fingerprint !== COLLABORATION_SCHEMA_FINGERPRINT) {
     throw new Error('collaboration_schema_fingerprint_mismatch')
@@ -317,7 +323,7 @@ async function applyMigration(pool: SqlPool, name: string): Promise<void> {
 
 export async function isCollaborationDatabaseReady(pool: SqlPool): Promise<boolean> {
   try {
-    assertRoute(await readLineageFacts(pool), 'current-v13')
+    assertRoute(await readLineageFacts(pool), 'current-v14')
     return await collaborationSchemaFingerprint(pool) === COLLABORATION_SCHEMA_FINGERPRINT
   } catch {
     return false
@@ -368,6 +374,10 @@ export function detectCollaborationSchemaRoute(facts: LineageFacts): Collaborati
   if (facts.version === 13 && facts.managedContainers && facts.remoteApprovals && facts.oidcIdentities &&
       facts.devices && facts.taskResourceRefs && facts.projectContentSpaceBindings && facts.taskExecutions) {
     return 'current-v13'
+  }
+  if (facts.version === 14 && facts.managedContainers && facts.remoteApprovals && facts.oidcIdentities &&
+      facts.devices && facts.taskResourceRefs && facts.projectContentSpaceBindings && facts.taskExecutions) {
+    return 'current-v14'
   }
   throw new Error('collaboration_schema_lineage_unsupported')
 }

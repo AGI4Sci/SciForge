@@ -155,4 +155,36 @@ describe('Project Content Space and Task file I/O contracts', () => {
       closedAt: '2026-08-15T08:02:00.000Z'
     }).success).toBe(true)
   })
+
+  it('represents pre-Provider provisioning without claiming that a root already exists', () => {
+    const provisioning = projectContentSpaceBindingSchema.parse({
+      schemaVersion: 1,
+      type: 'project_content_space_binding',
+      projectContentBindingId: 'pcb_Provisioning001',
+      projectId: TEST_IDS.projectId,
+      contentOwnerUserId: TEST_IDS.userId,
+      providerInstance: {
+        schemaVersion: 1,
+        type: 'provider_instance_reference',
+        providerInstanceRef: 'provider-instance-alpha'
+      },
+      rootLocator: null,
+      rootLocatorDigest: null,
+      provisioningIntentId: 'pci_Provision00001',
+      provisioningRevision: 1,
+      attestationId: null,
+      attestationDigest: null,
+      status: 'provisioning',
+      statusReason: 'provisioning_incomplete',
+      activatedAt: null,
+      degradedAt: null,
+      closedAt: null,
+      revision: 1,
+      createdAt: TEST_TIMESTAMP,
+      updatedAt: TEST_TIMESTAMP
+    })
+
+    expect(provisioning.rootLocator).toBeNull()
+    expect(provisioning.attestationId).toBeNull()
+  })
 })

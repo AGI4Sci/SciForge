@@ -608,13 +608,13 @@ export const projectContentSpaceBindingSchema = z.object({
   const closeReasons = new Set(['project_archived', 'project_deleted', 'owner_requested'])
   if (binding.status === 'provisioning') {
     if (
-      !hasRoot ||
       binding.statusReason !== 'provisioning_incomplete' ||
+      attested ||
       binding.activatedAt !== null ||
       binding.degradedAt !== null ||
       binding.closedAt !== null
     ) {
-      context.addIssue({ code: 'custom', path: ['status'], message: 'Provisioning binding requires an exact candidate root but remains unattached and inactive.' })
+      context.addIssue({ code: 'custom', path: ['status'], message: 'Provisioning binding remains unattested and inactive; its candidate root may not exist yet.' })
     }
   } else if (binding.status === 'active') {
     if (!hasRoot || !attested || binding.activatedAt === null || binding.statusReason !== null || binding.degradedAt !== null || binding.closedAt !== null) {

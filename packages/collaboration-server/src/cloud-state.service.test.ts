@@ -239,6 +239,158 @@ async function contentRecoveryProjectFixture(suffix: string) {
   return { repository, service, owner, worker, coordinator, ownerFact, workerFact, created }
 }
 
+async function activeContentProjectFixture(suffix: string) {
+  const fixture = await contentRecoveryProjectFixture(suffix)
+  const { repository, service, owner, worker, coordinator, ownerFact, created } = fixture
+  const signing = generateKeyPairSync('ed25519')
+  const publicJwk = signing.publicKey.export({ format: 'jwk' })
+  const deviceKeyId = `${suffix}-owner-device-key`
+  await repository.transaction(async (tx) => {
+    const device = (await tx.getDeviceForUpdate(owner.deviceId))!
+    await tx.updateDevice({
+      ...device,
+      publicKeyJwk: {
+        kty: 'OKP', crv: 'Ed25519', alg: 'EdDSA', use: 'sig', kid: deviceKeyId, x: publicJwk.x!
+      },
+      revision: device.revision + 1,
+      updatedAt: at.toISOString()
+    }, device.revision)
+  })
+  const workerAgent = await registeredAgent(service, worker.user, worker.deviceId, `${suffix}-worker-agent`)
+  const intent = created.provisioningIntent!
+  const requestDigest = stableDigest({ suffix, operation: 'create_shared_container' })
+  const prepared = await service.prepareExternalOperation(owner.user, {
+    protocolVersion: '1.0', type: 'external_operation.prepare',
+    requestId: `req_${suffix}_active_prepare`, idempotencyKey: `idem_${suffix}_active_prepare`,
+    scope: 'project_provisioning', projectId: created.project.projectId,
+    taskId: null, executionId: null, preparedTaskRevision: null, preparedExecutionRevision: null,
+    provisioningIntentId: intent.provisioningIntentId,
+    provisioningRevision: intent.provisioningRevision,
+    logicalInvocationId: `${suffix}-create-root`, operation: 'create_shared_container', requestDigest
+  })
+  const dispatched = await service.dispatchExternalOperation(owner.user, {
+    protocolVersion: '1.0', type: 'external_operation.dispatch',
+    requestId: `req_${suffix}_active_dispatch`, idempotencyKey: `idem_${suffix}_active_dispatch`,
+    journalEntryId: prepared.contentRecoveryJournalEntryId, expectedJournalRevision: prepared.revision
+  })
+  const receiptDigest = stableDigest({ suffix, receipt: 'created' })
+  const observed = await service.observeExternalOperation(owner.user, {
+    protocolVersion: '1.0', type: 'external_operation.observe',
+    requestId: `req_${suffix}_active_observe`, idempotencyKey: `idem_${suffix}_active_observe`,
+    journalEntryId: dispatched.contentRecoveryJournalEntryId,
+    expectedJournalRevision: dispatched.revision, outcome: 'observed_success',
+    receiptDigest, observationDigest: stableDigest({ suffix, observation: 'created' }), safeFailureCode: null
+  })
+  const rootLocator = {
+    contractVersion: 1 as const,
+    kind: 'content-space.container-reference' as const,
+    authority: 'opencontent.sciforge.test',
+    identity: { containerId: `${suffix}-root` }
+  }
+  const memberObservations = intent.desiredMembers.map((member) => ({
+    userId: member.userId,
+    providerPrincipalFactId: member.providerPrincipalFactId,
+    snapshottedFactRevision: member.snapshottedFactRevision,
+    principal: member.principal,
+    presence: 'present' as const,
+    observationDigest: stableDigest({ suffix, userId: member.userId, presence: 'present' }),
+    observedAt: at.toISOString()
+  }))
+  const attestation = signProvisioningAttestation({
+    format: 'sciforge.project-content-provisioning-attestation.v1',
+    provisioningAttestationId: `pca_${stableDigest(`${suffix}-attestation`).slice(0, 24)}`,
+    projectId: created.project.projectId,
+    provisioningIntentId: intent.provisioningIntentId,
+    provisioningRevision: intent.provisioningRevision,
+    ownerUserId: owner.userId,
+    principalIdentityRevision: ownerFact.principalIdentityRevision,
+    providerBindingAttestationDigest: ownerFact.providerBindingAttestationDigest,
+    providerInstance: ownerFact.providerPrincipal.providerInstance,
+    rootLocator,
+    rootLocatorDigest: stableDigest(rootLocator),
+    observedOperations: [{
+      operationId: prepared.logicalInvocationId,
+      operationRevision: observed.journal.revision,
+      kind: 'create_shared_container',
+      subjectPrincipal: null,
+      requestDigest,
+      receiptDigest,
+      outcome: 'observed_success',
+      safeFailureCode: null,
+      observedAt: at.toISOString()
+    }],
+    memberObservations,
+    memberSetDigest: createHash('sha256')
+      .update(canonicalProvisionedMemberSetBytes(memberObservations)).digest('hex'),
+    observationStartedAt: at.toISOString(),
+    observationCompletedAt: at.toISOString()
+  }, signing, owner.deviceId, deviceKeyId, 2)
+  const activatedContent = await service.attestProjectContent(owner.user, {
+    protocolVersion: '1.0', type: 'project.content.attest',
+    requestId: `req_${suffix}_active_attest`, idempotencyKey: `idem_${suffix}_active_attest`,
+    projectId: created.project.projectId,
+    expectedProjectRevision: created.project.revision,
+    expectedProvisioningRevision: intent.provisioningRevision,
+    attestation
+  })
+  const planTasks = [{
+    planItemId: 'item_content_lifecycle',
+    title: 'Review content lifecycle',
+    objective: 'Keep the Project active while Provider observations change.',
+    completionCriteria: ['Authority follows exact Provider observations.'],
+    dependencyPlanItemIds: [],
+    requiredCapabilityTags: ['research.execute'],
+    fileIntent: null
+  }]
+  const planFacts = {
+    projectId: created.project.projectId,
+    expectedProjectRevision: activatedContent.project.revision,
+    expectedCoordinatorAuthorityEpoch: activatedContent.project.coordinatorAuthorityEpoch,
+    supersedesProjectPlanId: null,
+    sourceInputLocators: [],
+    tasks: planTasks,
+    rationale: 'Exercise Project Content lifecycle authority.',
+    runtimeProvenance: {
+      runtimeId: `${suffix}-coordinator-runtime`, modelId: null,
+      generatedByCoordinatorAgentId: coordinator.agentId, generatedAt: at.toISOString()
+    }
+  }
+  const submittedPlan = await service.submitProjectPlan(coordinator, {
+    protocolVersion: '1.0', type: 'project.plan.submit',
+    requestId: `req_${suffix}_active_plan`, idempotencyKey: `idem_${suffix}_active_plan`,
+    ...planFacts,
+    planDigest: stableDigest(planFacts)
+  })
+  await service.confirmProjectPlan(owner.user, {
+    protocolVersion: '1.0', type: 'project.plan.confirm',
+    requestId: `req_${suffix}_active_confirm`, idempotencyKey: `idem_${suffix}_active_confirm`,
+    projectId: created.project.projectId,
+    projectPlanId: submittedPlan.projectPlanId,
+    expectedProjectRevision: activatedContent.project.revision + 1,
+    expectedCoordinatorAuthorityEpoch: activatedContent.project.coordinatorAuthorityEpoch,
+    expectedPlanRevision: submittedPlan.revision,
+    planDigest: submittedPlan.planDigest
+  })
+  const activeProject = await service.transitionProject(owner.user, {
+    protocolVersion: '1.0', type: 'project.transition',
+    requestId: `req_${suffix}_active_project`, idempotencyKey: `idem_${suffix}_active_project`,
+    projectId: created.project.projectId,
+    expectedRevision: activatedContent.project.revision + 2,
+    expectedCoordinatorAuthorityEpoch: activatedContent.project.coordinatorAuthorityEpoch,
+    expectedExecutionAuthorityEpoch: activatedContent.project.executionAuthorityEpoch,
+    status: 'active'
+  })
+  return {
+    ...fixture,
+    workerAgent,
+    rootLocator,
+    binding: activatedContent.binding,
+    activeProject,
+    signing,
+    deviceKeyId
+  }
+}
+
 async function activeTextOfferFixture(suffix: string) {
   const repository = new FakeCollaborationRepository()
   const service = new CollaborationService({ repository, now })
@@ -396,7 +548,10 @@ async function activeTextOfferFixture(suffix: string) {
   }
 }
 
-async function manualRecoveryFileOfferFixture(suffix: string) {
+async function manualRecoveryFileOfferFixture(
+  suffix: string,
+  options: Readonly<{ observedFailureCode?: string }> = {}
+) {
   const fixture = await contentRecoveryProjectFixture(suffix)
   const signing = generateKeyPairSync('ed25519')
   const publicJwk = signing.publicKey.export({ format: 'jwk' })
@@ -691,10 +846,10 @@ async function manualRecoveryFileOfferFixture(suffix: string) {
     idempotencyKey: `idem_${suffix}_unknown_upload`,
     journalEntryId: dispatched.contentRecoveryJournalEntryId,
     expectedJournalRevision: dispatched.revision,
-    outcome: 'outcome_unknown',
+    outcome: options.observedFailureCode === undefined ? 'outcome_unknown' : 'observed_failure',
     receiptDigest: null,
     observationDigest: null,
-    safeFailureCode: 'provider_outcome_unknown'
+    safeFailureCode: options.observedFailureCode ?? 'provider_outcome_unknown'
   })
   return {
     ...fixture,
@@ -960,6 +1115,13 @@ describe('vNext Cloud application service', () => {
       }
     }
 
+    await expect(service.createProject(owner.user, {
+      ...command,
+      requestId: 'req_project_create_cross_owner',
+      idempotencyKey: 'idem_project_create_cross_owner',
+      content: { ...command.content, contentOwnerUserId: worker.userId }
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+
     const created = await service.createProject(owner.user, command)
     expect(created.project).toMatchObject({
       ownerUserId: owner.userId,
@@ -983,6 +1145,23 @@ describe('vNext Cloud application service', () => {
         snapshottedFactRevision: workerFact.revision
       })
     ]))
+    await expect(repository.getProjectContentSpaceBinding(created.project.projectId)).resolves.toMatchObject({
+      projectId: created.project.projectId,
+      contentOwnerUserId: owner.userId,
+      providerInstance: ownerFact.providerPrincipal.providerInstance,
+      rootLocator: null,
+      rootLocatorDigest: null,
+      provisioningIntentId: created.provisioningIntent?.provisioningIntentId,
+      provisioningRevision: 1,
+      attestationId: null,
+      attestationDigest: null,
+      status: 'provisioning',
+      statusReason: 'provisioning_incomplete',
+      activatedAt: null,
+      degradedAt: null,
+      closedAt: null,
+      revision: 1
+    })
     expect(await repository.listProjectContentReadiness(created.project.projectId)).toHaveLength(2)
     expect(await repository.listTaskAuthorities(created.project.projectId)).toHaveLength(4)
   })
@@ -1050,13 +1229,353 @@ describe('vNext Cloud application service', () => {
     expect(abandoned.provisioningIntent).toMatchObject({ state: 'cancelled',
       revision: recoveringIntent.revision + 1 })
     expect(await repository.listProjectContentReadiness(created.project.projectId)).toEqual(readinessBefore)
-    expect(await repository.getProjectContentSpaceBinding(created.project.projectId)).toBeNull()
+    expect(await repository.getProjectContentSpaceBinding(created.project.projectId)).toMatchObject({
+      provisioningIntentId: recoveringIntent.provisioningIntentId,
+      status: 'closed',
+      statusReason: 'owner_requested',
+      closedAt: at.toISOString()
+    })
     await expect(service.observeExternalOperation(owner.user, {
       protocolVersion: '1.0', type: 'external_operation.observe', requestId: 'req_recovery_after_abandon',
       idempotencyKey: 'idem_recovery_after_abandon', journalEntryId: abandoned.journal.contentRecoveryJournalEntryId,
       expectedJournalRevision: abandoned.journal.revision, outcome: 'observed_success',
       receiptDigest: 'c'.repeat(64), observationDigest: 'd'.repeat(64), safeFailureCode: null
     })).rejects.toMatchObject({ code: 'invalid_state_transition' })
+  })
+
+  it('binds reconcile observations to the Owner and transfer observations to the exact Worker Agent', async () => {
+    const { repository, service, owner, worker, coordinator, created } =
+      await contentRecoveryProjectFixture('observation-authority')
+    const workerAgent = await registeredAgent(
+      service,
+      worker.user,
+      worker.deviceId,
+      'observation-authority-worker'
+    )
+    const binding = (await repository.getProjectContentSpaceBinding(created.project.projectId))!
+    const ownerReadiness = (await repository.listProjectContentReadiness(created.project.projectId))
+      .find(({ userId }) => userId === owner.userId)!
+    const workerReadiness = (await repository.listProjectContentReadiness(created.project.projectId))
+      .find(({ userId }) => userId === worker.userId)!
+    const observation = {
+      schemaVersion: 1 as const,
+      type: 'project_provider_membership_observation' as const,
+      providerObservationId: 'pob_ObservationAuth01',
+      projectId: created.project.projectId,
+      userId: owner.userId,
+      providerPrincipalFactId: ownerReadiness.providerPrincipalFactId!,
+      snapshottedFactRevision: ownerReadiness.snapshottedFactRevision!,
+      providerPrincipal: ownerReadiness.providerPrincipal!,
+      bindingRevision: binding.revision,
+      provisioningRevision: binding.provisioningRevision,
+      source: 'explicit_reconcile' as const,
+      outcome: 'unauthorized' as const,
+      observerUserId: worker.userId,
+      observerDeviceId: worker.deviceId,
+      observerAgentId: workerAgent.agentId,
+      provisioningAttestationId: null,
+      evidenceDigest: 'e'.repeat(64),
+      observedAt: at.toISOString(),
+      revision: 1,
+      createdAt: at.toISOString(),
+      updatedAt: at.toISOString()
+    }
+    await expect(service.submitProjectContentObservation(worker.user, {
+      protocolVersion: '1.0', type: 'project.content.observation.submit',
+      requestId: 'req_observation_non_owner_reconcile',
+      idempotencyKey: 'idem_observation_non_owner_reconcile',
+      projectId: created.project.projectId,
+      expectedProjectRevision: created.project.revision,
+      observation
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+
+    await expect(service.submitProjectContentObservation(owner.user, {
+      protocolVersion: '1.0', type: 'project.content.observation.submit',
+      requestId: 'req_observation_cross_user_transfer',
+      idempotencyKey: 'idem_observation_cross_user_transfer',
+      projectId: created.project.projectId,
+      expectedProjectRevision: created.project.revision,
+      observation: {
+        ...observation,
+        providerObservationId: 'pob_ObservationAuth02',
+        userId: worker.userId,
+        providerPrincipalFactId: workerReadiness.providerPrincipalFactId!,
+        snapshottedFactRevision: workerReadiness.snapshottedFactRevision!,
+        providerPrincipal: workerReadiness.providerPrincipal!,
+        source: 'download_check',
+        observerUserId: owner.userId,
+        observerDeviceId: owner.deviceId,
+        observerAgentId: coordinator.agentId
+      }
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+
+    await expect(service.submitProjectContentObservation(worker.user, {
+      protocolVersion: '1.0', type: 'project.content.observation.submit',
+      requestId: 'req_observation_transfer_without_agent',
+      idempotencyKey: 'idem_observation_transfer_without_agent',
+      projectId: created.project.projectId,
+      expectedProjectRevision: created.project.revision,
+      observation: {
+        ...observation,
+        providerObservationId: 'pob_ObservationAuth03',
+        userId: worker.userId,
+        providerPrincipalFactId: workerReadiness.providerPrincipalFactId!,
+        snapshottedFactRevision: workerReadiness.snapshottedFactRevision!,
+        providerPrincipal: workerReadiness.providerPrincipal!,
+        source: 'upload_new',
+        observerAgentId: null
+      }
+    })).rejects.toMatchObject({ code: 'validation_failed' })
+  })
+
+  it('degrades only an externally unauthorized member, degrades the whole binding on Owner root loss, and closes without Provider deletion', async () => {
+    const fixture = await activeContentProjectFixture('content-lifecycle')
+    const { repository, service, owner, worker, workerAgent, binding, activeProject } = fixture
+    const readiness = await repository.listProjectContentReadiness(activeProject.projectId)
+    const ownerReadiness = readiness.find(({ userId }) => userId === owner.userId)!
+    const workerReadiness = readiness.find(({ userId }) => userId === worker.userId)!
+    expect((await repository.listTaskAuthorities(activeProject.projectId)).filter(
+      ({ scope, state }) => scope === 'file_tasks' && state === 'eligible'
+    )).toHaveLength(2)
+
+    const workerLoss = await service.submitProjectContentObservation(worker.user, {
+      protocolVersion: '1.0', type: 'project.content.observation.submit',
+      requestId: 'req_content_lifecycle_worker_loss',
+      idempotencyKey: 'idem_content_lifecycle_worker_loss',
+      projectId: activeProject.projectId,
+      expectedProjectRevision: activeProject.revision,
+      observation: {
+        schemaVersion: 1,
+        type: 'project_provider_membership_observation',
+        providerObservationId: 'pob_ContentWorkerLoss1',
+        projectId: activeProject.projectId,
+        userId: worker.userId,
+        providerPrincipalFactId: workerReadiness.providerPrincipalFactId!,
+        snapshottedFactRevision: workerReadiness.snapshottedFactRevision!,
+        providerPrincipal: workerReadiness.providerPrincipal!,
+        bindingRevision: binding.revision,
+        provisioningRevision: binding.provisioningRevision,
+        source: 'download_check',
+        outcome: 'unauthorized',
+        observerUserId: worker.userId,
+        observerDeviceId: worker.deviceId,
+        observerAgentId: workerAgent.agentId,
+        provisioningAttestationId: null,
+        evidenceDigest: '7'.repeat(64),
+        observedAt: at.toISOString(),
+        revision: 1,
+        createdAt: at.toISOString(),
+        updatedAt: at.toISOString()
+      }
+    })
+    expect(workerLoss.membership.state).toBe('active')
+    expect(workerLoss.readiness).toMatchObject({ state: 'degraded', reason: 'provider_unauthorized' })
+    expect(workerLoss.binding).toMatchObject({ status: 'active', revision: binding.revision })
+    expect(await repository.getProjectContentReadiness(activeProject.projectId, owner.userId))
+      .toMatchObject({ state: 'ready' })
+    expect(await repository.listTaskAuthorities(activeProject.projectId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ userId: owner.userId, scope: 'file_tasks', state: 'eligible' }),
+      expect.objectContaining({ userId: worker.userId, scope: 'file_tasks', state: 'suspended',
+        reason: 'content_not_ready' }),
+      expect.objectContaining({ userId: worker.userId, scope: 'text_tasks', state: 'eligible' })
+    ]))
+
+    const ownerLoss = await service.submitProjectContentObservation(owner.user, {
+      protocolVersion: '1.0', type: 'project.content.observation.submit',
+      requestId: 'req_content_lifecycle_owner_loss',
+      idempotencyKey: 'idem_content_lifecycle_owner_loss',
+      projectId: activeProject.projectId,
+      expectedProjectRevision: workerLoss.project.revision,
+      observation: {
+        schemaVersion: 1,
+        type: 'project_provider_membership_observation',
+        providerObservationId: 'pob_ContentOwnerLoss01',
+        projectId: activeProject.projectId,
+        userId: owner.userId,
+        providerPrincipalFactId: ownerReadiness.providerPrincipalFactId!,
+        snapshottedFactRevision: ownerReadiness.snapshottedFactRevision!,
+        providerPrincipal: ownerReadiness.providerPrincipal!,
+        bindingRevision: binding.revision,
+        provisioningRevision: binding.provisioningRevision,
+        source: 'explicit_reconcile',
+        outcome: 'unauthorized',
+        observerUserId: owner.userId,
+        observerDeviceId: owner.deviceId,
+        observerAgentId: null,
+        provisioningAttestationId: null,
+        evidenceDigest: '8'.repeat(64),
+        observedAt: at.toISOString(),
+        revision: 1,
+        createdAt: at.toISOString(),
+        updatedAt: at.toISOString()
+      }
+    })
+    expect(ownerLoss.binding).toMatchObject({
+      status: 'degraded', statusReason: 'owner_access_lost', degradedAt: at.toISOString()
+    })
+    const rebindIntent = await service.getProjectContentProvisioningIntent(owner.user, {
+      protocolVersion: '1.0', type: 'project.content.provisioning_intent.get',
+      requestId: 'req_content_lifecycle_rebind_intent',
+      projectId: activeProject.projectId
+    })
+    expect(rebindIntent).toMatchObject({
+      kind: 'rebind',
+      state: 'pending',
+      provisioningRevision: binding.provisioningRevision + 1,
+      currentRootLocator: fixture.rootLocator,
+      currentBindingRevision: ownerLoss.binding.revision
+    })
+    expect((await repository.listTaskAuthorities(activeProject.projectId)).filter(
+      ({ scope, state, reason }) => scope === 'file_tasks' &&
+        state === 'suspended' && reason === 'content_binding_degraded'
+    )).toHaveLength(2)
+    expect((await repository.listTaskAuthorities(activeProject.projectId)).filter(
+      ({ scope, state }) => scope === 'text_tasks' && state === 'eligible'
+    )).toHaveLength(2)
+
+    const rebindRequestDigest = stableDigest({ operation: 'observe_root', recovery: 'content-lifecycle' })
+    const rebindPrepared = await service.prepareExternalOperation(owner.user, {
+      protocolVersion: '1.0', type: 'external_operation.prepare',
+      requestId: 'req_content_lifecycle_rebind_prepare',
+      idempotencyKey: 'idem_content_lifecycle_rebind_prepare',
+      scope: 'project_provisioning', projectId: activeProject.projectId,
+      taskId: null, executionId: null, preparedTaskRevision: null, preparedExecutionRevision: null,
+      provisioningIntentId: rebindIntent.provisioningIntentId,
+      provisioningRevision: rebindIntent.provisioningRevision,
+      logicalInvocationId: 'content-lifecycle-rebind-observe-root',
+      operation: 'observe_root', requestDigest: rebindRequestDigest
+    })
+    const rebindDispatched = await service.dispatchExternalOperation(owner.user, {
+      protocolVersion: '1.0', type: 'external_operation.dispatch',
+      requestId: 'req_content_lifecycle_rebind_dispatch',
+      idempotencyKey: 'idem_content_lifecycle_rebind_dispatch',
+      journalEntryId: rebindPrepared.contentRecoveryJournalEntryId,
+      expectedJournalRevision: rebindPrepared.revision
+    })
+    const rebindReceiptDigest = '9'.repeat(64)
+    const rebindObserved = await service.observeExternalOperation(owner.user, {
+      protocolVersion: '1.0', type: 'external_operation.observe',
+      requestId: 'req_content_lifecycle_rebind_observe',
+      idempotencyKey: 'idem_content_lifecycle_rebind_observe',
+      journalEntryId: rebindDispatched.contentRecoveryJournalEntryId,
+      expectedJournalRevision: rebindDispatched.revision,
+      outcome: 'observed_success', receiptDigest: rebindReceiptDigest,
+      observationDigest: 'a'.repeat(64), safeFailureCode: null
+    })
+    const rebindMembers = rebindIntent.desiredMembers.map((member) => ({
+      userId: member.userId,
+      providerPrincipalFactId: member.providerPrincipalFactId,
+      snapshottedFactRevision: member.snapshottedFactRevision,
+      principal: member.principal,
+      presence: 'present' as const,
+      observationDigest: stableDigest({ rebind: member.userId }),
+      observedAt: at.toISOString()
+    }))
+    const rebindAttestation = signProvisioningAttestation({
+      format: 'sciforge.project-content-provisioning-attestation.v1',
+      provisioningAttestationId: 'pca_ContentRebind001',
+      projectId: activeProject.projectId,
+      provisioningIntentId: rebindIntent.provisioningIntentId,
+      provisioningRevision: rebindIntent.provisioningRevision,
+      ownerUserId: owner.userId,
+      principalIdentityRevision: fixture.ownerFact.principalIdentityRevision,
+      providerBindingAttestationDigest: fixture.ownerFact.providerBindingAttestationDigest,
+      providerInstance: binding.providerInstance,
+      rootLocator: fixture.rootLocator,
+      rootLocatorDigest: stableDigest(fixture.rootLocator),
+      observedOperations: [{
+        operationId: rebindPrepared.logicalInvocationId,
+        operationRevision: rebindObserved.journal.revision,
+        kind: 'observe_root',
+        subjectPrincipal: null,
+        requestDigest: rebindRequestDigest,
+        receiptDigest: rebindReceiptDigest,
+        outcome: 'observed_success',
+        safeFailureCode: null,
+        observedAt: at.toISOString()
+      }],
+      memberObservations: rebindMembers,
+      memberSetDigest: createHash('sha256')
+        .update(canonicalProvisionedMemberSetBytes(rebindMembers)).digest('hex'),
+      observationStartedAt: at.toISOString(), observationCompletedAt: at.toISOString()
+    }, fixture.signing, owner.deviceId, fixture.deviceKeyId, 2)
+    const rebound = await service.attestProjectContent(owner.user, {
+      protocolVersion: '1.0', type: 'project.content.attest',
+      requestId: 'req_content_lifecycle_rebind_attest',
+      idempotencyKey: 'idem_content_lifecycle_rebind_attest',
+      projectId: activeProject.projectId,
+      expectedProjectRevision: ownerLoss.project.revision,
+      expectedProvisioningRevision: rebindIntent.provisioningRevision,
+      attestation: rebindAttestation
+    })
+    expect(rebound.binding).toMatchObject({
+      status: 'active', statusReason: null, rootLocator: fixture.rootLocator,
+      revision: ownerLoss.binding.revision + 1
+    })
+    expect(rebound.readiness.every(({ state }) => state === 'ready')).toBe(true)
+    expect((await repository.listTaskAuthorities(activeProject.projectId)).filter(
+      ({ scope, state }) => scope === 'file_tasks' && state === 'eligible'
+    )).toHaveLength(2)
+
+    const closed = await service.closeProjectContentBinding(owner.user, {
+      protocolVersion: '1.0', type: 'project.content.binding.close',
+      requestId: 'req_content_lifecycle_close',
+      idempotencyKey: 'idem_content_lifecycle_close',
+      projectId: activeProject.projectId,
+      expectedProjectRevision: rebound.project.revision,
+      expectedBindingRevision: rebound.binding.revision,
+      reason: 'owner_requested'
+    })
+    expect(closed.binding).toMatchObject({
+      status: 'closed', statusReason: 'owner_requested', closedAt: at.toISOString()
+    })
+    expect(closed.binding.rootLocator).toEqual(fixture.rootLocator)
+    await expect(service.submitProjectContentObservation(owner.user, {
+      protocolVersion: '1.0', type: 'project.content.observation.submit',
+      requestId: 'req_content_lifecycle_closed_observation',
+      idempotencyKey: 'idem_content_lifecycle_closed_observation',
+      projectId: activeProject.projectId,
+      expectedProjectRevision: closed.project.revision,
+      observation: {
+        ...ownerLoss.observation,
+        providerObservationId: 'pob_ContentAfterClose1',
+        bindingRevision: closed.binding.revision,
+        outcome: 'present'
+      }
+    })).rejects.toMatchObject({ code: 'invalid_state_transition' })
+  })
+
+  it('derives an exact Worker readiness observation from a real unauthorized task transfer journal', async () => {
+    const fixture = await manualRecoveryFileOfferFixture(
+      'task_transfer_auth',
+      { observedFailureCode: 'unauthorized' }
+    )
+    const readiness = await fixture.repository.getProjectContentReadiness(
+      fixture.activeProject.projectId,
+      fixture.worker.userId
+    )
+    expect(readiness).toMatchObject({ state: 'degraded', reason: 'provider_unauthorized' })
+    expect(await fixture.repository.getProjectContentSpaceBinding(fixture.activeProject.projectId))
+      .toMatchObject({ status: 'active' })
+    expect(await fixture.repository.listTaskAuthoritiesForUser(
+      fixture.activeProject.projectId,
+      fixture.worker.userId
+    )).toEqual(expect.arrayContaining([
+      expect.objectContaining({ scope: 'file_tasks', state: 'suspended', reason: 'content_not_ready' }),
+      expect.objectContaining({ scope: 'text_tasks', state: 'eligible' })
+    ]))
+    expect(await fixture.repository.listProjectProviderMembershipObservations(
+      fixture.activeProject.projectId,
+      fixture.worker.userId
+    )).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'upload_new',
+        outcome: 'unauthorized',
+        observerUserId: fixture.worker.userId,
+        observerDeviceId: fixture.worker.deviceId,
+        observerAgentId: fixture.workerAgent.agentId
+      })
+    ]))
   })
 
   it('abandons observed-failure membership recovery without rolling back removal fences or factual state', async () => {
@@ -1120,7 +1639,12 @@ describe('vNext Cloud application service', () => {
     expect(await repository.listTaskAuthoritiesForUser(created.project.projectId, worker.userId))
       .toEqual(removal.taskAuthorities)
     expect(await repository.listProjectContentReadiness(created.project.projectId)).toEqual(readinessBefore)
-    expect(await repository.getProjectContentSpaceBinding(created.project.projectId)).toBeNull()
+    expect(await repository.getProjectContentSpaceBinding(created.project.projectId)).toMatchObject({
+      status: 'closed',
+      statusReason: 'owner_requested',
+      provisioningIntentId: recoveringIntent.provisioningIntentId,
+      revision: 3
+    })
   })
 
   it('links only a fresh exact Task output observation and then accepts the same Worker execution result', async () => {
@@ -1699,6 +2223,12 @@ describe('vNext Cloud application service', () => {
           snapshottedFactRevision: addedWorkerFact.revision
         })
       ])
+    })
+    expect(await repository.getProjectContentSpaceBinding(created.project.projectId)).toMatchObject({
+      status: 'provisioning',
+      provisioningIntentId: added.provisioningIntent?.provisioningIntentId,
+      provisioningRevision: added.provisioningIntent?.provisioningRevision,
+      revision: 2
     })
   })
 

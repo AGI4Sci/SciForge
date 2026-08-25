@@ -1935,6 +1935,9 @@ export class CollaborationService {
     if (!projectCreateIncludesAuthenticatedOwner(input, actor.userId)) {
       fail('permission_denied', 'The explicit Project Memberships must include the authenticated OIDC Owner.')
     }
+    if (input.content.mode === 'required' && input.content.contentOwnerUserId !== actor.userId) {
+      fail('permission_denied', 'The initial Project Content Owner is derived from the authenticated OIDC Owner.')
+    }
     const memberUserIds = input.content.members.map(({ userId }) => userId)
     return this.commit(actor, 'project.create', input.idempotencyKey, input, async (tx, at) => {
       for (const userId of [...memberUserIds].sort()) {
@@ -2083,6 +2086,26 @@ export class CollaborationService {
           updatedAt: at
         }
         await tx.insertProjectContentProvisioningIntent(provisioningIntent)
+        await tx.upsertProjectContentSpaceBinding({
+          projectContentBindingId: newId('pcb'),
+          projectId,
+          contentOwnerUserId: actor.userId,
+          providerInstance: input.content.providerInstance,
+          rootLocator: null,
+          rootLocatorDigest: null,
+          provisioningIntentId,
+          provisioningRevision: provisioningIntent.provisioningRevision,
+          attestationId: null,
+          attestationDigest: null,
+          status: 'provisioning',
+          statusReason: 'provisioning_incomplete',
+          activatedAt: null,
+          degradedAt: null,
+          closedAt: null,
+          revision: 1,
+          createdAt: at,
+          updatedAt: at
+        }, null)
       }
 
       const message = await this.appendInbox(
@@ -2816,8 +2839,12 @@ export class CollaborationService {
       }
 
       const currentBinding = await tx.getProjectContentSpaceBindingForUpdate(project.projectId)
+      if (currentBinding?.status === 'closed') {
+        fail('invalid_state_transition', 'A closed Project Content binding is terminal.')
+      }
       if (
         currentBinding !== null && intent.kind === 'membership_change' &&
+        currentBinding.rootLocator !== null &&
         (currentBinding.rootLocatorDigest !== attested.rootLocatorDigest ||
           stableDigest(currentBinding.rootLocator) !== stableDigest(attested.rootLocator))
       ) {
@@ -2976,6 +3003,17 @@ export class CollaborationService {
       if (project.ownerUserId !== actor.userId && observerMembership?.state !== 'active') {
         fail('permission_denied', 'Only the Owner or an active Project member may submit Provider observations.')
       }
+      if (source.source === 'explicit_reconcile' && project.ownerUserId !== actor.userId) {
+        fail('permission_denied', 'Only the Project Owner may submit an explicit Provider reconcile observation.')
+      }
+      if (source.source === 'download_check' || source.source === 'upload_new') {
+        if (source.userId !== actor.userId) {
+          fail('permission_denied', 'A transfer observation must target the exact authenticated Worker User.')
+        }
+        if (source.observerAgentId === null) {
+          fail('validation_failed', 'A transfer observation requires the exact executing Worker Agent.')
+        }
+      }
       const observerDevice = required(await tx.getDeviceForUpdate(source.observerDeviceId), 'Observer Device')
       if (observerDevice.userId !== actor.userId || observerDevice.status !== 'active') {
         fail('credential_revoked', 'Provider observation requires the exact active OIDC User Device.')
@@ -2991,6 +3029,9 @@ export class CollaborationService {
         fail('revision_conflict', 'The Provider observation identity already exists.')
       }
       const binding = required(await tx.getProjectContentSpaceBindingForUpdate(project.projectId), 'Project Content binding')
+      if (binding.status === 'closed') {
+        fail('invalid_state_transition', 'A closed Project Content binding no longer accepts Provider observations.')
+      }
       if (source.bindingRevision !== binding.revision || source.provisioningRevision !== binding.provisioningRevision) {
         fail('revision_conflict', 'The Provider observation does not target the exact Content binding and provisioning revision.')
       }
@@ -3041,6 +3082,7 @@ export class CollaborationService {
         await tx.updateProjectMember(updatedMembership, membership.revision)
       }
       let updatedBinding = binding
+      let rebindIntent: StoredProjectContentProvisioningIntent | null = null
       const ownerLostRoot = source.userId === project.contentOwnerUserId &&
         (source.outcome === 'absent' || source.outcome === 'unauthorized')
       if (ownerLostRoot && binding.status === 'active') {
@@ -3048,12 +3090,29 @@ export class CollaborationService {
           degradedAt: at, revision: binding.revision + 1, updatedAt: at }
         await tx.upsertProjectContentSpaceBinding(updatedBinding, binding.revision)
         await tx.invalidateCloudResourceRefsForBinding(project.projectId, binding.revision, at)
+        rebindIntent = await createOwnerRebindIntent(tx, project, updatedBinding, actor.userId, at)
       }
 
       const affectedUsers = ownerLostRoot
         ? (await tx.listProjectMembers(project.projectId)).map(({ userId }) => userId)
         : [source.userId]
       const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+      if (updatedBinding !== binding) {
+        const bindingMessage = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId },
+          'project.content.binding.changed', { protocolVersion: '1.0', type: 'project.content.binding.changed',
+            projectId: project.projectId, projectContentBindingId: updatedBinding.projectContentBindingId,
+            status: updatedBinding.status, revision: updatedBinding.revision }, at)
+        notifications.push({ recipient: bindingMessage.recipient, sequence: bindingMessage.sequence })
+      }
+      if (rebindIntent !== null) {
+        const intentMessage = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId },
+          'project.content.provisioning_intent.changed', { protocolVersion: '1.0',
+            type: 'project.content.provisioning_intent.changed', projectId: project.projectId,
+            provisioningIntentId: rebindIntent.provisioningIntentId,
+            provisioningRevision: rebindIntent.provisioningRevision,
+            state: rebindIntent.state, revision: rebindIntent.revision }, at)
+        notifications.push({ recipient: intentMessage.recipient, sequence: intentMessage.sequence })
+      }
       for (const userId of affectedUsers) {
         const userMembership = await tx.getProjectMemberForUpdate(project.projectId, userId)
         const userReadiness = await tx.getProjectContentReadinessForUpdate(project.projectId, userId)
@@ -3313,6 +3372,20 @@ export class CollaborationService {
           await tx.updateTaskExecution(execution, authority.execution.revision)
           await tx.updateTask(task, authority.task.revision)
         }
+        if (
+          actor.kind === 'agent_device' &&
+          authority.execution !== null &&
+          input.outcome === 'observed_failure'
+        ) {
+          notifications.push(...await this.applyTaskTransferProviderFailure(
+            tx,
+            actor,
+            authority.project,
+            authority.execution,
+            observed,
+            at
+          ))
+        }
         const recipient = recoveryAction.audience === 'owner'
           ? { kind: 'user', id: authority.project.ownerUserId } as InboxRecipient
           : { kind: 'agent', id: authority.project.coordinatorAgentId } as InboxRecipient
@@ -3333,6 +3406,180 @@ export class CollaborationService {
       execution: response.execution as StoredTaskExecution | null,
       provisioningIntent: response.provisioningIntent as StoredProjectContentProvisioningIntent | null
     }))
+  }
+
+  private async applyTaskTransferProviderFailure(
+    tx: CollaborationTransaction,
+    actor: AgentActor,
+    project: StoredProject,
+    currentExecution: StoredTaskExecution,
+    journal: StoredExternalOperationJournal,
+    at: string
+  ): Promise<Array<{ recipient: InboxRecipient; sequence: number }>> {
+    const outcome = taskTransferProviderObservationOutcome(journal.safeFailureCode)
+    if (outcome === null || (journal.operation !== 'download' && journal.operation !== 'upload_new')) return []
+    const binding = required(
+      await tx.getProjectContentSpaceBindingForUpdate(project.projectId),
+      'Project Content binding'
+    )
+    if (
+      binding.status === 'closed' ||
+      currentExecution.fence.bindingRevision === null ||
+      binding.revision !== currentExecution.fence.bindingRevision
+    ) {
+      fail('revision_conflict', 'The Provider failure no longer targets the exact current Content binding.')
+    }
+    const readiness = required(
+      await tx.getProjectContentReadinessForUpdate(project.projectId, actor.userId),
+      'Worker Project Content readiness'
+    )
+    const membership = required(
+      await tx.getProjectMemberForUpdate(project.projectId, actor.userId),
+      'Worker Project Membership'
+    )
+    if (
+      membership.state !== 'active' ||
+      readiness.providerPrincipalFactId === null ||
+      readiness.snapshottedFactRevision === null ||
+      readiness.providerPrincipal === null
+    ) {
+      fail('revision_conflict', 'The Provider failure lacks the exact active Worker Content snapshot.')
+    }
+    const providerObservationId = `pob_${stableDigest({
+      journalEntryId: journal.contentRecoveryJournalEntryId,
+      kind: 'task-transfer-provider-failure'
+    }).slice(0, 24)}`
+    const observation: StoredProjectProviderMembershipObservation = {
+      providerObservationId,
+      projectId: project.projectId,
+      userId: actor.userId,
+      providerPrincipalFactId: readiness.providerPrincipalFactId,
+      snapshottedFactRevision: readiness.snapshottedFactRevision,
+      providerPrincipal: readiness.providerPrincipal,
+      bindingRevision: binding.revision,
+      provisioningRevision: binding.provisioningRevision,
+      source: journal.operation === 'download' ? 'download_check' : 'upload_new',
+      outcome,
+      observerUserId: actor.userId,
+      observerDeviceId: actor.deviceId,
+      observerAgentId: actor.agentId,
+      provisioningAttestationId: null,
+      evidenceDigest: stableDigest({
+        journalEntryId: journal.contentRecoveryJournalEntryId,
+        journalRevision: journal.revision,
+        requestDigest: journal.requestDigest,
+        safeFailureCode: journal.safeFailureCode,
+        observedAt: at
+      }),
+      observedAt: at,
+      revision: 1,
+      createdAt: at,
+      updatedAt: at
+    }
+    await tx.insertProjectProviderMembershipObservation(observation)
+    const updatedReadiness: StoredProjectContentReadiness = {
+      ...readiness,
+      state: 'degraded',
+      reason: outcome === 'unauthorized' ? 'provider_unauthorized' : 'provider_unavailable',
+      bindingRevision: binding.revision,
+      lastObservationId: observation.providerObservationId,
+      effectiveAt: at,
+      revision: readiness.revision + 1,
+      updatedAt: at
+    }
+    await tx.upsertProjectContentReadiness(updatedReadiness, readiness.revision)
+
+    let updatedBinding = binding
+    let rebindIntent: StoredProjectContentProvisioningIntent | null = null
+    const ownerLostRoot = actor.userId === project.contentOwnerUserId
+    if (ownerLostRoot && binding.status === 'active') {
+      updatedBinding = {
+        ...binding,
+        status: 'degraded',
+        statusReason: outcome === 'unauthorized' ? 'owner_access_lost' : 'provider_unavailable',
+        degradedAt: at,
+        revision: binding.revision + 1,
+        updatedAt: at
+      }
+      await tx.upsertProjectContentSpaceBinding(updatedBinding, binding.revision)
+      await tx.invalidateCloudResourceRefsForBinding(project.projectId, binding.revision, at)
+      rebindIntent = await createOwnerRebindIntent(tx, project, updatedBinding, actor.userId, at)
+    }
+
+    const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+    if (updatedBinding !== binding) {
+      const message = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId },
+        'project.content.binding.changed', { protocolVersion: '1.0', type: 'project.content.binding.changed',
+          projectId: project.projectId, projectContentBindingId: updatedBinding.projectContentBindingId,
+          status: updatedBinding.status, revision: updatedBinding.revision }, at)
+      notifications.push({ recipient: message.recipient, sequence: message.sequence })
+    }
+    if (rebindIntent !== null) {
+      const message = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId },
+        'project.content.provisioning_intent.changed', { protocolVersion: '1.0',
+          type: 'project.content.provisioning_intent.changed', projectId: project.projectId,
+          provisioningIntentId: rebindIntent.provisioningIntentId,
+          provisioningRevision: rebindIntent.provisioningRevision,
+          state: rebindIntent.state, revision: rebindIntent.revision }, at)
+      notifications.push({ recipient: message.recipient, sequence: message.sequence })
+    }
+    const affectedUserIds = ownerLostRoot
+      ? (await tx.listProjectMembers(project.projectId)).map(({ userId }) => userId)
+      : [actor.userId]
+    for (const userId of affectedUserIds) {
+      const affectedMembership = await tx.getProjectMemberForUpdate(project.projectId, userId)
+      const affectedReadiness = await tx.getProjectContentReadinessForUpdate(project.projectId, userId)
+      const authority = await tx.getTaskAuthorityForUpdate(project.projectId, userId, 'file_tasks')
+      if (affectedMembership !== null && authority !== null) {
+        const derived = deriveTaskAuthorityTransition({
+          projectStatus: project.status,
+          contentMode: project.contentMode,
+          membership: affectedMembership,
+          scope: 'file_tasks',
+          readiness: affectedReadiness,
+          binding: updatedBinding
+        })
+        await tx.upsertTaskAuthority({
+          ...authority,
+          ...derived,
+          authorityEpoch: authority.authorityEpoch + 1,
+          effectiveAt: at,
+          revision: authority.revision + 1,
+          updatedAt: at
+        }, authority.revision)
+      }
+      for (const execution of await tx.listCurrentTaskExecutionsForProjectUserForUpdate(project.projectId, userId)) {
+        if (
+          execution.executionId === currentExecution.executionId ||
+          execution.fileIntent === null ||
+          execution.fence.status === 'fenced'
+        ) continue
+        const task = required(await tx.getTaskForUpdate(execution.taskId), 'Current file Task')
+        if (task.currentExecutionId !== execution.executionId) continue
+        const fenced = fenceTaskExecution(execution, 'cancelled', 'execution_cancelled', at)
+        await tx.updateTaskExecution(fenced, execution.revision)
+        await tx.updateTask({
+          ...task,
+          status: 'revision_requested',
+          currentExecutionState: 'cancelled',
+          revision: task.revision + 1,
+          updatedAt: at
+        }, task.revision)
+        await tx.invalidateCloudResourceRefs(task.taskId, execution.executionId, at)
+        const message = await this.appendInbox(tx, { kind: 'agent', id: execution.assigneeAgentId },
+          'task.execution.fenced', { protocolVersion: '1.0', type: 'task.execution.fenced',
+            projectId: project.projectId, taskId: task.taskId, executionId: execution.executionId,
+            reason: outcome }, at)
+        notifications.push({ recipient: message.recipient, sequence: message.sequence })
+      }
+    }
+    await tx.updateProject({ ...project, revision: project.revision + 1, updatedAt: at }, project.revision)
+    const readinessMessage = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId },
+      'project.content.readiness.changed', { protocolVersion: '1.0',
+        type: 'project.content.readiness.changed', projectId: project.projectId,
+        userId: actor.userId, state: updatedReadiness.state, revision: updatedReadiness.revision }, at)
+    notifications.push({ recipient: readinessMessage.recipient, sequence: readinessMessage.sequence })
+    return notifications
   }
 
   async abandonProjectContentRecovery(
@@ -3405,6 +3652,38 @@ export class CollaborationService {
       }
       await tx.updateProjectContentProvisioningIntent(cancelledIntent, intent.revision)
 
+      const currentBinding = await tx.getProjectContentSpaceBindingForUpdate(project.projectId)
+      let bindingMessage: StoredInboxMessage | null = null
+      if (
+        currentBinding?.status === 'provisioning' &&
+        currentBinding.provisioningIntentId === intent.provisioningIntentId &&
+        currentBinding.provisioningRevision === intent.provisioningRevision
+      ) {
+        const closedBinding: StoredProjectContentSpaceBinding = {
+          ...currentBinding,
+          status: 'closed',
+          statusReason: 'owner_requested',
+          closedAt: at,
+          revision: currentBinding.revision + 1,
+          updatedAt: at
+        }
+        await tx.upsertProjectContentSpaceBinding(closedBinding, currentBinding.revision)
+        bindingMessage = await this.appendInbox(
+          tx,
+          { kind: 'agent', id: project.coordinatorAgentId },
+          'project.content.binding.changed',
+          {
+            protocolVersion: '1.0',
+            type: 'project.content.binding.changed',
+            projectId: project.projectId,
+            projectContentBindingId: closedBinding.projectContentBindingId,
+            status: closedBinding.status,
+            revision: closedBinding.revision
+          },
+          at
+        )
+      }
+
       const intentMessage = await this.appendInbox(
         tx,
         { kind: 'agent', id: project.coordinatorAgentId },
@@ -3444,7 +3723,10 @@ export class CollaborationService {
         resourceId: completedAction.recoveryActionId,
         notifications: [
           { recipient: intentMessage.recipient, sequence: intentMessage.sequence },
-          { recipient: actionMessage.recipient, sequence: actionMessage.sequence }
+          { recipient: actionMessage.recipient, sequence: actionMessage.sequence },
+          ...(bindingMessage === null
+            ? []
+            : [{ recipient: bindingMessage.recipient, sequence: bindingMessage.sequence }])
         ]
       }
     }).then((response) => ({
@@ -5644,6 +5926,80 @@ async function createMembershipChangeIntent(
   const intent: StoredProjectContentProvisioningIntent = { ...facts, state: 'pending',
     intentDigest: stableDigest(facts), revision: 1, createdAt: at, updatedAt: at }
   await tx.insertProjectContentProvisioningIntent(intent)
+  if (binding?.status === 'provisioning') {
+    await tx.upsertProjectContentSpaceBinding({
+      ...binding,
+      provisioningIntentId: intent.provisioningIntentId,
+      provisioningRevision: intent.provisioningRevision,
+      revision: binding.revision + 1,
+      updatedAt: at
+    }, binding.revision)
+  }
+  return intent
+}
+
+async function createOwnerRebindIntent(
+  tx: CollaborationTransaction,
+  project: StoredProject,
+  binding: StoredProjectContentSpaceBinding,
+  ownerUserId: string,
+  at: string
+): Promise<StoredProjectContentProvisioningIntent | null> {
+  const previous = required(
+    await tx.getLatestProjectContentProvisioningIntent(project.projectId),
+    'Project Content provisioning intent'
+  )
+  if (!['completed', 'superseded', 'cancelled'].includes(previous.state)) return null
+  const rootLocator = required(binding.rootLocator, 'Degraded Project Content root')
+  const desiredMembers: StoredProjectContentProvisioningIntent['desiredMembers'] = []
+  for (const membership of (await tx.listProjectMembers(project.projectId))
+    .filter(({ state }) => state === 'active' || state === 'pending_membership')
+    .sort((left, right) => left.userId.localeCompare(right.userId))) {
+    const readiness = required(
+      await tx.getProjectContentReadinessForUpdate(project.projectId, membership.userId),
+      'Project Content readiness'
+    )
+    if (
+      readiness.providerPrincipalFactId === null ||
+      readiness.snapshottedFactRevision === null ||
+      readiness.providerPrincipal === null ||
+      !sameProviderInstanceReference(readiness.providerInstance, binding.providerInstance)
+    ) {
+      fail('revision_conflict', 'A rebind intent requires every desired member exact Provider identity snapshot.')
+    }
+    desiredMembers.push({
+      userId: membership.userId,
+      providerPrincipalFactId: readiness.providerPrincipalFactId,
+      snapshottedFactRevision: readiness.snapshottedFactRevision,
+      principal: readiness.providerPrincipal
+    })
+  }
+  if (!desiredMembers.some(({ userId }) => userId === project.contentOwnerUserId)) {
+    fail('invalid_state_transition', 'The Project Content Owner must remain in a rebind intent.')
+  }
+  const provisioningIntentId = newId('pci')
+  const facts = {
+    provisioningIntentId,
+    projectId: project.projectId,
+    provisioningRevision: previous.provisioningRevision + 1,
+    kind: 'rebind' as const,
+    createdByOwnerUserId: ownerUserId,
+    contentOwnerUserId: binding.contentOwnerUserId,
+    providerInstance: binding.providerInstance,
+    desiredMembers,
+    containerDisplayName: previous.containerDisplayName,
+    currentRootLocator: rootLocator,
+    currentBindingRevision: binding.revision
+  }
+  const intent: StoredProjectContentProvisioningIntent = {
+    ...facts,
+    state: 'pending',
+    intentDigest: stableDigest(facts),
+    revision: 1,
+    createdAt: at,
+    updatedAt: at
+  }
+  await tx.insertProjectContentProvisioningIntent(intent)
   return intent
 }
 
@@ -5687,6 +6043,22 @@ function externalOperationAttestationKind(
   operation: StoredExternalOperationJournal['operation']
 ): string {
   return operation === 'download' ? 'download_check' : operation
+}
+
+function taskTransferProviderObservationOutcome(
+  safeFailureCode: string | null
+): StoredProjectProviderMembershipObservation['outcome'] | null {
+  if (safeFailureCode === 'unauthorized' || safeFailureCode === 'provider_unauthorized') {
+    return 'unauthorized'
+  }
+  if (
+    safeFailureCode === 'provider_unavailable' ||
+    safeFailureCode === 'source_unavailable' ||
+    safeFailureCode === 'destination_unavailable'
+  ) {
+    return 'unavailable'
+  }
+  return null
 }
 
 async function authorizeExternalJournalActor(

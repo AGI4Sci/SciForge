@@ -33,7 +33,7 @@ type Facts = {
 const migrationRollbackDatabaseUrl = process.env.SCIFORGE_A_MIGRATION_ROLLBACK_TEST_URL
 
 describe('collaboration forward-only migration lineage', () => {
-  it('routes only admitted historical lineages, v11/v12 predecessors, and current v13', () => {
+  it('routes only admitted historical lineages, v11-v13 predecessors, and current v14', () => {
     expect(detectCollaborationSchemaRoute(facts(null))).toBe('fresh-v4')
     expect(detectCollaborationSchemaRoute(facts(4, { managedContainers: true, remoteApprovals: true })))
       .toBe('upstream-v4')
@@ -55,16 +55,20 @@ describe('collaboration forward-only migration lineage', () => {
       managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
       taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: true
     }))).toBe('current-v13')
+    expect(detectCollaborationSchemaRoute(facts(14, {
+      managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
+      taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: true
+    }))).toBe('current-v14')
     expect(() => detectCollaborationSchemaRoute(facts(10, {
       managedContainers: true, oidcIdentities: true, devices: true, legacyResourceRefs: true
     }))).toThrow(/lineage_unsupported/u)
   })
 
-  it('installs fresh v4 then the 0011, 0012, and full-loop 0013 migrations', async () => {
+  it('installs fresh v4 then the 0011-0014 forward migrations', async () => {
     const harness = migrationHarness(facts(null))
     await runCollaborationMigrations(harness.pool, { sourceCatalogFingerprint: harness.sourceCatalogFingerprint })
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(13)
-    expect(harness.migrations).toHaveLength(7)
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(14)
+    expect(harness.migrations).toHaveLength(8)
     expect(harness.migrations[0]).toContain('VALUES (1)')
     expect(harness.migrations[3]).toContain('remote_capability_approvals')
     expect(harness.migrations[4]).toContain('migration_0011_unsupported_source_lineage')
@@ -84,6 +88,14 @@ describe('collaboration forward-only migration lineage', () => {
     expect(harness.migrations[6]).toContain('CREATE TABLE sciforge_collaboration.task_offers')
     expect(harness.migrations[6]).toContain('CREATE TABLE sciforge_collaboration.visible_recovery_actions')
     expect(harness.migrations[6]).not.toContain('CREATE TABLE sciforge_collaboration.task_execution_events')
+    expect(harness.migrations[7]).toContain('migration_0014_requires_v13')
+    expect(harness.migrations[7]).toContain('VALUES (14)')
+    expect(harness.migrations[7]).toMatch(
+      /status = 'provisioning'[\s\S]+attestation_id IS NULL[\s\S]+activated_at IS NULL/u
+    )
+    expect(harness.migrations[7]).not.toMatch(
+      /status = 'provisioning'[\s\S]{0,180}root_locator IS NOT NULL/u
+    )
     await expect(isCollaborationDatabaseReady(harness.pool)).resolves.toBe(true)
   })
 
@@ -95,29 +107,43 @@ describe('collaboration forward-only migration lineage', () => {
   ] as const)('upgrades %s without replaying colliding historical migration numbers', async (_route, initial) => {
     const harness = migrationHarness(initial)
     await runCollaborationMigrations(harness.pool, { sourceCatalogFingerprint: harness.sourceCatalogFingerprint })
-    expect(harness.migrations).toHaveLength(3)
+    expect(harness.migrations).toHaveLength(4)
     expect(harness.migrations[0]).toContain('VALUES (11)')
     expect(harness.migrations[0]).not.toContain('VALUES (10)')
     expect(harness.migrations[1]).toContain('VALUES (12)')
     expect(harness.migrations[2]).toContain('VALUES (13)')
+    expect(harness.migrations[3]).toContain('VALUES (14)')
   })
 
-  it('upgrades v12 through only the forward v13 migration', async () => {
+  it('upgrades v12 through only the forward v13 and v14 migrations', async () => {
     const harness = migrationHarness(facts(12, {
       managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
       taskResourceRefs: true, projectContentSpaceBindings: true
     }))
     await runCollaborationMigrations(harness.pool)
-    expect(harness.migrations).toHaveLength(1)
+    expect(harness.migrations).toHaveLength(2)
     expect(harness.migrations[0]).toContain('VALUES (13)')
     expect(harness.migrations[0]).toContain('CREATE TABLE sciforge_collaboration.visible_recovery_actions')
     expect(harness.migrations[0]).not.toContain('integrity_verified')
     expect(harness.migrations[0]).not.toContain('VALUES (11)')
     expect(harness.migrations[0]).not.toContain('VALUES (12)')
+    expect(harness.migrations[1]).toContain('VALUES (14)')
+  })
+
+  it('upgrades current v13 through only the provisioning-binding shape migration', async () => {
+    const harness = migrationHarness(facts(13, {
+      managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
+      taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: true
+    }))
+    await runCollaborationMigrations(harness.pool)
+    expect(harness.migrations).toHaveLength(1)
+    expect(harness.migrations[0]).toContain('migration_0014_requires_v13')
+    expect(harness.migrations[0]).toContain('VALUES (14)')
+    expect(harness.migrations[0]).not.toContain('VALUES (13)')
   })
 
   it('computes the same deterministic canonical schema fingerprint used by readiness', async () => {
-    const harness = migrationHarness(facts(13, {
+    const harness = migrationHarness(facts(14, {
       managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
       taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: true
     }))
@@ -126,7 +152,7 @@ describe('collaboration forward-only migration lineage', () => {
 
   it('requires a non-null Agent Device and rejects the removed installation identity column', async () => {
     expect(COLLABORATION_SCHEMA_DESCRIPTOR).toContain('agent_nodes.device_id:text:NO')
-    const legacy = migrationHarness(facts(13, {
+    const legacy = migrationHarness(facts(14, {
       managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
       taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: true
     }))
@@ -141,7 +167,7 @@ describe('collaboration forward-only migration lineage', () => {
     await expect(isCollaborationDatabaseReady(legacy.pool)).resolves.toBe(false)
   })
 
-  it('fingerprints the strict v13 authority, content, execution, and review tables', async () => {
+  it('fingerprints the strict v14 authority, content, execution, and review tables', async () => {
     expect(COLLABORATION_SCHEMA_DESCRIPTOR).toContain('projects.content_mode:text:NO')
     expect(COLLABORATION_SCHEMA_DESCRIPTOR).toContain('projects.coordinator_authority_epoch:bigint:NO')
     expect(COLLABORATION_SCHEMA_DESCRIPTOR).toContain('projects.execution_authority_epoch:bigint:NO')
@@ -207,7 +233,7 @@ describe('collaboration forward-only migration lineage', () => {
     expect(COLLABORATION_SCHEMA_DESCRIPTOR)
       .toContain('human_answers.answered_from_human_endpoint_id:text:YES')
 
-    const legacy = migrationHarness(facts(13, {
+    const legacy = migrationHarness(facts(14, {
       managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
       taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: true
     }))
@@ -280,7 +306,7 @@ describe('collaboration forward-only migration lineage', () => {
   })
 
   it('rejects removed execution-event and project-scoped Provider principal tables', async () => {
-    const legacy = migrationHarness(facts(13, {
+    const legacy = migrationHarness(facts(14, {
       managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
       taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: true
     }))
@@ -522,6 +548,11 @@ function migrationHarness(initial: Facts): {
       }
       if (text.includes('VALUES (13)')) {
         current = { ...current, version: 13, managedContainers: true, remoteApprovals: true,
+          oidcIdentities: true, devices: true, taskResourceRefs: true,
+          projectContentSpaceBindings: true, taskExecutions: true }
+      }
+      if (text.includes('VALUES (14)')) {
+        current = { ...current, version: 14, managedContainers: true, remoteApprovals: true,
           oidcIdentities: true, devices: true, taskResourceRefs: true,
           projectContentSpaceBindings: true, taskExecutions: true }
       }

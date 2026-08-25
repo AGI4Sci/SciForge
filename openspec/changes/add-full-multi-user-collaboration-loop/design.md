@@ -91,7 +91,7 @@ The database stores four independent facts instead of a composite “member is a
 - `project_content_readiness`: the derived per-Project, per-User projection `missing_identity | pending | ready | degraded` for one binding revision.
 - `task_authority`: derived at command time from Project/Membership/Device/Agent/execution facts; live executions carry a durable fence.
 
-`project_content_binding` separately tracks `provisioning | active | degraded | closed` with a portable root, provisioning revision and attestation digest. Project lifecycle status and binding status are separate fields; neither is encoded as a slash-composite status.
+`project_content_binding` separately tracks `provisioning | active | degraded | closed` with a provisioning revision. Its initial `provisioning` row exists in the atomic Project-create transaction with a null root and null attestation, because the external Provider container does not exist yet. The same binding receives the exact portable root and attestation digest only when Device-signed provisioning succeeds; `active` and `degraded` bindings always retain those facts. Project lifecycle status and binding status are separate fields; neither is encoded as a slash-composite status.
 
 Task rows point to the current `executionId`; every offer/reoffer inserts an immutable execution attempt. Old executions remain audit facts but all writes check the current execution/fence and expected revision. Outbox/Inbox and the state transition commit in one database transaction. WSS only signals availability.
 
