@@ -10,7 +10,7 @@ SciForge 已分别具备 OIDC/Device 身份、云端 Project/Task、OpenContent 
 - 新增 Project Owner 驱动的内容 provisioning saga：Run-0 初始 content owner 固定为 Project Owner；Cloud 保存 intent，Owner Desktop 通过 Content Space 创建一个共享目录、精确维护 Provider 成员、写后核验，并提交由当前 Device 签名的无秘密 provisioning attestation 后激活 Project。未来更换 content owner 必须由新 content owner Desktop 执行独立 saga，不属于本次验收。
 - 建立唯一的真实文件任务通道：portable reference 在 Worker 本机重新授权；download 在打开本地目标前执行 Provider `DownloadCheck`，upload 使用 Provider 的真实写入授权；元数据仅验证 locator/ancestry，不充当 ACL 事实源。
 - 对成员移除、Owner 失权、Device 撤销、断线重连、重复消息、改派 fencing 和 `outcome_unknown` 定义 fail-closed、可人工恢复的状态机。
-- 新增隔离 Run-0 部署和真机会议验收：五个动态 User fixture、至少三台物理机或独立 VM 上的五个独立 packaged Desktop profile、真实 Runtime/模型、真实 OpenContent 账号与可脱敏验证回执；公网既有部署保持不变。
+- 基于现有 A 测试环境执行可回滚蓝绿升级和真机会议验收：沿用 `cloud-test`/`login-test` 与现有 issuer，先完成备份/恢复演练和独立 candidate migration，再切换现有 edge 上游；五个动态 User fixture、至少三台物理机或独立 VM 上的五个独立 packaged Desktop profile 使用真实 Runtime/模型、真实 OpenContent 账号与可脱敏验证回执。
 - 本次只交付 Content Space 文件传递、复审和 Provider-native 操作；provider-neutral Shared Documents 与实时共同编辑明确延后。
 - **BREAKING** 删除匿名 pairing 创建 User、协作包保存 OIDC Token、生产 Mock Content Space、Cloud 持久化 `acceptancePolicy`、把 Project binding 当 Provider ACL、旧 execution 回写以及 domain-specific Host 路由等并行路径。
 
@@ -22,7 +22,7 @@ SciForge 已分别具备 OIDC/Device 身份、云端 Project/Task、OpenContent 
 - `project-agent-coordination`: 单 Coordinator Agent、精确 Worker Agent 选择、availability projection、本地接单策略、Task execution fencing、真人升级、复审、改派和 Coordinator 转交。
 - `project-content-provisioning`: Cloud intent 与 Owner Desktop Content Space 外部写组成的可恢复 saga、Provider principal readiness、Device-signed attestation、成员增删，以及 Project Membership、Provider Observation、Content Readiness、Task Authority 四项独立事实。
 - `project-content-execution`: Project 文件意图、portable reference、本机 Provider reauthorization、operation-time ACL、Workspace transfer、完整性、结果提交和 `outcome_unknown` 恢复。
-- `multi-user-meeting-acceptance`: 隔离 Run-0、packaged 多设备角色脚本、真实 Runtime/OpenContent 闭环、恢复矩阵和脱敏验证回执。
+- `multi-user-meeting-acceptance`: A 测试环境蓝绿 candidate/cutover、packaged 多设备角色脚本、真实 Runtime/OpenContent 闭环、恢复矩阵和脱敏验证回执。
 
 ### Modified Capabilities
 
@@ -32,7 +32,7 @@ SciForge 已分别具备 OIDC/Device 身份、云端 Project/Task、OpenContent 
 ## Impact
 
 - 影响 `@sciforge/collaboration-contracts`、`@sciforge/collaboration-server`、`@sciforge/domain-identity-access`、`@sciforge/domain-collaboration`、新的 `@sciforge/domain-project-coordinator`、Content Space/OpenContent 集成、通用 Domain SDK、AgentRuntime 接入和 packaged composition；旧 `@sciforge/collaboration-identity` 并行凭据包被删除。
-- Cloud 数据库需要向前迁移 Project membership/readiness、content provisioning、Task execution、Inbox/receipt、revision/idempotency 和 recovery journal；既有公网数据库不执行本变更迁移。
-- 新增同机隔离的 `cloud-run0.sciforge.cn`、`login-run0.sciforge.cn`、`SciForge-Run0` realm、独立数据库/角色/Compose/凭据/备份目录；DNS 未完成时验收停在 `awaiting_dns`。
+- Cloud 数据库需要向前迁移 Project membership/readiness、content provisioning、Task execution、Inbox/receipt、revision/idempotency 和 recovery journal；migration 只在从现有 A 数据库复制出的 candidate 上执行，运行中的旧数据库保持不变并保留回滚。
+- 沿用 `https://cloud-test.sciforge.cn`、`https://login-test.sciforge.cn/realms/SciForge`、现有 TLS/443 edge 和服务器 `47.76.230.118`；不再等待新 Run-0 DNS。任何切换前必须证明备份、恢复、candidate health/migration 和旧上游回滚均可用。
 - source、packaged、隔离 live 三层测试都必须走标准 manifest/generated composition 和真实生产路径；验收不得使用 Fake provider、Mock Content Space、fixture runtime、直接数据库写入或秘密回执。
 - 唯一集成主线为个人 Fork 的 `codex/full-collaboration-loop-recovery`，基线是 `origin/gui@e0038b8c7109390445dccb691052fec74a153c09`；旧闭环分支与 WIP snapshot 仅作逐文件 donor，不参与普通合并。

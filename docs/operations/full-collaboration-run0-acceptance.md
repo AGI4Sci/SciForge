@@ -1,12 +1,12 @@
-# Run-0 真实多用户会议闭环验收
+# 既有 A 蓝绿升级上的 Run-0 真实多用户会议闭环验收
 
-本文件是 `add-full-multi-user-collaboration-loop` 的人工与自动验收基线。它冻结证据要求，不是产品中的硬编码角色、用户数量、文件名或 Provider 限制；产品本身必须支持动态 User、Device、Agent、Project Member 和 Task。
+本文件是 `add-full-multi-user-collaboration-loop` 的人工与自动验收基线。此处 Run-0 指基于现有 A 测试环境完成蓝绿升级后的第一次 live acceptance run，不代表一套新的 DNS/issuer。它冻结证据要求，不是产品中的硬编码角色、用户数量、文件名或 Provider 限制；产品本身必须支持动态 User、Device、Agent、Project Member 和 Task。
 
 ## 完成状态
 
 | 状态 | 含义 |
 | --- | --- |
-| `awaiting_dns` | `cloud-run0.sciforge.cn` 或 `login-run0.sciforge.cn` 的 DNS/TLS/issuer 尚不满足冻结合同；不得借用旧 issuer。 |
+| `awaiting_candidate` | 现有 A 的备份/恢复、candidate migration/health、edge cutover 或旧 upstream 回滚尚未满足冻结合同。 |
 | `awaiting_real_devices` | 代码、source 和 packaged 自动门禁可通过，但尚未提供至少三台物理机或独立 VM 上的五个独立 packaged Desktop profile。 |
 | `incomplete` | 必需步骤尚未执行或证据不足；回执必须逐项标记 `not_run`/`blocked`。 |
 | `failed` | 一个必需门禁执行后失败。 |
@@ -18,15 +18,16 @@
 
 - 唯一集成分支：个人 Fork `codex/full-collaboration-loop-recovery`，从 `origin/gui@e0038b8c7109390445dccb691052fec74a153c09` 创建
 - 旧 `codex/full-collaboration-loop` 与本地 WIP snapshot：只读审计/donor，不普通合并、不继承 checkbox 或验收结论
-- Cloud origin：`https://cloud-run0.sciforge.cn`
-- OIDC issuer：`https://login-run0.sciforge.cn/realms/SciForge-Run0`
-- Keycloak realm：`SciForge-Run0`
+- Cloud origin：`https://cloud-test.sciforge.cn`
+- OIDC issuer：`https://login-test.sciforge.cn/realms/SciForge`
+- Keycloak realm：`SciForge`
 - Desktop：Authorization Code + PKCE S256 的 public client
 - 身份：OIDC JIT 是唯一 User 创建/查找路径；pairing 只绑定通信端点
-- 数据：独立 PostgreSQL database/role、Compose project、container、network、volume、credentials、backup directory 和 migration history
-- 公网 A 部署：只读对照，不执行 migration、重启、配置写入、数据写入或凭据复用
+- 数据：现有 A Cloud DB 只作为 clone source；migration 仅在独立命名的 candidate database/volume/container/network 上执行
+- 现有 A：切换前先备份 Cloud DB、Keycloak DB/realm、edge 配置和 image metadata，并通过隔离 restore rehearsal；旧 Cloud app/database 保留为回滚目标
+- 入口：复用现有 TLS/443 Caddy；只有 candidate 门禁通过后才能切换 `cloud-test` upstream，不新增第二个 443 listener
 
-Run-0 预检必须记录隔离资源的脱敏名称/digest，并证明它们与公网资源不相同。DNS 未就绪即停止在 `awaiting_dns`，不接受 `/etc/hosts`、issuer override、HTTP 或旧 realm 作为正式 live 证据。
+预检必须重新记录现有 image/schema/issuer/upstream 及 candidate 资源的脱敏名称/digest。备份、restore rehearsal、candidate migration/health 或回滚任一项缺失即停止在 `awaiting_candidate`；不接受直接迁移旧数据库、覆盖旧容器、issuer override、HTTP fallback 或未经验证的 Caddy cutover。
 
 ## 设备与角色矩阵
 
@@ -56,7 +57,7 @@ Coordinator 与 Worker 必须使用各自 Desktop 当前配置的真实 AgentRun
 
 ### 1. 身份、Device 与 Agent
 
-1. U0–U4 分别通过 Run-0 system-browser OIDC 注册/登录。
+1. U0–U4 分别通过现有 `login-test/realms/SciForge` system-browser OIDC 注册/登录。
 2. Cloud 只通过 OIDC JIT 创建/找到五个 Canonical User。
 3. 每个 Desktop 注册独立 `ACTIVE` Device。
 4. 每个 Human 配置至少一个真实 AgentRuntime；在这之前不得创建 Agent。
@@ -151,7 +152,7 @@ npm run architecture-principles:gate -- \
 
 ### Secret boundary gate
 
-Run-0 的秘密门禁不是关键字搜索。`scripts/collaboration-secret-audit.mjs` 会解析 package export/re-export 图和 JavaScript/TypeScript 语法树，并检查以下可解释边界：
+A-upgrade PoC 的秘密门禁不是关键字搜索。`scripts/collaboration-secret-audit.mjs` 会解析 package export/re-export 图和 JavaScript/TypeScript 语法树，并检查以下可解释边界：
 
 - 公开 package contract 不得声明 OIDC Token、User/Device/Agent/Provider credential、poll secret、私钥、密码或 Authorization header；
 - renderer/capability/IPC/message 不得携带这些字段；
@@ -169,7 +170,7 @@ node scripts/collaboration-secret-audit.mjs
 node scripts/collaboration-secret-audit.mjs --explain
 ```
 
-默认命令覆盖本闭环实际新增/修改的 collaboration、Identity、Content Space、OpenContent、Run-0 生产路径，以及这些路径直接使用的 Domain SDK contract；`--all` 仅用于整个仓库的扩展诊断，不改变本次阻塞范围。任一 finding 只输出文件、行号和规则类型，不回显命中的秘密材料。
+默认命令覆盖本闭环实际新增/修改的 collaboration、Identity、Content Space、OpenContent、A candidate/cutover 生产路径，以及这些路径直接使用的 Domain SDK contract；`--all` 仅用于整个仓库的扩展诊断，不改变本次阻塞范围。任一 finding 只输出文件、行号和规则类型，不回显命中的秘密材料。
 
 ## Verification receipt schema
 
@@ -178,7 +179,7 @@ node scripts/collaboration-secret-audit.mjs --explain
 ```json
 {
   "contractVersion": 1,
-  "status": "awaiting_dns | awaiting_real_devices | incomplete | failed | passed",
+  "status": "awaiting_candidate | awaiting_real_devices | incomplete | failed | passed",
   "source": {
     "commit": "<40-hex>",
     "branch": "codex/full-collaboration-loop-recovery",
@@ -188,13 +189,16 @@ node scripts/collaboration-secret-audit.mjs --explain
     "platform": "<platform/arch>",
     "packageDigest": "sha256:<digest>"
   }],
-  "run0": {
-    "cloudOrigin": "https://cloud-run0.sciforge.cn",
-    "issuer": "https://login-run0.sciforge.cn/realms/SciForge-Run0",
+  "environment": {
+    "kind": "existing-a-blue-green-upgrade",
+    "cloudOrigin": "https://cloud-test.sciforge.cn",
+    "issuer": "https://login-test.sciforge.cn/realms/SciForge",
     "imageDigests": ["sha256:<digest>"],
     "schemaVersion": "<version>",
-    "isolationVerified": true,
-    "publicDeploymentMutated": false
+    "backupRestoreVerified": true,
+    "candidateMigrationVerified": true,
+    "cutoverVerified": true,
+    "rollbackTargetRetained": true
   },
   "devices": [{
     "fixture": "U0",
@@ -212,7 +216,7 @@ node scripts/collaboration-secret-audit.mjs --explain
   },
   "gates": [{
     "id": "R1",
-    "layer": "source | packaged | isolated-live",
+    "layer": "source | packaged | live",
     "status": "passed | failed | blocked | not_run | skipped",
     "evidenceRefs": ["redacted:<digest>"],
     "manualOperations": ["<bounded description>"],

@@ -27,10 +27,11 @@ This directory preserves architectural decisions together with their lifecycle. 
 | 0033 | accepted | Device-signed provisioning attestation records observed facts and never becomes Provider ACL or persistent authorization scope. |
 | 0034 | accepted | Metadata proves containment only; real Provider DownloadCheck/write operations are the content authorization oracle. |
 | 0035 | accepted | Every Coordinator Agent belongs to the Project Owner; Run-0 initial content ownership also stays with that Owner, while any future transfer is a separate new-owner Desktop saga. |
+| 0036 | accepted | The first live PoC upgrades the existing A test environment through a backed-up candidate migration and reversible edge cutover instead of waiting for new Run-0 DNS. |
 
 ## Current authority order
 
-The canonical full-collaboration target is `CONTEXT-MAP.md`, the context glossaries, ADR-0031 through ADR-0035, and `openspec/changes/add-full-multi-user-collaboration-loop/`. `docs/SciForge_New_Cloudcolab.md`, the same-named root document, meeting summaries and donor-branch reports are historical or supporting evidence only; they cannot override the current OpenSpec or delivery gates.
+The canonical full-collaboration target is `CONTEXT-MAP.md`, the context glossaries, ADR-0031 through ADR-0036, and `openspec/changes/add-full-multi-user-collaboration-loop/`. `docs/SciForge_New_Cloudcolab.md`, the same-named root document, meeting summaries and donor-branch reports are historical or supporting evidence only; they cannot override the current OpenSpec or delivery gates.
 
 When documents disagree, use this order:
 

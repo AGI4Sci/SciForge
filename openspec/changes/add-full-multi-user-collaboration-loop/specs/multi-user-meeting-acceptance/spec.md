@@ -1,26 +1,26 @@
 ## Purpose
 
-定义隔离 Run-0 中以真实 OIDC、Device/Agent、AgentRuntime、OpenContent 和多台 packaged Desktop 证明“像开会一样”的端到端多用户协作闭环及其可审计完成门禁。
+定义基于现有 A 测试环境蓝绿升级的 Run-0 验收，以真实 OIDC、Device/Agent、AgentRuntime、OpenContent 和多台 packaged Desktop 证明“像开会一样”的端到端多用户协作闭环及其可审计完成门禁。
 
 ## ADDED Requirements
 
-### Requirement: Run-0 部署与既有公网部署完全隔离
+### Requirement: Run-0 通过既有 A 测试环境的蓝绿 candidate 可回滚升级
 
-Run-0 SHALL 复用同一服务器基础设施，但使用 `cloud-run0.sciforge.cn`、`login-run0.sciforge.cn`、Keycloak realm `SciForge-Run0`、独立 PostgreSQL database/role、Compose project、containers、credentials、backup directory 和 schema migration history。现有 A 公网部署 SHALL 保持不变；Run-0 SHALL NOT 读取、修改、迁移、借用或回退到旧 issuer、realm、database、credential 或 container。
+Run-0 SHALL 沿用现有 A 测试环境的 `https://cloud-test.sciforge.cn`、`https://login-test.sciforge.cn/realms/SciForge`、TLS/443 edge 和服务器 `47.76.230.118`，不新建 Run-0 DNS/issuer。Cloud upgrade SHALL 使用从旧 Cloud DB 复制出的独立 candidate database/volume/container/network；运行中的旧 Cloud app/database SHALL 在 cutover 与 live 验收完成前保持可回滚。Keycloak/realm 与 edge 的任何必要变更 SHALL 先完成备份、restore rehearsal 和有界回滚设计。
 
-#### Scenario: Run-0 DNS 尚未就绪
+#### Scenario: Candidate migration 尚未验证
 
-- **WHEN** 两个冻结 hostname 不能以正确 TLS/issuer 解析到隔离服务
-- **THEN** live 验收状态 SHALL 为 `awaiting_dns`
-- **AND** 系统 SHALL NOT 借用现有公网 issuer 或降低 OIDC 验证。
+- **WHEN** 旧栈备份/恢复、candidate DB migration、target image health 或旧 upstream 回滚任一项尚未验证
+- **THEN** live 验收状态 SHALL 为 `awaiting_candidate`
+- **AND** 系统 SHALL NOT 直接迁移旧数据库、覆盖旧容器或切换 Caddy upstream。
 
 ### Requirement: PoC 身份真实但不混入全部生产化门禁
 
-Run-0 SHALL 使用真实 Keycloak OIDC/PKCE、JIT User、真实 Device/Agent 和 Provider account。Realm MAY 开启自助注册且无需邮件验证；本次验收 SHALL NOT 把邮件验证、MFA、签名公证、生产公网切换或完整灾备作为完成条件，也不得把其缺失误报为已生产化。
+Run-0 SHALL 使用现有 `login-test` Keycloak issuer 的真实 OIDC/PKCE、JIT User、真实 Device/Agent 和 Provider account。Realm MAY 开启自助注册且无需邮件验证；本次验收 SHALL NOT 把邮件验证、MFA、签名公证、生产公网切换或完整灾备作为完成条件，也不得把其缺失误报为已生产化。
 
 #### Scenario: 新参与者自助注册
 
-- **WHEN** Human 在 Run-0 issuer 完成注册和 OIDC 登录
+- **WHEN** Human 在冻结的 `login-test/realms/SciForge` issuer 完成注册和 OIDC 登录
 - **THEN** Cloud SHALL JIT 创建唯一 SciForge User 并进入 Device/Runtime/Agent 配置流程
 - **AND** SHALL NOT 要求 pairing 创建 User。
 
@@ -76,7 +76,7 @@ Run-0 SHALL 至少验证：Worker accept 后重启并恢复同一 execution、We
 
 ### Requirement: 验收回执可复核且不泄密
 
-最终 verification receipt SHALL 记录 exact commit、packaged artifact、server image/schema、脱敏 User/Device/Agent/Project/Task/execution timeline、provisioning/member receipts、runtime/model IDs、source/packaged/isolated-live 结果、失败、跳过项和 Human manual operations。逐文件 bytes/SHA-256 与汇总 `integrityVerified` MAY 作为诊断记录，但不属于本 PoC 的完成门禁。会议输入 SHALL 为合成内容，实体 ID SHALL 脱敏，真实 credential SHALL 只由对应 Human 在自己的 Desktop 输入；回执 SHALL NOT 包含秘密、完整 prompt、真实敏感会议内容或可重放授权。
+最终 verification receipt SHALL 记录 exact commit、packaged artifact、server image/schema、脱敏 User/Device/Agent/Project/Task/execution timeline、provisioning/member receipts、runtime/model IDs、source/packaged/A-upgrade-live 结果、失败、跳过项和 Human manual operations。逐文件 bytes/SHA-256 与汇总 `integrityVerified` MAY 作为诊断记录，但不属于本 PoC 的完成门禁。会议输入 SHALL 为合成内容，实体 ID SHALL 脱敏，真实 credential SHALL 只由对应 Human 在自己的 Desktop 输入；回执 SHALL NOT 包含秘密、完整 prompt、真实敏感会议内容或可重放授权。
 
 #### Scenario: 某一 live recovery 未完成
 

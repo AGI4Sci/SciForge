@@ -9,7 +9,7 @@ The donor branches are not merge bases:
 - C is already integrated in the baseline at `3f5527d1`; its Device revalidation and stable Principal behavior remain canonical.
 - E1 `0d370464` contains useful generic system transfer, Workspace safety and receipt work, but its metadata ancestry observation must not be treated as Provider ACL.
 
-All donor code is therefore reviewed by behavior and rewritten behind final package contracts. The previous `codex/full-collaboration-loop` branch and local WIP snapshot are read-only audit/donor sources, are never merged as integration history, and do not establish implementation progress. The recovery branch `codex/full-collaboration-loop-recovery` is the sole integration mainline. The public A deployment is evidence only and remains unchanged.
+All donor code is therefore reviewed by behavior and rewritten behind final package contracts. The previous `codex/full-collaboration-loop` branch and local WIP snapshot are read-only audit/donor sources, are never merged as integration history, and do not establish implementation progress. The recovery branch `codex/full-collaboration-loop-recovery` is the sole integration mainline. The existing A test deployment is the live PoC upgrade baseline under the reversible blue-green rules in Decision 11; it is not a production environment or a donor implementation baseline.
 
 ## Goals / Non-Goals
 
@@ -20,11 +20,11 @@ All donor code is therefore reviewed by behavior and rewritten behind final pack
 - One Owner-Desktop-orchestrated Project content saga using ordinary Content Space operations and a Device-signed fact attestation.
 - One real Worker file path using the executing User's Provider Connection, operation-time Provider authorization and bounded Workspace transfer.
 - Independently ownable domain packages discovered through manifests/generated composition in source and packaged builds.
-- An isolated, reproducible Run-0 deployment and a fixed evidence script that does not constrain product dynamism.
+- A reproducible, reversible blue-green upgrade of the existing A test deployment and a fixed evidence script that does not constrain product dynamism.
 
 **Non-Goals:**
 
-- Replacing or migrating the existing public A deployment.
+- Performing an unbacked in-place mutation of the running A Cloud database, Keycloak realm, edge configuration, or containers.
 - Productionizing email verification, MFA, signature notarization, public release policy or complete disaster recovery.
 - Making Cloud Project Membership an OpenContent ACL, synchronizing Provider and Cloud databases, or deleting Provider content on Project lifecycle changes.
 - Introducing a Cloud-hosted LLM, collaboration-specific Agent Runtime, provider-specific Host switch, shared Provider credential, file sync/mount, or second content execution path.
@@ -136,17 +136,17 @@ The UI never directly calls Provider or database APIs. Provisioning and recovery
 
 Alternative rejected: a single collaboration screen owning Identity, Provider enrollment and Coordinator workflow. It obscures package authority and makes token/provider leakage difficult to audit.
 
-### 11. Run-0 is a separate deployable stack
+### 11. Run-0 reuses the existing A test issuer through a reversible blue-green upgrade
 
-Repository-owned Run-0 deployment artifacts define a unique Compose project, Keycloak realm/client, collaboration service, PostgreSQL database/role, secrets mounts, Caddy/DNS contract, backup/restore scripts and verification commands. No script targets the public service by default; destructive or migration commands require the exact Run-0 project/database names. Existing containers/databases are read-only evidence and never migration targets.
+Run-0 is the first live acceptance run, not a second public DNS/issuer stack. It reuses the healthy A test endpoints `https://cloud-test.sciforge.cn` and `https://login-test.sciforge.cn/realms/SciForge` on `47.76.230.118`; no `cloud-run0`/`login-run0` DNS or second 443 listener is required. The exact currently deployed image/schema/realm/edge facts are revalidated immediately before work rather than trusted from documentation.
 
-The packaged application is configured with the two frozen Run-0 origins at build/deployment configuration. If DNS/TLS is missing, verification stops at `awaiting_dns`; issuer overrides and HTTP fallbacks are forbidden.
+Before any mutation, the running Cloud database, Keycloak database/realm configuration, edge configuration and current image metadata are backed up and a restore rehearsal is proven. The current Cloud database is copied into independently named candidate database/volume/container/network resources, forward-only migrations and the recovery-branch image run only on that candidate, and synthetic acceptance identities are used. The existing Keycloak issuer remains canonical; any required realm/client change is separately backed up, bounded and reversible.
 
-Alternative rejected: reuse the public issuer/database for convenience. It would make evidence non-reproducible and risks changing a collaborator's accepted deployment.
+Only after candidate migration, health and focused acceptance pass may the existing Caddy `cloud-test` upstream be switched to the candidate. The previous Cloud app/database remain intact as a rollback target until packaged and live acceptance complete. Direct mutation of the running database/container, a new issuer fallback, new Run-0 DNS, or an unverified cutover is rejected. This trades environment-isolation purity for delivery speed while retaining reproducibility and rollback.
 
 ### 12. Acceptance status is evidence-derived
 
-The acceptance runner records but does not fake Human/device interactions. Source and packaged automated suites may use fakes only in their test entries. Isolated-live completion requires five independent packaged profiles on at least three machines/VMs, real OIDC/Provider/Runtime interactions, the fixed meeting script and recovery matrix. Missing DNS yields `awaiting_dns`; insufficient devices yields `awaiting_real_devices`; any failed required gate yields `failed` or `incomplete`, never “complete with caveats.”
+The acceptance runner records but does not fake Human/device interactions. Source and packaged automated suites may use fakes only in their test entries. Live completion requires a verified A candidate/cutover, five independent packaged profiles on at least three machines/VMs, real OIDC/Provider/Runtime interactions, the fixed meeting script and recovery matrix. An unfinished backup/migration/candidate/cutover yields `awaiting_candidate`; insufficient devices yields `awaiting_real_devices`; any failed required gate yields `failed` or `incomplete`, never “complete with caveats.”
 
 The receipt uses fixture labels U0-U4 and redacted entity IDs, but records exact commit/package/image/schema and non-secret digests.
 
@@ -165,17 +165,17 @@ The gate SHALL fail this change if one of its changed production paths requires 
 - [A late Provider success occurs after execution fencing] → retain observation in recovery journal but reject Task association until an authorized Human reconciles it.
 - [Donor code embeds obsolete contract assumptions] → port behavior behind new public contracts and tests instead of merging commits wholesale.
 - [Five-device live validation cannot run locally] → complete code/source/packaged gates, produce a packaged artifact and mark final status `awaiting_real_devices` until the real matrix is supplied.
-- [Shared server resources are accidentally targeted] → unique Run-0 names, preflight assertions, no wildcard/destructive defaults, independent backups and explicit public-deployment immutability checks.
+- [The shared A test environment is damaged during upgrade] → verified backups/restores, independently named candidate resources, candidate-only migrations, explicit edge cutover and retained old app/database rollback targets.
 
 ## Migration Plan
 
 1. Create `codex/full-collaboration-loop-recovery` from the personal Fork `origin/gui@e0038b8c7109390445dccb691052fec74a153c09`; freeze Context Map, glossary, ADRs, this OpenSpec and acceptance runbook there. The old integration branch and WIP snapshot remain read-only donors and are never ordinarily merged.
 2. Add token-free Identity transport and Device signing without changing public server APIs; migrate collaboration Desktop to consume them and delete its OIDC/token path.
-3. Evolve collaboration contracts/server with forward-only migrations for execution, membership/readiness and provisioning state; tests start from every prior schema version supported by the isolated stack.
+3. Evolve collaboration contracts/server with forward-only migrations for execution, membership/readiness and provisioning state; tests include the revalidated current A schema and every prior schema version supported by the candidate upgrade lineage.
 4. Add Project coordinator package and manifest composition; port B's useful UI/runner behavior behind current contracts and remove production mock/fallback code.
 5. Add Content Space system transfers and OpenContent operation-time checks; port E1 Workspace/receipt behavior while correcting ACL semantics.
-6. Add isolated Run-0 deployment artifacts, deploy only the new stack, verify issuer/database/container separation and record a backup.
+6. Revalidate the A test deployment, back up and rehearse restore, clone its Cloud database into independently named candidate resources, migrate/deploy the recovery image there, then switch only the existing `cloud-test` upstream after candidate gates pass.
 7. Run focused, full, architecture, generated-composition, source and packaged tests; build one exact packaged artifact.
 8. Execute the live device/meeting/recovery matrix and seal the redacted receipt on the recovery branch. Only after all gates pass and the User confirms is an upstream PR prepared from that branch.
 
-Rollback before live data consists of removing the isolated Run-0 Compose project and its explicitly named data after a verified backup; it never touches public services. After Provider provisioning, rollback closes Cloud binding and preserves Provider content for Human cleanup. Database migrations are forward-only; application rollback uses the isolated database backup rather than down-migrations that could discard evidence.
+Rollback before live activity restores the existing Caddy upstream to the retained old Cloud app/database; candidate resources remain evidence until the rollback is verified. After Provider provisioning, rollback also closes Cloud binding and preserves Provider content for Human cleanup. Database migrations are forward-only and run only on the cloned candidate; rollback never down-migrates the old or candidate database.

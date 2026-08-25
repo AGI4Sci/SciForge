@@ -33,7 +33,7 @@
 - `VerifiedContentSpaceAuthorization.scopes = [read, upload-new]` 及 binding 中持久化 authorization proof。最终模型使用 Device-signed provisioning observation，任何后续 Provider permission 都在 operation time 重新判断。
 - 仅 `active | closed` 的 binding。最终还需要 `provisioning | active | degraded | closed`、provisioning revision 和 durable saga/recovery。
 - production bootstrap 未注入 `verifyContentSpaceAuthorization`：`CollaborationService` 有可选 verifier，但 `createCollaborationServerRuntime` 未传入，实际 bind 会 fail closed。最终 verifier 必须是可组成且生产已绑定的 canonical path，不允许测试-only injection。
-- 把 A 的迁移号或 0.1/0.2 合同直接视为当前 schema。新 Run-0 使用一条从同步基线出发的 forward-only lineage，并完整测试升级。
+- 把 A 的迁移号或 0.1/0.2 合同直接视为目标 schema。最终 migration lineage 必须从只读重验的现有 A schema 出发，在复制出的 candidate DB 上完整测试后才允许 edge cutover。
 
 ## B：Agent 拆解、Worker 与 Coordinator donor
 
@@ -95,7 +95,7 @@
 - 公网边缘使用 Caddy，已部署的 Cloud image/commit 前缀为 `eaf992…`，collaboration contracts 处于 0.1 线，数据库 schema 为 v5，Keycloak 为 26.7。
 - 公网 Cloud 的实际身份语义优于 A/B donor：User 由 OIDC JIT 建立，pairing 在认证 User 下绑定 endpoint；没有匿名 first-pairing User 创建。
 - 公网实例尚无 Project Content Space binding、Cloud ResourceRef 或真实文件 Task 通道；已存在的跨 User Project 只证明无文件协作状态机。
-- 公网 realm/部署存在与目标不同的配置漂移和生产安全缺口，但本次不在其上修复、迁移或“顺手生产化”。
+- 该测试 realm/部署存在与目标不同的配置漂移和生产安全缺口；本次只修复真实会议闭环直接依赖的部分，不“顺手生产化”或扩展安全范围。
 
 ## 最终采纳规则
 
@@ -103,7 +103,7 @@
 2. A 提供 Cloud 数据形状灵感，B 提供 Coordinator/Worker 行为灵感，E1 提供 transfer/Workspace 灵感；最终公共合同由本变更 OpenSpec 决定。
 3. Cloud Project Membership lifecycle、Provider Membership Observation、derived Project Content Readiness 和 command-time Task Authority 分表/分状态，不互相推断。
 4. Cloud 与 Content Space 是并列模块：Cloud 保存 intent/state，Owner Desktop 编排 Provider 外部写，Content Space 不导入 Project。
-5. source、packaged 和 isolated-live 都必须走 manifest/generated composition 的唯一生产路径；测试 mock 不构成 donor 采纳理由。
-6. 现有公网 A 部署保持不变；所有 deployment/migration/live mutation 只允许指向独立 Run-0 资源。
+5. source、packaged 和 A-upgrade live 都必须走 manifest/generated composition 的唯一生产路径；测试 mock 不构成 donor 采纳理由。
+6. 现有 A 测试部署是 live PoC 的蓝绿升级源：先完成 Cloud/Keycloak/edge 备份与 restore rehearsal，再从旧 Cloud DB 建立独立 candidate 并只在 candidate 上 migration；验证后切换现有 `cloud-test` upstream，旧 app/database 保留回滚。
 7. Coordinator Agent 始终由 Project Owner 所有；Run-0 初始 content owner 同样固定为 Project Owner。Shared Documents/实时共同编辑不在本 PoC。
 8. Architecture/secret 扫描对全仓历史问题仅报告；本次只阻塞新增或修改的闭环生产路径及其最小直接依赖，不扩展为无关模块重构。

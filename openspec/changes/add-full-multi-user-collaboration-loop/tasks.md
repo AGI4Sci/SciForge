@@ -4,8 +4,9 @@
 - [x] 1.2 更新 Identity、Cloud Collaboration、Content Space 和 Provider Integration 词汇，冻结 User/Device/Agent、四项 membership/observation/readiness/authority 事实、attestation 与 operation-time ACL 术语。
 - [x] 1.3 新增 ADR，记录 token-free Cloud transport、client-orchestrated provisioning saga、Device-signed fact attestation 和 metadata-not-ACL 决策。
 - [x] 1.4 新增真实多用户会议验收文档，冻结角色、设备矩阵、会议脚本、恢复矩阵、状态门禁和脱敏回执 schema。
-- [x] 1.5 记录 A/B/C/E donor commit 的逐项采纳/拒绝结论，确认当前公网部署不可变且新分支只基于个人 Fork 同步点。
+- [x] 1.5 记录 A/B/C/E donor commit 的逐项采纳/拒绝结论，冻结现有 A 测试部署只通过备份、candidate migration、验证后 edge cutover 的蓝绿路径升级，且实现分支只基于个人 Fork 同步点。
 - [x] 1.6 从个人 Fork `origin/gui@e0038b8c7109390445dccb691052fec74a153c09` 建立唯一 recovery integration mainline，冻结 Owner-owned Coordinator、初始 Owner-owned content、Shared Documents 延后和 changed-path gate；旧闭环分支/WIP 仅作 donor。
+- [x] 1.7 冻结 Q27-R：Run-0 是沿用现有 `cloud-test`/`login-test` issuer 的第一次 live run，Cloud 只通过备份/恢复演练、独立 candidate migration 和可回滚 edge cutover 升级，不再等待新 DNS。
 
 ## 2. Identity 与通用安全边界
 
@@ -56,23 +57,23 @@
 - [ ] 6.5 实现 outcome_unknown exact observation/link-or-abandon 流程，禁止无 observation 的 mark-success。
 - [ ] 6.6 实现 Coordinator transfer HCI 和旧 Coordinator fencing 反馈；与 identity/collaboration/content-space 只通过标准 contracts/contributions 组合。
 
-## 7. 隔离 Run-0 部署
+## 7. 既有 A 测试环境蓝绿升级
 
-- [ ] 7.1 新增 `cloud-run0.sciforge.cn`/`login-run0.sciforge.cn`/`SciForge-Run0` 独立 Keycloak、Cloud、PostgreSQL、Compose、secret 和 backup artifacts。
-- [ ] 7.2 增加安全 preflight，验证 database/role/container/network/volume/issuer 与公网部署完全不同，脚本无默认公网 mutation 目标。
-- [ ] 7.3 配置 Run-0 self-registration/PKCE/JIT/Device 与固定 issuer/audience/TLS，DNS 缺失时返回 `awaiting_dns` 且无旧 issuer fallback。
-- [ ] 7.4 部署新 stack、执行 migration/health/backup/restore smoke，并记录脱敏 image/schema receipt；既有 A 部署保持 byte/state 不变。
+- [ ] 7.1 只读重验 `47.76.230.118` 上现有 A 的 exact image、schema、`cloud-test` origin、`login-test/realms/SciForge` issuer、Keycloak/Cloud 数据库和 Caddy upstream，并记录不含秘密的基线回执。
+- [ ] 7.2 对 Cloud DB、Keycloak DB/realm、edge 配置和当前 image metadata 完成备份与隔离 restore rehearsal；任何 migration/cutover 前必须证明旧栈可恢复。
+- [ ] 7.3 从旧 Cloud DB 复制独立 candidate database/volume/container/network，candidate-only 执行 forward migration、目标 image health 和合成账号 smoke；不得直接迁移运行中的旧数据库或新增 issuer fallback。
+- [ ] 7.4 candidate 全部门禁通过后切换现有 Caddy `cloud-test` upstream，保持 `login-test/realms/SciForge` issuer 不变；验证 packaged/live 后再决定退役旧栈，期间必须能精确回滚旧 upstream/app/database。
 
 ## 8. 自动化、packaged 与真机验收
 
 - [ ] 8.1 完成 contracts、server、identity、collaboration、coordinator、Content Space/OpenContent focused tests 和 changed-file lint/typecheck。
 - [ ] 8.2 对本变更新增/修改的生产路径执行 `Repository architecture principles gate`：不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证；全仓历史发现只报告，不扩展本任务。
 - [ ] 8.3 运行与 changed collaboration path 相关的 package boundary、private-import、generated composition freshness、capability governance、secret audit 和 full regression tests；只有直接阻断该路径的既有问题才允许最小通用适配。
-- [ ] 8.4 验证 source app 的真实生产 composition，并构建同一 exact commit 的 packaged artifact；验证 packaged app 无 mock/fallback 和 Run-0 配置漂移。
+- [ ] 8.4 验证 source app 的真实生产 composition，并构建同一 exact commit 的 packaged artifact；验证 packaged app 无 mock/fallback，且只指向冻结的 A-upgrade PoC origin/issuer。
 - [ ] 8.5 准备 U0-U4 合成账号/议程/需求、三文件 Task、HumanNeeded、reject/reassign、review/revision 和 completion 验收脚本。
 - [ ] 8.6 在至少三台机器/独立 VM 的五个 packaged profiles 上完成真实 OIDC、Device/Agent、OpenContent provisioning 与并发会议 happy path。
 - [ ] 8.7 完成 restart、WSS refill、duplicate、old execution fence、Device revoke、Coordinator transfer、Provider removal 和 outcome_unknown recovery matrix。
-- [ ] 8.8 从授权 Desktop 下载并人工核对最终产物，生成不含秘密的 verification receipt；逐文件 bytes/SHA-256 不作为本 PoC 门禁，未满足 DNS/设备门禁时精确标记 `awaiting_dns`/`awaiting_real_devices`。
+- [ ] 8.8 从授权 Desktop 下载并人工核对最终产物，生成不含秘密的 verification receipt；逐文件 bytes/SHA-256 不作为本 PoC 门禁，candidate/cutover 或设备门禁未满足时精确标记 `awaiting_candidate`/`awaiting_real_devices`。
 
 ## 9. 清理与交付
 
