@@ -95,6 +95,8 @@ The database stores four independent facts instead of a composite “member is a
 
 Task rows point to the current `executionId`; every offer/reoffer inserts an immutable execution attempt. Old executions remain audit facts but all writes check the current execution/fence and expected revision. Outbox/Inbox and the state transition commit in one database transaction. WSS only signals availability.
 
+On each Agent connect or reconnect, the Desktop drains the durable Inbox in bounded sequence pages before relying on another WSS hint. After the idempotent handler completes, advancing the local sequence and enqueueing its stable ACK are one local transaction. A crash before that commit replays the message through the same idempotent handler; duplicate pages therefore create neither a second durable business fact nor another ACK. Accept recovery continues the same Cloud execution, and a stable Agent directive reconciles a dispatched Runtime turn rather than creating a second turn or execution.
+
 Alternative rejected: infer Provider permission from Project Member or collapse retry count into the same execution identity. Both allow stale devices to write after authority changes.
 
 ### 5. Local acceptance policy is not a Cloud field
@@ -136,6 +138,8 @@ Alternative rejected: B's `productionMockContentSpace()` and E1's metadata-as-AC
 ### 9. External write uncertainty is reconciled, never guessed
 
 Every external write has one stable logical invocation ID and durable journal state: `prepared | dispatched | observed_success | observed_failure | outcome_unknown | abandoned`. A timeout after dispatch becomes `outcome_unknown`; no automatic retry is allowed. Coordinator recovery invokes canonical observation against the exact parent/name/digest. An exact observed output can be linked with Human provenance; otherwise the old execution is abandoned and a new execution/output name is created.
+
+Terminal execution and membership events immediately fence the matching local run and abort its active Runtime/transfer signal. A Runtime or Provider result that still arrives is retained as a late observation with its exact logical invocation, but it is never copied into current outputs or submitted as a TaskResult. Once the local fence is durable, the Desktop does not attempt a new Cloud observation write on that lost execution authority. Duplicate late observations converge on the same local journal fact. A normal Desktop shutdown instead leaves an in-flight Agent invocation `dispatched`, so restart reconciles the same stable directive.
 
 Alternative rejected: retry with the same or a generated idempotency key when the Provider does not guarantee idempotency. That can create duplicate content or overwrite Human-visible state.
 

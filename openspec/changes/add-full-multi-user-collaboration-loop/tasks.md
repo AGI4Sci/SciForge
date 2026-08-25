@@ -45,7 +45,7 @@
 - [x] 5.2 实现每 Agent Device 本地持久 `manual | automatic` 策略、统一 preflight、显式 accept/reject reason，确认 Cloud 无 acceptancePolicy。
 - [x] 5.3 实现 Worker availability 发布、Runtime capability tags、active Task count、Provider identity/current Project readiness 与 heartbeat projection。
 - [x] 5.4 从 B donor 重写 Worker runner，使用 runtime-neutral AgentRuntime、当前 execution journal 和真实 Content Space system channel。
-- [ ] 5.5 实现 accept 后重启恢复、WSS reconnect/inbox refill、duplicate offer/ACK 幂等、Device/membership/execution fencing 和迟到外部结果 journal。
+- [x] 5.5 实现 accept 后重启恢复、WSS reconnect/inbox refill、duplicate offer/ACK 幂等、Device/membership/execution fencing 和迟到外部结果 journal。
 - [ ] 5.6 实现 Worker HumanNeeded、真实 Runtime transformation、结果/file reference submission 和 provider_not_ready fail-closed。
 
 ## 6. Project Coordinator 模块与 HCI

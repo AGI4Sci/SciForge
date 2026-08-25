@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import {
+  agentInboxMessageSchema,
   cloudResourceRefSchema,
   externalOperationRecoveryJournalEntrySchema,
   taskExecutionPreflightSchema,
@@ -17,6 +18,7 @@ import {
   TEST_HASH,
   TEST_LATER_TIMESTAMP,
   TEST_TIMESTAMP,
+  agentInboxMessageFixture,
   agentNodeFixture
 } from '@sciforge/collaboration-contracts/testing'
 import type { DomainMainAgentExecutionHost, DomainMainSystemCapabilityInvoker } from '@sciforge/domain-sdk/host'
@@ -396,6 +398,81 @@ test('file execution journals Cloud and local dispatch before one real generic d
   ])
 })
 
+test('a late Provider upload success after Device fencing remains journal-only and is never submitted', async () => {
+  const cloud = new FakeWorkerCloud('offered', true)
+  const uploadStarted = deferred<void>()
+  const releaseUpload = deferred<void>()
+  let invocationOrdinal = 0
+  const capabilities = capabilityInvoker(async (contract, input, options) => {
+    invocationOrdinal += 1
+    if (contract.actionId === CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT.actionId) {
+      return contract.outputSchema.parse(contentPreflightResult(
+        invocationOrdinal,
+        options?.workspaceId ?? '',
+        input
+      ))
+    }
+    if (contract.actionId === CONTENT_SPACE_SYSTEM_DOWNLOAD_CONTRACT.actionId) {
+      return contract.outputSchema.parse(contentDownloadResult(
+        invocationOrdinal,
+        options?.workspaceId ?? ''
+      ))
+    }
+    if (contract.actionId === CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT.actionId) {
+      uploadStarted.resolve()
+      await releaseUpload.promise
+      return contract.outputSchema.parse(contentUploadResult(
+        invocationOrdinal,
+        options?.workspaceId ?? ''
+      ))
+    }
+    throw new Error(`Unexpected system capability ${contract.actionId}.`)
+  })
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => ({
+      runtimeId: 'codex',
+      threadId: 'worker-late-upload-thread',
+      turnId: 'worker-late-upload-turn',
+      state: 'completed',
+      text: JSON.stringify({
+        schemaVersion: 1,
+        outcome: 'completed',
+        summary: 'The upload can begin.'
+      })
+    })
+  }, initial, capabilities)
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await uploadStarted.promise
+  await created.adapter.fenceLocalAgent(TEST_IDS.agentId, 'Device authority was revoked.')
+  releaseUpload.resolve()
+  await created.adapter.waitForIdle(TEST_IDS.executionId)
+
+  const run = created.store.snapshot().taskRuns[0]
+  const upload = run?.externalJournal.find(({ operation }) => operation === 'upload_new')
+  assert.equal(run?.state, 'fenced')
+  assert.equal(upload?.state, 'late_outcome')
+  assert.ok(upload?.receiptDigest)
+  assert.ok(upload.observationDigest)
+  assert.equal(run?.outputs.length, 0)
+  assert.deepEqual(run?.lateOutcomes.map(({ source, outcome }) => ({ source, outcome })), [{
+    source: 'content_space',
+    outcome: 'completed_after_fence'
+  }])
+  assert.equal(cloud.requests.some((request) => (
+    request.type === 'external_operation.observe' &&
+    request.journalEntryId === upload?.cloudJournal?.contentRecoveryJournalEntryId
+  )), false)
+  assert.equal(cloud.commands.includes('task.result.submit'), false)
+})
+
 test('restart after Provider dispatch records outcome unknown and requires manual recovery', async () => {
   const cloud = new FakeWorkerCloud('running', true)
   const cloudJournal = externalOperationRecoveryJournalEntrySchema.parse({
@@ -492,6 +569,158 @@ test('restart after Provider dispatch records outcome unknown and requires manua
   assert.equal(recovered?.lateOutcomes[0]?.outcome, 'outcome_unknown')
 })
 
+test('restart after accept starts and completes the same execution without accepting it twice', async () => {
+  const cloud = new FakeWorkerCloud('accepted')
+  const initial = emptyState()
+  initial.tasks = [cloud.task]
+  initial.taskRuns = [durableTaskRun(cloud, {
+    state: 'accepting',
+    startedAt: null
+  })]
+  let agentRuns = 0
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => {
+      agentRuns += 1
+      return {
+        runtimeId: 'codex',
+        threadId: 'worker-accepted-restart-thread',
+        turnId: 'worker-accepted-restart-turn',
+        state: 'completed',
+        text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Recovered.' })
+      }
+    }
+  }, initial)
+
+  await created.adapter.recover()
+  await created.adapter.waitForIdle(TEST_IDS.executionId)
+
+  assert.equal(agentRuns, 1)
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.execution.start',
+    'task.result.submit'
+  ])
+  assert.equal(created.store.snapshot().taskRuns[0]?.offer.executionId, TEST_IDS.executionId)
+  assert.equal(created.store.snapshot().taskRuns[0]?.state, 'completed')
+})
+
+test('a terminal execution event aborts the active Runtime and journals its fenced late outcome', async () => {
+  const cloud = new FakeWorkerCloud()
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  const runtimeStarted = deferred<void>()
+  const runtimeAborted = deferred<void>()
+  const releaseRuntime = deferred<void>()
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async (request) => {
+      runtimeStarted.resolve()
+      const signal = request.signal
+      const aborted = new Promise<void>((resolve) => {
+        if (signal?.aborted) resolve()
+        else signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+      await Promise.race([aborted, releaseRuntime.promise])
+      if (signal?.aborted) {
+        runtimeAborted.resolve()
+        throw new Error('Runtime stopped after the execution fence.')
+      }
+      return {
+        runtimeId: 'codex',
+        threadId: 'worker-fenced-thread',
+        turnId: 'worker-fenced-turn',
+        state: 'completed',
+        text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Too late.' })
+      }
+    }
+  }, initial)
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await runtimeStarted.promise
+  cloud.denyPreflight()
+  await created.adapter.handleInbox(agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    inboxMessageId: 'ibx_ExecutionFence1',
+    sequence: 2,
+    payload: {
+      protocolVersion: '1.0',
+      type: 'collaboration.state.changed',
+      event: {
+        protocolVersion: '1.0',
+        eventId: 'evt_ExecutionFence1',
+        causedByRequestId: TEST_IDS.requestId,
+        occurredAt: TEST_LATER_TIMESTAMP,
+        type: 'task.execution.changed',
+        projectId: TEST_IDS.projectId,
+        taskId: TEST_IDS.taskId,
+        executionId: TEST_IDS.executionId,
+        state: 'superseded',
+        revision: cloud.execution.revision
+      }
+    }
+  }))
+  const abortedBeforeRelease = await Promise.race([
+    runtimeAborted.promise.then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 25))
+  ])
+  releaseRuntime.resolve()
+  await created.adapter.waitForIdle(TEST_IDS.executionId)
+
+  const run = created.store.snapshot().taskRuns[0]
+  assert.equal(abortedBeforeRelease, true)
+  assert.equal(run?.state, 'fenced')
+  assert.equal(run?.agentJournal[0]?.state, 'late_outcome')
+  assert.equal(run?.lateOutcomes[0]?.outcome, 'failed_after_fence')
+  assert.equal(cloud.commands.includes('task.result.submit'), false)
+})
+
+test('membership removal fences the matching recovered execution before Runtime resumes', async () => {
+  const cloud = new FakeWorkerCloud('running')
+  const initial = emptyState()
+  initial.tasks = [cloud.task]
+  initial.taskRuns = [durableTaskRun(cloud)]
+  let agentRuns = 0
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => {
+      agentRuns += 1
+      throw new Error('A membership-fenced execution must not resume Runtime work.')
+    }
+  }, initial)
+
+  await created.adapter.handleInbox(agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    inboxMessageId: 'ibx_MembershipFence1',
+    sequence: 3,
+    payload: {
+      protocolVersion: '1.0',
+      type: 'collaboration.state.changed',
+      event: {
+        protocolVersion: '1.0',
+        eventId: 'evt_MembershipFence1',
+        causedByRequestId: TEST_IDS.requestId,
+        occurredAt: TEST_LATER_TIMESTAMP,
+        type: 'project.membership.changed',
+        projectId: TEST_IDS.projectId,
+        projectMembershipId: TEST_IDS.projectMembershipId,
+        userId: TEST_IDS.userId,
+        state: 'membership_removal_pending',
+        revision: 2,
+        authorityEpoch: 2
+      }
+    }
+  }))
+  await created.adapter.waitForIdle(TEST_IDS.executionId)
+
+  assert.equal(agentRuns, 0)
+  assert.equal(created.store.snapshot().taskRuns[0]?.state, 'fenced')
+  assert.equal(cloud.commands.includes('task.result.submit'), false)
+})
+
 test('restart resumes the same dispatched Agent directive instead of creating another execution', async () => {
   const cloud = new FakeWorkerCloud('running')
   const stableDirective = 'collab-worker-stable-restart'
@@ -569,6 +798,63 @@ test('restart resumes the same dispatched Agent directive instead of creating an
   assert.equal(created.store.snapshot().taskRuns[0]?.state, 'completed')
 })
 
+test('Desktop shutdown preserves the dispatched Agent directive for restart reconciliation', async () => {
+  const cloud = new FakeWorkerCloud()
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  const firstRunStarted = deferred<void>()
+  const directives: string[] = []
+  const first = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async (request) => {
+      directives.push(request.clientDirectiveId ?? '')
+      firstRunStarted.resolve()
+      await new Promise<void>((resolve) => {
+        if (request.signal?.aborted) resolve()
+        else request.signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+      throw new Error('Desktop stopped while the Agent Host request was in flight.')
+    }
+  }, initial)
+
+  await first.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await firstRunStarted.promise
+  first.adapter.stop()
+  await first.adapter.waitForIdle(TEST_IDS.executionId)
+
+  const stoppedState = first.store.snapshot()
+  assert.equal(stoppedState.taskRuns[0]?.agentJournal[0]?.state, 'dispatched')
+  const second = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async (request) => {
+      directives.push(request.clientDirectiveId ?? '')
+      return {
+        runtimeId: 'codex',
+        threadId: 'worker-shutdown-recovery-thread',
+        turnId: 'worker-shutdown-recovery-turn',
+        state: 'completed',
+        text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Reconciled.' })
+      }
+    }
+  }, stoppedState)
+
+  await second.adapter.recover()
+  await second.adapter.waitForIdle(TEST_IDS.executionId)
+
+  assert.equal(directives.length, 2)
+  assert.equal(directives[0], directives[1])
+  assert.equal(second.store.snapshot().taskRuns[0]?.agentJournal.length, 1)
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.offer.accept',
+    'task.execution.start',
+    'task.result.submit'
+  ])
+})
+
 async function createRunner(
   cloud: FakeWorkerCloud,
   agentExecution: DomainMainAgentExecutionHost = neverAgent(),
@@ -591,6 +877,45 @@ async function createRunner(
   return { adapter, store }
 }
 
+function durableTaskRun(
+  cloud: FakeWorkerCloud,
+  overrides: Partial<CollaborationLocalState['taskRuns'][number]> = {}
+): CollaborationLocalState['taskRuns'][number] {
+  return {
+    offer: offerJournal(),
+    task: cloud.task,
+    execution: cloud.execution,
+    latestPreflight: {
+      cloud: cloud.preflight(),
+      outcome: 'allowed',
+      reasons: [],
+      contentTransferReadiness: [],
+      evaluatedAt: TEST_TIMESTAMP
+    },
+    decision: { decision: 'accept', decidedAt: TEST_TIMESTAMP },
+    expectedTaskRevision: cloud.task.revision,
+    expectedExecutionRevision: cloud.execution.revision,
+    state: 'running',
+    workspaceRoot: `/tmp/sciforge-worker-${TEST_IDS.executionId}`,
+    runtimeId: null,
+    threadId: null,
+    humanRequestId: null,
+    humanAnswer: null,
+    resources: [],
+    agentJournal: [],
+    externalJournal: [],
+    outputs: [],
+    recoveryJournalEntryIds: [],
+    resultSummary: null,
+    lateOutcomes: [],
+    startedAt: TEST_TIMESTAMP,
+    updatedAt: TEST_TIMESTAMP,
+    completedAt: null,
+    error: null,
+    ...overrides
+  }
+}
+
 class FakeWorkerCloud {
   task: Task
   execution: TaskExecution
@@ -601,9 +926,10 @@ class FakeWorkerCloud {
     typeof externalOperationRecoveryJournalEntrySchema.parse
   >>()
   private recoveryJournalOrdinal = 0
+  private preflightDenied = false
 
   constructor(
-    state: 'offered' | 'running' = 'offered',
+    state: 'offered' | 'accepted' | 'running' = 'offered',
     private readonly fileMode = false
   ) {
     this.task = makeTask(state, state === 'offered' ? 1 : 3)
@@ -673,7 +999,9 @@ class FakeWorkerCloud {
       contentReadiness: this.fileMode ? fileContentReadiness() : null,
       contentBinding: this.fileMode ? fileContentBinding() : null,
       execution: this.execution,
-      decision: { outcome: 'allowed', reasons: [] },
+      decision: this.preflightDenied
+        ? { outcome: 'denied', reasons: ['execution_fenced'] }
+        : { outcome: 'allowed', reasons: [] },
       evaluatedAt: TEST_TIMESTAMP
     })
   }
@@ -811,6 +1139,10 @@ class FakeWorkerCloud {
     entry: ReturnType<typeof externalOperationRecoveryJournalEntrySchema.parse>
   ): void {
     this.recoveryJournals.set(entry.contentRecoveryJournalEntryId, entry)
+  }
+
+  denyPreflight(): void {
+    this.preflightDenied = true
   }
 
   private advance(state: 'accepted' | 'rejected' | 'running' | 'failed'): void {
@@ -1194,6 +1526,16 @@ function contentUploadResult(ordinal: number, workspaceId: string) {
 
 function digestFixture(input: unknown): string {
   return createHash('sha256').update(canonicalFixture(input)).digest('hex')
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }
 
 function canonicalFixture(input: unknown): string {

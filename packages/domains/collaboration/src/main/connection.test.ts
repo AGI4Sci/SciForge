@@ -10,18 +10,22 @@ import {
   defineAuthenticatedCloudTransport
 } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import {
+  agentInboxMessageSchema,
   restRequestSchema,
+  type AgentInboxMessage,
   type RestRequest,
   type RestResponse
 } from '@sciforge/collaboration-contracts'
 import {
   TEST_IDS,
   TEST_LATER_TIMESTAMP,
+  agentInboxMessageFixture,
   agentNodeFixture,
   chineseProviderLocatorFixture,
   humanEndpointBindingFixture,
   participantProfileFixture,
-  userPrincipalFixture
+  userPrincipalFixture,
+  webSocketMessageFixture
 } from '@sciforge/collaboration-contracts/testing'
 import type { DomainPackageJsonValue } from '@sciforge/domain-sdk/contract'
 import type { DomainMainPackageSettingsHost } from '@sciforge/domain-sdk/package-storage'
@@ -417,6 +421,140 @@ test('restart activation repairs participant and locators before connecting Agen
   await connection.dispose()
 })
 
+test('WSS is only a refill hint and reconnect durably handles and ACKs each inbox sequence once', async () => {
+  const store = await localStore([agentNodeFixture])
+  const messages: AgentInboxMessage[] = [agentInboxMessageFixture]
+  const handled: string[] = []
+  let heartbeatRevision = agentNodeFixture.revision
+  let pullCalls = 0
+  let notificationSubscriptions = 0
+  let wakes = 0
+  const connection = new CollaborationConnection({
+    store,
+    settings: new CollaborationSettingsService(settingsHost()),
+    outbox: {
+      start: () => undefined,
+      wake: () => { wakes += 1 },
+      stop: () => undefined
+    } as unknown as DurableCloudOutbox,
+    authenticatedCloudTransport: unusedUserTransport(),
+    agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: readyAuthority,
+      execute: async (_agentId, request) => {
+        assert.equal(request.type, 'agent.heartbeat')
+        heartbeatRevision += 1
+        return {
+          protocolVersion: '1.0',
+          type: 'rest.entity',
+          requestId: request.requestId,
+          entity: {
+            ...agentNodeFixture,
+            revision: heartbeatRevision,
+            connectionStatus: 'online',
+            lastSeenAt: TEST_LATER_TIMESTAMP,
+            updatedAt: TEST_LATER_TIMESTAMP
+          }
+        }
+      },
+      pullAgentInbox: async ({ afterSequence }) => {
+        pullCalls += 1
+        const duplicateProbe = pullCalls === 2 || pullCalls === 4
+        const page = duplicateProbe
+          ? messages
+          : messages.filter(({ sequence }) => sequence > afterSequence)
+        return {
+          messages: page,
+          nextSequence: messages.at(-1)?.sequence ?? afterSequence
+        }
+      },
+      observeAgentInbox: async function* (_agentId, signal) {
+        notificationSubscriptions += 1
+        yield webSocketMessageFixture
+        await waitForAbort(signal)
+      }
+    }),
+    inboxHandler: {
+      handle: async (message) => { handled.push(message.inboxMessageId) }
+    }
+  })
+
+  await connection.connect()
+  await waitForCondition(() => pullCalls >= 2)
+  await connection.disconnect()
+
+  messages.push(agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    inboxMessageId: 'ibx_Inbox0000002',
+    sequence: 2
+  }))
+  await connection.connect()
+  await waitForCondition(() => pullCalls >= 4)
+  await connection.disconnect()
+
+  assert.equal(notificationSubscriptions, 2)
+  assert.deepEqual(handled, ['ibx_Inbox0000001', 'ibx_Inbox0000002'])
+  assert.equal(store.snapshot().lastInboxSequence, 2)
+  assert.equal(wakes, 2)
+  assert.deepEqual(store.snapshot().outbox.map(({ kind, body }) => ({
+    kind,
+    type: body.type,
+    sequence: body.type === 'inbox.ack' ? body.sequence : null
+  })), [
+    { kind: 'inbox.ack', type: 'inbox.ack', sequence: 1 },
+    { kind: 'inbox.ack', type: 'inbox.ack', sequence: 2 }
+  ])
+})
+
+test('connect drains every durable inbox page before relying on another WSS hint', async () => {
+  const store = await localStore([agentNodeFixture])
+  const messages = Array.from({ length: 101 }, (_, index) => agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    inboxMessageId: `ibx_Refill${String(index + 1).padStart(8, '0')}`,
+    sequence: index + 1
+  }))
+  const afterSequences: number[] = []
+  const handled: number[] = []
+  const connection = new CollaborationConnection({
+    store,
+    settings: new CollaborationSettingsService(settingsHost()),
+    outbox: lifecycleOutbox(),
+    authenticatedCloudTransport: unusedUserTransport(),
+    agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: readyAuthority,
+      execute: async (_agentId, request) => ({
+        protocolVersion: '1.0',
+        type: 'rest.entity',
+        requestId: request.requestId,
+        entity: {
+          ...agentNodeFixture,
+          revision: agentNodeFixture.revision + 1,
+          connectionStatus: 'online',
+          lastSeenAt: TEST_LATER_TIMESTAMP,
+          updatedAt: TEST_LATER_TIMESTAMP
+        }
+      }),
+      pullAgentInbox: async ({ afterSequence, limit = 100 }) => {
+        afterSequences.push(afterSequence)
+        const page = messages
+          .filter(({ sequence }) => sequence > afterSequence)
+          .slice(0, limit)
+        return {
+          messages: page,
+          nextSequence: page.at(-1)?.sequence ?? afterSequence
+        }
+      }
+    }),
+    inboxHandler: { handle: async (message) => { handled.push(message.sequence) } }
+  })
+
+  await connection.connect()
+  await connection.disconnect()
+  assert.deepEqual(afterSequences, [0, 100])
+  assert.equal(handled.length, 101)
+  assert.equal(store.snapshot().lastInboxSequence, 101)
+  assert.equal(store.snapshot().outbox.filter(({ kind }) => kind === 'inbox.ack').length, 101)
+})
+
 function userTransport(
   baseUrl: string,
   execute: (request: RestRequest) => Promise<RestResponse>
@@ -538,4 +676,17 @@ async function localStore(
   }))
   await store.open()
   return store
+}
+
+async function waitForAbort(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return
+  await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+}
+
+async function waitForCondition(condition: () => boolean): Promise<void> {
+  const expiresAt = Date.now() + 1_000
+  while (!condition()) {
+    if (Date.now() >= expiresAt) throw new Error('Timed out waiting for test condition.')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
 }

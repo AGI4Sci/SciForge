@@ -58,8 +58,8 @@
 ### B 精确 commits 的 Stage 2 处置
 
 - `79200c70` 的 Coordinator workbench、`f23c6788` 的 Cloud finalization、`32be3a74` 的 Coordinator approval recovery 分别归属 Coordinator HCI/完成/恢复工作，不作为 Worker runner 实现移植。
-- `4a48efa7` 中旧 `project-coordinator/worker-runner` 的 Runtime 终态失败、execution fence 和恢复测试按行为拆分：Runtime 终态失败已迁移为当前 `domain-collaboration` execution journal characterization；accept 后恢复与迟到结果留给 5.5，不提前计入 5.4。
-- `0b1e8043` 的 Agent outbox/WSS recovery characterization 留给 5.5；其中 Coordinator planner characterization 已由当前 Coordinator package 独立承接。
+- `4a48efa7` 中旧 `project-coordinator/worker-runner` 的 Runtime 终态失败、execution fence 和恢复测试按行为拆分：Runtime 终态失败迁移到 5.4；accept 后恢复、即时 fencing 与 Runtime/Provider 迟到结果 journal-only 语义迁移到 5.5 的当前 `domain-collaboration` tests/runner，旧 `task.transition` 不迁移。
+- `0b1e8043` 的 Agent outbox/WSS recovery characterization 已适配到 5.5 的 token-free Agent Inbox：WSS 只提示，connect/reconnect 有界 drain durable sequence；handler 完成后，cursor 与稳定 ACK 在同一本地事务落盘，崩溃前未提交的消息由幂等 handler 重放，重复页不产生重复业务事实或 ACK；其中 Coordinator planner characterization 由当前 Coordinator package 独立承接。
 - `42d1d9ee` 新增的 `collaboration-identity` Token/session ownership 与最终 Identity 合同冲突，已拒绝；它不作为 Worker runner 的认证入口。
 - 当前唯一 Worker runner 是 recovery commit `b9e34cf7` 写入 `domain-collaboration` 的 canonical task adapter。它消费 runtime-neutral Agent execution Host、当前 execution journal 和 generic Content Space system contracts。旧 `task.transition`、`resource.create`、专用 ContentSpacePort 与 `project-coordinator/worker-runner` 均不迁移，也不保留 shim。
 

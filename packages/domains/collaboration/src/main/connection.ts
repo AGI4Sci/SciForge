@@ -642,23 +642,31 @@ export class CollaborationConnection {
 
   private pullInbox(): Promise<void> {
     const drain = async () => {
-      const afterSequence = this.options.store.snapshot().lastInboxSequence
       const localAgentId = await this.requireLocalAgentId()
-      const page = await this.options.agentCloudRuntime.pullAgentInbox({
-        agentId: localAgentId,
-        afterSequence,
-        limit: 100
-      })
-      const sorted = [...page.messages].sort((left, right) => left.sequence - right.sequence)
-      for (const message of sorted) {
-        if (message.recipientType !== 'agent') continue
-        if (!localAgentId || message.recipientAgentId !== localAgentId) {
-          throw new Error('Cloud returned an inbox message for another Agent.')
+      const pageLimit = 100
+      for (let pageCount = 0; pageCount < 1_000; pageCount += 1) {
+        const afterSequence = this.options.store.snapshot().lastInboxSequence
+        const page = await this.options.agentCloudRuntime.pullAgentInbox({
+          agentId: localAgentId,
+          afterSequence,
+          limit: pageLimit
+        })
+        const sorted = [...page.messages].sort((left, right) => left.sequence - right.sequence)
+        for (const message of sorted) {
+          if (message.recipientType !== 'agent') continue
+          if (!localAgentId || message.recipientAgentId !== localAgentId) {
+            throw new Error('Cloud returned an inbox message for another Agent.')
+          }
+          if (message.sequence <= this.options.store.snapshot().lastInboxSequence) continue
+          await this.options.inboxHandler.handle(message)
+          await this.persistInboxAck(message)
         }
-        if (message.sequence <= this.options.store.snapshot().lastInboxSequence) continue
-        await this.options.inboxHandler.handle(message)
-        await this.persistInboxAck(message)
+        if (page.messages.length < pageLimit) return
+        if (this.options.store.snapshot().lastInboxSequence <= afterSequence) {
+          throw new Error('Agent inbox refill did not advance its durable sequence.')
+        }
       }
+      throw new Error('Agent inbox refill exceeded the safe page limit.')
     }
     // A rejected event must stop this cursor advance, but it must not poison
     // the serialized pull tail forever. Explicit recovery can re-fetch the same

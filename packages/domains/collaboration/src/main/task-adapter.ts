@@ -79,6 +79,18 @@ const TERMINAL_RUN_STATES = new Set<CollaborationTaskRun['state']>([
   'manual-recovery'
 ])
 
+const TERMINAL_EXECUTION_EVENT_STATES = new Set<TaskExecution['state']>([
+  'rejected',
+  'result_submitted',
+  'manual_recovery_required',
+  'completed',
+  'failed',
+  'cancelled',
+  'timed_out',
+  'revoked',
+  'superseded'
+])
+
 /** Canonical durable Worker runner for inbox, HCI, Runtime, transfer, and Cloud state. */
 export class CollaborationTaskAdapter {
   private readonly now: () => Date
@@ -530,10 +542,22 @@ export class CollaborationTaskAdapter {
         interaction: 'reviewable', mode: 'agent', signal
       })
     } catch (error) {
-      if (signal.aborted || this.requireRun(run.offer.executionId).state === 'fenced') {
-        await this.recordLateOutcome(run.offer.executionId, logicalInvocationId, 'failed_after_fence', error)
+      if (this.requireRun(run.offer.executionId).state === 'fenced') {
+        const observedAt = this.now().toISOString()
+        await this.updateAgentJournal(run.offer.executionId, logicalInvocationId, {
+          state: 'late_outcome', observedAt, runtimeState: 'failed',
+          safeError: safeError(error, this.options.sanitizeText)
+        })
+        await this.recordLateOutcome(
+          'agent_runtime',
+          run.offer.executionId,
+          logicalInvocationId,
+          'failed_after_fence',
+          error
+        )
         return null
       }
+      if (signal.aborted && this.stopped) return null
       await this.updateAgentJournal(run.offer.executionId, logicalInvocationId, {
         state: 'observed_failure', observedAt: this.now().toISOString(),
         runtimeState: 'failed', safeError: safeError(error, this.options.sanitizeText)
@@ -550,7 +574,7 @@ export class CollaborationTaskAdapter {
         runtimeId: result.runtimeId, threadId: result.threadId, turnId: result.turnId,
         runtimeState: result.state, safeResultText: safeText
       })
-      await this.recordLateOutcome(run.offer.executionId, logicalInvocationId,
+      await this.recordLateOutcome('agent_runtime', run.offer.executionId, logicalInvocationId,
         result.state === 'completed' ? 'completed_after_fence' : 'failed_after_fence', result.text)
       await this.markFenced(this.requireRun(run.offer.executionId), 'Execution was fenced while Agent Runtime was active.')
       return null
@@ -623,6 +647,7 @@ export class CollaborationTaskAdapter {
     })
     if (!receipt || !('portableReference' in receipt)) return
     const latest = this.requireRun(run.offer.executionId)
+    if (TERMINAL_RUN_STATES.has(latest.state)) return
     const binding = latest.latestPreflight?.cloud.contentBinding
     const uploadPreflight = latest.latestPreflight?.contentTransferReadiness.find((observation) => (
       observation.operation === 'upload-new' && observation.status === 'ready'
@@ -769,6 +794,26 @@ export class CollaborationTaskAdapter {
             CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT,
             CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT.inputSchema.parse(operation.input),
             invocationOptions)
+      if (this.requireRun(run.offer.executionId).state === 'fenced') {
+        if (!result.ok) {
+          await this.observeLateTransferOutcome(
+            run,
+            journal,
+            result.error.code === 'outcome_unknown' ? 'outcome_unknown' : 'failed_after_fence',
+            result.error.message
+          )
+          return null
+        }
+        await this.observeLateTransferOutcome(
+          run,
+          journal,
+          'completed_after_fence',
+          'Provider success was observed after the local execution was fenced.',
+          result.value.transferReceiptDigest,
+          result.value.observationDigest
+        )
+        return result.value
+      }
       if (!result.ok) {
         await this.observeTransferFailure(run, journal, result.error.code, result.error.message,
           result.error.code === 'outcome_unknown')
@@ -782,6 +827,15 @@ export class CollaborationTaskAdapter {
       )
       return result.value
     } catch (error) {
+      if (this.requireRun(run.offer.executionId).state === 'fenced') {
+        await this.observeLateTransferOutcome(
+          run,
+          journal,
+          'outcome_unknown',
+          safeError(error, this.options.sanitizeText)
+        )
+        return null
+      }
       await this.observeUnknownOutcome(run, journal, safeError(error, this.options.sanitizeText))
       return null
     }
@@ -793,9 +847,35 @@ export class CollaborationTaskAdapter {
     receiptDigest: string,
     observationDigest: string
   ): Promise<void> {
-    const response = await this.observeExternalOperation(requireCloudJournal(journal), {
-      outcome: 'observed_success', receiptDigest, observationDigest, safeFailureCode: null
-    })
+    let response: ExternalOperationRecoveryJournalEntry
+    try {
+      response = await this.observeExternalOperation(requireCloudJournal(journal), {
+        outcome: 'observed_success', receiptDigest, observationDigest, safeFailureCode: null
+      })
+    } catch (error) {
+      if (this.requireRun(run.offer.executionId).state !== 'fenced') throw error
+      await this.observeLateTransferOutcome(
+        run,
+        journal,
+        'completed_after_fence',
+        'Cloud rejected the observation after local execution authority was fenced.',
+        receiptDigest,
+        observationDigest
+      )
+      return
+    }
+    if (this.requireRun(run.offer.executionId).state === 'fenced') {
+      await this.observeLateTransferOutcome(
+        run,
+        journal,
+        'completed_after_fence',
+        'Provider success completed concurrently with the local execution fence.',
+        receiptDigest,
+        observationDigest,
+        response
+      )
+      return
+    }
     await this.updateTransferJournal(run.offer.executionId, journal.logicalInvocationId, {
       state: 'observed_success', cloudJournal: response,
       receiptDigest, observationDigest, observedAt: this.now().toISOString()
@@ -820,10 +900,29 @@ export class CollaborationTaskAdapter {
       return
     }
     const normalized = normalizeSafeCode(safeFailureCode)
-    const response = await this.observeExternalOperation(requireCloudJournal(journal), {
-      outcome: 'observed_failure', receiptDigest: null, observationDigest: null,
-      safeFailureCode: normalized
-    })
+    let response: ExternalOperationRecoveryJournalEntry
+    try {
+      response = await this.observeExternalOperation(requireCloudJournal(journal), {
+        outcome: 'observed_failure', receiptDigest: null, observationDigest: null,
+        safeFailureCode: normalized
+      })
+    } catch (error) {
+      if (this.requireRun(run.offer.executionId).state !== 'fenced') throw error
+      await this.observeLateTransferOutcome(run, journal, 'failed_after_fence', message)
+      return
+    }
+    if (this.requireRun(run.offer.executionId).state === 'fenced') {
+      await this.observeLateTransferOutcome(
+        run,
+        journal,
+        'failed_after_fence',
+        message,
+        null,
+        null,
+        response
+      )
+      return
+    }
     await this.updateTransferJournal(run.offer.executionId, journal.logicalInvocationId, {
       state: 'observed_failure', cloudJournal: response,
       observedAt: this.now().toISOString(), safeFailureCode: normalized,
@@ -838,10 +937,29 @@ export class CollaborationTaskAdapter {
     journal: CollaborationExternalOperationJournal,
     detail: string
   ): Promise<void> {
-    const response = await this.observeExternalOperation(requireCloudJournal(journal), {
-      outcome: 'outcome_unknown', receiptDigest: null, observationDigest: null,
-      safeFailureCode: 'provider_outcome_unknown'
-    })
+    let response: ExternalOperationRecoveryJournalEntry
+    try {
+      response = await this.observeExternalOperation(requireCloudJournal(journal), {
+        outcome: 'outcome_unknown', receiptDigest: null, observationDigest: null,
+        safeFailureCode: 'provider_outcome_unknown'
+      })
+    } catch (error) {
+      if (this.requireRun(run.offer.executionId).state !== 'fenced') throw error
+      await this.observeLateTransferOutcome(run, journal, 'outcome_unknown', detail)
+      return
+    }
+    if (this.requireRun(run.offer.executionId).state === 'fenced') {
+      await this.observeLateTransferOutcome(
+        run,
+        journal,
+        'outcome_unknown',
+        detail,
+        null,
+        null,
+        response
+      )
+      return
+    }
     const observedAt = this.now().toISOString()
     await this.updateTransferJournal(run.offer.executionId, journal.logicalInvocationId, {
       state: 'outcome_unknown', cloudJournal: response, observedAt,
@@ -861,6 +979,49 @@ export class CollaborationTaskAdapter {
       })
     })
     await this.publishAvailability('online')
+  }
+
+  private async observeLateTransferOutcome(
+    run: CollaborationTaskRun,
+    journal: CollaborationExternalOperationJournal,
+    outcome: 'completed_after_fence' | 'failed_after_fence' | 'outcome_unknown',
+    detail: string,
+    receiptDigest: string | null = null,
+    observationDigest: string | null = null,
+    cloudJournal?: ExternalOperationRecoveryJournalEntry
+  ): Promise<void> {
+    const safeDetail = safeError(detail, this.options.sanitizeText)
+    const observedAt = this.now().toISOString()
+    await this.options.store.transact((draft) => {
+      const current = requireDraftRun(draft.taskRuns, run.offer.executionId)
+      const entry = current.externalJournal.find((candidate) => (
+        candidate.logicalInvocationId === journal.logicalInvocationId
+      ))
+      if (!entry) throw new Error('External operation journal entry was not found.')
+      Object.assign(entry, {
+        state: 'late_outcome',
+        ...(cloudJournal ? { cloudJournal } : {}),
+        receiptDigest,
+        observationDigest,
+        observedAt,
+        safeFailureCode: outcome,
+        safeError: safeDetail
+      })
+      if (!current.lateOutcomes.some((candidate) => (
+        candidate.source === 'content_space' &&
+        candidate.logicalInvocationId === journal.logicalInvocationId &&
+        candidate.outcome === outcome
+      ))) {
+        current.lateOutcomes.push({
+          source: 'content_space',
+          logicalInvocationId: journal.logicalInvocationId,
+          outcome,
+          observedAt,
+          safeDetail
+        })
+      }
+      current.updatedAt = observedAt
+    })
   }
 
   private async observeExternalOperation(
@@ -1257,16 +1418,31 @@ export class CollaborationTaskAdapter {
   private async acceptCloudStateEvent(event: CloudStateEvent): Promise<void> {
     if (event.type === 'task.execution.changed') {
       const run = this.findRun(event.executionId)
-      if (!run) return
+      if (!run || TERMINAL_RUN_STATES.has(run.state)) return
       await this.updateRun(event.executionId, {
         expectedExecutionRevision: Math.max(run.expectedExecutionRevision, event.revision)
       })
+      if (TERMINAL_EXECUTION_EVENT_STATES.has(event.state)) {
+        await this.markFenced(
+          this.requireRun(event.executionId),
+          `Cloud execution entered terminal state ${event.state}.`
+        )
+        return
+      }
       this.schedule(event.executionId)
       return
     }
     if (!('projectId' in event)) return
     for (const run of this.options.store.snapshot().taskRuns) {
       if (run.offer.projectId === event.projectId && !TERMINAL_RUN_STATES.has(run.state)) {
+        if (
+          event.type === 'project.membership.changed' &&
+          event.userId === run.execution?.assigneeUserId &&
+          event.state !== 'active'
+        ) {
+          await this.markFenced(run, `Project membership entered state ${event.state}.`)
+          continue
+        }
         this.schedule(run.offer.executionId)
       }
     }
@@ -1293,24 +1469,31 @@ export class CollaborationTaskAdapter {
   }
 
   private async markFenced(run: CollaborationTaskRun, error: string): Promise<void> {
-    this.controllers.get(run.offer.executionId)?.abort(error)
+    if (TERMINAL_RUN_STATES.has(this.requireRun(run.offer.executionId).state)) return
     await this.updateRun(run.offer.executionId, {
       state: 'fenced', completedAt: this.now().toISOString(), error: error.slice(0, 4_000)
     })
+    this.controllers.get(run.offer.executionId)?.abort(error)
     await this.publishAvailability('online')
   }
 
   private async recordLateOutcome(
+    source: 'agent_runtime' | 'content_space' | 'cloud',
     executionId: string,
     logicalInvocationId: string,
-    outcome: 'completed_after_fence' | 'failed_after_fence',
+    outcome: 'completed_after_fence' | 'failed_after_fence' | 'outcome_unknown',
     detail: unknown
   ): Promise<void> {
     const observedAt = this.now().toISOString()
     await this.options.store.transact((draft) => {
       const run = requireDraftRun(draft.taskRuns, executionId)
+      if (run.lateOutcomes.some((candidate) => (
+        candidate.source === source &&
+        candidate.logicalInvocationId === logicalInvocationId &&
+        candidate.outcome === outcome
+      ))) return
       run.lateOutcomes.push({
-        source: 'agent_runtime', logicalInvocationId, outcome, observedAt,
+        source, logicalInvocationId, outcome, observedAt,
         safeDetail: safeError(detail, this.options.sanitizeText)
       })
       run.updatedAt = observedAt

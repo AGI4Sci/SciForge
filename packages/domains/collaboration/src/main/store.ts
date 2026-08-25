@@ -301,9 +301,16 @@ export const collaborationExternalOperationJournalSchema = z.object({
   if (observed !== (entry.observedAt !== null)) {
     context.addIssue({ code: 'custom', path: ['observedAt'], message: 'Observed transfer state requires observation time.' })
   }
-  const success = entry.state === 'observed_success'
+  const lateSuccess = entry.state === 'late_outcome' && entry.safeFailureCode === 'completed_after_fence'
+  const success = entry.state === 'observed_success' || lateSuccess
   if (success !== (entry.receiptDigest !== null && entry.observationDigest !== null)) {
     context.addIssue({ code: 'custom', path: ['observationDigest'], message: 'Successful transfer requires exact receipt and observation digests.' })
+  }
+  if (
+    entry.state === 'late_outcome' &&
+    !['completed_after_fence', 'failed_after_fence', 'outcome_unknown'].includes(entry.safeFailureCode ?? '')
+  ) {
+    context.addIssue({ code: 'custom', path: ['safeFailureCode'], message: 'A late transfer requires its exact bounded outcome.' })
   }
 })
 
