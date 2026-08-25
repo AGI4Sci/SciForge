@@ -72,14 +72,27 @@ ownership-transfer operation exists. `updateSpace`, `pinSpace`, `unpinSpace`,
 Administration revision, and declare `concurrency.revision: "none"`; this is an
 explicit absence of optimistic-concurrency/CAS semantics. An ordinary root
 resource is not standing administration approval: each of these five Agent
-mutations requires fresh Human confirmation before Provider dispatch.
+mutations requires fresh Human confirmation before Provider dispatch, either
+for the exact invocation or for one immutable approved provisioning batch.
 
-Delegated resources authorize non-destructive ordinary writes only. Every
-native-document or extended operation declared `destructive` requires fresh
-per-invocation Human confirmation and carries no `autonomousWrite` grant. An
-ordinary child, feature-selection, or Provider-administration resource cannot
-substitute for that confirmation; the Broker rejects the call before Provider
-binding or dispatch.
+`content-space.provisioning-batch` is the single delegated path for the typed
+authorize/create/list/add/remove/list administration contracts. It does not
+expand or weaken the generic Host limit of 64 immutable operations. Initial
+provisioning therefore fits only when its exact authorize → create → first
+member-list → bounded adds → final member-list plan fits that gate. A member
+page `nextCursor` is a factual Provider result, not implicit completeness; if
+the newly created root returns one, the Coordinator must fail closed and move
+to explicit recovery instead of treating the first page as the full roster.
+The public page contract deliberately retains `nextCursor` so no layer can
+erase that fact.
+
+Outside that exact approved administration batch, delegated resources
+authorize non-destructive ordinary writes only. Every native-document or
+extended operation declared `destructive` requires fresh per-invocation Human
+confirmation and carries no `autonomousWrite` grant. An ordinary child,
+feature-selection, or Provider-administration resource cannot substitute for
+that confirmation; the Broker rejects the call before Provider binding or
+dispatch.
 
 All ten Administration outputs are strictly bound to the exact request and
 Broker authority. Pages must be bounded, unique, and progressing, and an empty

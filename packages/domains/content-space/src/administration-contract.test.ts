@@ -25,7 +25,8 @@ describe('Content Space administration contract', () => {
       administration.CONTENT_SPACE_AUTHORIZE_PROVIDER_ADMINISTRATION_CONTRACT,
       administration.CONTENT_SPACE_AGENT_ADMIN_CREATE_SPACE_CONTRACT,
       administration.CONTENT_SPACE_AGENT_ADMIN_LIST_MEMBERS_CONTRACT,
-      administration.CONTENT_SPACE_AGENT_ADMIN_ADD_MEMBER_CONTRACT
+      administration.CONTENT_SPACE_AGENT_ADMIN_ADD_MEMBER_CONTRACT,
+      administration.CONTENT_SPACE_AGENT_ADMIN_REMOVE_MEMBER_CONTRACT
     ].map(({ actionId, effect }) => ({ actionId, effect }))).toEqual([
       {
         actionId: 'content-space.authorize-provider-administration',
@@ -42,6 +43,10 @@ describe('Content Space administration contract', () => {
       {
         actionId: 'content-space.agent-admin-add-member',
         effect: 'external-write'
+      },
+      {
+        actionId: 'content-space.agent-admin-remove-member',
+        effect: 'destructive'
       }
     ])
     expect(administration.contentSpaceAgentAdministrationListMembersInputSchema.parse({
@@ -54,6 +59,18 @@ describe('Content Space administration contract', () => {
       }),
       page: { limit: 20 }
     })).toThrow()
+    const member = directoryUser('provider-user-remove')
+    expect(administration.contentSpaceAgentAdministrationRemoveMemberResultSchema.parse({
+      ok: true,
+      value: {
+        root: toPortableContentContainerReference({
+          providerInstanceRef: 'provider-instance-a',
+          containerId: 'root-a'
+        }),
+        member,
+        removed: true
+      }
+    })).toMatchObject({ ok: true, value: { member, removed: true } })
   })
 
   it('strictly rejects retired CAS, revision, and role fields', () => {

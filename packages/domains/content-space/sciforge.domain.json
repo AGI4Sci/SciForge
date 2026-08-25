@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.content-space",
     "displayName": "Content Space",
-    "version": "4.0.0",
+    "version": "4.1.0",
     "hostApi": {
       "minimum": "1.5.0",
       "maximumExclusive": "2.0.0"

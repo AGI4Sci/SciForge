@@ -235,6 +235,12 @@ export const contentSpaceAgentAdministrationAddMemberReceiptSchema = z.object({
   member: contentSpaceAdministrationMemberReferenceSchema
 }).strict().readonly()
 
+export const contentSpaceAgentAdministrationRemoveMemberReceiptSchema = z.object({
+  root: contentSpacePortableContainerReferenceEnvelopeSchema,
+  member: contentSpaceAdministrationMemberReferenceSchema,
+  removed: z.literal(true)
+}).strict().readonly()
+
 export const contentSpaceAgentProviderAdministrationAuthorizationResultSchema =
   contentSpaceResultSchema(contentSpaceAgentProviderAdministrationAuthorizationSchema)
 export const contentSpaceAgentAdministrationCreateSpaceCapabilityResultSchema =
@@ -243,6 +249,8 @@ export const contentSpaceAgentAdministrationListMembersResultSchema =
   contentSpaceResultSchema(contentSpaceAgentAdministrationMemberPageSchema)
 export const contentSpaceAgentAdministrationAddMemberResultSchema =
   contentSpaceResultSchema(contentSpaceAgentAdministrationAddMemberReceiptSchema)
+export const contentSpaceAgentAdministrationRemoveMemberResultSchema =
+  contentSpaceResultSchema(contentSpaceAgentAdministrationRemoveMemberReceiptSchema)
 
 export const CONTENT_SPACE_AUTHORIZE_PROVIDER_ADMINISTRATION_CONTRACT: DomainCapabilityContract<
   z.infer<typeof contentSpaceProviderInstanceInputSchema>,
@@ -282,6 +290,16 @@ export const CONTENT_SPACE_AGENT_ADMIN_ADD_MEMBER_CONTRACT: DomainCapabilityCont
   effect: 'external-write',
   inputSchema: contentSpaceAgentAdministrationMemberMutationInputSchema,
   outputSchema: contentSpaceAgentAdministrationAddMemberResultSchema
+})
+
+export const CONTENT_SPACE_AGENT_ADMIN_REMOVE_MEMBER_CONTRACT: DomainCapabilityContract<
+  z.infer<typeof contentSpaceAgentAdministrationMemberMutationInputSchema>,
+  z.infer<typeof contentSpaceAgentAdministrationRemoveMemberResultSchema>
+> = Object.freeze({
+  actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember,
+  effect: 'destructive',
+  inputSchema: contentSpaceAgentAdministrationMemberMutationInputSchema,
+  outputSchema: contentSpaceAgentAdministrationRemoveMemberResultSchema
 })
 
 export type ContentSpaceAdministrationSpaceSummary = z.infer<

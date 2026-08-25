@@ -224,17 +224,15 @@ describe('Content Space main composition', () => {
       CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers,
-      CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember
     ].map((actionId) => definition(definitions, actionId))).toEqual([
+      expect.objectContaining({ delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
       expect.objectContaining({ delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
       expect.objectContaining({ delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
       expect.objectContaining({ delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
       expect.objectContaining({ delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID })
     ])
-    expect(definition(
-      definitions,
-      CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember
-    )).not.toHaveProperty('delegatedBatchGrant')
   })
 
   it('enforces system audience, Workspace scope, and the exact grant before decoding authority', async () => {
@@ -2019,6 +2017,113 @@ describe('Content Space main composition', () => {
       definitions,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers
     ).version).toBe('2.0.0')
+  })
+
+  it('keeps approved-batch removal bound to the exact issued root and rejects caller-supplied authority', async () => {
+    const root = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      containerId: 'batch-removal-root'
+    })
+    const portableRoot = toPortableContentContainerReference(root)
+    const summary = Object.freeze({
+      root: portableRoot,
+      label: 'Removal Team',
+      contentOwnerUserId: principal.subject,
+      pinned: false
+    })
+    const removeMember = vi.fn(async (
+      input: Parameters<ContentSpaceAdministrationPort['removeMember']>[0]
+    ) => Object.freeze({ root: portableRoot, member: input.member, removed: true as const }))
+    const administration = administrationPortFixture({
+      createSpace: async () => summary,
+      removeMember
+    })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture({
+        features: {
+          administration: {
+            describeOperations: () => readyAdministrationStates,
+            bind: async () => Object.freeze({ administration })
+          }
+        }
+      })))
+    )
+    let administrationRegistration: any
+    await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration
+    ).handler({ providerInstanceRef: PROVIDER_INSTANCE_REF }, capabilityContext(undefined, 'agent', {
+      callerId: 'agent:batch-removal',
+      workspaceId: '/workspace',
+      issueResource: (registration) => {
+        administrationRegistration = registration
+        return resourceHandle('a', registration.semanticRevision)
+      }
+    }))
+    let rootRegistration: any
+    await definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace).handler({
+      label: 'Removal Team'
+    }, capabilityContext(undefined, 'agent', {
+      callerId: 'agent:batch-removal',
+      workspaceId: '/workspace',
+      resource: {
+        resourceId: administrationRegistration.resourceId,
+        resourceKind: CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND,
+        workspaceId: '/workspace'
+      },
+      issueResource: (registration) => {
+        rootRegistration = registration
+        return resourceHandle('r', registration.semanticRevision)
+      }
+    }))
+    const member = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      kind: 'user' as const,
+      principalId: 'provider-user-remove'
+    })
+    const remove = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember)
+    expect(remove).toMatchObject({
+      effect: 'destructive',
+      approval: 'confirmation',
+      delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
+      resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND]
+    })
+    expect(remove.inputSchema.safeParse({ member, root: portableRoot }).success).toBe(false)
+    await expect(remove.handler({ member }, capabilityContext(undefined, 'agent', {
+      callerId: 'agent:batch-removal',
+      workspaceId: '/workspace',
+      resource: {
+        resourceId: 'caller-supplied-root',
+        resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
+        workspaceId: '/workspace'
+      }
+    }))).rejects.toMatchObject({ detail: { code: 'unauthorized' } })
+    await expect(remove.handler({ member }, capabilityContext(undefined, 'agent', {
+      callerId: 'agent:other',
+      workspaceId: '/workspace',
+      resource: {
+        resourceId: rootRegistration.resourceId,
+        resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
+        workspaceId: '/workspace'
+      }
+    }))).rejects.toMatchObject({ detail: { code: 'unauthorized' } })
+    expect(removeMember).not.toHaveBeenCalled()
+
+    await expect(remove.handler({ member }, capabilityContext(undefined, 'agent', {
+      callerId: 'agent:batch-removal',
+      workspaceId: '/workspace',
+      resource: {
+        resourceId: rootRegistration.resourceId,
+        resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
+        workspaceId: '/workspace'
+      }
+    }))).resolves.toMatchObject({
+      output: { ok: true, value: { root: portableRoot, member, removed: true } },
+      changed: true,
+      semanticRevision: expect.any(String)
+    })
+    expect(removeMember).toHaveBeenCalledExactlyOnceWith({ root: portableRoot, member })
   })
 
   it('versions the literal directory-search and Team-governance Agent wires', async () => {

@@ -114,9 +114,9 @@ import {
   contentSpaceAgentAdministrationListMembersInputSchema,
   contentSpaceAgentAdministrationMemberMutationInputSchema,
   contentSpaceAgentAdministrationMemberPageSchema,
+  contentSpaceAgentAdministrationRemoveMemberReceiptSchema,
   contentSpaceAgentProviderAdministrationAuthorizationSchema,
   contentSpaceAdministrationListSpacesInputSchema,
-  contentSpaceAdministrationRemoveMemberReceiptSchema,
   contentSpaceAdministrationSpacePageSchema,
   contentSpaceAdministrationSpaceSummarySchema,
   contentSpaceAdministrationUnpinSpaceInputSchema,
@@ -1896,9 +1896,10 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
         effect: 'destructive',
         approval: 'confirmation',
+        delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
         concurrency: { revision: 'none', idempotency: 'required' },
         inputSchema: contentSpaceAgentAdministrationMemberMutationInputSchema,
-        outputSchema: contentSpaceResultSchema(ADMINISTRATION_REMOVE_MEMBER_WIRE_SCHEMA),
+        outputSchema: contentSpaceResultSchema(contentSpaceAgentAdministrationRemoveMemberReceiptSchema),
         handler: async (input, context) => {
           const record = requireAgentRootAdministrationResource(context)
           return capabilityMutationResult(
@@ -2383,8 +2384,6 @@ const AGENT_EXTENDED_INPUT_SCHEMA_BY_EFFECT = Object.freeze({
 const administrationUpdateShape = contentSpaceAdministrationUpdateSpaceInputSchema.unwrap().shape
 const contentContainerReferenceShape = contentContainerReferenceSchema.unwrap().shape
 const administrationSpaceSummaryShape = contentSpaceAdministrationSpaceSummarySchema.unwrap().shape
-const administrationRemoveMemberShape = contentSpaceAdministrationRemoveMemberReceiptSchema
-  .unwrap().shape
 
 const PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA = z.object({
   contractVersion: z.literal(1),
@@ -2409,12 +2408,6 @@ const ADMINISTRATION_SPACE_PAGE_WIRE_SCHEMA = z.object({
 
 const ADMINISTRATION_ROOT_OPEN_WIRE_SCHEMA = z.object({
   root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA
-}).strict().readonly()
-
-const ADMINISTRATION_REMOVE_MEMBER_WIRE_SCHEMA = z.object({
-  root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA,
-  member: administrationRemoveMemberShape.member,
-  removed: administrationRemoveMemberShape.removed
 }).strict().readonly()
 
 const AGENT_ADMINISTRATION_UPDATE_SPACE_INPUT_SCHEMA = z.object({
