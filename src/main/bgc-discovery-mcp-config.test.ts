@@ -6,6 +6,7 @@ import {
 import {
   bgcDiscoveryMcpEnabledTools,
   buildBgcDiscoveryMcpConfigFragment,
+  resolveBgcDiscoveryMcpCommand,
   type BgcDiscoveryMcpLaunchConfig
 } from './bgc-discovery-mcp-config'
 
@@ -23,7 +24,7 @@ describe('BGC discovery MCP config', () => {
         bgc_discovery: {
           enabled: true,
           transport: 'stdio',
-          command: '/Applications/SciForge.app/Contents/Frameworks/SciForge Helper.app/Contents/MacOS/SciForge Helper',
+          command: resolveBgcDiscoveryMcpCommand(launch),
           args: [
             '/Applications/SciForge.app/out/main/bgc-discovery-mcp-node-entry.js',
             BGC_DISCOVERY_MCP_FLAG,

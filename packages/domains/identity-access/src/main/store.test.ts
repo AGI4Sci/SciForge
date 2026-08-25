@@ -34,6 +34,35 @@ function temporaryRoot(): string {
   return root
 }
 
+function seedAccountsAtCapacity(databasePath: string): void {
+  const database = new DatabaseSync(databasePath)
+  const insert = database.prepare(`
+    INSERT INTO accounts (user_id, username, username_key, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+  `)
+  const timestamp = '2026-01-01T00:00:00.000Z'
+  database.exec('BEGIN IMMEDIATE')
+  try {
+    for (let index = 0; index < MAX_LOCAL_ACCOUNTS; index += 1) {
+      const suffix = index.toString().padStart(12, '0')
+      const username = `Account_${suffix}`
+      insert.run(
+        `00000000-0000-4000-8000-${suffix}`,
+        username,
+        username.toLocaleLowerCase('en-US'),
+        timestamp,
+        timestamp
+      )
+    }
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  } finally {
+    database.close()
+  }
+}
+
 describe('IdentityStore', () => {
   it('persists immutable UUID accounts, selection, rename, exit, and monotonically ordered state', () => {
     const root = temporaryRoot()
@@ -78,10 +107,13 @@ describe('IdentityStore', () => {
   it(
     'rejects account capacity before inserting an unprojectable account',
     () => {
-      const store = IdentityStore.open(temporaryRoot())
-      for (let index = 0; index < MAX_LOCAL_ACCOUNTS; index += 1) {
-        store.createAccount(`Account_${index}`)
-      }
+      const root = temporaryRoot()
+      const initialized = IdentityStore.open(root)
+      const databasePath = initialized.databasePath
+      initialized.close()
+      seedAccountsAtCapacity(databasePath)
+
+      const store = IdentityStore.open(root)
       const before = store.state()
 
       expectValidationCode(

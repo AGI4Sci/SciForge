@@ -133,16 +133,11 @@ export function resolveOpenContentDeploymentConfiguration(
         bytesRead > maxBytes || BigInt(bytesRead) !== before.size) {
         return undefined
       }
-
-      // Bind the accepted bytes to the configured pathname as well as the
-      // opened descriptor. A rename/replace during the read must not let a
-      // stale deployment configuration retain authority.
-      assertPathWithoutSymlink(trustedRoot, sidecarPath)
-      const pathAfter = lstatSync(sidecarPath, { bigint: true })
-      const canonicalPathAfter = realpathSync(sidecarPath)
-      if (!sameFileSnapshot(after, pathAfter) ||
-        pathAfter.isSymbolicLink() ||
-        !isContained(canonicalRoot, canonicalPathAfter)) {
+      // Rebind the verified descriptor to the configured pathname after the
+      // read. A rename-and-replace race leaves the descriptor valid but must
+      // not make a stale deployment configuration authoritative.
+      const currentPath = lstatSync(sidecarPath, { bigint: true })
+      if (currentPath.isSymbolicLink() || !sameFileSnapshot(after, currentPath)) {
         return undefined
       }
       const parsed = openContentDeploymentConfigurationSchema.parse(
