@@ -8,8 +8,10 @@ import type {
 import {
   projectCoordinatorPlanAssignmentSchema,
   projectCoordinatorPlanDraftSchema,
+  projectCoordinatorTransferFeedbackSchema,
   type ProjectCoordinatorPlanAssignment,
-  type ProjectCoordinatorPlanDraft
+  type ProjectCoordinatorPlanDraft,
+  type ProjectCoordinatorTransferFeedback
 } from './contract.js'
 
 const submittedPlanSelectionSchema = z.object({
@@ -22,7 +24,10 @@ const submittedPlanSelectionSchema = z.object({
 const projectCoordinatorStateSchema = z.object({
   schemaVersion: z.literal(1),
   planDrafts: z.array(projectCoordinatorPlanDraftSchema).max(1_000),
-  submittedPlanSelections: z.array(submittedPlanSelectionSchema).max(1_000)
+  submittedPlanSelections: z.array(submittedPlanSelectionSchema).max(1_000),
+  coordinatorTransferFeedback: z.array(projectCoordinatorTransferFeedbackSchema)
+    .max(1_000)
+    .default([])
 }).strict().readonly()
 
 type ProjectCoordinatorState = z.infer<typeof projectCoordinatorStateSchema>
@@ -30,7 +35,8 @@ type ProjectCoordinatorState = z.infer<typeof projectCoordinatorStateSchema>
 const EMPTY_STATE: ProjectCoordinatorState = {
   schemaVersion: 1,
   planDrafts: [],
-  submittedPlanSelections: []
+  submittedPlanSelections: [],
+  coordinatorTransferFeedback: []
 }
 
 export class ProjectCoordinatorStateStore {
@@ -133,6 +139,57 @@ export class ProjectCoordinatorStateStore {
       candidate.projectPlanId === projectPlanId && candidate.planDigest === planDigest
     ))
     return selection?.assignments ?? []
+  }
+
+  async readCoordinatorTransferFeedback(
+    projectId: string
+  ): Promise<ProjectCoordinatorTransferFeedback | null> {
+    const { state } = await this.read()
+    return state.coordinatorTransferFeedback.find((feedback) => (
+      feedback.projectId === projectId
+    )) ?? null
+  }
+
+  async recordCoordinatorTransferFeedback(
+    rawFeedback: ProjectCoordinatorTransferFeedback
+  ): Promise<ProjectCoordinatorTransferFeedback> {
+    const feedback = projectCoordinatorTransferFeedbackSchema.parse(rawFeedback)
+    let snapshot = await this.settings.read()
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const state = parseState(snapshot)
+      const existing = state.coordinatorTransferFeedback.find((candidate) => (
+        candidate.projectId === feedback.projectId
+      ))
+      if (existing?.inboxMessageId === feedback.inboxMessageId) {
+        if (JSON.stringify(existing) !== JSON.stringify(feedback)) {
+          throw new Error('Coordinator transfer Inbox identity conflict.')
+        }
+        return existing
+      }
+      if (existing && existing.coordinatorAuthorityEpoch > feedback.coordinatorAuthorityEpoch) {
+        return existing
+      }
+      if (existing && existing.coordinatorAuthorityEpoch === feedback.coordinatorAuthorityEpoch) {
+        throw new Error('Coordinator transfer authority epoch conflict.')
+      }
+      const value = projectCoordinatorStateSchema.parse({
+        ...state,
+        coordinatorTransferFeedback: [
+          ...state.coordinatorTransferFeedback.filter(({ projectId }) => (
+            projectId !== feedback.projectId
+          )),
+          feedback
+        ]
+      })
+      try {
+        await this.settings.write(value, snapshot.revision)
+        return feedback
+      } catch (error) {
+        if (attempt > 0) throw error
+        snapshot = await this.settings.read()
+      }
+    }
+    throw new Error('Unable to persist Coordinator transfer feedback.')
   }
 
   private async read(): Promise<Readonly<{

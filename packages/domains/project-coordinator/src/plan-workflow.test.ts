@@ -320,6 +320,7 @@ function workspaceFixture() {
       pendingHumanNeeded: [],
       records: [],
       finalSummary: null,
+      coordinatorTransferFeedback: null,
       provisioning: {
         intent: null,
         attestation: null,

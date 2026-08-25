@@ -23,6 +23,7 @@ import {
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateResultSchema,
   projectCoordinatorResultReviewInputSchema,
+  projectCoordinatorTransferInputSchema,
   projectCoordinatorWorkspaceReadInputSchema,
   projectCoordinatorWorkspaceSchema,
   type ProjectCoordinatorPlanConfirmActivateInput,
@@ -46,6 +47,7 @@ import {
   type ProjectCoordinatorProjectCreateInput,
   type ProjectCoordinatorProjectCreateResult,
   type ProjectCoordinatorResultReviewInput,
+  type ProjectCoordinatorTransferInput,
   type ProjectCoordinatorWorkspace,
   type ProjectCoordinatorWorkspaceReadInput
 } from '../contract.js'
@@ -162,6 +164,13 @@ const humanAnswerContract = Object.freeze({
   outputSchema: projectCoordinatorWorkspaceSchema
 })
 
+const coordinatorTransferContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer,
+  effect: 'external-write' as const,
+  inputSchema: projectCoordinatorTransferInputSchema,
+  outputSchema: projectCoordinatorWorkspaceSchema
+})
+
 const resultReviewContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
   effect: 'external-write' as const,
@@ -199,6 +208,7 @@ export type ProjectCoordinatorRendererClient = Readonly<{
   removeMember(input: ProjectCoordinatorMembershipRemoveInput): Promise<ProjectCoordinatorWorkspace>
   createHumanNeeded(input: ProjectCoordinatorHumanNeededCreateInput): Promise<ProjectCoordinatorWorkspace>
   answerHumanNeeded(input: ProjectCoordinatorHumanAnswerInput): Promise<ProjectCoordinatorWorkspace>
+  transferCoordinator(input: ProjectCoordinatorTransferInput): Promise<ProjectCoordinatorWorkspace>
   reviewResult(input: ProjectCoordinatorResultReviewInput): Promise<ProjectCoordinatorWorkspace>
   completeProject(input: ProjectCoordinatorCompleteInput): Promise<ProjectCoordinatorWorkspace>
 }>
@@ -229,6 +239,7 @@ export function createProjectCoordinatorRendererClient(
     removeMember: (input) => invoker.invoke(membershipRemoveContract, input),
     createHumanNeeded: (input) => invoker.invoke(humanNeededCreateContract, input),
     answerHumanNeeded: (input) => invoker.invoke(humanAnswerContract, input),
+    transferCoordinator: (input) => invoker.invoke(coordinatorTransferContract, input),
     reviewResult: (input) => invoker.invoke(resultReviewContract, input),
     completeProject: (input) => invoker.invoke(projectCompleteContract, input)
   })

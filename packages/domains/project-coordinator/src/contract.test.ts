@@ -10,6 +10,7 @@ import {
   projectCoordinatorMembershipAddInputSchema,
   projectCoordinatorMembershipRemoveInputSchema,
   projectCoordinatorProvisioningApplyInputSchema,
+  projectCoordinatorTransferInputSchema,
   projectCoordinatorWorkspaceSchema
 } from './contract.js'
 
@@ -226,6 +227,26 @@ test('activation accepts only an exact Project focus', () => {
     projectId: 'prj_Project000001',
     latest: true
   }))
+})
+
+test('Coordinator transfer HCI selects only a successor identity and cannot claim Cloud authority facts', () => {
+  const input = {
+    projectId: 'prj_Project000001',
+    coordinatorAgentId: 'agt_OwnerSuccessor1'
+  }
+  assert.deepEqual(projectCoordinatorTransferInputSchema.parse(input), input)
+  for (const callerClaim of [
+    { expectedRevision: 3 },
+    { expectedCoordinatorAuthorityEpoch: 2 },
+    { expectedCoordinatorAvailabilityRevision: 7 },
+    { ownerUserId: 'usr_Owner0000001' }
+  ]) {
+    assert.throws(() => projectCoordinatorTransferInputSchema.parse({ ...input, ...callerClaim }))
+  }
+  assert.equal(
+    PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer,
+    'project-coordinator.coordinator.transfer'
+  )
 })
 
 test('provisioning confirmation binds only exact Cloud CAS facts and the Host full-plan digest', () => {

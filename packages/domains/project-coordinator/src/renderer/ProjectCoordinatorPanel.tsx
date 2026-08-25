@@ -8,6 +8,7 @@ import React, {
   type ReactNode
 } from 'react'
 import {
+  ArrowRightLeft,
   ClipboardCheck,
   FileCheck2,
   ListChecks,
@@ -42,6 +43,7 @@ import type {
 import type { ProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
 
 export const PROJECT_COORDINATOR_PANEL_SECTION_IDS = Object.freeze([
+  'coordinator',
   'plan',
   'workers',
   'tasks',
@@ -290,6 +292,15 @@ export function ProjectCoordinatorPanel({
     void runAction('human-answer', () => client.answerHumanNeeded(input), applyProjectWorkspace)
   }, [applyProjectWorkspace, client, runAction])
 
+  const transferCoordinator = useCallback((input: Readonly<{
+    projectId: string
+    coordinatorAgentId: string
+  }>) => {
+    void runAction('coordinator-transfer', () => (
+      client.transferCoordinator(input)
+    ), applyProjectWorkspace)
+  }, [applyProjectWorkspace, client, runAction])
+
   const reviewResult = useCallback((input: ProjectCoordinatorResultReviewInput) => {
     void runAction('result-review', () => client.reviewResult(input), applyProjectWorkspace)
   }, [applyProjectWorkspace, client, runAction])
@@ -435,6 +446,13 @@ export function ProjectCoordinatorPanel({
         ) : null}
 
         {project ? <ProjectSummary project={project} /> : null}
+        <ProjectCoordinatorTransferSection
+          project={project}
+          canTransfer={workspace?.connection.state === 'ready' &&
+            workspace.connection.userId === project?.project.ownerUserId}
+          busy={busyAction === 'coordinator-transfer'}
+          onTransfer={transferCoordinator}
+        />
         <ProjectCoordinatorPlanSection
           project={project}
           draft={draft}
@@ -538,6 +556,132 @@ function ProjectSummary({ project }: Readonly<{ project: ProjectCoordinatorProje
         <dd>{record.revision}</dd>
       </dl>
     </div>
+  )
+}
+
+export function projectCoordinatorTransferCandidates(
+  project: ProjectCoordinatorProject
+): ProjectCoordinatorProject['workerGroups'][number]['agents'] {
+  if (project.project.status === 'completed' || project.project.status === 'cancelled') return []
+  const ownerGroup = project.workerGroups.find(({ userId }) => (
+    userId === project.project.ownerUserId
+  ))
+  return ownerGroup?.agents.filter(({ projectAvailability }) => {
+    const availability = projectAvailability.availability
+    return projectAvailability.userId === project.project.ownerUserId &&
+      projectAvailability.agentId !== project.project.coordinatorAgentId &&
+      projectAvailability.membership?.state === 'active' &&
+      availability.agentActive &&
+      availability.deviceActive &&
+      availability.connectionStatus === 'online' &&
+      availability.runtimeReadiness === 'ready'
+  }) ?? []
+}
+
+export function ProjectCoordinatorTransferSection({
+  project,
+  canTransfer,
+  busy,
+  onTransfer
+}: Readonly<{
+  project?: ProjectCoordinatorProject
+  canTransfer: boolean
+  busy: boolean
+  onTransfer(input: Readonly<{ projectId: string; coordinatorAgentId: string }>): void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  const candidates = project ? projectCoordinatorTransferCandidates(project) : []
+  const [selectedAgentId, setSelectedAgentId] = useState('')
+  useEffect(() => {
+    if (selectedAgentId && !candidates.some(({ projectAvailability }) => (
+      projectAvailability.agentId === selectedAgentId
+    ))) {
+      setSelectedAgentId('')
+    }
+  }, [candidates, selectedAgentId])
+  const feedback = project?.coordinatorTransferFeedback
+  return (
+    <Section
+      id="coordinator"
+      title={t('projectCoordinatorTransferTitle')}
+      icon={<ArrowRightLeft className="h-4 w-4" />}
+    >
+      {!project ? <Empty /> : (
+        <div className="space-y-2">
+          <div className="rounded border border-ds-border bg-ds-bg p-2 text-[11px]">
+            <div className="text-ds-muted">{t('projectCoordinatorCurrentAuthority')}</div>
+            <div className="break-all font-mono">{project.project.coordinatorAgentId}</div>
+            <div className="text-ds-muted">
+              {t('projectCoordinatorAuthorityEpoch')}: {project.project.coordinatorAuthorityEpoch}
+            </div>
+          </div>
+          {feedback ? (
+            <div
+              className="rounded border border-amber-500/40 p-2 text-[11px]"
+              data-default-visible-card="coordinator-transfer-fence"
+            >
+              <div className="font-medium">
+                {t(feedback.disposition === 'authority_transferred_out'
+                  ? 'projectCoordinatorAuthorityTransferredOut'
+                  : 'projectCoordinatorAuthorityTransferredIn')}
+              </div>
+              <div className="mt-1 break-all font-mono text-ds-muted">
+                {feedback.previousCoordinatorAgentId} → {feedback.coordinatorAgentId}
+              </div>
+              <div className="text-ds-muted">
+                {t('projectCoordinatorAuthorityEpoch')}: {feedback.coordinatorAuthorityEpoch}
+              </div>
+            </div>
+          ) : null}
+          {canTransfer ? candidates.length === 0 ? (
+            <p className="text-[11px] text-ds-muted">
+              {t('projectCoordinatorNoEligibleOwnerAgent')}
+            </p>
+          ) : (
+            <form
+              className="space-y-2"
+              onSubmit={(event) => {
+                event.preventDefault()
+                if (!selectedAgentId) return
+                onTransfer({
+                  projectId: project.project.projectId,
+                  coordinatorAgentId: selectedAgentId
+                })
+              }}
+            >
+              <select
+                required
+                value={selectedAgentId}
+                onChange={(event) => setSelectedAgentId(event.currentTarget.value)}
+                aria-label={t('projectCoordinatorSuccessorAgent')}
+                className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+              >
+                <option value="">{t('projectCoordinatorChooseOwnerAgent')}</option>
+                {candidates.map(({ displayName, projectAvailability }) => (
+                  <option
+                    key={projectAvailability.agentId}
+                    value={projectAvailability.agentId}
+                  >
+                    {displayName} · {projectAvailability.agentId}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="submit"
+                disabled={busy || !selectedAgentId}
+                className="rounded border border-amber-500/50 px-2 py-1.5 text-xs font-medium disabled:opacity-50"
+              >
+                {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorTransferAction')}
+              </button>
+            </form>
+          ) : (
+            <p className="text-[11px] text-ds-muted">
+              {t('projectCoordinatorOwnerOnlyTransfer')}
+            </p>
+          )}
+        </div>
+      )}
+    </Section>
   )
 }
 

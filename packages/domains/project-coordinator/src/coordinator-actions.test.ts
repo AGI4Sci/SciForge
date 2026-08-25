@@ -21,12 +21,14 @@ import {
 } from '@sciforge/collaboration-contracts/testing'
 import type { CoordinatorCloudCommandService } from '@sciforge/domain-collaboration/coordinator-cloud-command'
 import type { AuthenticatedCloudTransport } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
+import type { DomainMainPackageSettingsHost } from '@sciforge/domain-sdk/package-storage'
 
 import { projectCoordinatorWorkspaceSchema } from './contract.js'
 import {
   createProjectCoordinatorActionPort,
   defineProjectCoordinatorWorkspacePort
 } from './ports.js'
+import { ProjectCoordinatorStateStore } from './state.js'
 
 test('Coordinator creates Project-scoped HumanNeeded while only the OIDC Owner answers it', async () => {
   const workspace = workspaceFixture()
@@ -76,6 +78,7 @@ test('Coordinator creates Project-scoped HumanNeeded while only the OIDC Owner a
     }),
     coordinatorCloudCommands,
     transport,
+    state: coordinatorState(),
     requestId: () => `req_CoordinatorAction${String(++requestOrdinal).padStart(3, '0')}`
   })
 
@@ -164,6 +167,7 @@ test('Coordinator accepts or requests revision through the exact immutable resul
     }),
     coordinatorCloudCommands,
     transport: unusedTransport(),
+    state: coordinatorState(),
     requestId: (() => {
       let ordinal = 0
       return () => `req_ResultReview${String(++ordinal).padStart(4, '0')}`
@@ -294,6 +298,7 @@ test('Coordinator final summary atomically completes the Project through accepte
     }),
     coordinatorCloudCommands,
     transport: unusedTransport(),
+    state: coordinatorState(),
     requestId: () => 'req_FinalSummary0001'
   })
 
@@ -391,6 +396,7 @@ test('durable Coordinator Inbox turns the exact Owner HumanAnswer into one offic
     }),
     coordinatorCloudCommands,
     transport: unusedTransport(),
+    state: coordinatorState(),
     requestId: () => 'req_ProjectDecision001'
   })
 
@@ -482,4 +488,24 @@ function unusedTransport(): AuthenticatedCloudTransport {
     status: () => ({ state: 'unavailable', reason: 'OIDC transport is unused.' }),
     execute: async () => { throw new Error('OIDC transport is unused.') }
   }
+}
+
+function coordinatorState(): ProjectCoordinatorStateStore {
+  let revision = 0
+  let value: Awaited<ReturnType<DomainMainPackageSettingsHost['read']>>['value'] = null
+  return new ProjectCoordinatorStateStore({
+    read: async () => ({ revision, value }),
+    write: async (next, expectedRevision) => {
+      assert.equal(expectedRevision, revision)
+      value = next
+      revision += 1
+      return { revision, value }
+    },
+    clear: async (expectedRevision) => {
+      assert.equal(expectedRevision, revision)
+      value = null
+      revision += 1
+      return { revision, value }
+    }
+  })
 }

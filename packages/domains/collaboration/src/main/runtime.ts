@@ -78,6 +78,15 @@ export function isWorkerTaskInboxPayload(payload: AgentInboxMessage['payload']):
     payload.type === 'collaboration.state.changed'
 }
 
+export function isCoordinatorProjectInboxPayload(
+  payload: AgentInboxMessage['payload']
+): boolean {
+  return payload.type === 'coordinator.transferred' || (
+    payload.type === 'human.answer.received' &&
+    payload.answer.context.scope === 'coordinator_project'
+  )
+}
+
 export class CollaborationRuntime {
   private readonly store: CollaborationLocalStore
   private readonly settings: CollaborationSettingsService
@@ -149,16 +158,19 @@ export class CollaborationRuntime {
           await projections.acceptPersonalInbox(message)
           return
         }
-        if (message.payload.type === 'human.answer.received') {
-          if (message.payload.answer.context.scope === 'coordinator_project') {
-            const handler = this.options.coordinatorInboxHandler?.()
-            if (!handler) {
-              throw new Error('The Project Coordinator Inbox owner is unavailable.')
-            }
-            await handler(message)
-          } else {
-            await tasks.handleInbox(message)
+        if (isCoordinatorProjectInboxPayload(message.payload)) {
+          const handler = this.options.coordinatorInboxHandler?.()
+          if (!handler) {
+            throw new Error('The Project Coordinator Inbox owner is unavailable.')
           }
+          await handler(message)
+          if (message.payload.type === 'coordinator.transferred') {
+            await this.refreshCollaborationFact(message)
+          }
+          return
+        }
+        if (message.payload.type === 'human.answer.received') {
+          await tasks.handleInbox(message)
           return
         }
         if (isWorkerTaskInboxPayload(message.payload)) {

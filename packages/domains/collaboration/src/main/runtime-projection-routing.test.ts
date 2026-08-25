@@ -18,6 +18,7 @@ import { localProjectionFromRemote } from './projection-coordinator.js'
 import {
   CollaborationRuntime,
   activeProjectionBindingsForSession,
+  isCoordinatorProjectInboxPayload,
   isWorkerTaskInboxPayload
 } from './runtime.js'
 import {
@@ -56,6 +57,20 @@ test('runtime routes durable exact-output recovery and abandonment to the Worker
   }
   assert.equal(isWorkerTaskInboxPayload({
     type: 'human.answer.received'
+  } as AgentInboxMessage['payload']), false)
+})
+
+test('runtime reserves Coordinator transfer feedback for the single Project Coordinator Inbox owner', () => {
+  assert.equal(isCoordinatorProjectInboxPayload({
+    type: 'coordinator.transferred'
+  } as AgentInboxMessage['payload']), true)
+  assert.equal(isCoordinatorProjectInboxPayload({
+    type: 'human.answer.received',
+    answer: { context: { scope: 'coordinator_project' } }
+  } as AgentInboxMessage['payload']), true)
+  assert.equal(isCoordinatorProjectInboxPayload({
+    type: 'human.answer.received',
+    answer: { context: { scope: 'worker_execution' } }
   } as AgentInboxMessage['payload']), false)
 })
 

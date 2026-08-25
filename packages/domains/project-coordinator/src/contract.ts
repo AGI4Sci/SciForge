@@ -4,6 +4,7 @@ import {
   agentIdSchema,
   deviceIdSchema,
   displayNameSchema,
+  inboxMessageIdSchema,
   humanAnswerCommandSchema,
   humanNeededSchema,
   humanNeededCreateCommandSchema,
@@ -58,6 +59,7 @@ export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   membershipRemove: 'project-coordinator.membership.remove',
   humanNeededCreate: 'project-coordinator.human-needed.create',
   humanAnswer: 'project-coordinator.human-needed.answer',
+  coordinatorTransfer: 'project-coordinator.coordinator.transfer',
   resultReview: 'project-coordinator.result.review',
   projectComplete: 'project-coordinator.project.complete'
 } as const)
@@ -294,6 +296,48 @@ export const projectCoordinatorHumanAnswerInputSchema = humanAnswerCommandSchema
   projectId: projectIdSchema
 }).strict().readonly()
 
+/**
+ * The Owner chooses only the exact successor Agent. Cloud CAS facts are
+ * re-read and derived in main; renderer input cannot claim authority epochs.
+ */
+export const projectCoordinatorTransferInputSchema = z.object({
+  projectId: projectIdSchema,
+  coordinatorAgentId: agentIdSchema
+}).strict().readonly()
+
+export const projectCoordinatorTransferFeedbackSchema = z.object({
+  projectId: projectIdSchema,
+  inboxMessageId: inboxMessageIdSchema,
+  recipientAgentId: agentIdSchema,
+  previousCoordinatorAgentId: agentIdSchema,
+  coordinatorAgentId: agentIdSchema,
+  coordinatorAuthorityEpoch: projectSchema.shape.coordinatorAuthorityEpoch,
+  projectRevision: projectSchema.shape.revision,
+  disposition: z.enum(['authority_transferred_out', 'authority_transferred_in']),
+  observedAt: timestampSchema
+}).strict().superRefine((feedback, context) => {
+  if (
+    feedback.disposition === 'authority_transferred_out' &&
+    feedback.recipientAgentId !== feedback.previousCoordinatorAgentId
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['recipientAgentId'],
+      message: 'Transferred-out feedback must target the previous Coordinator Agent.'
+    })
+  }
+  if (
+    feedback.disposition === 'authority_transferred_in' &&
+    feedback.recipientAgentId !== feedback.coordinatorAgentId
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['recipientAgentId'],
+      message: 'Transferred-in feedback must target the successor Coordinator Agent.'
+    })
+  }
+}).readonly()
+
 export const projectCoordinatorResultReviewInputSchema = taskResultReviewFactsSchema.readonly()
 
 export const projectCoordinatorCompleteInputSchema = projectFinalSummarySubmitCommandSchema.omit({
@@ -408,6 +452,7 @@ export const projectCoordinatorProvisioningViewSchema = z.object({
 
 export const projectCoordinatorProjectSchema = z.object({
   project: projectSchema,
+  coordinatorTransferFeedback: projectCoordinatorTransferFeedbackSchema.nullable().default(null),
   plan: projectCoordinatorPlanViewSchema.nullable(),
   workerGroups: z.array(projectCoordinatorWorkerGroupSchema).max(1_000),
   tasks: z.array(projectCoordinatorTaskViewSchema).max(10_000),
@@ -418,6 +463,19 @@ export const projectCoordinatorProjectSchema = z.object({
   provisioning: projectCoordinatorProvisioningViewSchema
 }).strict().superRefine((view, context) => {
   const projectId = view.project.projectId
+  if (view.coordinatorTransferFeedback && (
+    view.coordinatorTransferFeedback.projectId !== projectId ||
+    view.coordinatorTransferFeedback.coordinatorAgentId !== view.project.coordinatorAgentId ||
+    view.coordinatorTransferFeedback.coordinatorAuthorityEpoch !==
+      view.project.coordinatorAuthorityEpoch ||
+    view.coordinatorTransferFeedback.projectRevision > view.project.revision
+  )) {
+    context.addIssue({
+      code: 'custom',
+      path: ['coordinatorTransferFeedback'],
+      message: 'Coordinator transfer feedback must match the current Project authority.'
+    })
+  }
   if (view.plan && view.plan.plan.projectId !== projectId) {
     context.addIssue({ code: 'custom', path: ['plan'], message: 'Plan must belong to this Project.' })
   }
@@ -692,6 +750,12 @@ export type ProjectCoordinatorHumanNeededCreateInput = z.infer<
 >
 export type ProjectCoordinatorHumanAnswerInput = z.infer<
   typeof projectCoordinatorHumanAnswerInputSchema
+>
+export type ProjectCoordinatorTransferInput = z.infer<
+  typeof projectCoordinatorTransferInputSchema
+>
+export type ProjectCoordinatorTransferFeedback = z.infer<
+  typeof projectCoordinatorTransferFeedbackSchema
 >
 export type ProjectCoordinatorResultReviewInput = z.infer<
   typeof projectCoordinatorResultReviewInputSchema

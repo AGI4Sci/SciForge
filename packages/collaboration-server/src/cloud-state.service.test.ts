@@ -62,6 +62,54 @@ async function heartbeatReadyAgent(
   })
 }
 
+async function addActiveDeviceForUser(
+  repository: FakeCollaborationRepository,
+  sourceDeviceId: string,
+  userId: string,
+  label: string
+): Promise<string> {
+  const suffix = stableDigest(label).slice(0, 24)
+  const deviceId = `dev_${suffix}`
+  await repository.transaction(async (tx) => {
+    const source = await tx.getDeviceForUpdate(sourceDeviceId)
+    if (!source) throw new Error('Source Device was not found.')
+    await tx.insertDevice({
+      ...source,
+      deviceId,
+      userId,
+      installationId: `ins_${suffix}`,
+      displayName: `${label} Device`,
+      revision: 1,
+      createdAt: at.toISOString(),
+      updatedAt: at.toISOString()
+    })
+  })
+  return deviceId
+}
+
+async function publishReadyAvailability(
+  service: CollaborationService,
+  actor: AgentActor,
+  label: string
+) {
+  const heartbeat = await heartbeatReadyAgent(service, actor, `idem_${label}_heartbeat`)
+  return service.publishWorkerAvailability(actor, {
+    protocolVersion: '1.0',
+    type: 'worker.availability.publish',
+    requestId: `req_${label}_availability`,
+    idempotencyKey: `idem_${label}_availability`,
+    agentId: actor.agentId,
+    expectedAgentRevision: heartbeat.revision,
+    connectionStatus: 'online',
+    lastHeartbeatAt: heartbeat.lastSeenAt,
+    runtimeReadiness: 'ready',
+    runtimeCapabilityTags: RUNTIME_CAPABILITY_TAGS,
+    acceptsNewOffers: true,
+    activeTaskCount: 0,
+    observedAt: at.toISOString()
+  })
+}
+
 function providerFactCommand(
   actor: UserActor,
   deviceId: string,
@@ -196,7 +244,12 @@ async function activeTextOfferFixture(suffix: string) {
   const service = new CollaborationService({ repository, now })
   const owner = await seedOidcUserDevice(repository, `${suffix}-owner`, at)
   const firstWorker = await seedOidcUserDevice(repository, `${suffix}-first-worker`, at)
-  const nextCoordinator = await seedOidcUserDevice(repository, `${suffix}-next-coordinator`, at)
+  const nextCoordinatorDeviceId = await addActiveDeviceForUser(
+    repository,
+    owner.deviceId,
+    owner.userId,
+    `${suffix}-next-coordinator`
+  )
   const coordinator = await registeredAgent(service, owner.user, owner.deviceId, `${suffix}-owner`)
   const firstWorkerAgent = await registeredAgent(
     service,
@@ -206,8 +259,8 @@ async function activeTextOfferFixture(suffix: string) {
   )
   const nextCoordinatorAgent = await registeredAgent(
     service,
-    nextCoordinator.user,
-    nextCoordinator.deviceId,
+    owner.user,
+    nextCoordinatorDeviceId,
     `${suffix}-next-coordinator`
   )
   const publishAvailability = async (actor: AgentActor, idempotencyKey: string) => (
@@ -253,8 +306,7 @@ async function activeTextOfferFixture(suffix: string) {
       mode: 'none',
       members: [
         { userId: owner.userId },
-        { userId: firstWorker.userId },
-        { userId: nextCoordinator.userId }
+        { userId: firstWorker.userId }
       ]
     }
   })
@@ -334,7 +386,6 @@ async function activeTextOfferFixture(suffix: string) {
     service,
     owner,
     firstWorker,
-    nextCoordinator,
     coordinator,
     firstWorkerAgent,
     nextCoordinatorAgent,
@@ -1865,6 +1916,179 @@ describe('vNext Cloud application service', () => {
       protocolVersion: '1.0', type: 'project.list', requestId: 'req_membership_project_wrong_actor',
       cursor: firstPage.nextCursor!, limit: 1
     })).rejects.toMatchObject({ code: 'validation_failed' })
+  })
+
+  it('transfers Coordinator authority only between exact Agents owned by the Project Owner', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const owner = await seedOidcUserDevice(repository, 'transfer-owner', at)
+    const member = await seedOidcUserDevice(repository, 'transfer-member', at)
+    const secondOwnerDeviceId = await addActiveDeviceForUser(
+      repository,
+      owner.deviceId,
+      owner.userId,
+      'transfer-owner-second'
+    )
+    const coordinator = await registeredAgent(
+      service,
+      owner.user,
+      owner.deviceId,
+      'transfer-owner-current'
+    )
+    const successor = await registeredAgent(
+      service,
+      owner.user,
+      secondOwnerDeviceId,
+      'transfer-owner-successor'
+    )
+    const memberAgent = await registeredAgent(
+      service,
+      member.user,
+      member.deviceId,
+      'transfer-member-agent'
+    )
+    const successorAvailability = await publishReadyAvailability(
+      service,
+      successor,
+      'transfer_successor'
+    )
+    const memberAvailability = await publishReadyAvailability(
+      service,
+      memberAgent,
+      'transfer_member'
+    )
+    const created = await service.createProject(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.create',
+      requestId: 'req_transfer_owner_project',
+      idempotencyKey: 'idem_transfer_owner_project',
+      displayName: 'Owner-only Coordinator transfer',
+      goal: 'Fence the old Coordinator without creating a role account.',
+      coordinatorAgentId: coordinator.agentId,
+      expectedCoordinatorAgentRevision: 1,
+      budget: {
+        maxTasks: 5,
+        maxTasksPerRound: 5,
+        maxTaskRetries: 1,
+        maxCoordinationRounds: 2
+      },
+      content: {
+        mode: 'none',
+        members: [{ userId: owner.userId }, { userId: member.userId }]
+      }
+    })
+    const currentAvailability = await publishReadyAvailability(
+      service,
+      coordinator,
+      'transfer_current'
+    )
+    const transferFacts = {
+      protocolVersion: '1.0' as const,
+      type: 'project.transfer_coordinator' as const,
+      projectId: created.project.projectId,
+      expectedRevision: created.project.revision,
+      expectedCoordinatorAuthorityEpoch: created.project.coordinatorAuthorityEpoch
+    }
+
+    await expect(service.transferCoordinator(owner.user, {
+      ...transferFacts,
+      requestId: 'req_transfer_member_forbidden',
+      idempotencyKey: 'idem_transfer_member_forbidden',
+      coordinatorAgentId: memberAgent.agentId,
+      expectedCoordinatorAvailabilityRevision: memberAvailability.revision
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+    await expect(service.transferCoordinator(owner.user, {
+      ...transferFacts,
+      requestId: 'req_transfer_same_forbidden',
+      idempotencyKey: 'idem_transfer_same_forbidden',
+      coordinatorAgentId: coordinator.agentId,
+      expectedCoordinatorAvailabilityRevision: currentAvailability.revision
+    })).rejects.toMatchObject({ code: 'invalid_state_transition' })
+
+    const transferred = await service.transferCoordinator(owner.user, {
+      ...transferFacts,
+      requestId: 'req_transfer_owner_successor',
+      idempotencyKey: 'idem_transfer_owner_successor',
+      coordinatorAgentId: successor.agentId,
+      expectedCoordinatorAvailabilityRevision: successorAvailability.revision
+    })
+    expect(transferred).toMatchObject({
+      coordinatorAgentId: successor.agentId,
+      coordinatorAuthorityEpoch: created.project.coordinatorAuthorityEpoch + 1,
+      revision: created.project.revision + 1
+    })
+
+    for (const recipient of [coordinator, successor]) {
+      const inbox = await service.pullInbox(recipient, { afterSequence: 0, limit: 100 })
+      const notifications = inbox.messages.filter(({ payload }) => (
+        payload.type === 'coordinator.transferred'
+      ))
+      expect(notifications).toHaveLength(1)
+      expect(notifications[0]).toMatchObject({
+        recipient: { kind: 'agent', id: recipient.agentId },
+        payload: {
+          type: 'coordinator.transferred',
+          projectId: transferred.projectId,
+          previousCoordinatorAgentId: coordinator.agentId,
+          coordinatorAgentId: successor.agentId,
+          coordinatorAuthorityEpoch: transferred.coordinatorAuthorityEpoch,
+          revision: transferred.revision
+        }
+      })
+    }
+
+    const tasks = [{
+      planItemId: 'item_transfer_fence',
+      title: 'Verify transferred authority',
+      objective: 'Only the successor Coordinator may submit this plan.',
+      completionCriteria: ['The old Coordinator write is rejected.'],
+      dependencyPlanItemIds: [],
+      requiredCapabilityTags: ['research.execute'],
+      fileIntent: null
+    }]
+    const oldPlanFacts = {
+      projectId: transferred.projectId,
+      expectedProjectRevision: created.project.revision,
+      expectedCoordinatorAuthorityEpoch: created.project.coordinatorAuthorityEpoch,
+      supersedesProjectPlanId: null,
+      sourceInputLocators: [],
+      tasks,
+      rationale: 'The transfer itself supplies the authority fence.',
+      runtimeProvenance: {
+        runtimeId: 'runtime_transfer_old_coordinator',
+        modelId: null,
+        generatedByCoordinatorAgentId: coordinator.agentId,
+        generatedAt: at.toISOString()
+      }
+    }
+    await expect(service.submitProjectPlan(coordinator, {
+      protocolVersion: '1.0',
+      type: 'project.plan.submit',
+      requestId: 'req_transfer_old_plan',
+      idempotencyKey: 'idem_transfer_old_plan',
+      ...oldPlanFacts,
+      planDigest: stableDigest(oldPlanFacts)
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+
+    const successorPlanFacts = {
+      ...oldPlanFacts,
+      expectedProjectRevision: transferred.revision,
+      expectedCoordinatorAuthorityEpoch: transferred.coordinatorAuthorityEpoch,
+      runtimeProvenance: {
+        ...oldPlanFacts.runtimeProvenance,
+        runtimeId: 'runtime_transfer_successor',
+        generatedByCoordinatorAgentId: successor.agentId
+      }
+    }
+    const plan = await service.submitProjectPlan(successor, {
+      protocolVersion: '1.0',
+      type: 'project.plan.submit',
+      requestId: 'req_transfer_successor_plan',
+      idempotencyKey: 'idem_transfer_successor_plan',
+      ...successorPlanFacts,
+      planDigest: stableDigest(successorPlanFacts)
+    })
+    expect(plan.runtimeProvenance.generatedByCoordinatorAgentId).toBe(successor.agentId)
   })
 
   it('reassigns only from the caller-observed Project and execution authority epochs after transfer', async () => {

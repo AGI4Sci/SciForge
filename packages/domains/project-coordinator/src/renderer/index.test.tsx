@@ -17,10 +17,12 @@ import {
   ProjectCoordinatorPanel,
   ProjectCoordinatorPlanSection,
   ProjectCoordinatorProvisioningSection,
+  ProjectCoordinatorTransferSection,
   projectCoordinatorCompletionInput,
   projectCoordinatorCreatedSelection,
   projectCoordinatorProvisioningApplyInput,
-  projectCoordinatorResultReviewInput
+  projectCoordinatorResultReviewInput,
+  projectCoordinatorTransferCandidates
 } from './ProjectCoordinatorPanel.js'
 import { createProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
 import {
@@ -76,8 +78,9 @@ test('renderer entry owns one generic Workbench surface without Identity UI cont
   assert.equal(rendered.props.className, 'fixture-panel')
 })
 
-test('panel surface is limited to Plan, Worker selection, Task, review, and provisioning HCI', () => {
+test('panel surface is limited to Coordinator, Plan, Worker, Task, review, and provisioning HCI', () => {
   assert.deepEqual(PROJECT_COORDINATOR_PANEL_SECTION_IDS, [
+    'coordinator',
     'plan',
     'workers',
     'tasks',
@@ -106,6 +109,7 @@ test('panel surface is limited to Plan, Worker selection, Task, review, and prov
       retryRecoverySuccessor: async () => { throw new Error('unused') },
       createHumanNeeded: async () => { throw new Error('unused') },
       answerHumanNeeded: async () => { throw new Error('unused') },
+      transferCoordinator: async () => { throw new Error('unused') },
       reviewResult: async () => { throw new Error('unused') },
       completeProject: async () => { throw new Error('unused') }
     },
@@ -115,6 +119,26 @@ test('panel surface is limited to Plan, Worker selection, Task, review, and prov
     assert.match(markup, new RegExp(`data-coordinator-section="${sectionId}"`, 'u'))
   }
   assert.doesNotMatch(markup, /password|access token|refresh token|register agent|enroll device/iu)
+})
+
+test('Coordinator transfer HCI is Owner-only, exact-Agent, and shows the old authority fence', () => {
+  const project = coordinatorTransferProjectFixture()
+  assert.deepEqual(
+    projectCoordinatorTransferCandidates(project).map(({ projectAvailability }) => (
+      projectAvailability.agentId
+    )),
+    ['agt_OwnerSuccessor1']
+  )
+  const markup = renderToStaticMarkup(createElement(ProjectCoordinatorTransferSection, {
+    project,
+    canTransfer: true,
+    busy: false,
+    onTransfer: () => undefined
+  }))
+  assert.match(markup, /projectCoordinatorTransferTitle/u)
+  assert.match(markup, /agt_OwnerSuccessor1/u)
+  assert.match(markup, /projectCoordinatorAuthorityTransferredOut/u)
+  assert.doesNotMatch(markup, /agt_MemberAgent001/u)
 })
 
 test('command focuses an exact Project through the generic panel activation contract', () => {
@@ -190,6 +214,41 @@ test('renderer Project create applies the exact Cloud-returned workspace focus w
         maxCoordinationRounds: 2
       },
       content: { mode: 'none', members: [{ userId: 'usr_Owner0000001' }] }
+    }
+  }])
+})
+
+test('renderer Coordinator transfer invokes one governed Owner command without caller-authored CAS facts', async () => {
+  const invoked: unknown[] = []
+  const workspace = {
+    connection: {
+      state: 'ready' as const,
+      userId: 'usr_Owner0000001',
+      deviceId: 'dev_Device0000001'
+    },
+    observedAt: '2026-08-25T01:08:00.000Z',
+    focusedProjectId: 'prj_ProjectCreated01',
+    projects: [awaitingConfirmationProjectFixture()]
+  }
+  const client = createProjectCoordinatorRendererClient({
+    observe: async () => { throw new Error('not observed') },
+    invoke: async (contract, input) => {
+      invoked.push({ actionId: contract.actionId, effect: contract.effect, input })
+      return workspace as never
+    }
+  })
+
+  await client.transferCoordinator({
+    projectId: 'prj_ProjectCreated01',
+    coordinatorAgentId: 'agt_OwnerSuccessor1'
+  })
+
+  assert.deepEqual(invoked, [{
+    actionId: 'project-coordinator.coordinator.transfer',
+    effect: 'external-write',
+    input: {
+      projectId: 'prj_ProjectCreated01',
+      coordinatorAgentId: 'agt_OwnerSuccessor1'
     }
   }])
 })
@@ -806,6 +865,105 @@ function rendererHost(opened: unknown[]): DomainRendererHost {
   }
 }
 
+function coordinatorTransferProjectFixture(): ProjectCoordinatorProject {
+  const base = awaitingConfirmationProjectFixture()
+  const availability = (userId: string, agentId: string, revision: number) => ({
+    schemaVersion: 1 as const,
+    type: 'project_worker_availability_view' as const,
+    projectId: base.project.projectId,
+    userId,
+    agentId,
+    revision,
+    availability: {
+      schemaVersion: 1 as const,
+      type: 'worker_availability_projection' as const,
+      userId,
+      agentId,
+      deviceId: `dev_${agentId.slice(4)}`,
+      agentActive: true,
+      deviceActive: true,
+      connectionStatus: 'online' as const,
+      lastHeartbeatAt: base.project.updatedAt,
+      runtimeReadiness: 'ready' as const,
+      runtimeCapabilityTags: ['research.execute'],
+      acceptsNewOffers: true,
+      activeTaskCount: 0,
+      observedAt: base.project.updatedAt,
+      expiresAt: '2026-08-25T02:08:00.000Z',
+      revision,
+      createdAt: base.project.createdAt,
+      updatedAt: base.project.updatedAt
+    },
+    membership: {
+      schemaVersion: 1 as const,
+      type: 'project_membership' as const,
+      projectMembershipId: userId === base.project.ownerUserId
+        ? 'pmb_OwnerMember001'
+        : 'pmb_OtherMember001',
+      projectId: base.project.projectId,
+      userId,
+      state: 'active' as const,
+      authorityEpoch: 1,
+      activatedAt: base.project.createdAt,
+      removalRequestedAt: null,
+      removalRequestedByUserId: null,
+      removedAt: null,
+      revision: 1,
+      createdAt: base.project.createdAt,
+      updatedAt: base.project.updatedAt
+    },
+    taskAuthorities: [],
+    providerPrincipalFact: null,
+    providerPrincipalSnapshotStatus: 'not_applicable' as const,
+    contentReadiness: null,
+    observedAt: base.project.updatedAt
+  })
+  return {
+    ...base,
+    coordinatorTransferFeedback: {
+      projectId: base.project.projectId,
+      inboxMessageId: 'ibx_TransferInbox01',
+      recipientAgentId: 'agt_PreviousCoord01',
+      previousCoordinatorAgentId: 'agt_PreviousCoord01',
+      coordinatorAgentId: base.project.coordinatorAgentId,
+      coordinatorAuthorityEpoch: base.project.coordinatorAuthorityEpoch,
+      projectRevision: 1,
+      disposition: 'authority_transferred_out',
+      observedAt: base.project.updatedAt
+    },
+    workerGroups: [{
+      userId: base.project.ownerUserId,
+      displayName: 'Project Owner',
+      agents: [{
+        displayName: 'Current Coordinator Desktop',
+        projectAvailability: availability(
+          base.project.ownerUserId,
+          base.project.coordinatorAgentId,
+          6
+        )
+      }, {
+        displayName: 'Owner Successor Desktop',
+        projectAvailability: availability(
+          base.project.ownerUserId,
+          'agt_OwnerSuccessor1',
+          7
+        )
+      }]
+    }, {
+      userId: 'usr_ProjectMember01',
+      displayName: 'Project Member',
+      agents: [{
+        displayName: 'Member Desktop',
+        projectAvailability: availability(
+          'usr_ProjectMember01',
+          'agt_MemberAgent001',
+          9
+        )
+      }]
+    }]
+  } as ProjectCoordinatorProject
+}
+
 function awaitingConfirmationProjectFixture() {
   const createdAt = '2026-08-25T01:00:00.000Z'
   const updatedAt = '2026-08-25T01:08:00.000Z'
@@ -874,6 +1032,7 @@ function awaitingConfirmationProjectFixture() {
     pendingHumanNeeded: [],
     records: [],
     finalSummary: null,
+    coordinatorTransferFeedback: null,
     provisioning: {
       intent: null,
       attestation: null,

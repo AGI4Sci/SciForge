@@ -2146,6 +2146,12 @@ export class CollaborationService {
         fail('invalid_state_transition', 'The new Coordinator availability fact is not current and ready.')
       }
       const coordinator = required(await tx.getAgentForUpdate(input.coordinatorAgentId), 'Coordinator Agent')
+      if (coordinator.agentId === project.coordinatorAgentId) {
+        fail('invalid_state_transition', 'Coordinator transfer requires another exact Owner Agent.')
+      }
+      if (coordinator.ownerUserId !== project.ownerUserId) {
+        fail('permission_denied', 'The new Coordinator Agent must be owned by the current Project Owner.')
+      }
       const coordinatorDevice = required(await tx.getDeviceForUpdate(coordinator.deviceId), 'Coordinator Device')
       const coordinatorMember = await tx.getProjectMember(project.projectId, coordinator.ownerUserId)
       if (

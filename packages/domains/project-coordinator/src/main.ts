@@ -47,6 +47,7 @@ import {
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateResultSchema,
   projectCoordinatorResultReviewInputSchema,
+  projectCoordinatorTransferInputSchema,
   projectCoordinatorWorkspaceReadInputSchema,
   projectCoordinatorWorkspaceSchema,
   type ProjectCoordinatorWorkspaceReadInput
@@ -456,6 +457,27 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         })
       }),
       options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer,
+        version: '1.0.0',
+        title: 'Transfer Project Coordinator',
+        description: 'Lets the authenticated Project Owner select another exact ready Agent that they own; main derives all Cloud CAS facts and the old Coordinator is fenced atomically.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'owner', 'coordinator', 'transfer', 'authority-fence'],
+        inputSchema: projectCoordinatorTransferInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.actions.transferCoordinator(
+            projectCoordinatorTransferInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer, context)
+          ),
+          changed: true
+        })
+      }),
+      options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
         version: '1.0.0',
         title: 'Review Task result',
@@ -539,6 +561,9 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     readPlanAssignments: (plan) => state.readPlanAssignments(
       plan.projectPlanId,
       plan.planDigest
+    ),
+    readCoordinatorTransferFeedback: (projectId) => (
+      state.readCoordinatorTransferFeedback(projectId)
     )
   })
   let agentExecution: DomainMainAgentExecutionHost | undefined
@@ -553,7 +578,8 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
   const actions = createProjectCoordinatorActionPort({
     workspace,
     coordinatorCloudCommands,
-    transport
+    transport,
+    state
   })
   const disposeCoordinatorInbox = coordinatorCloudCommands.subscribe((message) => (
     actions.handleInbox(message)

@@ -159,6 +159,7 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer,
     PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete
   ])
@@ -273,6 +274,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer,
     PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete
   ])
@@ -284,6 +286,12 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
     ({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate
   )!
   assert.equal(generate.effect, 'workspace-write')
+  const transfer = definitions.find(
+    ({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer
+  )!
+  assert.equal(transfer.effect, 'external-write')
+  assert.equal(transfer.approval, 'confirmation')
+  assert.equal(transfer.concurrency.idempotency, 'required')
   assert.deepEqual(await create.handler({
     displayName: 'Meeting',
     goal: 'Run the meeting.',
@@ -304,6 +312,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
 
 function coordinatorActionPort() {
   return Object.freeze({
+    transferCoordinator: async () => { throw new Error('unused') },
     createHumanNeeded: async () => { throw new Error('unused') },
     answerHumanNeeded: async () => { throw new Error('unused') },
     reviewResult: async () => { throw new Error('unused') },

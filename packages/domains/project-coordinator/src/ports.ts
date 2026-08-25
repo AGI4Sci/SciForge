@@ -11,6 +11,7 @@ import {
   PROJECT_COORDINATION_COLLECTIONS,
   PROJECT_COORDINATION_MAX_PAGE_SIZE,
   agentInboxMessageSchema,
+  projectSchema,
   projectPlanSchema,
   projectPlanTaskSchema,
   humanAnswerSchema,
@@ -50,6 +51,8 @@ import {
   projectCoordinatorHumanNeededCreateInputSchema,
   projectCoordinatorCompleteInputSchema,
   projectCoordinatorResultReviewInputSchema,
+  projectCoordinatorTransferFeedbackSchema,
+  projectCoordinatorTransferInputSchema,
   projectCoordinatorPlanDraftEditInputSchema,
   projectCoordinatorPlanDraftGenerateInputSchema,
   projectCoordinatorPlanDraftReadInputSchema,
@@ -66,6 +69,8 @@ import {
   type ProjectCoordinatorHumanNeededCreateInput,
   type ProjectCoordinatorCompleteInput,
   type ProjectCoordinatorResultReviewInput,
+  type ProjectCoordinatorTransferFeedback,
+  type ProjectCoordinatorTransferInput,
   type ProjectCoordinatorPlanAssignment,
   type ProjectCoordinatorPlanDraft,
   type ProjectCoordinatorPlanDraftEditInput,
@@ -107,6 +112,10 @@ export type ProjectCoordinatorPlanPort = Readonly<{
 }>
 
 export type ProjectCoordinatorActionPort = Readonly<{
+  transferCoordinator(
+    input: ProjectCoordinatorTransferInput,
+    idempotencyKey: string
+  ): Promise<ProjectCoordinatorWorkspace>
   createHumanNeeded(
     input: ProjectCoordinatorHumanNeededCreateInput,
     idempotencyKey: string
@@ -160,6 +169,9 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
   readPlanAssignments?: (
     plan: ProjectPlan
   ) => Promise<readonly ProjectCoordinatorPlanAssignment[]>
+  readCoordinatorTransferFeedback?: (
+    projectId: string
+  ) => Promise<ProjectCoordinatorTransferFeedback | null>
   requestId?: () => `req_${string}`
   now?: () => Date
 }>): ProjectCoordinatorCloudWorkspacePort {
@@ -198,18 +210,29 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
       ? await readAllProjectFacts(options.transport, focusedProject, requestId)
       : undefined
     const projects = await Promise.all(listed.projects.map(async (project) => {
-      const view = projectCoordinatorProjectView(
+      let view = projectCoordinatorProjectView(
         project,
         project.projectId === focusedProject?.projectId ? facts : undefined
       )
-      if (!view.plan || !options.readPlanAssignments) return view
-      return {
-        ...view,
-        plan: {
-          ...view.plan,
-          assignments: await options.readPlanAssignments(view.plan.plan)
+      const transferFeedback = await options.readCoordinatorTransferFeedback?.(project.projectId)
+      if (
+        transferFeedback &&
+        transferFeedback.coordinatorAgentId === project.coordinatorAgentId &&
+        transferFeedback.coordinatorAuthorityEpoch === project.coordinatorAuthorityEpoch &&
+        transferFeedback.projectRevision <= project.revision
+      ) {
+        view = { ...view, coordinatorTransferFeedback: transferFeedback }
+      }
+      if (view.plan && options.readPlanAssignments) {
+        view = {
+          ...view,
+          plan: {
+            ...view.plan,
+            assignments: [...await options.readPlanAssignments(view.plan.plan)]
+          }
         }
       }
+      return view
     }))
     return projectCoordinatorWorkspaceSchema.parse({
       connection: { state: 'ready', userId: status.userId, deviceId: status.deviceId },
@@ -478,10 +501,82 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
   workspace: ProjectCoordinatorWorkspacePort
   coordinatorCloudCommands: CoordinatorCloudCommandService
   transport: AuthenticatedCloudTransport
+  state: ProjectCoordinatorStateStore
   requestId?: () => `req_${string}`
 }>): ProjectCoordinatorActionPort {
   const requestId = options.requestId ?? (() => `req_${randomUUID().replaceAll('-', '')}`)
   return Object.freeze({
+    transferCoordinator: async (rawInput, idempotencyKey) => {
+      const input = projectCoordinatorTransferInputSchema.parse(rawInput)
+      const workspace = await options.workspace.readWorkspace({ projectId: input.projectId })
+      const projectView = requireReadyProject(workspace, input.projectId)
+      if (workspace.connection.state !== 'ready' ||
+          workspace.connection.userId !== projectView.project.ownerUserId) {
+        throw new Error('Only the current Project Owner may transfer Coordinator authority.')
+      }
+      if (projectView.project.status === 'completed' || projectView.project.status === 'cancelled') {
+        throw new Error('A terminal Project cannot transfer Coordinator authority.')
+      }
+      if (input.coordinatorAgentId === projectView.project.coordinatorAgentId) {
+        throw new Error('Coordinator transfer requires another exact Owner Agent.')
+      }
+      const ownerGroup = projectView.workerGroups.find(({ userId }) => (
+        userId === projectView.project.ownerUserId
+      ))
+      const successor = ownerGroup?.agents.find(({ projectAvailability }) => (
+        projectAvailability.agentId === input.coordinatorAgentId
+      ))
+      if (!successor || successor.projectAvailability.userId !== projectView.project.ownerUserId) {
+        throw new Error('Coordinator successor must be an exact Agent owned by the Project Owner.')
+      }
+      const candidate = successor.projectAvailability
+      const availability = candidate.availability
+      if (
+        candidate.membership?.state !== 'active' ||
+        !availability.agentActive ||
+        !availability.deviceActive ||
+        availability.connectionStatus !== 'online' ||
+        availability.runtimeReadiness !== 'ready' ||
+        Date.parse(availability.expiresAt) <= Date.parse(workspace.observedAt)
+      ) {
+        throw new Error('Coordinator successor is not currently active, online, and Runtime-ready.')
+      }
+      const response = await executeUserCloud(options.transport, {
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        requestId: requestId(),
+        type: 'project.transfer_coordinator',
+        idempotencyKey,
+        projectId: input.projectId,
+        expectedRevision: projectView.project.revision,
+        expectedCoordinatorAuthorityEpoch: projectView.project.coordinatorAuthorityEpoch,
+        coordinatorAgentId: input.coordinatorAgentId,
+        expectedCoordinatorAvailabilityRevision: availability.revision
+      })
+      if (response.type !== 'rest.entity') {
+        throw new Error(`Coordinator transfer returned ${response.type}.`)
+      }
+      const transferred = projectSchema.parse(response.entity)
+      if (
+        transferred.projectId !== projectView.project.projectId ||
+        transferred.ownerUserId !== projectView.project.ownerUserId ||
+        transferred.coordinatorAgentId !== input.coordinatorAgentId ||
+        transferred.coordinatorAuthorityEpoch !==
+          projectView.project.coordinatorAuthorityEpoch + 1 ||
+        transferred.revision !== projectView.project.revision + 1
+      ) {
+        throw new Error('Coordinator transfer did not return the exact successor authority.')
+      }
+      const fresh = await options.workspace.readWorkspace({ projectId: input.projectId })
+      const observed = requireReadyProject(fresh, input.projectId)
+      if (
+        observed.project.coordinatorAgentId !== transferred.coordinatorAgentId ||
+        observed.project.coordinatorAuthorityEpoch !== transferred.coordinatorAuthorityEpoch ||
+        observed.project.revision < transferred.revision
+      ) {
+        throw new Error('Coordinator transfer was not observed in fresh Cloud facts.')
+      }
+      return fresh
+    },
     createHumanNeeded: async (rawInput, idempotencyKey) => {
       const input = projectCoordinatorHumanNeededCreateInputSchema.parse(rawInput)
       const response = await options.coordinatorCloudCommands.execute({
@@ -614,6 +709,43 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
     },
     handleInbox: async (rawMessage) => {
       const message = agentInboxMessageSchema.parse(rawMessage)
+      if (message.payload.type === 'coordinator.transferred') {
+        const transfer = message.payload
+        if (
+          message.recipientAgentId !== transfer.previousCoordinatorAgentId &&
+          message.recipientAgentId !== transfer.coordinatorAgentId
+        ) {
+          throw new Error('Coordinator transfer feedback targets an unrelated Agent.')
+        }
+        const workspace = await options.workspace.readWorkspace({ projectId: transfer.projectId })
+        const project = requireReadyProject(workspace, transfer.projectId)
+        if (
+          project.project.coordinatorAuthorityEpoch < transfer.coordinatorAuthorityEpoch ||
+          project.project.revision < transfer.revision ||
+          (
+            project.project.coordinatorAuthorityEpoch === transfer.coordinatorAuthorityEpoch &&
+            project.project.coordinatorAgentId !== transfer.coordinatorAgentId
+          )
+        ) {
+          throw new Error('Coordinator transfer feedback does not match Cloud authority.')
+        }
+        await options.state.recordCoordinatorTransferFeedback(
+          projectCoordinatorTransferFeedbackSchema.parse({
+            projectId: transfer.projectId,
+            inboxMessageId: message.inboxMessageId,
+            recipientAgentId: message.recipientAgentId,
+            previousCoordinatorAgentId: transfer.previousCoordinatorAgentId,
+            coordinatorAgentId: transfer.coordinatorAgentId,
+            coordinatorAuthorityEpoch: transfer.coordinatorAuthorityEpoch,
+            projectRevision: transfer.revision,
+            disposition: message.recipientAgentId === transfer.previousCoordinatorAgentId
+              ? 'authority_transferred_out'
+              : 'authority_transferred_in',
+            observedAt: message.createdAt
+          })
+        )
+        return
+      }
       if (message.payload.type !== 'human.answer.received') {
         throw new Error('Project Coordinator received an unsupported Agent Inbox message.')
       }
@@ -806,6 +938,7 @@ function projectCoordinatorProjectView(
   ).filter((item): item is NonNullable<typeof item> => item !== null)
   return {
     project,
+    coordinatorTransferFeedback: null,
     plan: plan ? { plan, assignments: [] } : null,
     workerGroups: projectWorkerGroups(project, snapshot),
     tasks: factItems<ProjectCoordinatorProject['tasks'][number]['task']>(snapshot, 'tasks')

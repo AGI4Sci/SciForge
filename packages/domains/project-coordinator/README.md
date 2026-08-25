@@ -14,6 +14,8 @@ This package owns only the Human-facing coordination surfaces for:
 - creating a Cloud-authoritative Project as the current OIDC User;
 - generating, editing, submitting, and confirming a Project Plan;
 - grouping Worker candidates by User while selecting an exact Agent;
+- transferring Coordinator authority only to another exact active Agent owned
+  by the same Project Owner, with durable old-authority fencing feedback;
 - reviewing immutable Task results, asking/answering Project HumanNeeded, and
   completing a Project with its final summary;
 - observing Project Tasks, ProjectRecord memory, and the independent Project
@@ -34,8 +36,11 @@ The main entrypoint acquires the token-free authenticated Cloud transport from
 `@sciforge/domain-identity-access` through the Host's owner-scoped internal
 service registry. The canonical `project.list` and
 `project.coordination.read` commands are paginated through that closed service;
-Project creation, Plan confirmation, and Project activation use the same
-User-authorized path. It also acquires Identity's purpose-locked Device fact
+Project creation, Plan confirmation, Project activation, and Owner-authorized
+Coordinator transfer use the same User-authorized path. The transfer renderer
+chooses only a successor Agent identity; main derives fresh Project epoch,
+revision, and exact availability CAS facts before Cloud atomically fences the
+old Coordinator. It also acquires Identity's purpose-locked Device fact
 attestation signer as a narrow main-process port. This package supplies only a
 factual payload digest, provisioning revision and observation time; it never
 receives a Device key, performs signing itself, or exposes signing to the
@@ -47,9 +52,11 @@ Collaboration binds the active local Agent and owns durable delivery plus the
 single Coordinator Agent Inbox subscription; this package cannot provide an
 Agent identity, route, header, or credential. A `coordinator_project`
 HumanAnswer is consumed here and becomes a Coordinator-authored decision with a
-stable idempotency key. The OIDC Owner answer itself uses Identity's token-free
-User transport and never becomes a second ProjectRecord writer. OIDC material
-never enters this package. Local Plan drafts are
+stable idempotency key. `coordinator.transferred` is durably consumed through
+the same single Inbox owner and projected as default-visible transferred-in or
+transferred-out feedback before ACK. The OIDC Owner answer itself uses
+Identity's token-free User transport and never becomes a second ProjectRecord
+writer. OIDC material never enters this package. Local Plan drafts are
 non-secret package settings guarded by revision compare-and-set. Plan generation
 uses the Host-provided Agent Runtime only after the runtime lifecycle has
 activated; missing Runtime, identity, Device, Cloud, or exact Project facts fail
@@ -85,11 +92,12 @@ recovery records; it adds only UI-specific grouping, exact selection and focus
 wrappers rather than redefining those state machines.
 `./ports` contains the narrow package-owned workspace, Plan, provisioning, and
 action workflow ports used by the capability factory plus the closed
-Collaboration Coordinator-Agent command port. The renderer invokes fifteen
+Collaboration Coordinator-Agent command port. The renderer invokes nineteen
 governed capabilities: workspace read, Project create, Plan-draft
 read/generate/edit, Plan submit, Owner confirm-and-activate, provisioning
-preview/apply, membership add/remove, Project HumanNeeded create/answer, result
-review, and atomic final completion. Pending confirmation, provisioning,
-HumanNeeded, review, completion, membership fences, and root recovery cards are
-default-visible. There is no renderer transport, HTTP client, Provider adapter,
-or second Cloud DTO.
+preview/apply, three exact-output recovery actions, membership add/remove,
+Project HumanNeeded create/answer, Owner Coordinator transfer, result review,
+and atomic final completion. Pending confirmation, provisioning, HumanNeeded,
+review, completion, Coordinator fencing, membership fences, and root recovery
+cards are default-visible. There is no renderer transport, HTTP client,
+Provider adapter, or second Cloud DTO.
