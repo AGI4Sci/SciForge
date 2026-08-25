@@ -7,6 +7,7 @@ import {
   PROJECT_COORDINATOR_I18N_CONTRIBUTION,
   PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION,
   PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION,
+  PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION,
   PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRIBUTION,
   domainPackageDefinition
 } from './definition.js'
@@ -14,6 +15,10 @@ import {
 test('manifest composes independent main and renderer entrypoints', () => {
   assert.equal(domainPackageDefinition.packageName, '@sciforge/domain-project-coordinator')
   assert.equal(domainPackageDefinition.module.id, 'sciforge.project-coordinator')
+  assert.deepEqual(domainPackageDefinition.module.hostApi, {
+    minimum: '1.5.0',
+    maximumExclusive: '2.0.0'
+  })
   assert.deepEqual(
     domainPackageDefinition.entrypoints.map(({ process, export: entryExport }) => [process, entryExport]),
     [['main', './main'], ['renderer', './renderer']]
@@ -24,6 +29,7 @@ test('manifest composes independent main and renderer entrypoints', () => {
     ),
     [
       PROJECT_COORDINATOR_CAPABILITY_FACTORY_CONTRIBUTION.id,
+      PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION.id,
       PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
       PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION.id,
       PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRIBUTION.id,
@@ -33,6 +39,12 @@ test('manifest composes independent main and renderer entrypoints', () => {
   // Internal-service discovery is governed by service descriptors, not by
   // release packaging dependencies between source-composed domains.
   assert.equal(domainPackageDefinition.packaging, undefined)
+  assert.equal(
+    domainPackageDefinition.contributionContracts[
+      PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION.id
+    ],
+    undefined
+  )
 })
 
 test('package sources keep Host-private implementations and sibling domain internals outside the boundary', async () => {
@@ -67,4 +79,14 @@ test('package sources keep Host-private implementations and sibling domain inter
   assert.deepEqual([...new Set(collaborationImports)], [
     '@sciforge/domain-collaboration/coordinator-cloud-command'
   ])
+})
+
+test('publishable dependencies target the frozen Host and domain contract majors', async () => {
+  const packageJson = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  ) as { dependencies: Record<string, string> }
+  assert.equal(packageJson.dependencies['@sciforge/collaboration-contracts'], '1.0.0')
+  assert.equal(packageJson.dependencies['@sciforge/domain-collaboration'], '^2.0.0')
+  assert.equal(packageJson.dependencies['@sciforge/domain-identity-access'], '^2.0.0')
+  assert.equal(packageJson.dependencies['@sciforge/domain-sdk'], '^0.3.0')
 })

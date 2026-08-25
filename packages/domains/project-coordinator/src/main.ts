@@ -1,5 +1,10 @@
+import { createHash } from 'node:crypto'
 import type { z } from 'zod'
-import type { DomainMainHost } from '@sciforge/domain-sdk/host'
+import type { DomainMainAgentExecutionHost } from '@sciforge/domain-sdk/agent-execution'
+import type {
+  DomainMainHost,
+  DomainMainRuntimeLifecycleContribution
+} from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import {
   COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION,
@@ -19,6 +24,15 @@ import {
 
 import {
   PROJECT_COORDINATOR_CAPABILITY_IDS,
+  projectCoordinatorPlanConfirmActivateInputSchema,
+  projectCoordinatorPlanDraftEditInputSchema,
+  projectCoordinatorPlanDraftGenerateInputSchema,
+  projectCoordinatorPlanDraftReadInputSchema,
+  projectCoordinatorPlanDraftSchema,
+  projectCoordinatorPlanDraftSubmitInputSchema,
+  projectCoordinatorPlanSubmitResultSchema,
+  projectCoordinatorProjectCreateInputSchema,
+  projectCoordinatorProjectCreateResultSchema,
   projectCoordinatorWorkspaceReadInputSchema,
   projectCoordinatorWorkspaceSchema,
   type ProjectCoordinatorWorkspaceReadInput
@@ -26,13 +40,16 @@ import {
 import {
   PROJECT_COORDINATOR_CAPABILITY_FACTORY_CONTRIBUTION,
   PROJECT_COORDINATOR_DOMAIN_MODULE_ID,
+  PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION,
   domainPackageDefinition
 } from './definition.js'
 import {
-  createIdentityMediatedProjectCoordinatorWorkspacePort,
+  createProjectCoordinatorCloudWorkspacePort,
+  createProjectCoordinatorPlanPort,
   createProjectContentProvisioningAttestationSigningPort,
   type ProjectCoordinatorMainPorts
 } from './ports.js'
+import { ProjectCoordinatorStateStore } from './state.js'
 
 export type ProjectCoordinatorCapabilityOptions = Readonly<{
   id: string
@@ -41,16 +58,19 @@ export type ProjectCoordinatorCapabilityOptions = Readonly<{
   description: string
   audiences: readonly ['ui']
   scope: 'global'
-  effect: 'read'
-  approval: 'none'
+  effect: 'read' | 'compute' | 'workspace-write' | 'external-write'
+  approval: 'none' | 'confirmation'
   concurrency: Readonly<{
     revision: 'none'
-    idempotency: 'none'
+    idempotency: 'none' | 'required'
   }>
   tags: readonly string[]
   inputSchema: z.ZodType
   outputSchema: z.ZodType
-  handler(input: unknown): Promise<Readonly<{ output: unknown }>>
+  handler(
+    input: unknown,
+    context: Readonly<{ invocationId?: string }>
+  ): Promise<Readonly<{ output: unknown; changed?: boolean }>>
 }>
 
 export type ProjectCoordinatorCapabilityFactory<CapabilityDefinition = unknown> = Readonly<{
@@ -95,16 +115,152 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
             projectCoordinatorWorkspaceReadInputSchema.parse(raw) as ProjectCoordinatorWorkspaceReadInput
           )
         })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
+        version: '1.0.0',
+        title: 'Create Project',
+        description: 'Creates one Cloud-authoritative Project for the current OIDC Owner and returns exact Desktop focus.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'create', 'owner'],
+        inputSchema: projectCoordinatorProjectCreateInputSchema,
+        outputSchema: projectCoordinatorProjectCreateResultSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.workspace.createProject(
+            projectCoordinatorProjectCreateInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate, context)
+          ),
+          changed: true
+        })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftRead,
+        version: '1.0.0',
+        title: 'Read local Project Plan draft',
+        description: 'Reads the package-owned non-secret draft for one exact Project.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        tags: ['project', 'plan', 'draft'],
+        inputSchema: projectCoordinatorPlanDraftReadInputSchema,
+        outputSchema: projectCoordinatorPlanDraftSchema.nullable(),
+        handler: async (raw) => ({
+          output: await options.ports.plan.readDraft(
+            projectCoordinatorPlanDraftReadInputSchema.parse(raw)
+          )
+        })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate,
+        version: '1.0.0',
+        title: 'Generate local Project Plan draft',
+        description: 'Runs the configured local Agent Runtime and persists one reviewable non-secret draft.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'workspace-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'plan', 'runtime'],
+        inputSchema: projectCoordinatorPlanDraftGenerateInputSchema,
+        outputSchema: projectCoordinatorPlanDraftSchema,
+        handler: async (raw) => ({
+          output: await options.ports.plan.generateDraft(
+            projectCoordinatorPlanDraftGenerateInputSchema.parse(raw)
+          ),
+          changed: true
+        })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftEdit,
+        version: '1.0.0',
+        title: 'Edit local Project Plan draft',
+        description: 'CAS-updates Plan items and exact visible Worker Agent choices.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'workspace-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'plan', 'worker-selection'],
+        inputSchema: projectCoordinatorPlanDraftEditInputSchema,
+        outputSchema: projectCoordinatorPlanDraftSchema,
+        handler: async (raw) => ({
+          output: await options.ports.plan.editDraft(
+            projectCoordinatorPlanDraftEditInputSchema.parse(raw)
+          ),
+          changed: true
+        })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.planSubmit,
+        version: '1.0.0',
+        title: 'Submit Project Plan',
+        description: 'Submits the immutable digest through the current Coordinator Agent durable Cloud command service.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'plan', 'submit'],
+        inputSchema: projectCoordinatorPlanDraftSubmitInputSchema,
+        outputSchema: projectCoordinatorPlanSubmitResultSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.plan.submitDraft(
+            projectCoordinatorPlanDraftSubmitInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.planSubmit, context)
+          ),
+          changed: true
+        })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate,
+        version: '1.0.0',
+        title: 'Confirm Plan and activate Project',
+        description: 'Confirms the exact immutable Plan as the Coordinator Human and activates from freshly read CAS facts.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'plan', 'confirmation', 'activation'],
+        inputSchema: projectCoordinatorPlanConfirmActivateInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.plan.confirmAndActivate(
+            projectCoordinatorPlanConfirmActivateInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate, context)
+          ),
+          changed: true
+        })
       })
     ]
   })
 }
 
+function capabilityIdempotencyKey(
+  actionId: string,
+  context: Readonly<{ invocationId?: string }>
+): string {
+  if (!context.invocationId?.trim()) throw new Error('A Host invocation ID is required for this write.')
+  const digest = createHash('sha256')
+    .update(`${actionId}\u0000${context.invocationId}`, 'utf8')
+    .digest('hex')
+  return `idem_project-coordinator.${digest.slice(0, 48)}`
+}
+
 export function createDomainMainEntry<CapabilityDefinition = unknown>(
   host: DomainMainHost
-): TrustedDomainProcessEntryInput<ProjectCoordinatorCapabilityFactory<CapabilityDefinition>> {
-  if (!host.internalServices) {
-    throw new Error('Project Coordinator requires Host internal-service mediation.')
+): TrustedDomainProcessEntryInput<
+  ProjectCoordinatorCapabilityFactory<CapabilityDefinition> |
+  DomainMainRuntimeLifecycleContribution
+> {
+  if (!host.internalServices || !host.packageSettings) {
+    throw new Error('Project Coordinator requires internal services and owner-scoped settings.')
   }
   const transport = host.internalServices.acquire<AuthenticatedCloudTransport>(
     AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
@@ -118,23 +274,55 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     COORDINATOR_CLOUD_COMMAND_SERVICE_ID,
     COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION
   )
+  const state = new ProjectCoordinatorStateStore(host.packageSettings)
+  const workspace = createProjectCoordinatorCloudWorkspacePort({
+    transport,
+    readPlanAssignments: (plan) => state.readPlanAssignments(
+      plan.projectPlanId,
+      plan.planDigest
+    )
+  })
+  let agentExecution: DomainMainAgentExecutionHost | undefined
+  const plan = createProjectCoordinatorPlanPort({
+    settings: host.packageSettings,
+    state,
+    workspace,
+    getAgentExecution: () => agentExecution,
+    coordinatorCloudCommands,
+    transport
+  })
   const ports: ProjectCoordinatorMainPorts = Object.freeze({
-    workspace: createIdentityMediatedProjectCoordinatorWorkspacePort({ transport }),
+    workspace,
+    plan,
     provisioningAttestationSigning:
       createProjectContentProvisioningAttestationSigningPort(signingService),
     coordinatorCloudCommands
   })
+  const lifecycle: DomainMainRuntimeLifecycleContribution = Object.freeze({
+    activate: (context) => {
+      agentExecution = context.agentExecution
+      return () => {
+        agentExecution = undefined
+      }
+    }
+  })
   return {
     definition: domainPackageDefinition,
-    contributions: [{
-      ...PROJECT_COORDINATOR_CAPABILITY_FACTORY_CONTRIBUTION,
-      value: createProjectCoordinatorCapabilityFactory({
-        defineCapability: host.defineCapability as (
-          input: ProjectCoordinatorCapabilityOptions
-        ) => CapabilityDefinition,
-        ports
-      })
-    }]
+    contributions: [
+      {
+        ...PROJECT_COORDINATOR_CAPABILITY_FACTORY_CONTRIBUTION,
+        value: createProjectCoordinatorCapabilityFactory({
+          defineCapability: host.defineCapability as (
+            input: ProjectCoordinatorCapabilityOptions
+          ) => CapabilityDefinition,
+          ports
+        })
+      },
+      {
+        ...PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION,
+        value: lifecycle
+      }
+    ]
   }
 }
 

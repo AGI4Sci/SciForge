@@ -1,4 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+  type ReactElement,
+  type ReactNode
+} from 'react'
 import {
   ClipboardCheck,
   FileCheck2,
@@ -13,6 +21,8 @@ import { useTranslation } from 'react-i18next'
 import type { DomainWorkbenchRightPanelSession } from '@sciforge/domain-sdk/host'
 
 import type {
+  ProjectCoordinatorPlanDraft,
+  ProjectCoordinatorProjectCreateResult,
   ProjectCoordinatorProject,
   ProjectCoordinatorWorkspace
 } from '../contract.js'
@@ -44,6 +54,18 @@ export function selectFocusedProject(
   return workspace.projects.length === 1 ? workspace.projects[0] : undefined
 }
 
+export function projectCoordinatorCreatedSelection(
+  result: ProjectCoordinatorProjectCreateResult
+): Readonly<{
+  workspace: ProjectCoordinatorWorkspace
+  selectedProjectId: string
+}> {
+  return Object.freeze({
+    workspace: result.workspace,
+    selectedProjectId: result.createdProjectId
+  })
+}
+
 export function ProjectCoordinatorPanel({
   client,
   session,
@@ -56,6 +78,13 @@ export function ProjectCoordinatorPanel({
   const [selectedProjectId, setSelectedProjectId] = useState(initialProjectId ?? '')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
+  const [draft, setDraft] = useState<ProjectCoordinatorPlanDraft | null>(null)
+  const [busyAction, setBusyAction] = useState<string>()
+  const [createDisplayName, setCreateDisplayName] = useState('')
+  const [createGoal, setCreateGoal] = useState('')
+  const [createCoordinatorAgentId, setCreateCoordinatorAgentId] = useState('')
+  const [createCoordinatorRevision, setCreateCoordinatorRevision] = useState('1')
+  const [createWorkerUserIds, setCreateWorkerUserIds] = useState('')
 
   const refresh = useCallback(async (projectId?: string, signal?: AbortSignal) => {
     setLoading(true)
@@ -67,8 +96,16 @@ export function ProjectCoordinatorPanel({
       const preferred = projectId ?? next.focusedProjectId
       if (preferred && next.projects.some(({ project }) => project.projectId === preferred)) {
         setSelectedProjectId(preferred)
+        const nextDraft = await client.readPlanDraft({ projectId: preferred })
+        if (!signal?.aborted) setDraft(nextDraft)
       } else if (next.projects.length === 1) {
-        setSelectedProjectId(next.projects[0]!.project.projectId)
+        const onlyProjectId = next.projects[0]!.project.projectId
+        setSelectedProjectId(onlyProjectId)
+        const nextDraft = await client.readPlanDraft({ projectId: onlyProjectId })
+        if (!signal?.aborted) setDraft(nextDraft)
+      } else {
+        setSelectedProjectId('')
+        setDraft(null)
       }
     } catch (cause) {
       if (signal?.aborted) return
@@ -92,6 +129,125 @@ export function ProjectCoordinatorPanel({
   const connectionMessage = workspace && workspace.connection.state !== 'ready'
     ? connectionMessageKey(workspace.connection.state)
     : undefined
+
+  const runAction = useCallback(async <T,>(
+    action: string,
+    operation: () => Promise<T>,
+    apply: (value: T) => void | Promise<void>
+  ) => {
+    setBusyAction(action)
+    setError(undefined)
+    try {
+      await apply(await operation())
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t('projectCoordinatorActionFailed'))
+    } finally {
+      setBusyAction(undefined)
+    }
+  }, [t])
+
+  const createProject = useCallback((event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (workspace?.connection.state !== 'ready') return
+    const workerUserIds = createWorkerUserIds.split(',').map((value) => value.trim()).filter(Boolean)
+    const memberUserIds = [...new Set([workspace.connection.userId, ...workerUserIds])]
+    void runAction('project-create', () => client.createProject({
+      displayName: createDisplayName,
+      goal: createGoal,
+      coordinatorAgentId: createCoordinatorAgentId,
+      expectedCoordinatorAgentRevision: Number(createCoordinatorRevision),
+      budget: {
+        maxTasks: 32,
+        maxTasksPerRound: 8,
+        maxTaskRetries: 2,
+        maxCoordinationRounds: 4
+      },
+      content: {
+        mode: 'none',
+        members: memberUserIds.map((userId) => ({ userId }))
+      }
+    }), async (result) => {
+      const selected = projectCoordinatorCreatedSelection(result)
+      setWorkspace(selected.workspace)
+      setSelectedProjectId(selected.selectedProjectId)
+      setDraft(await client.readPlanDraft({ projectId: selected.selectedProjectId }))
+      setCreateDisplayName('')
+      setCreateGoal('')
+      setCreateCoordinatorAgentId('')
+      setCreateWorkerUserIds('')
+    })
+  }, [
+    client,
+    createCoordinatorAgentId,
+    createCoordinatorRevision,
+    createDisplayName,
+    createGoal,
+    createWorkerUserIds,
+    runAction,
+    workspace
+  ])
+
+  const generateDraft = useCallback(() => {
+    if (!project) return
+    void runAction('plan-generate', () => client.generatePlanDraft({
+      projectId: project.project.projectId,
+      instruction: project.project.goal,
+      sourceInputLocators: [],
+      modelId: null
+    }), setDraft)
+  }, [client, project, runAction])
+
+  const editDraftAssignment = useCallback((planItemId: string, selectedAgentId: string) => {
+    if (!draft) return
+    const nextAssignments = draft.assignments.map((assignment) => (
+      assignment.planItemId === planItemId
+        ? {
+            ...assignment,
+            selectedAgentId: selectedAgentId || null,
+            recommendationReason: selectedAgentId
+              ? t('projectCoordinatorOwnerSelectedExactAgent')
+              : null
+          }
+        : assignment
+    ))
+    void runAction('plan-edit', () => client.editPlanDraft({
+      projectId: draft.projectId,
+      draftId: draft.draftId,
+      expectedDraftRevision: draft.draftRevision,
+      tasks: draft.tasks,
+      rationale: draft.rationale,
+      assignments: nextAssignments
+    }), setDraft)
+  }, [client, draft, runAction, t])
+
+  const submitDraft = useCallback(() => {
+    if (!draft) return
+    void runAction('plan-submit', () => client.submitPlanDraft({
+      projectId: draft.projectId,
+      draftId: draft.draftId,
+      expectedDraftRevision: draft.draftRevision
+    }), (result) => {
+      setWorkspace(result.workspace)
+      setSelectedProjectId(result.plan.projectId)
+      setDraft(null)
+    })
+  }, [client, draft, runAction])
+
+  const confirmActivate = useCallback(() => {
+    if (!project?.plan || project.plan.plan.state !== 'awaiting_confirmation') return
+    const plan = project.plan.plan
+    void runAction('plan-confirm', () => client.confirmPlanAndActivate({
+      projectId: project.project.projectId,
+      projectPlanId: plan.projectPlanId,
+      expectedProjectRevision: project.project.revision,
+      expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
+      expectedPlanRevision: plan.revision,
+      planDigest: plan.planDigest
+    }), (next) => {
+      setWorkspace(next)
+      setSelectedProjectId(project.project.projectId)
+    })
+  }, [client, project, runAction])
 
   return (
     <aside
@@ -137,13 +293,33 @@ export function ProjectCoordinatorPanel({
         ) : null}
         {loading && !workspace ? <Notice>{t('projectCoordinatorLoading')}</Notice> : null}
 
+        {workspace?.connection.state === 'ready' ? (
+          <ProjectCreateForm
+            busy={busyAction === 'project-create'}
+            coordinatorAgentId={createCoordinatorAgentId}
+            coordinatorRevision={createCoordinatorRevision}
+            displayName={createDisplayName}
+            goal={createGoal}
+            workerUserIds={createWorkerUserIds}
+            onCoordinatorAgentId={setCreateCoordinatorAgentId}
+            onCoordinatorRevision={setCreateCoordinatorRevision}
+            onDisplayName={setCreateDisplayName}
+            onGoal={setCreateGoal}
+            onSubmit={createProject}
+            onWorkerUserIds={setCreateWorkerUserIds}
+          />
+        ) : null}
+
         {workspace?.connection.state === 'ready' && workspace.projects.length > 0 ? (
           <label className="block text-xs font-medium text-ds-muted">
             {t('projectCoordinatorProject')}
             <select
               className="mt-1 w-full rounded border border-ds-border bg-ds-surface px-2 py-1.5 text-xs text-ds-text"
               value={project?.project.projectId ?? ''}
-              onChange={(event) => setSelectedProjectId(event.currentTarget.value)}
+              onChange={(event) => {
+                const projectId = event.currentTarget.value
+                if (projectId) void refresh(projectId)
+              }}
             >
               <option value="">{t('projectCoordinatorNoProject')}</option>
               {workspace.projects.map((candidate) => (
@@ -156,13 +332,66 @@ export function ProjectCoordinatorPanel({
         ) : null}
 
         {project ? <ProjectSummary project={project} /> : null}
-        <PlanSection project={project} />
+        <ProjectCoordinatorPlanSection
+          project={project}
+          draft={draft}
+          busy={Boolean(busyAction?.startsWith('plan-'))}
+          onGenerate={generateDraft}
+          onEditDraft={editDraftAssignment}
+          onSubmitDraft={submitDraft}
+          onConfirmActivate={confirmActivate}
+        />
         <WorkersSection project={project} />
         <TasksSection project={project} />
         <ReviewsSection project={project} />
         <ProvisioningSection project={project} />
       </div>
     </aside>
+  )
+}
+
+function ProjectCreateForm({
+  busy,
+  coordinatorAgentId,
+  coordinatorRevision,
+  displayName,
+  goal,
+  workerUserIds,
+  onCoordinatorAgentId,
+  onCoordinatorRevision,
+  onDisplayName,
+  onGoal,
+  onSubmit,
+  onWorkerUserIds
+}: Readonly<{
+  busy: boolean
+  coordinatorAgentId: string
+  coordinatorRevision: string
+  displayName: string
+  goal: string
+  workerUserIds: string
+  onCoordinatorAgentId(value: string): void
+  onCoordinatorRevision(value: string): void
+  onDisplayName(value: string): void
+  onGoal(value: string): void
+  onSubmit(event: FormEvent<HTMLFormElement>): void
+  onWorkerUserIds(value: string): void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <form className="rounded-lg border border-ds-border bg-ds-surface p-2.5" onSubmit={onSubmit}>
+      <h3 className="mb-2 text-xs font-semibold">{t('projectCoordinatorCreateProject')}</h3>
+      <div className="grid gap-2">
+        <input required value={displayName} onChange={(event) => onDisplayName(event.currentTarget.value)} placeholder={t('projectCoordinatorProjectName')} className="rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+        <textarea required value={goal} onChange={(event) => onGoal(event.currentTarget.value)} placeholder={t('projectCoordinatorProjectGoal')} className="rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+        <input required value={coordinatorAgentId} onChange={(event) => onCoordinatorAgentId(event.currentTarget.value)} placeholder={t('projectCoordinatorCoordinatorAgentId')} className="rounded border border-ds-border bg-ds-bg px-2 py-1.5 font-mono text-xs" />
+        <input required min={1} type="number" value={coordinatorRevision} onChange={(event) => onCoordinatorRevision(event.currentTarget.value)} placeholder={t('projectCoordinatorAgentRevision')} className="rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+        <input value={workerUserIds} onChange={(event) => onWorkerUserIds(event.currentTarget.value)} placeholder={t('projectCoordinatorWorkerUserIds')} className="rounded border border-ds-border bg-ds-bg px-2 py-1.5 font-mono text-xs" />
+        <button disabled={busy} type="submit" className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50">
+          {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorCreateProject')}
+        </button>
+      </div>
+    </form>
   )
 }
 
@@ -185,12 +414,76 @@ function ProjectSummary({ project }: Readonly<{ project: ProjectCoordinatorProje
   )
 }
 
-function PlanSection({ project }: Readonly<{ project?: ProjectCoordinatorProject }>): ReactElement {
+export function ProjectCoordinatorPlanSection({
+  project,
+  draft,
+  busy,
+  onGenerate,
+  onEditDraft,
+  onSubmitDraft,
+  onConfirmActivate
+}: Readonly<{
+  project?: ProjectCoordinatorProject
+  draft: ProjectCoordinatorPlanDraft | null
+  busy: boolean
+  onGenerate(): void
+  onEditDraft(planItemId: string, selectedAgentId: string): void
+  onSubmitDraft(): void
+  onConfirmActivate(): void
+}>): ReactElement {
   const { t } = useTranslation('common')
+  const visibleAgents = project?.workerGroups.flatMap((group) => group.agents) ?? []
+  const awaitingConfirmation = project?.plan?.plan.state === 'awaiting_confirmation'
   return (
     <Section id="plan" title={t('projectCoordinatorPlan')} icon={<ListChecks className="h-4 w-4" />}>
-      {!project ? <Empty /> : !project.plan ? (
-        <Empty message={t('projectCoordinatorPlanMissing')} />
+      {!project ? <Empty /> : awaitingConfirmation ? (
+        <div className="space-y-2 rounded border border-amber-500/40 p-2" data-default-visible-card="plan-confirmation">
+          <Status value="awaiting_confirmation" />
+          <p className="text-[11px] text-ds-muted">{project.plan!.plan.rationale}</p>
+          <button type="button" disabled={busy} onClick={onConfirmActivate} className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50">
+            {t('projectCoordinatorConfirmActivate')}
+          </button>
+        </div>
+      ) : draft ? (
+        <div className="space-y-2" data-default-visible-card="plan-draft">
+          <Status value="draft" />
+          {draft.tasks.map((item) => {
+            const assignment = draft.assignments.find(({ planItemId }) => planItemId === item.planItemId)
+            return (
+              <label key={item.planItemId} className="block rounded border border-ds-border p-2 text-xs">
+                <span className="font-medium">{item.title}</span>
+                <select
+                  className="mt-1 w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+                  value={assignment?.selectedAgentId ?? ''}
+                  disabled={busy}
+                  onChange={(event) => onEditDraft(item.planItemId, event.currentTarget.value)}
+                >
+                  <option value="">{t('projectCoordinatorChooseExactAgent')}</option>
+                  {visibleAgents.map((agent) => (
+                    <option key={agent.projectAvailability.agentId} value={agent.projectAvailability.agentId}>
+                      {agent.displayName} · {agent.projectAvailability.agentId}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )
+          })}
+          <button
+            type="button"
+            disabled={busy || draft.assignments.some(({ selectedAgentId }) => selectedAgentId === null)}
+            onClick={onSubmitDraft}
+            className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+          >
+            {t('projectCoordinatorSubmitPlan')}
+          </button>
+        </div>
+      ) : !project.plan ? (
+        <div className="space-y-2">
+          <Empty message={t('projectCoordinatorPlanMissing')} />
+          <button type="button" disabled={busy} onClick={onGenerate} className="rounded border border-ds-border px-2 py-1.5 text-xs disabled:opacity-50">
+            {t('projectCoordinatorGeneratePlan')}
+          </button>
+        </div>
       ) : (
         <div className="space-y-2 text-xs">
           <Status value={project.plan.plan.state} />
@@ -399,6 +692,5 @@ function connectionMessageKey(
     case 'identity_required': return 'projectCoordinatorIdentityRequired'
     case 'device_required': return 'projectCoordinatorDeviceRequired'
     case 'cloud_unavailable': return 'projectCoordinatorCloudUnavailable'
-    case 'coordination_protocol_unavailable': return 'projectCoordinatorProtocolUnavailable'
   }
 }

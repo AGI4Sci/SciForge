@@ -37,6 +37,11 @@
           "kind": "main.capability-factory",
           "id": "project-coordinator.capabilities",
           "priority": 73
+        },
+        {
+          "kind": "main.runtime-lifecycle",
+          "id": "project-coordinator.runtime-lifecycle",
+          "priority": 73
         }
       ]
     },

@@ -7,8 +7,10 @@ import {
   projectContentProvisioningIntentSchema,
   projectContentReadinessSchema,
   projectContentSpaceBindingSchema,
+  projectCreateCommandSchema,
   projectIdSchema,
   projectPlanSchema,
+  projectPlanRuntimeProvenanceSchema,
   projectPlanTaskSchema,
   projectSchema,
   projectWorkerAvailabilityViewSchema,
@@ -18,14 +20,28 @@ import {
   taskSchema,
   timestampSchema,
   userIdSchema,
-  visibleRecoveryActionSchema
+  visibleRecoveryActionSchema,
+  portableContentSpaceLocatorSchema
 } from '@sciforge/collaboration-contracts'
 
 const safeReasonSchema = z.string().trim().min(1).max(2_000)
 
 export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
-  workspaceRead: 'project-coordinator.workspace.read'
+  workspaceRead: 'project-coordinator.workspace.read',
+  projectCreate: 'project-coordinator.project.create',
+  planDraftRead: 'project-coordinator.plan-draft.read',
+  planDraftGenerate: 'project-coordinator.plan-draft.generate',
+  planDraftEdit: 'project-coordinator.plan-draft.edit',
+  planSubmit: 'project-coordinator.plan.submit',
+  planConfirmActivate: 'project-coordinator.plan.confirm-activate'
 } as const)
+
+export const projectCoordinatorProjectCreateInputSchema = projectCreateCommandSchema.omit({
+  protocolVersion: true,
+  requestId: true,
+  type: true,
+  idempotencyKey: true
+}).readonly()
 
 export const projectCoordinatorConnectionSchema = z.discriminatedUnion('state', [
   z.object({
@@ -40,12 +56,6 @@ export const projectCoordinatorConnectionSchema = z.discriminatedUnion('state', 
   }).strict().readonly(),
   z.object({
     state: z.literal('cloud_unavailable'),
-    reason: safeReasonSchema
-  }).strict().readonly(),
-  z.object({
-    state: z.literal('coordination_protocol_unavailable'),
-    userId: userIdSchema,
-    deviceId: deviceIdSchema,
     reason: safeReasonSchema
   }).strict().readonly()
 ])
@@ -64,6 +74,77 @@ export const projectCoordinatorPlanAssignmentSchema = z.object({
     })
   }
 }).readonly()
+
+const projectCoordinatorDraftIdSchema = z.string()
+  .regex(/^draft_[A-Za-z0-9](?:[A-Za-z0-9_-]{10,95}[A-Za-z0-9])$/u)
+
+export const projectCoordinatorPlanDraftSchema = z.object({
+  draftId: projectCoordinatorDraftIdSchema,
+  draftRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  projectId: projectIdSchema,
+  expectedProjectRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  expectedCoordinatorAuthorityEpoch: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  supersedesProjectPlanId: projectPlanSchema.shape.projectPlanId.nullable(),
+  sourceInputLocators: z.array(portableContentSpaceLocatorSchema).max(100),
+  tasks: z.array(projectPlanTaskSchema).min(1).max(1_000),
+  rationale: safeReasonSchema,
+  runtimeProvenance: projectPlanRuntimeProvenanceSchema,
+  assignments: z.array(projectCoordinatorPlanAssignmentSchema).min(1).max(1_000),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema
+}).strict().superRefine((draft, context) => {
+  const taskIds = draft.tasks.map(({ planItemId }) => planItemId)
+  const assignmentIds = draft.assignments.map(({ planItemId }) => planItemId)
+  if (
+    taskIds.length !== assignmentIds.length ||
+    new Set(assignmentIds).size !== assignmentIds.length ||
+    taskIds.some((planItemId) => !assignmentIds.includes(planItemId))
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['assignments'],
+      message: 'A Plan draft retains exactly one assignment choice for every Plan item.'
+    })
+  }
+  if (Date.parse(draft.updatedAt) < Date.parse(draft.createdAt)) {
+    context.addIssue({ code: 'custom', path: ['updatedAt'], message: 'Draft update cannot precede creation.' })
+  }
+}).readonly()
+
+export const projectCoordinatorPlanDraftGenerateInputSchema = z.object({
+  projectId: projectIdSchema,
+  instruction: safeReasonSchema,
+  sourceInputLocators: z.array(portableContentSpaceLocatorSchema).max(100),
+  modelId: z.string().trim().min(1).max(256).nullable()
+}).strict().readonly()
+
+export const projectCoordinatorPlanDraftReadInputSchema = z.object({
+  projectId: projectIdSchema
+}).strict().readonly()
+
+export const projectCoordinatorPlanDraftEditInputSchema = z.object({
+  projectId: projectIdSchema,
+  draftId: projectCoordinatorDraftIdSchema,
+  expectedDraftRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  tasks: z.array(projectPlanTaskSchema).min(1).max(1_000),
+  rationale: safeReasonSchema,
+  assignments: z.array(projectCoordinatorPlanAssignmentSchema).min(1).max(1_000)
+}).strict().readonly()
+
+export const projectCoordinatorPlanDraftSubmitInputSchema = z.object({
+  projectId: projectIdSchema,
+  draftId: projectCoordinatorDraftIdSchema,
+  expectedDraftRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
+}).strict().readonly()
+
+export const projectCoordinatorPlanConfirmActivateInputSchema = z.object({
+  projectId: projectIdSchema,
+  projectPlanId: projectPlanSchema.shape.projectPlanId,
+  expectedProjectRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  expectedCoordinatorAuthorityEpoch: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  expectedPlanRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  planDigest: projectPlanSchema.shape.planDigest
+}).strict().readonly()
 
 export const projectCoordinatorPlanViewSchema = z.object({
   plan: projectPlanSchema,
@@ -294,10 +375,63 @@ export const projectCoordinatorWorkspaceSchema = z.object({
   }
 }).readonly()
 
+export const projectCoordinatorPlanSubmitResultSchema = z.object({
+  plan: projectPlanSchema,
+  workspace: projectCoordinatorWorkspaceSchema
+}).strict().superRefine((result, context) => {
+  if (result.plan.state !== 'awaiting_confirmation') {
+    context.addIssue({ code: 'custom', path: ['plan', 'state'], message: 'A submitted Plan awaits Owner confirmation.' })
+  }
+  if (result.workspace.focusedProjectId !== result.plan.projectId) {
+    context.addIssue({ code: 'custom', path: ['workspace'], message: 'Plan submit must retain exact Project focus.' })
+  }
+}).readonly()
+
+export const projectCoordinatorProjectCreateResultSchema = z.object({
+  createdProjectId: projectIdSchema,
+  workspace: projectCoordinatorWorkspaceSchema
+}).strict().superRefine((result, context) => {
+  if (result.workspace.focusedProjectId !== result.createdProjectId) {
+    context.addIssue({
+      code: 'custom',
+      path: ['workspace', 'focusedProjectId'],
+      message: 'Project creation must focus the exact new Project.'
+    })
+  }
+}).readonly()
+
 export type ProjectCoordinatorConnection = z.infer<typeof projectCoordinatorConnectionSchema>
 export type ProjectCoordinatorProject = z.infer<typeof projectCoordinatorProjectSchema>
 export type ProjectCoordinatorWorkspace = z.infer<typeof projectCoordinatorWorkspaceSchema>
 export type ProjectCoordinatorWorkspaceReadInput = z.infer<
   typeof projectCoordinatorWorkspaceReadInputSchema
+>
+export type ProjectCoordinatorProjectCreateInput = z.infer<
+  typeof projectCoordinatorProjectCreateInputSchema
+>
+export type ProjectCoordinatorProjectCreateResult = z.infer<
+  typeof projectCoordinatorProjectCreateResultSchema
+>
+export type ProjectCoordinatorPlanDraft = z.infer<typeof projectCoordinatorPlanDraftSchema>
+export type ProjectCoordinatorPlanAssignment = z.infer<
+  typeof projectCoordinatorPlanAssignmentSchema
+>
+export type ProjectCoordinatorPlanDraftGenerateInput = z.infer<
+  typeof projectCoordinatorPlanDraftGenerateInputSchema
+>
+export type ProjectCoordinatorPlanDraftReadInput = z.infer<
+  typeof projectCoordinatorPlanDraftReadInputSchema
+>
+export type ProjectCoordinatorPlanDraftEditInput = z.infer<
+  typeof projectCoordinatorPlanDraftEditInputSchema
+>
+export type ProjectCoordinatorPlanDraftSubmitInput = z.infer<
+  typeof projectCoordinatorPlanDraftSubmitInputSchema
+>
+export type ProjectCoordinatorPlanSubmitResult = z.infer<
+  typeof projectCoordinatorPlanSubmitResultSchema
+>
+export type ProjectCoordinatorPlanConfirmActivateInput = z.infer<
+  typeof projectCoordinatorPlanConfirmActivateInputSchema
 >
 export type ProjectCoordinatorActivation = z.infer<typeof projectCoordinatorActivationSchema>

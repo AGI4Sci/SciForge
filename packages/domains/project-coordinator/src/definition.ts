@@ -15,6 +15,10 @@ export const PROJECT_COORDINATOR_CAPABILITY_FACTORY_CONTRIBUTION = contributionF
   'main',
   'main.capability-factory'
 )
+export const PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION = contributionFor(
+  'main',
+  'main.runtime-lifecycle'
+)
 export const PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.workbench-right-panel'
