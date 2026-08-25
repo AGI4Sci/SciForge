@@ -3,7 +3,8 @@ import type { z } from 'zod'
 import type { DomainMainAgentExecutionHost } from '@sciforge/domain-sdk/agent-execution'
 import type {
   DomainMainHost,
-  DomainMainRuntimeLifecycleContribution
+  DomainMainRuntimeLifecycleContribution,
+  DomainMainSystemCapabilityInvoker
 } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import {
@@ -27,6 +28,8 @@ import {
   projectCoordinatorCompleteInputSchema,
   projectCoordinatorHumanAnswerInputSchema,
   projectCoordinatorHumanNeededCreateInputSchema,
+  projectCoordinatorMembershipAddInputSchema,
+  projectCoordinatorMembershipRemoveInputSchema,
   projectCoordinatorPlanConfirmActivateInputSchema,
   projectCoordinatorPlanDraftEditInputSchema,
   projectCoordinatorPlanDraftGenerateInputSchema,
@@ -34,6 +37,9 @@ import {
   projectCoordinatorPlanDraftSchema,
   projectCoordinatorPlanDraftSubmitInputSchema,
   projectCoordinatorPlanSubmitResultSchema,
+  projectCoordinatorProvisioningApplyInputSchema,
+  projectCoordinatorProvisioningPlanInputSchema,
+  projectCoordinatorProvisioningPlanSchema,
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateResultSchema,
   projectCoordinatorResultReviewInputSchema,
@@ -45,6 +51,7 @@ import {
   PROJECT_COORDINATOR_CAPABILITY_FACTORY_CONTRIBUTION,
   PROJECT_COORDINATOR_DOMAIN_MODULE_ID,
   PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION,
+  PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRACT,
   domainPackageDefinition
 } from './definition.js'
 import {
@@ -55,6 +62,7 @@ import {
   type ProjectCoordinatorMainPorts
 } from './ports.js'
 import { ProjectCoordinatorStateStore } from './state.js'
+import { createProjectCoordinatorProvisioningPort } from './provisioning.js'
 
 export type ProjectCoordinatorCapabilityOptions = Readonly<{
   id: string
@@ -63,7 +71,7 @@ export type ProjectCoordinatorCapabilityOptions = Readonly<{
   description: string
   audiences: readonly ['ui']
   scope: 'global'
-  effect: 'read' | 'compute' | 'workspace-write' | 'external-write'
+  effect: 'read' | 'compute' | 'workspace-write' | 'external-write' | 'destructive'
   approval: 'none' | 'confirmation'
   concurrency: Readonly<{
     revision: 'none'
@@ -244,6 +252,91 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         })
       }),
       options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningPlan,
+        version: '1.0.0',
+        title: 'Preview Project Content provisioning',
+        description: 'Reads the exact Cloud intent and returns the Host-canonical complete ordinary Content Space operation plan for Human review.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        tags: ['project', 'content', 'provisioning', 'plan'],
+        inputSchema: projectCoordinatorProvisioningPlanInputSchema,
+        outputSchema: projectCoordinatorProvisioningPlanSchema,
+        handler: async (raw) => ({
+          output: await options.ports.provisioning.preview(
+            projectCoordinatorProvisioningPlanInputSchema.parse(raw)
+          )
+        })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
+        version: '1.0.0',
+        title: 'Apply Project Content provisioning',
+        description: 'Executes only the exact Human-confirmed full plan, journals ordinary Provider operations, signs factual observations with the current Device, and submits them to Cloud.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'content', 'provisioning', 'attestation'],
+        inputSchema: projectCoordinatorProvisioningApplyInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.provisioning.apply(
+            projectCoordinatorProvisioningApplyInputSchema.parse(raw),
+            capabilityIdempotencyKey(
+              PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
+              context
+            )
+          ),
+          changed: true
+        })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
+        version: '1.0.0',
+        title: 'Add Project member pending Content provisioning',
+        description: 'Adds the exact User and Provider fact to Cloud; content-required membership remains pending until a fresh signed Provider observation succeeds.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'membership', 'content', 'pending'],
+        inputSchema: projectCoordinatorMembershipAddInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.provisioning.addMember(
+            projectCoordinatorMembershipAddInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd, context)
+          ),
+          changed: true
+        })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
+        version: '1.0.0',
+        title: 'Fence and remove Project member',
+        description: 'Fences Cloud Task Authority first; content-required membership remains removal-pending until Provider absence is observed and signed.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'destructive',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'membership', 'content', 'removal'],
+        inputSchema: projectCoordinatorMembershipRemoveInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.provisioning.removeMember(
+            projectCoordinatorMembershipRemoveInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove, context)
+          ),
+          changed: true
+        })
+      }),
+      options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
         version: '1.0.0',
         title: 'Ask the Project Owner',
@@ -388,19 +481,35 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
   const disposeCoordinatorInbox = coordinatorCloudCommands.subscribe((message) => (
     actions.handleInbox(message)
   ))
+  const provisioningAttestationSigning =
+    createProjectContentProvisioningAttestationSigningPort(signingService)
+  let systemCapabilities: DomainMainSystemCapabilityInvoker | undefined
+  const provisioning = createProjectCoordinatorProvisioningPort({
+    workspace,
+    transport,
+    signing: provisioningAttestationSigning,
+    getCapabilities: () => {
+      if (!systemCapabilities) {
+        throw new Error('The approved Content Space provisioning batch is unavailable.')
+      }
+      return systemCapabilities
+    }
+  })
   const ports: ProjectCoordinatorMainPorts = Object.freeze({
     workspace,
     plan,
     actions,
-    provisioningAttestationSigning:
-      createProjectContentProvisioningAttestationSigningPort(signingService),
+    provisioningAttestationSigning,
+    provisioning,
     coordinatorCloudCommands
   })
   const lifecycle: DomainMainRuntimeLifecycleContribution = Object.freeze({
     activate: (context) => {
       agentExecution = context.agentExecution
+      systemCapabilities = context.capabilities
       return () => {
         agentExecution = undefined
+        systemCapabilities = undefined
       }
     }
   })
@@ -418,6 +527,7 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
       },
       {
         ...PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION,
+        contract: PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRACT,
         value: lifecycle,
         onDispose: disposeCoordinatorInbox
       }

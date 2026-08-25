@@ -39,11 +39,11 @@ test('manifest composes independent main and renderer entrypoints', () => {
   // Internal-service discovery is governed by service descriptors, not by
   // release packaging dependencies between source-composed domains.
   assert.equal(domainPackageDefinition.packaging, undefined)
-  assert.equal(
+  assert.deepEqual(
     domainPackageDefinition.contributionContracts[
       PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION.id
     ],
-    undefined
+    { requestedSystemCapabilityGrants: ['content-space.provisioning-batch'] }
   )
 })
 
@@ -87,6 +87,7 @@ test('publishable dependencies target the frozen Host and domain contract majors
   ) as { dependencies: Record<string, string> }
   assert.equal(packageJson.dependencies['@sciforge/collaboration-contracts'], '2.0.0')
   assert.equal(packageJson.dependencies['@sciforge/domain-collaboration'], '^3.0.0')
+  assert.equal(packageJson.dependencies['@sciforge/domain-content-space'], '^4.5.0')
   assert.equal(packageJson.dependencies['@sciforge/domain-identity-access'], '^2.0.0')
   assert.equal(packageJson.dependencies['@sciforge/domain-sdk'], '^0.2.3')
 })

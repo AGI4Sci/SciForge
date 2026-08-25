@@ -245,6 +245,8 @@ export const contentSpaceAgentProviderAdministrationAuthorizationResultSchema =
   contentSpaceResultSchema(contentSpaceAgentProviderAdministrationAuthorizationSchema)
 export const contentSpaceAgentAdministrationCreateSpaceCapabilityResultSchema =
   contentSpaceResultSchema(contentSpaceAgentAdministrationCreateSpaceResultSchema)
+export const contentSpaceAgentAdministrationObserveSpaceResultSchema =
+  contentSpaceResultSchema(contentSpaceAgentAdministrationSpaceSummarySchema)
 export const contentSpaceAgentAdministrationListMembersResultSchema =
   contentSpaceResultSchema(contentSpaceAgentAdministrationMemberPageSchema)
 export const contentSpaceAgentAdministrationAddMemberResultSchema =
@@ -270,6 +272,16 @@ export const CONTENT_SPACE_AGENT_ADMIN_CREATE_SPACE_CONTRACT: DomainCapabilityCo
   effect: 'external-write',
   inputSchema: contentSpaceAgentAdministrationCreateSpaceInputSchema,
   outputSchema: contentSpaceAgentAdministrationCreateSpaceCapabilityResultSchema
+})
+
+export const CONTENT_SPACE_AGENT_ADMIN_OBSERVE_SPACE_CONTRACT: DomainCapabilityContract<
+  Readonly<Record<string, never>>,
+  z.infer<typeof contentSpaceAgentAdministrationObserveSpaceResultSchema>
+> = Object.freeze({
+  actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminObserveSpace,
+  effect: 'read',
+  inputSchema: z.object({}).strict().readonly(),
+  outputSchema: contentSpaceAgentAdministrationObserveSpaceResultSchema
 })
 
 export const CONTENT_SPACE_AGENT_ADMIN_LIST_MEMBERS_CONTRACT: DomainCapabilityContract<
@@ -349,6 +361,12 @@ export type ContentSpaceAdministrationAddMemberReceipt = z.infer<
 >
 export type ContentSpaceAdministrationRemoveMemberReceipt = z.infer<
   typeof contentSpaceAdministrationRemoveMemberReceiptSchema
+>
+export type ContentSpaceAgentAdministrationSpaceSummary = z.infer<
+  typeof contentSpaceAgentAdministrationSpaceSummarySchema
+>
+export type ContentSpaceAgentAdministrationMemberPage = z.infer<
+  typeof contentSpaceAgentAdministrationMemberPageSchema
 >
 
 export type ContentSpaceAdministrationPort = Readonly<{

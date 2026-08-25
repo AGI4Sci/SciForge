@@ -24,6 +24,7 @@ describe('Content Space administration contract', () => {
     expect([
       administration.CONTENT_SPACE_AUTHORIZE_PROVIDER_ADMINISTRATION_CONTRACT,
       administration.CONTENT_SPACE_AGENT_ADMIN_CREATE_SPACE_CONTRACT,
+      administration.CONTENT_SPACE_AGENT_ADMIN_OBSERVE_SPACE_CONTRACT,
       administration.CONTENT_SPACE_AGENT_ADMIN_LIST_MEMBERS_CONTRACT,
       administration.CONTENT_SPACE_AGENT_ADMIN_ADD_MEMBER_CONTRACT,
       administration.CONTENT_SPACE_AGENT_ADMIN_REMOVE_MEMBER_CONTRACT
@@ -35,6 +36,10 @@ describe('Content Space administration contract', () => {
       {
         actionId: 'content-space.agent-admin-create-space',
         effect: 'external-write'
+      },
+      {
+        actionId: 'content-space.agent-admin-observe-space',
+        effect: 'read'
       },
       {
         actionId: 'content-space.agent-admin-list-members',

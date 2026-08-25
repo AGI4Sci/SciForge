@@ -231,11 +231,15 @@ describe('Content Space main composition', () => {
     })
     expect([
       CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminObserveSpace,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember
     ].map((actionId) => definition(definitions, actionId))).toEqual([
+      expect.objectContaining({ audiences: ['agent', 'system'], delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
+      expect.objectContaining({ audiences: ['agent', 'system'], delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
       expect.objectContaining({ audiences: ['agent', 'system'], delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
       expect.objectContaining({ audiences: ['agent', 'system'], delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
       expect.objectContaining({ audiences: ['agent', 'system'], delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID }),
@@ -1324,7 +1328,7 @@ describe('Content Space main composition', () => {
     }
   })
 
-  it('keeps Human browsing global while Agent content access starts from a confirmed resource root', async () => {
+  it('keeps Human browsing global while Agent or an approved batch starts from a confirmed resource root', async () => {
     const definitions = await activateDefinitions(
       createDomainMainEntry(mainHost()).contributions,
       contributionHost(providerContributions(() => providerFixture()))
@@ -1334,10 +1338,11 @@ describe('Content Space main composition', () => {
       scope: 'global'
     })
     expect(definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot)).toMatchObject({
-      audiences: ['agent'],
+      audiences: ['agent', 'system'],
       scope: 'global',
       effect: 'external-write',
-      approval: 'confirmation'
+      approval: 'confirmation',
+      delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID
     })
     expect(definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentListEntries)).toMatchObject({
       audiences: ['agent'],
@@ -1536,6 +1541,91 @@ describe('Content Space main composition', () => {
       resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
       workspaceId: '/workspace'
     }))
+  })
+
+  it('reauthorizes and observes one exact live root only inside the approved provisioning batch', async () => {
+    const root = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      containerId: 'existing-team-root'
+    })
+    const portableRoot = toPortableContentContainerReference(root)
+    const summary = Object.freeze({
+      root: portableRoot,
+      label: 'Project Existing Team',
+      contentOwnerUserId: principal.subject,
+      pinned: false
+    })
+    const listContainers = vi.fn(async ({ context }:
+      Parameters<ContentSpaceProvider['listContainers']>[0]) => ({
+      providerInstanceRef: context.providerInstanceRef,
+      items: [{ reference: root, scope: 'shared' as const, label: summary.label }]
+    }))
+    const observeSpace = vi.fn(async () => summary)
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture({
+        listContainers,
+        observeEntry: async () => ({
+          entry: { kind: 'container' as const, reference: root, label: summary.label },
+          capabilities: []
+        }),
+        features: {
+          administration: {
+            describeOperations: () => readyAdministrationStates,
+            bind: async () => Object.freeze({
+              administration: administrationPortFixture({ observeSpace })
+            })
+          }
+        }
+      })))
+    )
+    const authorize = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot)
+    const issueResourceWithoutProof = vi.fn()
+    await expect(authorize.handler({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'shared',
+      label: summary.label
+    }, capabilityContext(undefined, 'system', {
+      callerId: 'sciforge.project-coordinator',
+      workspaceId: '/workspace',
+      issueResource: issueResourceWithoutProof
+    }))).resolves.toMatchObject({
+      output: { ok: false, error: { code: 'unauthorized' } }
+    })
+    expect(listContainers).not.toHaveBeenCalled()
+    expect(issueResourceWithoutProof).not.toHaveBeenCalled()
+
+    let registration: any
+    await expect(authorize.handler({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'shared',
+      label: summary.label
+    }, capabilityContext(undefined, 'system', {
+      callerId: 'sciforge.project-coordinator',
+      workspaceId: '/workspace',
+      capabilityGrants: [CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID],
+      issueResource: (value) => {
+        registration = value
+        return resourceHandle('r', value.semanticRevision)
+      }
+    }))).resolves.toMatchObject({ output: { ok: true } })
+
+    const observed = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentAdminObserveSpace
+    ).handler({}, capabilityContext(undefined, 'system', {
+      callerId: 'sciforge.project-coordinator',
+      workspaceId: '/workspace',
+      capabilityGrants: [CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID],
+      resource: {
+        resourceId: registration.resourceId,
+        resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
+        workspaceId: '/workspace'
+      }
+    }))
+    expect(observed.output).toEqual(contentSpaceSuccess(summary))
+    expect(listContainers).toHaveBeenCalledOnce()
+    expect(observeSpace).toHaveBeenCalledExactlyOnceWith({ root: portableRoot })
   })
 
   it('derives the Provider Instance from discovery and pages scope-filtered Agent root labels without identities', async () => {

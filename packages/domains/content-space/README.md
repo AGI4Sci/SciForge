@@ -52,9 +52,11 @@ Content Space exposes no Task-specific port. Cloud Task handoff remains owned
 by Cloud Collaboration and requires its Project Content Space Binding, typed
 Task file intents, and exact Task-turn resource injection and retirement.
 Content Space also exposes no Project provisioning capability, operation,
-intent/report schema, or Provider port. A future Project-owning integration
-must introduce its own authoritative binding and identity contract through a
-separately reviewed change rather than reuse ordinary Provider administration.
+intent/report schema, or Provider port. The separately owned Project
+Coordinator integration keeps its authoritative Cloud intent, membership
+mapping, recovery journal and Device-signed attestation outside this package;
+it can only orchestrate these ordinary Provider-neutral capabilities through
+the Host-approved finite batch. No Project DTO enters Content Space.
 
 Ordinary shared-container membership uses a different identity boundary. The
 v2 extended contract gives each directory search a literal-kind summary/page
@@ -76,7 +78,11 @@ mutations requires fresh Human confirmation before Provider dispatch, either
 for the exact invocation or for one immutable approved provisioning batch.
 
 `content-space.provisioning-batch` is the single delegated path for the typed
-authorize/create/list/add/remove/list administration contracts. It does not
+authorize/create-or-reauthorize/observe/list/add/remove/list administration
+contracts. Root reauthorization resolves one unique live shared label and
+observes that exact root before any member write; missing, ambiguous, or
+unauthorized roots fail closed. Both system-audience operations reject calls
+without the exact batch grant before Provider enumeration. The grant does not
 expand or weaken the generic Host limit of 64 immutable operations. Initial
 provisioning therefore fits only when its exact authorize → create → first
 member-list → bounded adds → final member-list plan fits that gate. A member

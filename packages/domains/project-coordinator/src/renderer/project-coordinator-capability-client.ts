@@ -5,6 +5,8 @@ import {
   projectCoordinatorCompleteInputSchema,
   projectCoordinatorHumanAnswerInputSchema,
   projectCoordinatorHumanNeededCreateInputSchema,
+  projectCoordinatorMembershipAddInputSchema,
+  projectCoordinatorMembershipRemoveInputSchema,
   projectCoordinatorPlanConfirmActivateInputSchema,
   projectCoordinatorPlanDraftEditInputSchema,
   projectCoordinatorPlanDraftGenerateInputSchema,
@@ -12,6 +14,9 @@ import {
   projectCoordinatorPlanDraftSchema,
   projectCoordinatorPlanDraftSubmitInputSchema,
   projectCoordinatorPlanSubmitResultSchema,
+  projectCoordinatorProvisioningApplyInputSchema,
+  projectCoordinatorProvisioningPlanInputSchema,
+  projectCoordinatorProvisioningPlanSchema,
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateResultSchema,
   projectCoordinatorResultReviewInputSchema,
@@ -21,12 +26,17 @@ import {
   type ProjectCoordinatorCompleteInput,
   type ProjectCoordinatorHumanAnswerInput,
   type ProjectCoordinatorHumanNeededCreateInput,
+  type ProjectCoordinatorMembershipAddInput,
+  type ProjectCoordinatorMembershipRemoveInput,
   type ProjectCoordinatorPlanDraft,
   type ProjectCoordinatorPlanDraftEditInput,
   type ProjectCoordinatorPlanDraftGenerateInput,
   type ProjectCoordinatorPlanDraftReadInput,
   type ProjectCoordinatorPlanDraftSubmitInput,
   type ProjectCoordinatorPlanSubmitResult,
+  type ProjectCoordinatorProvisioningApplyInput,
+  type ProjectCoordinatorProvisioningPlan,
+  type ProjectCoordinatorProvisioningPlanInput,
   type ProjectCoordinatorProjectCreateInput,
   type ProjectCoordinatorProjectCreateResult,
   type ProjectCoordinatorResultReviewInput,
@@ -83,6 +93,34 @@ const planConfirmActivateContract = Object.freeze({
   outputSchema: projectCoordinatorWorkspaceSchema
 })
 
+const contentProvisioningPlanContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningPlan,
+  effect: 'read' as const,
+  inputSchema: projectCoordinatorProvisioningPlanInputSchema,
+  outputSchema: projectCoordinatorProvisioningPlanSchema
+})
+
+const contentProvisioningApplyContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
+  effect: 'external-write' as const,
+  inputSchema: projectCoordinatorProvisioningApplyInputSchema,
+  outputSchema: projectCoordinatorWorkspaceSchema
+})
+
+const membershipAddContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
+  effect: 'external-write' as const,
+  inputSchema: projectCoordinatorMembershipAddInputSchema,
+  outputSchema: projectCoordinatorWorkspaceSchema
+})
+
+const membershipRemoveContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
+  effect: 'destructive' as const,
+  inputSchema: projectCoordinatorMembershipRemoveInputSchema,
+  outputSchema: projectCoordinatorWorkspaceSchema
+})
+
 const humanNeededCreateContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
   effect: 'external-write' as const,
@@ -119,6 +157,10 @@ export type ProjectCoordinatorRendererClient = Readonly<{
   editPlanDraft(input: ProjectCoordinatorPlanDraftEditInput): Promise<ProjectCoordinatorPlanDraft>
   submitPlanDraft(input: ProjectCoordinatorPlanDraftSubmitInput): Promise<ProjectCoordinatorPlanSubmitResult>
   confirmPlanAndActivate(input: ProjectCoordinatorPlanConfirmActivateInput): Promise<ProjectCoordinatorWorkspace>
+  previewProvisioning(input: ProjectCoordinatorProvisioningPlanInput): Promise<ProjectCoordinatorProvisioningPlan>
+  applyProvisioning(input: ProjectCoordinatorProvisioningApplyInput): Promise<ProjectCoordinatorWorkspace>
+  addMember(input: ProjectCoordinatorMembershipAddInput): Promise<ProjectCoordinatorWorkspace>
+  removeMember(input: ProjectCoordinatorMembershipRemoveInput): Promise<ProjectCoordinatorWorkspace>
   createHumanNeeded(input: ProjectCoordinatorHumanNeededCreateInput): Promise<ProjectCoordinatorWorkspace>
   answerHumanNeeded(input: ProjectCoordinatorHumanAnswerInput): Promise<ProjectCoordinatorWorkspace>
   reviewResult(input: ProjectCoordinatorResultReviewInput): Promise<ProjectCoordinatorWorkspace>
@@ -136,6 +178,10 @@ export function createProjectCoordinatorRendererClient(
     editPlanDraft: (input) => invoker.invoke(planDraftEditContract, input),
     submitPlanDraft: (input) => invoker.invoke(planSubmitContract, input),
     confirmPlanAndActivate: (input) => invoker.invoke(planConfirmActivateContract, input),
+    previewProvisioning: (input) => invoker.invoke(contentProvisioningPlanContract, input),
+    applyProvisioning: (input) => invoker.invoke(contentProvisioningApplyContract, input),
+    addMember: (input) => invoker.invoke(membershipAddContract, input),
+    removeMember: (input) => invoker.invoke(membershipRemoveContract, input),
     createHumanNeeded: (input) => invoker.invoke(humanNeededCreateContract, input),
     answerHumanNeeded: (input) => invoker.invoke(humanAnswerContract, input),
     reviewResult: (input) => invoker.invoke(resultReviewContract, input),

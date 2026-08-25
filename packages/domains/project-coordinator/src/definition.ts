@@ -19,6 +19,10 @@ export const PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION = contributionFo
   'main',
   'main.runtime-lifecycle'
 )
+export const PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION.id
+  ]!
 export const PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.workbench-right-panel'

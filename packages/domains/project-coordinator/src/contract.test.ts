@@ -2,7 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  PROJECT_COORDINATOR_CAPABILITY_IDS,
   projectCoordinatorActivationSchema,
+  projectCoordinatorMembershipAddInputSchema,
+  projectCoordinatorMembershipRemoveInputSchema,
+  projectCoordinatorProvisioningApplyInputSchema,
   projectCoordinatorWorkspaceSchema
 } from './contract.js'
 
@@ -166,6 +170,11 @@ const fixture = {
       intent: null,
       attestation: null,
       binding: null,
+      memberships: [],
+      providerPrincipalFacts: [],
+      contentReadiness: [],
+      providerMembershipObservations: [],
+      externalOperationJournal: [],
       recoveryActions: []
     }
   }]
@@ -213,5 +222,57 @@ test('activation accepts only an exact Project focus', () => {
   assert.throws(() => projectCoordinatorActivationSchema.parse({
     projectId: 'prj_Project000001',
     latest: true
+  }))
+})
+
+test('provisioning confirmation binds only exact Cloud CAS facts and the Host full-plan digest', () => {
+  const apply = {
+    projectId: 'prj_Project000001',
+    provisioningIntentId: 'pci_Provisioning01',
+    expectedProjectRevision: 3,
+    expectedProvisioningRevision: 2,
+    expectedProvisioningIntentRevision: 1,
+    intentDigest: 'a'.repeat(64),
+    attemptId: 'attempt_Provisioning01',
+    confirmedPlanDigest: 'b'.repeat(64)
+  }
+  assert.deepEqual(projectCoordinatorProvisioningApplyInputSchema.parse(apply), apply)
+  assert.throws(() => projectCoordinatorProvisioningApplyInputSchema.parse({
+    ...apply,
+    operations: [{ actionId: 'content-space.agent-admin-add-member' }]
+  }))
+  assert.throws(() => projectCoordinatorProvisioningApplyInputSchema.parse({
+    ...apply,
+    confirmedPlanDigest: 'caller-selected-authority'
+  }))
+  assert.equal(
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
+    'project-coordinator.content-provisioning.apply'
+  )
+})
+
+test('dynamic member writes carry exact Cloud identities and never Provider credentials', () => {
+  const add = {
+    projectId: 'prj_Project000001',
+    expectedProjectRevision: 3,
+    userId: 'usr_Worker000001',
+    providerPrincipalFactId: 'ppf_WorkerFact0001',
+    expectedProviderPrincipalFactRevision: 2
+  }
+  assert.deepEqual(projectCoordinatorMembershipAddInputSchema.parse(add), add)
+  assert.throws(() => projectCoordinatorMembershipAddInputSchema.parse({
+    ...add,
+    providerToken: 'forbidden'
+  }))
+  const remove = {
+    projectId: 'prj_Project000001',
+    projectMembershipId: 'pmb_WorkerMember01',
+    expectedProjectRevision: 4,
+    expectedMembershipRevision: 2
+  }
+  assert.deepEqual(projectCoordinatorMembershipRemoveInputSchema.parse(remove), remove)
+  assert.throws(() => projectCoordinatorMembershipRemoveInputSchema.parse({
+    ...remove,
+    providerPrincipalId: 'caller-must-not-supply'
   }))
 })

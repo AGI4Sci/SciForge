@@ -324,6 +324,11 @@ function workspaceFixture() {
         intent: null,
         attestation: null,
         binding: null,
+        memberships: [],
+        providerPrincipalFacts: [],
+        contentReadiness: [],
+        providerMembershipObservations: [],
+        externalOperationJournal: [],
         recoveryActions: []
       }
     }]

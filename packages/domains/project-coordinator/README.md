@@ -16,8 +16,11 @@ This package owns only the Human-facing coordination surfaces for:
 - grouping Worker candidates by User while selecting an exact Agent;
 - reviewing immutable Task results, asking/answering Project HumanNeeded, and
   completing a Project with its final summary;
-- observing Project Tasks, ProjectRecord memory, and Project Content
-  provisioning facts.
+- observing Project Tasks, ProjectRecord memory, and the independent Project
+  Membership, Provider observation, Content Readiness, Task Authority and
+  recovery facts;
+- previewing and applying the Owner-confirmed Content Space provisioning plan,
+  reconciling dynamic membership, and presenting Owner root-loss recovery.
 
 It does **not** own OIDC login, Device enrollment, Agent registration,
 connection settings, Agent presence, Inbox delivery, local Worker execution,
@@ -52,16 +55,41 @@ uses the Host-provided Agent Runtime only after the runtime lifecycle has
 activated; missing Runtime, identity, Device, Cloud, or exact Project facts fail
 closed.
 
+Project Content provisioning is a package-owned saga over existing ordinary
+Content Space capabilities. The runtime lifecycle requests only
+`content-space.provisioning-batch`; one Host-confirmed immutable finite plan
+then authorizes its exact ordered authorize/create-or-reauthorize/observe/list/
+add/remove/list operations. Apply accepts only fresh Cloud CAS facts and the
+Host-canonical full-plan digest, never renderer-supplied Provider operations.
+Each Provider operation is surrounded by Cloud prepare/dispatch/observe journal
+writes. A dispatched or outcome-unknown container create is reconciled by exact
+live root discovery and is never issued a second time. The final complete member
+observation is signed through Identity's purpose-locked current-Device service
+and submitted to Cloud; the package retains no Provider credential, Connection,
+endpoint, resource handle, Token, local path, or reusable authorization.
+
+Dynamic content-required adds must first return `pending_membership`; removals
+must first return `membership_removal_pending`. The Owner Desktop then applies
+the new provisioning intent and only Cloud's successful verification may
+activate or finally remove the member. The renderer rejects an immediate-active
+or immediate-removed compatibility response. Content-free membership continues
+to activate/remove directly. If exact Owner root authorization or observation
+returns unauthorized, the saga records the external failure, submits the
+factual Owner observation, stops before all member writes, and exposes Cloud's
+safe recovery action without deleting Provider content.
+
 `./contract` contains the strict renderer-safe coordination read model. It
 composes the canonical Cloud Project Plan, Worker Availability, Membership,
 Task Authority, execution, result/review, content readiness, provisioning and
 recovery records; it adds only UI-specific grouping, exact selection and focus
 wrappers rather than redefining those state machines.
-`./ports` contains the narrow package-owned workspace and Plan workflow ports
-used by the capability factory plus the closed Collaboration
-Coordinator-Agent command port. The renderer invokes eleven governed
-capabilities: workspace read, Project create, Plan-draft read/generate/edit,
-Plan submit, Owner confirm-and-activate, Project HumanNeeded create/answer,
-result review, and atomic final completion. Pending confirmation, HumanNeeded,
-review, and completion cards are default-visible. There is no renderer
-transport, HTTP client, Provider adapter, or second Cloud DTO.
+`./ports` contains the narrow package-owned workspace, Plan, provisioning, and
+action workflow ports used by the capability factory plus the closed
+Collaboration Coordinator-Agent command port. The renderer invokes fifteen
+governed capabilities: workspace read, Project create, Plan-draft
+read/generate/edit, Plan submit, Owner confirm-and-activate, provisioning
+preview/apply, membership add/remove, Project HumanNeeded create/answer, result
+review, and atomic final completion. Pending confirmation, provisioning,
+HumanNeeded, review, completion, membership fences, and root recovery cards are
+default-visible. There is no renderer transport, HTTP client, Provider adapter,
+or second Cloud DTO.

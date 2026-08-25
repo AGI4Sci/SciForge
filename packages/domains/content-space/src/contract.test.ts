@@ -120,7 +120,7 @@ describe('Content Space public contract', () => {
     })).toThrow()
   })
 
-  it('publishes one grant and three effect-honest system transfer contracts', () => {
+  it('publishes one grant and effect-honest system transfer and root-authorization contracts', () => {
     expect(contract.CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_ID)
       .toBe('content-space.system-transfer')
     expect(contract.CONTENT_SPACE_SYSTEM_CAPABILITY_GRANTS)
@@ -138,6 +138,10 @@ describe('Content Space public contract', () => {
     })
     expect(contract.CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT).toMatchObject({
       actionId: 'content-space.system-upload-new',
+      effect: 'external-write'
+    })
+    expect(contract.CONTENT_SPACE_AUTHORIZE_AGENT_ROOT_CONTRACT).toMatchObject({
+      actionId: 'content-space.authorize-agent-root',
       effect: 'external-write'
     })
   })

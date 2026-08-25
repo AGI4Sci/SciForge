@@ -1042,6 +1042,15 @@ export const CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT: DomainCapabilityContract<
   inputSchema: contentSpaceSystemUploadNewInputSchema,
   outputSchema: contentSpaceSystemUploadNewResultSchema
 })
+export const CONTENT_SPACE_AUTHORIZE_AGENT_ROOT_CONTRACT: DomainCapabilityContract<
+  z.infer<typeof contentSpaceAuthorizeAgentRootInputSchema>,
+  z.infer<typeof contentSpaceAgentRootAuthorizationResultSchema>
+> = Object.freeze({
+  actionId: CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
+  effect: 'external-write',
+  inputSchema: contentSpaceAuthorizeAgentRootInputSchema,
+  outputSchema: contentSpaceAgentRootAuthorizationResultSchema
+})
 
 export const opaqueExternalBindingValueSchema = z.string().regex(/^[a-f0-9]{64}$/u)
 

@@ -78,6 +78,7 @@ import {
   type ProjectCoordinatorWorkspaceReadInput
 } from './contract.js'
 import { ProjectCoordinatorStateStore } from './state.js'
+import type { ProjectCoordinatorProvisioningPort } from './provisioning.js'
 
 export type ProjectCoordinatorWorkspacePort = Readonly<{
   readWorkspace(input: ProjectCoordinatorWorkspaceReadInput): Promise<ProjectCoordinatorWorkspace>
@@ -134,6 +135,7 @@ export type ProjectCoordinatorMainPorts = Readonly<{
   workspace: ProjectCoordinatorCloudWorkspacePort
   plan: ProjectCoordinatorPlanPort
   provisioningAttestationSigning: ProjectContentProvisioningAttestationSigningPort
+  provisioning: ProjectCoordinatorProvisioningPort
   coordinatorCloudCommands: CoordinatorCloudCommandService
   actions: ProjectCoordinatorActionPort
 }>
@@ -822,6 +824,11 @@ function projectCoordinatorProjectView(
       intent: intents.at(-1) ?? null,
       attestation: attestations.at(-1) ?? null,
       binding: bindings.at(-1) ?? null,
+      memberships: factItems(snapshot, 'memberships'),
+      providerPrincipalFacts: factItems(snapshot, 'provider_principal_facts'),
+      contentReadiness: factItems(snapshot, 'content_readiness'),
+      providerMembershipObservations: factItems(snapshot, 'provider_membership_observations'),
+      externalOperationJournal: factItems(snapshot, 'external_operation_journal'),
       recoveryActions: factItems(snapshot, 'visible_recovery_actions')
     }
   }

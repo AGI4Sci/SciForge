@@ -1342,9 +1342,10 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         id: CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
         title: 'Authorize Agent Content Space Root',
         description: 'After Provider Instance and optional candidate-label discovery, confirms one exact Human-visible personal or shared library label and re-enumerates live state to establish the bounded root for this Agent context.',
-        audiences: ['agent'],
+        audiences: ['agent', 'system'],
         effect: 'external-write',
         approval: 'confirmation',
+        delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
         concurrency: { revision: 'none', idempotency: 'required' },
         tags: [
           'external-content',
@@ -1361,6 +1362,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         inputSchema: contentSpaceAuthorizeAgentRootInputSchema,
         outputSchema: contentSpaceAgentRootAuthorizationResultSchema,
         handler: async (selection, context) => capabilityResult(async () => {
+          provisioningResourceAudience(context)
           const root = await resolveSelectableAgentRoot(selection, context)
           const observation = await options.getService().observeEntry(root, call(context))
           if (observation.entry.kind !== 'container') {
@@ -1753,11 +1755,12 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminObserveSpace,
         title: 'Observe Authorized Content Space Administration State',
         description: 'Reads administration state for the exact authorized Content Space root.',
-        audiences: ['agent'],
+        audiences: ['agent', 'system'],
         scope: 'resource',
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
         effect: 'read',
         approval: 'none',
+        delegatedBatchGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
         concurrency: { revision: 'none', idempotency: 'none' },
         inputSchema: zEmptyObject,
         outputSchema: contentSpaceResultSchema(ADMINISTRATION_SPACE_SUMMARY_WIRE_SCHEMA),

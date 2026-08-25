@@ -24,10 +24,14 @@ import type {
   ProjectCoordinatorCompleteInput,
   ProjectCoordinatorHumanAnswerInput,
   ProjectCoordinatorHumanNeededCreateInput,
+  ProjectCoordinatorMembershipAddInput,
+  ProjectCoordinatorMembershipRemoveInput,
   ProjectCoordinatorPlanDraft,
   ProjectCoordinatorPlanDraftEditInput,
   ProjectCoordinatorProjectCreateResult,
   ProjectCoordinatorProject,
+  ProjectCoordinatorProvisioningApplyInput,
+  ProjectCoordinatorProvisioningPlan,
   ProjectCoordinatorResultReviewInput,
   ProjectCoordinatorWorkspace
 } from '../contract.js'
@@ -71,6 +75,25 @@ export function projectCoordinatorCreatedSelection(
   })
 }
 
+/**
+ * Narrows the Human-reviewed full plan to the immutable Cloud/Host CAS facts accepted by apply.
+ * Provider operations remain Host-owned and cannot be replaced by renderer input.
+ */
+export function projectCoordinatorProvisioningApplyInput(
+  plan: ProjectCoordinatorProvisioningPlan
+): ProjectCoordinatorProvisioningApplyInput {
+  return {
+    projectId: plan.projectId,
+    provisioningIntentId: plan.provisioningIntentId,
+    expectedProjectRevision: plan.expectedProjectRevision,
+    expectedProvisioningRevision: plan.expectedProvisioningRevision,
+    expectedProvisioningIntentRevision: plan.expectedProvisioningIntentRevision,
+    intentDigest: plan.intentDigest,
+    attemptId: plan.attemptId,
+    confirmedPlanDigest: plan.confirmedPlanDigest
+  }
+}
+
 export function ProjectCoordinatorPanel({
   client,
   session,
@@ -84,6 +107,7 @@ export function ProjectCoordinatorPanel({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
   const [draft, setDraft] = useState<ProjectCoordinatorPlanDraft | null>(null)
+  const [provisioningPlan, setProvisioningPlan] = useState<ProjectCoordinatorProvisioningPlan>()
   const [busyAction, setBusyAction] = useState<string>()
   const [createDisplayName, setCreateDisplayName] = useState('')
   const [createGoal, setCreateGoal] = useState('')
@@ -98,6 +122,7 @@ export function ProjectCoordinatorPanel({
       const next = await client.readWorkspace(projectId ? { projectId } : {})
       if (signal?.aborted) return
       setWorkspace(next)
+      setProvisioningPlan(undefined)
       const preferred = projectId ?? next.focusedProjectId
       if (preferred && next.projects.some(({ project }) => project.projectId === preferred)) {
         setSelectedProjectId(preferred)
@@ -130,6 +155,10 @@ export function ProjectCoordinatorPanel({
     () => selectFocusedProject(workspace, selectedProjectId || initialProjectId),
     [initialProjectId, selectedProjectId, workspace]
   )
+
+  useEffect(() => {
+    setProvisioningPlan(undefined)
+  }, [project?.project.projectId, project?.project.revision])
 
   const connectionMessage = workspace && workspace.connection.state !== 'ready'
     ? connectionMessageKey(workspace.connection.state)
@@ -265,6 +294,36 @@ export function ProjectCoordinatorPanel({
     void runAction('project-complete', () => client.completeProject(input), applyProjectWorkspace)
   }, [applyProjectWorkspace, client, runAction])
 
+  const previewProvisioning = useCallback(() => {
+    if (!project) return
+    void runAction('provisioning-preview', () => client.previewProvisioning({
+      projectId: project.project.projectId
+    }), setProvisioningPlan)
+  }, [client, project, runAction])
+
+  const applyProvisioning = useCallback((plan: ProjectCoordinatorProvisioningPlan) => {
+    void runAction('provisioning-apply', () => client.applyProvisioning(
+      projectCoordinatorProvisioningApplyInput(plan)
+    ), (next) => {
+      applyProjectWorkspace(next)
+      setProvisioningPlan(undefined)
+    })
+  }, [applyProjectWorkspace, client, runAction])
+
+  const addMember = useCallback((input: ProjectCoordinatorMembershipAddInput) => {
+    void runAction('membership-add', () => client.addMember(input), (next) => {
+      applyProjectWorkspace(next)
+      setProvisioningPlan(undefined)
+    })
+  }, [applyProjectWorkspace, client, runAction])
+
+  const removeMember = useCallback((input: ProjectCoordinatorMembershipRemoveInput) => {
+    void runAction('membership-remove', () => client.removeMember(input), (next) => {
+      applyProjectWorkspace(next)
+      setProvisioningPlan(undefined)
+    })
+  }, [applyProjectWorkspace, client, runAction])
+
   return (
     <aside
       className={`ds-no-drag flex h-full min-h-0 flex-col bg-ds-bg text-ds-text ${className ?? ''}`}
@@ -369,7 +428,18 @@ export function ProjectCoordinatorPanel({
           onReviewResult={reviewResult}
           onComplete={completeProject}
         />
-        <ProvisioningSection project={project} />
+        <ProjectCoordinatorProvisioningSection
+          project={project}
+          plan={provisioningPlan ?? null}
+          canManage={workspace?.connection.state === 'ready' &&
+            workspace.connection.userId === project?.project.ownerUserId}
+          busy={Boolean(busyAction?.startsWith('provisioning-') ||
+            busyAction?.startsWith('membership-'))}
+          onPreview={previewProvisioning}
+          onApply={applyProvisioning}
+          onAddMember={addMember}
+          onRemoveMember={removeMember}
+        />
       </div>
     </aside>
   )
@@ -909,14 +979,71 @@ function acceptedCurrentResultIds(project: ProjectCoordinatorProject): string[] 
     : resultSubmissionIds as string[]
 }
 
-function ProvisioningSection({ project }: Readonly<{ project?: ProjectCoordinatorProject }>): ReactElement {
+export function ProjectCoordinatorProvisioningSection({
+  project,
+  plan,
+  canManage = true,
+  busy,
+  onPreview,
+  onApply,
+  onAddMember,
+  onRemoveMember
+}: Readonly<{
+  project?: ProjectCoordinatorProject
+  plan: ProjectCoordinatorProvisioningPlan | null
+  canManage?: boolean
+  busy: boolean
+  onPreview(): void
+  onApply(plan: ProjectCoordinatorProvisioningPlan): void
+  onAddMember(input: ProjectCoordinatorMembershipAddInput): void
+  onRemoveMember(input: ProjectCoordinatorMembershipRemoveInput): void
+}>): ReactElement {
   const { t } = useTranslation('common')
+  const [selectedProviderFactId, setSelectedProviderFactId] = useState('')
+  const [contentFreeUserId, setContentFreeUserId] = useState('')
   const provisioning = project?.provisioning
+  const memberships = provisioning?.memberships ?? []
+  const existingUserIds = new Set(
+    memberships.filter(({ state }) => state !== 'removed').map(({ userId }) => userId)
+  )
+  const eligibleProviderFacts = (provisioning?.providerPrincipalFacts ?? []).filter((fact) => (
+    fact.readiness === 'ready' && !existingUserIds.has(fact.userId)
+  ))
+  const selectedProviderFact = eligibleProviderFacts.find(({ providerPrincipalFactId }) => (
+    providerPrincipalFactId === selectedProviderFactId
+  )) ?? eligibleProviderFacts[0]
   const provisioningState = provisioning?.binding?.status ?? provisioning?.intent?.state
+  const recoveryAction = provisioning?.recoveryActions[0]
+  const rootLost = provisioning?.binding?.status === 'degraded'
+
+  const addExactMember = () => {
+    if (!project) return
+    if (project.project.contentMode === 'required') {
+      if (!selectedProviderFact) return
+      onAddMember({
+        projectId: project.project.projectId,
+        expectedProjectRevision: project.project.revision,
+        userId: selectedProviderFact.userId,
+        providerPrincipalFactId: selectedProviderFact.providerPrincipalFactId,
+        expectedProviderPrincipalFactRevision: selectedProviderFact.revision
+      })
+      return
+    }
+    const userId = contentFreeUserId.trim()
+    if (!userId) return
+    onAddMember({
+      projectId: project.project.projectId,
+      expectedProjectRevision: project.project.revision,
+      userId,
+      providerPrincipalFactId: null,
+      expectedProviderPrincipalFactRevision: null
+    })
+  }
+
   return (
     <Section id="provisioning" title={t('projectCoordinatorProvisioning')} icon={<Warehouse className="h-4 w-4" />}>
-      {!provisioning ? <Empty /> : (
-        <div className="space-y-2 text-xs">
+      {!project || !provisioning ? <Empty /> : (
+        <div className="space-y-3 text-xs">
           <div className="flex items-center justify-between gap-2">
             <Status value={provisioningState ?? 'unbound'} />
             <span className="text-[10px] text-ds-muted">
@@ -924,23 +1051,180 @@ function ProvisioningSection({ project }: Readonly<{ project?: ProjectCoordinato
               {provisioning.binding?.provisioningRevision ?? provisioning.intent?.provisioningRevision ?? '—'}
             </span>
           </div>
-          {provisioning.recoveryActions[0] ? (
-            <p className="text-[11px] text-ds-muted">
-              {t('projectCoordinatorProvisioningNext')}: {provisioning.recoveryActions[0].safeSummary}
-            </p>
-          ) : null}
-          {project!.workerGroups.map((group) => (
-            <div key={group.userId} className="grid grid-cols-[1fr_auto] gap-2 rounded bg-ds-bg px-2 py-1.5 text-[10px]">
-              <span className="break-all font-mono">{group.userId}</span>
-              <span>
-                {group.agents[0]?.projectAvailability.membership?.state ?? 'not_member'} ·{' '}
-                {group.agents[0]?.projectAvailability.contentReadiness?.state ?? 'missing_identity'} ·{' '}
-                {group.agents[0]?.projectAvailability.providerPrincipalSnapshotStatus ?? 'not_applicable'} ·{' '}
-                {group.agents[0]?.projectAvailability.taskAuthorities
-                  .map(({ state }) => state).join('/') || 'blocked'}
-              </span>
+
+          {rootLost || recoveryAction ? (
+            <div
+              className="space-y-2 rounded border border-amber-500/40 bg-ds-bg p-2"
+              data-default-visible-card="content-recovery"
+            >
+              <div className="font-medium">{t('projectCoordinatorContentRecovery')}</div>
+              {provisioning.binding?.statusReason ? (
+                <code className="block break-all text-[10px]" data-binding-status-reason={provisioning.binding.statusReason}>
+                  {provisioning.binding.statusReason}
+                </code>
+              ) : null}
+              {recoveryAction ? (
+                <p className="text-[11px] text-ds-muted">
+                  {t('projectCoordinatorProvisioningNext')}: {recoveryAction.safeSummary}
+                </p>
+              ) : null}
+              {canManage && project.project.contentMode === 'required' && provisioning.intent ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={onPreview}
+                  className="rounded border border-ds-border px-2 py-1 text-[11px] disabled:opacity-50"
+                >
+                  {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorPreviewReconcile')}
+                </button>
+              ) : null}
             </div>
-          ))}
+          ) : null}
+
+          {canManage && project.project.contentMode === 'required' && provisioning.intent && !plan ? (
+            <div
+              className="space-y-2 rounded border border-ds-border bg-ds-bg p-2"
+              data-default-visible-card="content-provisioning"
+            >
+              <p className="text-[11px] text-ds-muted">
+                {t('projectCoordinatorProvisioningReviewRequired')}
+              </p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onPreview}
+                className="rounded bg-ds-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+              >
+                {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorPreviewProvisioning')}
+              </button>
+            </div>
+          ) : null}
+
+          {plan ? (
+            <div
+              className="space-y-2 rounded border border-ds-border bg-ds-bg p-2"
+              data-default-visible-card="content-provisioning-confirmation"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium">{t('projectCoordinatorProvisioningFullPlan')}</span>
+                <Status value={plan.rootStrategy} />
+              </div>
+              <ol className="space-y-1">
+                {plan.operations.map((operation, index) => (
+                  <li
+                    key={operation.operationId}
+                    className="rounded border border-ds-border px-2 py-1 text-[10px]"
+                    data-provisioning-operation={operation.operationId}
+                  >
+                    <span>{index + 1}. </span>
+                    <code>{operation.actionId}</code>
+                    <span> · {operation.kind}</span>
+                    {operation.userId ? <span> · <code>{operation.userId}</code></span> : null}
+                  </li>
+                ))}
+              </ol>
+              <div className="break-all font-mono text-[9px] text-ds-muted">
+                {t('projectCoordinatorConfirmedPlanDigest')}: {plan.confirmedPlanDigest}
+              </div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onApply(plan)}
+                className="rounded bg-ds-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+              >
+                {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorApplyProvisioning')}
+              </button>
+            </div>
+          ) : null}
+
+          <div className="space-y-1.5">
+            <div className="font-medium">{t('projectCoordinatorProjectMembers')}</div>
+            {memberships.length === 0 ? <Empty /> : memberships.map((membership) => {
+              const readiness = provisioning.contentReadiness.find(({ userId }) => (
+                userId === membership.userId
+              ))
+              const authoritySuspended = membership.state === 'pending_membership' ||
+                membership.state === 'membership_removal_pending'
+              return (
+                <div
+                  key={membership.projectMembershipId}
+                  className="space-y-1 rounded bg-ds-bg px-2 py-1.5 text-[10px]"
+                  data-membership-state={membership.state}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <code className="break-all">{membership.userId}</code>
+                    <Status value={membership.state} />
+                  </div>
+                  <div className="flex items-center justify-between gap-2 text-ds-muted">
+                    <span>{readiness?.state ?? 'not_applicable'}</span>
+                    {authoritySuspended ? (
+                      <span>{t('projectCoordinatorTaskAuthoritySuspended')}</span>
+                    ) : null}
+                  </div>
+                  {canManage && membership.userId !== project.project.ownerUserId &&
+                    membership.state === 'active' ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onRemoveMember({
+                          projectId: project.project.projectId,
+                          projectMembershipId: membership.projectMembershipId,
+                          expectedProjectRevision: project.project.revision,
+                          expectedMembershipRevision: membership.revision
+                        })}
+                        className="rounded border border-red-500/40 px-1.5 py-0.5 text-[10px] text-red-600 disabled:opacity-50"
+                      >
+                        {t('projectCoordinatorRemoveMember')}
+                      </button>
+                    ) : null}
+                </div>
+              )
+            })}
+          </div>
+
+          {canManage ? (
+            <div className="space-y-2 rounded border border-ds-border bg-ds-bg p-2">
+              <div className="font-medium">{t('projectCoordinatorAddMember')}</div>
+              {project.project.contentMode === 'required' ? (
+                eligibleProviderFacts.length === 0 ? (
+                  <p className="text-[10px] text-ds-muted">
+                    {t('projectCoordinatorNoReadyProviderPrincipal')}
+                  </p>
+                ) : (
+                  <select
+                    value={selectedProviderFact?.providerPrincipalFactId ?? ''}
+                    onChange={(event) => setSelectedProviderFactId(event.currentTarget.value)}
+                    className="w-full rounded border border-ds-border bg-ds-surface px-2 py-1 text-[10px]"
+                    aria-label={t('projectCoordinatorProviderPrincipal')}
+                  >
+                    {eligibleProviderFacts.map((fact) => (
+                      <option key={fact.providerPrincipalFactId} value={fact.providerPrincipalFactId}>
+                        {fact.userId} · rev {fact.revision}
+                      </option>
+                    ))}
+                  </select>
+                )
+              ) : (
+                <input
+                  value={contentFreeUserId}
+                  onChange={(event) => setContentFreeUserId(event.currentTarget.value)}
+                  placeholder={t('projectCoordinatorExactUserId')}
+                  className="w-full rounded border border-ds-border bg-ds-surface px-2 py-1 text-[10px]"
+                />
+              )}
+              <button
+                type="button"
+                disabled={busy || (project.project.contentMode === 'required'
+                  ? !selectedProviderFact
+                  : contentFreeUserId.trim().length === 0)}
+                onClick={addExactMember}
+                className="rounded border border-ds-border px-2 py-1 text-[11px] disabled:opacity-50"
+              >
+                {t('projectCoordinatorAddMember')}
+              </button>
+              <div className="font-medium">{t('projectCoordinatorRemoveMember')}</div>
+            </div>
+          ) : null}
         </div>
       )}
     </Section>

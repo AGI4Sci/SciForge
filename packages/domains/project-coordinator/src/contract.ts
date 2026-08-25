@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { domainMainFiniteCapabilityBatchPlanDigestSchema } from '@sciforge/domain-sdk/host'
 import {
   agentIdSchema,
   deviceIdSchema,
@@ -6,14 +7,19 @@ import {
   humanAnswerCommandSchema,
   humanNeededSchema,
   humanNeededCreateCommandSchema,
+  externalOperationRecoveryJournalEntrySchema,
+  projectContentReadinessSchema,
   projectContentProvisioningAttestationSchema,
   projectContentProvisioningIntentSchema,
-  projectContentReadinessSchema,
   projectContentSpaceBindingSchema,
   projectCreateCommandSchema,
   projectFinalSummarySchema,
   projectFinalSummarySubmitCommandSchema,
   projectIdSchema,
+  projectMembershipAddCommandSchema,
+  projectMembershipRemoveCommandSchema,
+  projectMembershipSchema,
+  projectProviderMembershipObservationSchema,
   projectPlanSchema,
   projectPlanRuntimeProvenanceSchema,
   projectPlanTaskSchema,
@@ -28,6 +34,7 @@ import {
   timestampSchema,
   userIdSchema,
   visibleRecoveryActionSchema,
+  providerDirectoryPrincipalFactSchema,
   portableContentSpaceLocatorSchema
 } from '@sciforge/collaboration-contracts'
 
@@ -41,6 +48,10 @@ export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   planDraftEdit: 'project-coordinator.plan-draft.edit',
   planSubmit: 'project-coordinator.plan.submit',
   planConfirmActivate: 'project-coordinator.plan.confirm-activate',
+  contentProvisioningPlan: 'project-coordinator.content-provisioning.plan',
+  contentProvisioningApply: 'project-coordinator.content-provisioning.apply',
+  membershipAdd: 'project-coordinator.membership.add',
+  membershipRemove: 'project-coordinator.membership.remove',
   humanNeededCreate: 'project-coordinator.human-needed.create',
   humanAnswer: 'project-coordinator.human-needed.answer',
   resultReview: 'project-coordinator.result.review',
@@ -155,6 +166,84 @@ export const projectCoordinatorPlanConfirmActivateInputSchema = z.object({
   expectedCoordinatorAuthorityEpoch: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
   expectedPlanRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
   planDigest: projectPlanSchema.shape.planDigest
+}).strict().readonly()
+
+export const projectCoordinatorProvisioningAttemptIdSchema = z.string()
+  .trim()
+  .min(12)
+  .max(96)
+  .regex(/^[A-Za-z0-9](?:[A-Za-z0-9._:-]{10,94}[A-Za-z0-9])$/u)
+
+export const projectCoordinatorProvisioningPlanInputSchema = z.object({
+  projectId: projectIdSchema
+}).strict().readonly()
+
+export const projectCoordinatorProvisioningPlanOperationSchema = z.object({
+  operationId: z.string().trim().min(1).max(128),
+  actionId: z.string().trim().min(1).max(256),
+  kind: z.enum([
+    'authorize_provider',
+    'authorize_root',
+    'create_shared_container',
+    'observe_root',
+    'list_members',
+    'add_member',
+    'remove_member'
+  ]),
+  userId: userIdSchema.nullable()
+}).strict().readonly()
+
+export const projectCoordinatorProvisioningPlanSchema = z.object({
+  projectId: projectIdSchema,
+  provisioningIntentId: projectContentProvisioningIntentSchema.shape.provisioningIntentId,
+  expectedProjectRevision: projectSchema.shape.revision,
+  expectedProvisioningRevision: projectContentProvisioningIntentSchema.shape.provisioningRevision,
+  expectedProvisioningIntentRevision: projectContentProvisioningIntentSchema.shape.revision,
+  intentDigest: projectContentProvisioningIntentSchema.shape.intentDigest,
+  attemptId: projectCoordinatorProvisioningAttemptIdSchema,
+  rootStrategy: z.enum(['create', 'reauthorize']),
+  providerInstance: projectContentProvisioningIntentSchema.shape.providerInstance,
+  containerDisplayName: projectContentProvisioningIntentSchema.shape.containerDisplayName,
+  currentRootLocator: portableContentSpaceLocatorSchema.nullable(),
+  operations: z.array(projectCoordinatorProvisioningPlanOperationSchema).min(1).max(64),
+  confirmedPlanDigest: domainMainFiniteCapabilityBatchPlanDigestSchema
+}).strict().readonly()
+
+export const projectCoordinatorProvisioningApplyInputSchema = z.object({
+  projectId: projectIdSchema,
+  provisioningIntentId: projectContentProvisioningIntentSchema.shape.provisioningIntentId,
+  expectedProjectRevision: projectSchema.shape.revision,
+  expectedProvisioningRevision: projectContentProvisioningIntentSchema.shape.provisioningRevision,
+  expectedProvisioningIntentRevision: projectContentProvisioningIntentSchema.shape.revision,
+  intentDigest: projectContentProvisioningIntentSchema.shape.intentDigest,
+  attemptId: projectCoordinatorProvisioningAttemptIdSchema,
+  confirmedPlanDigest: domainMainFiniteCapabilityBatchPlanDigestSchema
+}).strict().readonly()
+
+export const projectCoordinatorMembershipAddInputSchema = z.object({
+  projectId: projectMembershipAddCommandSchema.shape.projectId,
+  expectedProjectRevision: projectMembershipAddCommandSchema.shape.expectedProjectRevision,
+  userId: projectMembershipAddCommandSchema.shape.userId,
+  providerPrincipalFactId: projectMembershipAddCommandSchema.shape.providerPrincipalFactId,
+  expectedProviderPrincipalFactRevision:
+    projectMembershipAddCommandSchema.shape.expectedProviderPrincipalFactRevision
+}).strict().superRefine((input, context) => {
+  if ((input.providerPrincipalFactId === null) !== (
+    input.expectedProviderPrincipalFactRevision === null
+  )) {
+    context.addIssue({
+      code: 'custom',
+      path: ['expectedProviderPrincipalFactRevision'],
+      message: 'A Provider principal fact ID and revision must be supplied together.'
+    })
+  }
+}).readonly()
+
+export const projectCoordinatorMembershipRemoveInputSchema = z.object({
+  projectId: projectMembershipRemoveCommandSchema.shape.projectId,
+  projectMembershipId: projectMembershipRemoveCommandSchema.shape.projectMembershipId,
+  expectedProjectRevision: projectMembershipRemoveCommandSchema.shape.expectedProjectRevision,
+  expectedMembershipRevision: projectMembershipRemoveCommandSchema.shape.expectedMembershipRevision
 }).strict().readonly()
 
 export const projectCoordinatorHumanNeededCreateInputSchema = z.object({
@@ -279,6 +368,11 @@ export const projectCoordinatorProvisioningViewSchema = z.object({
   intent: projectContentProvisioningIntentSchema.nullable(),
   attestation: projectContentProvisioningAttestationSchema.nullable(),
   binding: projectContentSpaceBindingSchema.nullable(),
+  memberships: z.array(projectMembershipSchema).max(1_000),
+  providerPrincipalFacts: z.array(providerDirectoryPrincipalFactSchema).max(1_000),
+  contentReadiness: z.array(projectContentReadinessSchema).max(1_000),
+  providerMembershipObservations: z.array(projectProviderMembershipObservationSchema).max(10_000),
+  externalOperationJournal: z.array(externalOperationRecoveryJournalEntrySchema).max(10_000),
   recoveryActions: z.array(visibleRecoveryActionSchema).max(1_000)
 }).strict().readonly()
 
@@ -361,7 +455,16 @@ export const projectCoordinatorProjectSchema = z.object({
       message: 'Final summary must belong to this Project.'
     })
   }
-  const { intent, attestation, binding, recoveryActions } = view.provisioning
+  const {
+    intent,
+    attestation,
+    binding,
+    memberships,
+    contentReadiness,
+    providerMembershipObservations,
+    externalOperationJournal,
+    recoveryActions
+  } = view.provisioning
   if (intent && intent.projectId !== projectId) {
     context.addIssue({ code: 'custom', path: ['provisioning', 'intent'], message: 'Intent must belong to this Project.' })
   }
@@ -385,6 +488,38 @@ export const projectCoordinatorProjectSchema = z.object({
       message: 'Attestation must bind the exact visible provisioning intent.'
     })
   }
+  memberships.forEach((membership, index) => {
+    if (membership.projectId === projectId) return
+    context.addIssue({
+      code: 'custom',
+      path: ['provisioning', 'memberships', index],
+      message: 'Every Project Membership must belong to this Project.'
+    })
+  })
+  contentReadiness.forEach((readiness, index) => {
+    if (readiness.projectId === projectId) return
+    context.addIssue({
+      code: 'custom',
+      path: ['provisioning', 'contentReadiness', index],
+      message: 'Every Content Readiness fact must belong to this Project.'
+    })
+  })
+  providerMembershipObservations.forEach((observation, index) => {
+    if (observation.projectId === projectId) return
+    context.addIssue({
+      code: 'custom',
+      path: ['provisioning', 'providerMembershipObservations', index],
+      message: 'Every Provider observation must belong to this Project.'
+    })
+  })
+  externalOperationJournal.forEach((journal, index) => {
+    if (journal.projectId === projectId) return
+    context.addIssue({
+      code: 'custom',
+      path: ['provisioning', 'externalOperationJournal', index],
+      message: 'Every external operation journal entry must belong to this Project.'
+    })
+  })
   recoveryActions.forEach((action, index) => {
     if (action.projectId === projectId) return
     context.addIssue({
@@ -497,6 +632,21 @@ export type ProjectCoordinatorPlanSubmitResult = z.infer<
 >
 export type ProjectCoordinatorPlanConfirmActivateInput = z.infer<
   typeof projectCoordinatorPlanConfirmActivateInputSchema
+>
+export type ProjectCoordinatorProvisioningPlanInput = z.infer<
+  typeof projectCoordinatorProvisioningPlanInputSchema
+>
+export type ProjectCoordinatorProvisioningPlan = z.infer<
+  typeof projectCoordinatorProvisioningPlanSchema
+>
+export type ProjectCoordinatorProvisioningApplyInput = z.infer<
+  typeof projectCoordinatorProvisioningApplyInputSchema
+>
+export type ProjectCoordinatorMembershipAddInput = z.infer<
+  typeof projectCoordinatorMembershipAddInputSchema
+>
+export type ProjectCoordinatorMembershipRemoveInput = z.infer<
+  typeof projectCoordinatorMembershipRemoveInputSchema
 >
 export type ProjectCoordinatorHumanNeededCreateInput = z.infer<
   typeof projectCoordinatorHumanNeededCreateInputSchema

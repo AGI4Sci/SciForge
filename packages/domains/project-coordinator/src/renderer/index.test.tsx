@@ -16,8 +16,10 @@ import {
   ProjectCoordinatorDecisionSection,
   ProjectCoordinatorPanel,
   ProjectCoordinatorPlanSection,
+  ProjectCoordinatorProvisioningSection,
   projectCoordinatorCompletionInput,
   projectCoordinatorCreatedSelection,
+  projectCoordinatorProvisioningApplyInput,
   projectCoordinatorResultReviewInput
 } from './ProjectCoordinatorPanel.js'
 import { createProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
@@ -95,6 +97,10 @@ test('panel surface is limited to Plan, Worker selection, Task, review, and prov
       editPlanDraft: async () => { throw new Error('unused') },
       submitPlanDraft: async () => { throw new Error('unused') },
       confirmPlanAndActivate: async () => { throw new Error('unused') },
+      previewProvisioning: async () => { throw new Error('unused') },
+      applyProvisioning: async () => { throw new Error('unused') },
+      addMember: async () => { throw new Error('unused') },
+      removeMember: async () => { throw new Error('unused') },
       createHumanNeeded: async () => { throw new Error('unused') },
       answerHumanNeeded: async () => { throw new Error('unused') },
       reviewResult: async () => { throw new Error('unused') },
@@ -251,6 +257,150 @@ test('renderer decision HCI invokes only the four governed canonical actions', a
     { actionId: 'project-coordinator.result.review', effect: 'external-write' },
     { actionId: 'project-coordinator.project.complete', effect: 'external-write' }
   ])
+})
+
+test('renderer provisioning client keeps the reviewed full plan behind its confirmed digest', async () => {
+  const invoked: unknown[] = []
+  const plan = provisioningPlanFixture()
+  const workspace = {
+    connection: { state: 'ready' as const, userId: 'usr_Owner0000001', deviceId: 'dev_Device0000001' },
+    observedAt: '2026-08-25T01:08:00.000Z',
+    focusedProjectId: 'prj_ProjectCreated01',
+    projects: [contentProvisioningProjectFixture()]
+  }
+  const client = createProjectCoordinatorRendererClient({
+    observe: async () => { throw new Error('not observed') },
+    invoke: async (contract, input) => {
+      invoked.push({ actionId: contract.actionId, effect: contract.effect, input })
+      return (contract.actionId === 'project-coordinator.content-provisioning.plan'
+        ? plan
+        : workspace) as never
+    }
+  })
+
+  const reviewed = await client.previewProvisioning({ projectId: plan.projectId })
+  await client.applyProvisioning(projectCoordinatorProvisioningApplyInput(reviewed))
+  await client.addMember({
+    projectId: plan.projectId,
+    expectedProjectRevision: 3,
+    userId: 'usr_NewWorker00001',
+    providerPrincipalFactId: 'ppf_NewWorker00001',
+    expectedProviderPrincipalFactRevision: 2
+  })
+  await client.removeMember({
+    projectId: plan.projectId,
+    projectMembershipId: 'pmb_WorkerMember01',
+    expectedProjectRevision: 4,
+    expectedMembershipRevision: 2
+  })
+
+  assert.deepEqual(invoked, [
+    {
+      actionId: 'project-coordinator.content-provisioning.plan',
+      effect: 'read',
+      input: { projectId: plan.projectId }
+    },
+    {
+      actionId: 'project-coordinator.content-provisioning.apply',
+      effect: 'external-write',
+      input: {
+        projectId: plan.projectId,
+        provisioningIntentId: plan.provisioningIntentId,
+        expectedProjectRevision: plan.expectedProjectRevision,
+        expectedProvisioningRevision: plan.expectedProvisioningRevision,
+        expectedProvisioningIntentRevision: plan.expectedProvisioningIntentRevision,
+        intentDigest: plan.intentDigest,
+        attemptId: plan.attemptId,
+        confirmedPlanDigest: plan.confirmedPlanDigest
+      }
+    },
+    {
+      actionId: 'project-coordinator.membership.add',
+      effect: 'external-write',
+      input: {
+        projectId: plan.projectId,
+        expectedProjectRevision: 3,
+        userId: 'usr_NewWorker00001',
+        providerPrincipalFactId: 'ppf_NewWorker00001',
+        expectedProviderPrincipalFactRevision: 2
+      }
+    },
+    {
+      actionId: 'project-coordinator.membership.remove',
+      effect: 'destructive',
+      input: {
+        projectId: plan.projectId,
+        projectMembershipId: 'pmb_WorkerMember01',
+        expectedProjectRevision: 4,
+        expectedMembershipRevision: 2
+      }
+    }
+  ])
+  assert.equal('operations' in (invoked[1] as { input: object }).input, false)
+})
+
+test('content-required provisioning, membership fences, and root recovery are default-visible HCI', () => {
+  const project = contentProvisioningProjectFixture()
+  const pendingMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorProvisioningSection, {
+    project,
+    plan: null,
+    busy: false,
+    onPreview: () => undefined,
+    onApply: () => undefined,
+    onAddMember: () => undefined,
+    onRemoveMember: () => undefined
+  }))
+  assert.match(pendingMarkup, /data-default-visible-card="content-provisioning"/u)
+  assert.match(pendingMarkup, /projectCoordinatorPreviewProvisioning/u)
+  assert.match(pendingMarkup, /pending_membership/u)
+  assert.match(pendingMarkup, /membership_removal_pending/u)
+  assert.match(pendingMarkup, /projectCoordinatorTaskAuthoritySuspended/u)
+  assert.match(pendingMarkup, /projectCoordinatorAddMember/u)
+  assert.match(pendingMarkup, /projectCoordinatorRemoveMember/u)
+
+  const reviewedMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorProvisioningSection, {
+    project,
+    plan: provisioningPlanFixture(),
+    busy: false,
+    onPreview: () => undefined,
+    onApply: () => undefined,
+    onAddMember: () => undefined,
+    onRemoveMember: () => undefined
+  }))
+  assert.match(reviewedMarkup, /data-default-visible-card="content-provisioning-confirmation"/u)
+  assert.match(reviewedMarkup, /content-space\.authorize-provider-administration/u)
+  assert.match(reviewedMarkup, /content-space\.agent-admin-add-member/u)
+  assert.match(reviewedMarkup, /projectCoordinatorApplyProvisioning/u)
+  assert.match(reviewedMarkup, new RegExp(provisioningPlanFixture().confirmedPlanDigest, 'u'))
+
+  const degraded = {
+    ...project,
+    provisioning: {
+      ...project.provisioning,
+      binding: {
+        provisioningRevision: 1,
+        status: 'degraded',
+        statusReason: 'owner_access_lost'
+      },
+      recoveryActions: [{
+        actionId: 'reconcile_provider_membership',
+        safeSummary: 'Re-authorize the exact shared root before retrying membership changes.'
+      }]
+    }
+  } as never
+  const recoveryMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorProvisioningSection, {
+    project: degraded,
+    plan: null,
+    busy: false,
+    onPreview: () => undefined,
+    onApply: () => undefined,
+    onAddMember: () => undefined,
+    onRemoveMember: () => undefined
+  }))
+  assert.match(recoveryMarkup, /data-default-visible-card="content-recovery"/u)
+  assert.match(recoveryMarkup, /owner_access_lost/u)
+  assert.match(recoveryMarkup, /Re-authorize the exact shared root/u)
+  assert.match(recoveryMarkup, /projectCoordinatorPreviewReconcile/u)
 })
 
 test('an awaiting-confirmation Plan renders its Owner action as a default-visible card', () => {
@@ -511,9 +661,125 @@ function awaitingConfirmationProjectFixture() {
       intent: null,
       attestation: null,
       binding: null,
+      memberships: [],
+      providerPrincipalFacts: [],
+      contentReadiness: [],
+      providerMembershipObservations: [],
+      externalOperationJournal: [],
       recoveryActions: []
     }
   }
+}
+
+function provisioningPlanFixture() {
+  return {
+    projectId: 'prj_ProjectCreated01',
+    provisioningIntentId: 'pvi_ContentIntent001',
+    expectedProjectRevision: 3,
+    expectedProvisioningRevision: 2,
+    expectedProvisioningIntentRevision: 1,
+    intentDigest: 'c'.repeat(64),
+    attemptId: 'attempt_Provisioning001',
+    rootStrategy: 'create' as const,
+    providerInstance: {
+      schemaVersion: 1 as const,
+      type: 'provider_instance_reference' as const,
+      providerInstanceRef: 'opencontent.run0'
+    },
+    containerDisplayName: 'Meeting Project',
+    currentRootLocator: null,
+    operations: [{
+      operationId: 'authorize-provider',
+      actionId: 'content-space.authorize-provider-administration',
+      kind: 'authorize_provider' as const,
+      userId: null
+    }, {
+      operationId: 'add-member-worker',
+      actionId: 'content-space.agent-admin-add-member',
+      kind: 'add_member' as const,
+      userId: 'usr_Worker00000001'
+    }],
+    confirmedPlanDigest: 'd'.repeat(64)
+  }
+}
+
+function contentProvisioningProjectFixture(): ProjectCoordinatorProject {
+  const base = awaitingConfirmationProjectFixture()
+  const timestamp = base.project.updatedAt
+  const membership = (
+    userId: string,
+    projectMembershipId: string,
+    state: 'active' | 'pending_membership' | 'membership_removal_pending'
+  ) => ({
+    schemaVersion: 1 as const,
+    type: 'project_membership' as const,
+    projectMembershipId,
+    projectId: base.project.projectId,
+    userId,
+    state,
+    authorityEpoch: 1,
+    activatedAt: state === 'pending_membership' ? null : timestamp,
+    removalRequestedAt: state === 'membership_removal_pending' ? timestamp : null,
+    removalRequestedByUserId: state === 'membership_removal_pending'
+      ? base.project.ownerUserId
+      : null,
+    removedAt: null,
+    revision: 2,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  })
+  const principalFact = (userId: string, providerPrincipalFactId: string) => ({
+    schemaVersion: 1 as const,
+    type: 'provider_directory_principal_fact' as const,
+    providerPrincipalFactId,
+    userId,
+    providerPrincipal: {
+      schemaVersion: 1 as const,
+      type: 'provider_directory_principal_reference' as const,
+      providerInstance: 'opencent-run0',
+      principalKind: 'user' as const,
+      principalId: `principal-${userId}`
+    },
+    principalIdentityRevision: 1,
+    providerBindingAttestationDigest: 'e'.repeat(64),
+    publishedByDeviceId: 'dev_Device0000001',
+    readiness: 'ready' as const,
+    readinessReason: null,
+    observedAt: timestamp,
+    revision: 2,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  })
+  return {
+    ...base,
+    project: {
+      ...base.project,
+      contentMode: 'required',
+      revision: 3
+    },
+    provisioning: {
+      intent: {
+        state: 'pending',
+        provisioningRevision: 2
+      },
+      attestation: null,
+      binding: null,
+      memberships: [
+        membership(base.project.ownerUserId, 'pmb_OwnerMember001', 'active'),
+        membership('usr_Worker00000001', 'pmb_WorkerMember01', 'pending_membership'),
+        membership('usr_RemoveWorker001', 'pmb_RemoveMember001', 'membership_removal_pending')
+      ],
+      providerPrincipalFacts: [
+        principalFact(base.project.ownerUserId, 'ppf_OwnerFact00001'),
+        principalFact('usr_Worker00000001', 'ppf_WorkerFact0001'),
+        principalFact('usr_NewWorker00001', 'ppf_NewWorker00001')
+      ],
+      contentReadiness: [],
+      providerMembershipObservations: [],
+      externalOperationJournal: [],
+      recoveryActions: []
+    }
+  } as never
 }
 
 function decisionProjectFixture(

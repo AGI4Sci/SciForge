@@ -50,6 +50,7 @@ test('workspace read remains a strict non-writing coordination capability', asyn
       provisioningAttestationSigning: {
         signFactualPayload: async () => { throw new Error('unused') }
       },
+      provisioning: coordinatorProvisioningPort(),
       coordinatorCloudCommands: coordinatorCloudCommandService(),
       actions: coordinatorActionPort()
     }
@@ -143,11 +144,19 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftEdit,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planSubmit,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningPlan,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
     PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete
   ])
+  assert.deepEqual(
+    (entry.contributions[1] as { contract?: unknown }).contract,
+    { requestedSystemCapabilityGrants: ['content-space.provisioning-batch'] }
+  )
   assert.equal(coordinatorInboxSubscribed, true)
   assert.equal(executeCalls, 0)
   await entry.contributions[1]?.onDispose?.()
@@ -222,6 +231,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
     provisioningAttestationSigning: {
       signFactualPayload: async () => { throw new Error('unused') }
     },
+    provisioning: coordinatorProvisioningPort(),
     coordinatorCloudCommands: coordinatorCloudCommandService(),
     actions: coordinatorActionPort()
   }
@@ -239,6 +249,10 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftEdit,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planSubmit,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningPlan,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
     PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
@@ -277,5 +291,14 @@ function coordinatorActionPort() {
     reviewResult: async () => { throw new Error('unused') },
     completeProject: async () => { throw new Error('unused') },
     handleInbox: async () => { throw new Error('unused') }
+  })
+}
+
+function coordinatorProvisioningPort() {
+  return Object.freeze({
+    preview: async () => { throw new Error('unused') },
+    apply: async () => { throw new Error('unused') },
+    addMember: async () => { throw new Error('unused') },
+    removeMember: async () => { throw new Error('unused') }
   })
 }

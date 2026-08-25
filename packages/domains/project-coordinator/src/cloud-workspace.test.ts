@@ -364,6 +364,176 @@ test('Project read projects pending Owner HumanNeeded and accepted Coordinator d
   assert.deepEqual(projected.records, [decision])
 })
 
+test('Project read keeps membership, Provider observation, readiness, and recovery as independent facts', async () => {
+  const project = {
+    ...projectFixture('prj_ProjectCreated01', 'Content meeting'),
+    contentMode: 'required' as const
+  }
+  const providerInstance = {
+    schemaVersion: 1 as const,
+    type: 'provider_instance_reference' as const,
+    providerInstanceRef: 'opencontent.run0'
+  }
+  const providerPrincipal = {
+    schemaVersion: 1 as const,
+    type: 'provider_directory_principal_reference' as const,
+    providerInstance,
+    principalKind: 'user' as const,
+    principalId: 'principal-owner'
+  }
+  const membership = membershipFixture(project.projectId)
+  const principalFact = {
+    schemaVersion: 1 as const,
+    type: 'provider_directory_principal_fact' as const,
+    providerPrincipalFactId: 'ppf_OwnerFact00001',
+    userId: project.ownerUserId,
+    providerPrincipal,
+    principalIdentityRevision: 1,
+    providerBindingAttestationDigest: 'a'.repeat(64),
+    publishedByDeviceId: 'dev_Device0000001',
+    readiness: 'ready' as const,
+    readinessReason: null,
+    observedAt: updatedAt,
+    revision: 1,
+    createdAt,
+    updatedAt
+  }
+  const observation = {
+    schemaVersion: 1 as const,
+    type: 'project_provider_membership_observation' as const,
+    providerObservationId: 'pob_OwnerObserve001',
+    projectId: project.projectId,
+    userId: project.ownerUserId,
+    providerPrincipalFactId: principalFact.providerPrincipalFactId,
+    snapshottedFactRevision: principalFact.revision,
+    providerPrincipal,
+    bindingRevision: 1,
+    provisioningRevision: 2,
+    source: 'explicit_reconcile' as const,
+    outcome: 'present' as const,
+    observerUserId: project.ownerUserId,
+    observerDeviceId: 'dev_Device0000001',
+    observerAgentId: null,
+    provisioningAttestationId: null,
+    evidenceDigest: 'b'.repeat(64),
+    observedAt: updatedAt,
+    revision: 1,
+    createdAt,
+    updatedAt
+  }
+  const readiness = {
+    schemaVersion: 1 as const,
+    type: 'project_content_readiness' as const,
+    projectId: project.projectId,
+    userId: project.ownerUserId,
+    providerInstance,
+    state: 'ready' as const,
+    reason: null,
+    providerPrincipalFactId: principalFact.providerPrincipalFactId,
+    snapshottedFactRevision: principalFact.revision,
+    providerPrincipal,
+    bindingRevision: 1,
+    lastObservationId: observation.providerObservationId,
+    effectiveAt: updatedAt,
+    revision: 2,
+    createdAt,
+    updatedAt
+  }
+  const journal = {
+    schemaVersion: 1 as const,
+    type: 'external_operation_recovery_journal_entry' as const,
+    contentRecoveryJournalEntryId: 'crj_OwnerRootLoss01',
+    scope: 'project_provisioning' as const,
+    projectId: project.projectId,
+    taskId: null,
+    executionId: null,
+    preparedTaskRevision: null,
+    preparedExecutionRevision: null,
+    provisioningIntentId: 'pci_ContentIntent001',
+    provisioningRevision: 2,
+    logicalInvocationId: 'root-authorize-attempt-001',
+    operation: 'observe_root' as const,
+    state: 'observed_failure' as const,
+    requestDigest: 'c'.repeat(64),
+    receiptDigest: null,
+    observationDigest: null,
+    safeFailureCode: 'unauthorized',
+    preparedAt: createdAt,
+    dispatchedAt: updatedAt,
+    resolvedAt: updatedAt,
+    revision: 3,
+    createdAt,
+    updatedAt
+  }
+  const recoveryAction = {
+    schemaVersion: 1 as const,
+    type: 'visible_recovery_action' as const,
+    recoveryActionId: 'rca_OwnerRootLoss01',
+    projectId: project.projectId,
+    taskId: null,
+    executionId: null,
+    journalEntryId: journal.contentRecoveryJournalEntryId,
+    audience: 'owner' as const,
+    action: 'reconcile_provider_membership' as const,
+    status: 'available' as const,
+    requiresFreshObservation: true,
+    safeSummary: 'Re-authorize the exact shared root and reconcile Provider membership.',
+    availableAt: updatedAt,
+    completedAt: null,
+    revision: 1,
+    createdAt,
+    updatedAt
+  }
+  const responses = [
+    response(200, {
+      protocolVersion: '1.0',
+      type: 'rest.project_page',
+      requestId: 'req_ListContentFacts1',
+      limit: 250,
+      projects: [project],
+      observedAt: updatedAt
+    }),
+    response(200, {
+      protocolVersion: '1.0',
+      type: 'rest.project_coordination',
+      requestId: 'req_ReadContentFacts1',
+      project,
+      observedAt: updatedAt,
+      pages: [{ collection: 'memberships', limit: 250, items: [membership] },
+        { collection: 'provider_principal_facts', limit: 250, items: [principalFact] },
+        { collection: 'provider_membership_observations', limit: 250, items: [observation] },
+        { collection: 'content_readiness', limit: 250, items: [readiness] },
+        { collection: 'external_operation_journal', limit: 250, items: [journal] },
+        { collection: 'visible_recovery_actions', limit: 250, items: [recoveryAction] }],
+      finalSummary: null
+    })
+  ]
+  const transport: AuthenticatedCloudTransport = {
+    status: () => ({
+      state: 'ready',
+      baseUrl: 'https://cloud.run0.invalid/',
+      userId: project.ownerUserId,
+      deviceId: 'dev_Device0000001'
+    }),
+    execute: async () => {
+      const next = responses.shift()
+      if (!next) throw new Error('Unexpected Cloud request.')
+      return next
+    }
+  }
+
+  const workspace = await createProjectCoordinatorCloudWorkspacePort({ transport })
+    .readWorkspace({ projectId: project.projectId })
+  const provisioning = workspace.projects[0]?.provisioning
+
+  assert.deepEqual(provisioning?.memberships, [membership])
+  assert.deepEqual(provisioning?.providerPrincipalFacts, [principalFact])
+  assert.deepEqual(provisioning?.providerMembershipObservations, [observation])
+  assert.deepEqual(provisioning?.contentReadiness, [readiness])
+  assert.deepEqual(provisioning?.externalOperationJournal, [journal])
+  assert.deepEqual(provisioning?.recoveryActions, [recoveryAction])
+})
+
 function response(
   status: number,
   body: AuthenticatedCloudResponse['body']
