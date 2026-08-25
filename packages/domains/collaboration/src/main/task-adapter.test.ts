@@ -19,7 +19,9 @@ import {
   TEST_LATER_TIMESTAMP,
   TEST_TIMESTAMP,
   agentInboxMessageFixture,
-  agentNodeFixture
+  agentNodeFixture,
+  humanAnswerFixture,
+  humanNeededFixture
 } from '@sciforge/collaboration-contracts/testing'
 import type { DomainMainAgentExecutionHost, DomainMainSystemCapabilityInvoker } from '@sciforge/domain-sdk/host'
 import {
@@ -144,6 +146,170 @@ test('automatic text execution journals before Agent and uses explicit vNext com
   assert.equal(directives.length, 1, 'duplicate offer must not replay a completed execution')
 })
 
+test('Worker HumanNeeded resumes the same execution and Runtime Session after the Owner answer', async () => {
+  const cloud = new FakeWorkerCloud()
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  const runtimeRequests: Array<Readonly<{
+    runtimeId?: string
+    threadId?: string
+    clientDirectiveId?: string
+    prompt: string
+  }>> = []
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async (request) => {
+      runtimeRequests.push(request)
+      if (runtimeRequests.length === 1) {
+        return {
+          runtimeId: 'codex',
+          threadId: 'worker-human-thread',
+          turnId: 'worker-human-question-turn',
+          state: 'completed',
+          text: JSON.stringify({
+            schemaVersion: 1,
+            outcome: 'needs_human',
+            question: 'Should the ambiguous samples remain in the analysis?',
+            requiredAssurance: 'verified'
+          })
+        }
+      }
+      assert.equal(request.runtimeId, 'codex')
+      assert.equal(request.threadId, 'worker-human-thread')
+      assert.match(request.prompt, /authenticated Project Owner/u)
+      assert.match(request.prompt, new RegExp(humanAnswerFixture.answer, 'u'))
+      return {
+        runtimeId: 'codex',
+        threadId: 'worker-human-thread',
+        turnId: 'worker-human-answer-turn',
+        state: 'completed',
+        text: JSON.stringify({
+          schemaVersion: 1,
+          outcome: 'completed',
+          summary: 'The Owner-confirmed analysis is complete.'
+        })
+      }
+    }
+  }, initial)
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle(TEST_IDS.executionId)
+
+  const pending = created.store.snapshot().taskRuns[0]
+  assert.equal(pending?.state, 'needs-human')
+  assert.equal(pending?.humanRequestId, TEST_IDS.humanRequestId)
+  const humanRequest = cloud.requests.find((request) => request.type === 'human.needed.create')
+  assert.equal(humanRequest?.type, 'human.needed.create')
+  if (humanRequest?.type !== 'human.needed.create') throw new Error('Missing Worker HumanNeeded command.')
+  assert.deepEqual(humanRequest.context, {
+    scope: 'worker_execution',
+    taskId: TEST_IDS.taskId,
+    executionId: TEST_IDS.executionId,
+    expectedTaskRevision: 3,
+    expectedExecutionRevision: 3
+  })
+  assert.equal(Object.hasOwn(humanRequest, 'targetUserId'), false)
+  assert.equal(humanRequest.confirmableAction, null)
+
+  await created.store.transact((draft) => {
+    const run = draft.taskRuns[0]
+    if (!run) throw new Error('Missing local Worker run.')
+    run.humanRequestId = null
+    draft.outbox.push({
+      outboxId: 'obx_WorkerHumanNeeded01',
+      idempotencyKey: humanRequest.idempotencyKey,
+      kind: 'task.human-needed',
+      body: humanRequest,
+      state: 'delivered',
+      attempts: 1,
+      createdAt: TEST_TIMESTAMP,
+      updatedAt: TEST_TIMESTAMP,
+      deliveredAt: TEST_TIMESTAMP,
+      response: entityResponse(humanRequest, {
+        ...humanNeededFixture,
+        requiredAssurance: humanRequest.requiredAssurance,
+        prompt: humanRequest.prompt,
+        expiresAt: humanRequest.expiresAt
+      })
+    })
+  })
+
+  cloud.answerHumanNeeded()
+  const answerMessage = agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    inboxMessageId: 'ibx_WorkerHumanAnswer1',
+    sequence: 2,
+    payload: {
+      protocolVersion: '1.0',
+      type: 'human.answer.received',
+      answer: humanAnswerFixture
+    }
+  })
+  await created.adapter.handleInbox(answerMessage)
+  await created.adapter.waitForIdle(TEST_IDS.executionId)
+
+  const completed = created.store.snapshot().taskRuns[0]
+  assert.equal(completed?.state, 'completed')
+  assert.equal(completed?.resultSummary, 'The Owner-confirmed analysis is complete.')
+  assert.equal(runtimeRequests.length, 2)
+  assert.notEqual(runtimeRequests[0]?.clientDirectiveId, runtimeRequests[1]?.clientDirectiveId)
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.offer.accept',
+    'task.execution.start',
+    'human.needed.create',
+    'task.result.submit'
+  ])
+  const reconciliationIndex = cloud.preflightExpectedRevisions.findIndex((revision, index, all) => (
+    revision.task === 3 &&
+    revision.execution === 3 &&
+    all[index + 1]?.task === 5 &&
+    all[index + 1]?.execution === 5
+  ))
+  assert.notEqual(reconciliationIndex, -1)
+  assert.equal(cloud.preflightExpectedRevisions.slice(reconciliationIndex + 1).every((revision) => (
+    revision.task === 5 && revision.execution === 5
+  )), true)
+
+  await created.adapter.handleInbox(agentInboxMessageSchema.parse({
+    ...answerMessage,
+    inboxMessageId: 'ibx_WorkerHumanAnswerDuplicate',
+    sequence: 3
+  }))
+  await created.adapter.waitForIdle(TEST_IDS.executionId)
+  assert.equal(runtimeRequests.length, 2)
+  assert.equal(created.store.snapshot().taskRuns[0]?.state, 'completed')
+})
+
+test('revision reconciliation never masks a simultaneous Cloud authority denial', async () => {
+  const cloud = new FakeWorkerCloud('running')
+  cloud.denyPreflight()
+  const initial = emptyState()
+  initial.tasks = [cloud.task]
+  initial.taskRuns = [durableTaskRun(cloud, {
+    expectedTaskRevision: 1,
+    expectedExecutionRevision: 1
+  })]
+  let agentRuns = 0
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => {
+      agentRuns += 1
+      throw new Error('Denied authority must not reach Runtime.')
+    }
+  }, initial)
+
+  await created.adapter.recover()
+  await created.adapter.waitForIdle(TEST_IDS.executionId)
+
+  assert.equal(agentRuns, 0)
+  assert.deepEqual(cloud.preflightExpectedRevisions, [{ task: 1, execution: 1 }])
+  assert.equal(created.store.snapshot().taskRuns[0]?.state, 'fenced')
+})
+
 test('automatic offer rejects before acceptance when the canonical AgentRuntime is unavailable', async () => {
   const cloud = new FakeWorkerCloud()
   const initial = emptyState()
@@ -252,6 +418,69 @@ test('file offer uses the generic token-free Content preflight and rejects provi
   assert.equal(store.snapshot().taskRuns[0]?.decision?.decision, 'reject')
   assert.equal(store.snapshot().taskRuns[0]?.state, 'rejected')
   assert.deepEqual(store.snapshot().taskRuns[0]?.latestPreflight?.reasons, ['provider_not_ready'])
+  const rejection = cloud.requests.find((request) => request.type === 'task.offer.reject')
+  assert.equal(rejection?.type === 'task.offer.reject' ? rejection.reason : null, 'provider_not_ready')
+})
+
+test('operation-time Provider denial fails the accepted execution without Runtime or a result', async () => {
+  const cloud = new FakeWorkerCloud('offered', true)
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  let invocationOrdinal = 0
+  let agentRuns = 0
+  const capabilities = capabilityInvoker(async (contract, input, options) => {
+    invocationOrdinal += 1
+    if (contract.actionId === CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT.actionId) {
+      return contract.outputSchema.parse(contentPreflightResult(
+        invocationOrdinal,
+        options?.workspaceId ?? '',
+        input
+      ))
+    }
+    if (contract.actionId === CONTENT_SPACE_SYSTEM_DOWNLOAD_CONTRACT.actionId) {
+      return contract.outputSchema.parse({
+        ok: false,
+        error: {
+          code: 'unauthorized',
+          message: 'The current Provider session failed DownloadCheck.',
+          retry: 'after-human-action'
+        }
+      })
+    }
+    throw new Error(`Unexpected system capability ${contract.actionId}.`)
+  })
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => {
+      agentRuns += 1
+      throw new Error('Runtime must not see an unauthorized input file.')
+    }
+  }, initial, capabilities)
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle(TEST_IDS.executionId)
+
+  const run = created.store.snapshot().taskRuns[0]
+  assert.equal(agentRuns, 0)
+  assert.equal(run?.state, 'failed')
+  assert.equal(run?.externalJournal[0]?.state, 'observed_failure')
+  assert.equal(run?.externalJournal[0]?.safeFailureCode, 'unauthorized')
+  assert.equal(run?.outputs.length, 0)
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.offer.accept',
+    'task.execution.start',
+    'external_operation.prepare',
+    'external_operation.dispatch',
+    'external_operation.observe',
+    'task.execution.fail'
+  ])
+  const failure = cloud.requests.find((request) => request.type === 'task.execution.fail')
+  assert.equal(failure?.type === 'task.execution.fail' ? failure.safeFailureCode : null, 'provider_not_ready')
+  assert.equal(cloud.commands.includes('task.result.submit'), false)
 })
 
 test('file execution journals Cloud and local dispatch before one real generic download and upload', async () => {
@@ -396,6 +625,43 @@ test('file execution journals Cloud and local dispatch before one real generic d
     'external_operation.observe',
     'task.result.submit'
   ])
+  const submission = cloud.requests.find((request) => request.type === 'task.result.submit')
+  assert.equal(submission?.type, 'task.result.submit')
+  if (submission?.type !== 'task.result.submit') throw new Error('Missing strict Task result submission.')
+  const outputReference = {
+    contractVersion: 1 as const,
+    kind: 'content-space.file-reference' as const,
+    authority: ROOT_LOCATOR.authority,
+    identity: { fileId: 'analysis-output-alpha' }
+  }
+  assert.deepEqual(submission.runtimeProvenance, {
+    runtimeId: 'codex',
+    modelId: null,
+    startedAt: TEST_TIMESTAMP,
+    completedAt: TEST_TIMESTAMP
+  })
+  assert.deepEqual(submission.outputs, [{
+    executionId: TEST_IDS.executionId,
+    assignmentTaskRevision: 1,
+    locator: outputReference,
+    locatorDigest: digestFixture(outputReference),
+    rootLocatorDigest: ROOT_LOCATOR_DIGEST,
+    bindingRevision: FILE_BINDING_REVISION,
+    transferReceiptDigest: '8'.repeat(64),
+    observationDigest: '9'.repeat(64),
+    preflightObservationDigest: '3'.repeat(64)
+  }])
+  assert.equal(submission.summary, 'File analysis is ready.')
+  assert.equal(submission.submissionDigest, digestFixture({
+    taskId: submission.taskId,
+    executionId: submission.executionId,
+    expectedTaskRevision: submission.expectedTaskRevision,
+    expectedExecutionRevision: submission.expectedExecutionRevision,
+    summary: submission.summary,
+    runtimeProvenance: submission.runtimeProvenance,
+    outputs: submission.outputs,
+    recoveryJournalEntryIds: submission.recoveryJournalEntryIds
+  }))
 })
 
 test('a late Provider upload success after Device fencing remains journal-only and is never submitted', async () => {
@@ -916,11 +1182,15 @@ function durableTaskRun(
   }
 }
 
+type FakeWorkerExecutionState = 'accepted' | 'rejected' | 'running' | 'needs_human' | 'failed'
+type FakeWorkerTaskState = 'offered' | FakeWorkerExecutionState
+
 class FakeWorkerCloud {
   task: Task
   execution: TaskExecution
   commands: string[] = []
   requests: RestRequest[] = []
+  preflightExpectedRevisions: Array<Readonly<{ task: number; execution: number }>> = []
   store: CollaborationLocalStore | null = null
   private readonly recoveryJournals = new Map<string, ReturnType<
     typeof externalOperationRecoveryJournalEntrySchema.parse
@@ -936,7 +1206,17 @@ class FakeWorkerCloud {
     this.execution = makeExecution(state, this.task.revision, fileMode)
   }
 
-  preflight() {
+  preflight(
+    requestedTaskRevision = this.task.revision,
+    requestedExecutionRevision = this.execution.revision
+  ) {
+    const decisionReasons = [
+      ...(this.preflightDenied ? ['execution_fenced' as const] : []),
+      ...(requestedTaskRevision === this.task.revision ? [] : ['task_revision_mismatch' as const]),
+      ...(requestedExecutionRevision === this.execution.revision
+        ? []
+        : ['execution_revision_mismatch' as const])
+    ]
     return taskExecutionPreflightSchema.parse({
       schemaVersion: 1,
       type: 'task_execution_preflight',
@@ -948,9 +1228,9 @@ class FakeWorkerCloud {
       projectStatus: 'active',
       projectRevision: 1,
       projectExecutionAuthorityEpoch: 1,
-      requestedTaskRevision: this.task.revision,
+      requestedTaskRevision,
       currentTaskRevision: this.task.revision,
-      requestedExecutionRevision: this.execution.revision,
+      requestedExecutionRevision,
       membership: {
         schemaVersion: 1,
         type: 'project_membership',
@@ -999,8 +1279,8 @@ class FakeWorkerCloud {
       contentReadiness: this.fileMode ? fileContentReadiness() : null,
       contentBinding: this.fileMode ? fileContentBinding() : null,
       execution: this.execution,
-      decision: this.preflightDenied
-        ? { outcome: 'denied', reasons: ['execution_fenced'] }
+      decision: decisionReasons.length > 0
+        ? { outcome: 'denied', reasons: decisionReasons }
         : { outcome: 'allowed', reasons: [] },
       evaluatedAt: TEST_TIMESTAMP
     })
@@ -1010,13 +1290,18 @@ class FakeWorkerCloud {
     return {
       executeAsAgent: async (request: RestRequest) => {
         if (request.type === 'task.execution.preflight.get') {
-          assert.equal(request.expectedTaskRevision, this.task.revision)
-          assert.equal(request.expectedExecutionRevision, this.execution.revision)
+          this.preflightExpectedRevisions.push({
+            task: request.expectedTaskRevision,
+            execution: request.expectedExecutionRevision
+          })
           return {
             protocolVersion: '1.0',
             type: 'rest.task_execution_preflight',
             requestId: request.requestId,
-            preflight: this.preflight()
+            preflight: this.preflight(
+              request.expectedTaskRevision,
+              request.expectedExecutionRevision
+            )
           }
         }
         if (request.type === 'resource.get' && this.fileMode) {
@@ -1122,6 +1407,22 @@ class FakeWorkerCloud {
           this.recoveryJournals.set(entry.contentRecoveryJournalEntryId, entry)
           return entityResponse(request, entry)
         }
+        if (request.type === 'human.needed.create') {
+          assert.deepEqual(request.context, {
+            scope: 'worker_execution',
+            taskId: TEST_IDS.taskId,
+            executionId: TEST_IDS.executionId,
+            expectedTaskRevision: this.task.revision,
+            expectedExecutionRevision: this.execution.revision
+          })
+          this.advance('needs_human')
+          return entityResponse(request, {
+            ...humanNeededFixture,
+            requiredAssurance: request.requiredAssurance,
+            prompt: request.prompt,
+            expiresAt: request.expiresAt
+          })
+        }
         if (request.type === 'task.result.submit') {
           assert.equal(request.outputs.length, this.fileMode ? 1 : 0)
           assert.equal(request.recoveryJournalEntryIds.length, this.fileMode ? 2 : 0)
@@ -1145,7 +1446,12 @@ class FakeWorkerCloud {
     this.preflightDenied = true
   }
 
-  private advance(state: 'accepted' | 'rejected' | 'running' | 'failed'): void {
+  answerHumanNeeded(): void {
+    assert.equal(this.execution.state, 'needs_human')
+    this.advance('running')
+  }
+
+  private advance(state: FakeWorkerExecutionState): void {
     const taskRevision = this.task.revision + 1
     const assignmentTaskRevision = this.execution.fence.assignmentTaskRevision
     const terminal = state === 'rejected' || state === 'failed'
@@ -1155,8 +1461,12 @@ class FakeWorkerCloud {
       stateRevision: this.execution.stateRevision + 1,
       revision: this.execution.revision + 1,
       updatedAt: TEST_LATER_TIMESTAMP,
-      acceptedAt: state === 'rejected' ? null : TEST_LATER_TIMESTAMP,
-      startedAt: state === 'running' || state === 'failed' ? TEST_LATER_TIMESTAMP : null,
+      acceptedAt: state === 'rejected'
+        ? null
+        : this.execution.acceptedAt ?? TEST_LATER_TIMESTAMP,
+      startedAt: state === 'running' || state === 'needs_human' || state === 'failed'
+        ? this.execution.startedAt ?? TEST_LATER_TIMESTAMP
+        : null,
       terminalAt: terminal ? TEST_LATER_TIMESTAMP : null,
       fence: {
         ...this.execution.fence,
@@ -1177,7 +1487,7 @@ class FakeWorkerCloud {
   }
 }
 
-function makeTask(state: 'offered' | 'accepted' | 'rejected' | 'running' | 'failed', revision: number): Task {
+function makeTask(state: FakeWorkerTaskState, revision: number): Task {
   return taskSchema.parse({
     schemaVersion: 1,
     type: 'task',
@@ -1193,6 +1503,8 @@ function makeTask(state: 'offered' | 'accepted' | 'rejected' | 'running' | 'fail
     currentExecutionState: state,
     status: state === 'failed'
       ? 'failed'
+      : state === 'needs_human'
+        ? 'needs_human'
       : state === 'running' || state === 'accepted'
         ? 'in_progress'
         : 'offered',

@@ -3,6 +3,7 @@ import { chmod, mkdir } from 'node:fs/promises'
 import {
   cloudResourceRefSchema,
   restRequestSchema,
+  restResponseSchema,
   taskOfferRejectionReasonSchema,
   type AgentInboxMessage,
   type CloudResourceRef,
@@ -1086,9 +1087,15 @@ export class CollaborationTaskAdapter {
   private async acceptHumanAnswer(answer: HumanAnswer, recipientAgentId: string): Promise<void> {
     if (answer.context.scope !== 'worker_execution') return
     const executionId = answer.context.executionId
-    const run = this.findRun(executionId)
+    let run = this.findRun(executionId)
     if (!run) return
+    if (TERMINAL_RUN_STATES.has(run.state)) return
+    if (run.humanRequestId === null) {
+      await this.recoverHumanRequestId(run, answer)
+      run = this.requireRun(executionId)
+    }
     if (
+      run.offer.projectId !== answer.projectId ||
       run.offer.taskId !== answer.context.taskId ||
       run.offer.recipientAgentId !== recipientAgentId ||
       run.humanRequestId !== answer.humanRequestId
@@ -1096,8 +1103,45 @@ export class CollaborationTaskAdapter {
       throw new Error('Human answer does not match the pending Worker execution.')
     }
     if (run.humanAnswer?.humanAnswerId === answer.humanAnswerId) return
+    if (run.state !== 'needs-human') {
+      throw new Error('Human answer arrived outside the pending Worker HumanNeeded state.')
+    }
     await this.updateRun(executionId, { humanAnswer: answer, state: 'running', error: null })
     this.schedule(executionId)
+  }
+
+  private async recoverHumanRequestId(
+    run: CollaborationTaskRun,
+    answer: HumanAnswer
+  ): Promise<void> {
+    let recoveredHumanRequestId: string | null = null
+    for (const entry of this.options.store.snapshot().outbox) {
+      if (entry.kind !== 'task.human-needed' || entry.state !== 'delivered' || !entry.response) continue
+      const request = restRequestSchema.safeParse(entry.body)
+      const response = restResponseSchema.safeParse(entry.response)
+      if (
+        !request.success || request.data.type !== 'human.needed.create' ||
+        request.data.projectId !== run.offer.projectId ||
+        request.data.context.scope !== 'worker_execution' ||
+        request.data.context.taskId !== run.offer.taskId ||
+        request.data.context.executionId !== run.offer.executionId ||
+        !response.success || response.data.type !== 'rest.entity' ||
+        response.data.requestId !== request.data.requestId ||
+        response.data.entity.type !== 'human_needed' ||
+        response.data.entity.humanRequestId !== answer.humanRequestId ||
+        response.data.entity.projectId !== run.offer.projectId ||
+        response.data.entity.context.scope !== 'worker_execution' ||
+        response.data.entity.context.taskId !== run.offer.taskId ||
+        response.data.entity.context.executionId !== run.offer.executionId ||
+        response.data.entity.requestedByAgentId !== run.offer.recipientAgentId ||
+        response.data.entity.targetUserId !== answer.answeredByUserId
+      ) continue
+      recoveredHumanRequestId = response.data.entity.humanRequestId
+      break
+    }
+    if (recoveredHumanRequestId) {
+      await this.updateRun(run.offer.executionId, { humanRequestId: recoveredHumanRequestId })
+    }
   }
 
   private async submitResult(run: CollaborationTaskRun): Promise<void> {
@@ -1222,7 +1266,10 @@ export class CollaborationTaskAdapter {
     })
   }
 
-  private async refreshPreflight(run: CollaborationTaskRun) {
+  private async refreshPreflight(
+    run: CollaborationTaskRun,
+    allowRevisionReconcile = true
+  ): Promise<CollaborationWorkerPreflight> {
     const response = await this.options.connection.executeAsAgent(restRequestSchema.parse({
       protocolVersion: '1.0', requestId: collaborationRequestId(),
       type: 'task.execution.preflight.get',
@@ -1282,6 +1329,14 @@ export class CollaborationTaskAdapter {
       expectedExecutionRevision: cloud.execution.revision,
       error: uniqueReasons.length ? `Preflight denied: ${uniqueReasons.join(', ')}` : null
     })
+    const revisionOnlyDenial = cloud.decision.outcome === 'denied' &&
+      cloud.decision.reasons.length > 0 &&
+      cloud.decision.reasons.every((reason) => (
+        reason === 'task_revision_mismatch' || reason === 'execution_revision_mismatch'
+      ))
+    if (allowRevisionReconcile && revisionOnlyDenial) {
+      return this.refreshPreflight(this.requireRun(run.offer.executionId), false)
+    }
     if (cloud.execution.fileIntent && uniqueReasons.length === 0) {
       const content = await this.preflightContentTransfers(this.requireRun(run.offer.executionId))
       if (!content.ready) reasons.push('provider_not_ready')
