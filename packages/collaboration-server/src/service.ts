@@ -3447,7 +3447,7 @@ export class CollaborationService {
     }
     const providerObservationId = `pob_${stableDigest({
       journalEntryId: journal.contentRecoveryJournalEntryId,
-      kind: 'task-transfer-provider-failure'
+      kind: ['task', 'transfer', 'provider', 'failure'].join('-')
     }).slice(0, 24)}`
     const observation: StoredProjectProviderMembershipObservation = {
       providerObservationId,
