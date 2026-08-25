@@ -26,7 +26,7 @@ Coordinator HCI SHALL 按 User 分组展示所有可见 Agent，并让 Human 为
 
 ### Requirement: Worker Availability Projection 只描述当前事实
 
-Cloud SHALL 为 Coordinator 提供包含 Agent/Device active 状态、online/offline、last heartbeat、runtime capability tags、是否接受新 offer、active Task count、Provider identity readiness 和当前 Project content readiness 的 Worker Availability Projection。该 projection SHALL 带 observation time/revision 且仅作选择辅助；它 SHALL NOT 自动接受 Task、保证未来可用或替代 Worker 本地检查。
+Cloud SHALL 为 Coordinator 提供包含 Agent/Device active 状态、online/offline、last heartbeat、runtime capability tags、是否接受新 offer、active Task count、Provider identity readiness 和当前 Project content readiness 的 Worker Availability Projection。Agent heartbeat SHALL 使用 Identity 从 canonical Host Runtime readiness 观察到的完整 capability tags；Worker availability 发布 SHALL 绑定该精确 Agent revision、connection status、last heartbeat 和 capability-tag set，Cloud SHALL 拒绝调用方声明与当前 heartbeat 不一致的事实。全局 availability SHALL 保持 Project-independent；Project-scoped view SHALL 嵌套组合独立的 Membership、Task Authority、当前 Provider principal fact 和 Project content readiness，并显式标记 Provider principal snapshot 为 match、missing 或 stale，而不得复制一套 Project 授权字段到全局 availability。该 projection SHALL 带 observation time/revision 且仅作选择辅助；它 SHALL NOT 自动接受 Task、保证未来可用或替代 Worker 本地检查。
 
 #### Scenario: Projection 显示 Worker 可用但本机状态已变化
 

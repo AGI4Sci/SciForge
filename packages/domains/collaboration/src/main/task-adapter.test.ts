@@ -65,7 +65,21 @@ test('duplicate inbox offers persist once and manual mode sends no acceptance be
   const [run] = store.snapshot().taskRuns
   assert.equal(run?.state, 'awaiting-manual')
   assert.equal(store.snapshot().taskRuns.length, 1)
-  assert.equal(cloud.commands.length, 0)
+  assert.equal(cloud.commands.filter((type) => !type.startsWith('worker.')).length, 0)
+  const offeredAvailability = cloud.requests.filter((request) => (
+    request.type === 'worker.availability.publish'
+  ))
+  assert.equal(offeredAvailability.length, 1)
+  assert.equal(offeredAvailability[0]?.type, 'worker.availability.publish')
+  if (offeredAvailability[0]?.type !== 'worker.availability.publish') {
+    throw new Error('Worker availability was not published after the durable offer journal write.')
+  }
+  assert.equal(offeredAvailability[0].activeTaskCount, 1)
+  assert.deepEqual(offeredAvailability[0].runtimeCapabilityTags, [
+    'agent.execute',
+    'workspace.read'
+  ])
+  assert.equal(offeredAvailability[0].lastHeartbeatAt, agentNodeFixture.lastSeenAt)
 
   await adapter.decideOffer(TEST_IDS.executionId, {
     decision: 'reject',
@@ -74,6 +88,11 @@ test('duplicate inbox offers persist once and manual mode sends no acceptance be
   await adapter.waitForIdle(TEST_IDS.executionId)
   assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), ['task.offer.reject'])
   assert.equal(store.snapshot().taskRuns[0]?.state, 'rejected')
+  assert.deepEqual(cloud.requests.filter((request) => (
+    request.type === 'worker.availability.publish'
+  )).map((request) => request.type === 'worker.availability.publish'
+    ? request.activeTaskCount
+    : -1), [1, 0])
 })
 
 test('automatic text execution journals before Agent and uses explicit vNext commands only', async () => {
@@ -81,6 +100,7 @@ test('automatic text execution journals before Agent and uses explicit vNext com
   let store!: CollaborationLocalStore
   const directives: string[] = []
   const agentExecution: DomainMainAgentExecutionHost = {
+    runtimeReadiness: readyRuntimeReadiness,
     run: async (request) => {
       directives.push(request.clientDirectiveId ?? '')
       const run = store.snapshot().taskRuns[0]
@@ -120,6 +140,48 @@ test('automatic text execution journals before Agent and uses explicit vNext com
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle(TEST_IDS.executionId)
   assert.equal(directives.length, 1, 'duplicate offer must not replay a completed execution')
+})
+
+test('automatic offer rejects before acceptance when the canonical AgentRuntime is unavailable', async () => {
+  const cloud = new FakeWorkerCloud()
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  const { adapter, store } = await createRunner(cloud, {
+    runtimeReadiness: async () => ({
+      state: 'unavailable',
+      reason: 'The configured Runtime is temporarily unavailable.'
+    }),
+    run: async () => { throw new Error('Unavailable Runtime must not execute a Task.') }
+  }, initial)
+
+  await adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await adapter.waitForIdle(TEST_IDS.executionId)
+
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.offer.reject'
+  ])
+  const decision = store.snapshot().taskRuns[0]?.decision
+  assert.equal(decision?.decision, 'reject')
+  if (decision?.decision !== 'reject') throw new Error('Expected an explicit Runtime rejection.')
+  assert.equal(decision.reason, 'runtime_not_ready')
+  assert.equal(store.snapshot().taskRuns[0]?.state, 'rejected')
+  const availability = cloud.requests.filter((request) => (
+    request.type === 'worker.availability.publish'
+  ))
+  assert.deepEqual(availability.map((request) => (
+    request.type === 'worker.availability.publish' ? {
+      runtimeReadiness: request.runtimeReadiness,
+      acceptsNewOffers: request.acceptsNewOffers,
+      activeTaskCount: request.activeTaskCount
+    } : null
+  )), [
+    { runtimeReadiness: 'unavailable', acceptsNewOffers: false, activeTaskCount: 1 },
+    { runtimeReadiness: 'unavailable', acceptsNewOffers: false, activeTaskCount: 0 }
+  ])
 })
 
 test('file offer uses the generic token-free Content preflight and rejects provider-not-ready closed', async () => {
@@ -201,6 +263,7 @@ test('file execution journals Cloud and local dispatch before one real generic d
     updatedAt: TEST_TIMESTAMP
   }]
   const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
     run: async () => {
       const run = store.snapshot().taskRuns[0]
       assert.equal(
@@ -336,7 +399,14 @@ test('restart after Provider dispatch records outcome unknown and requires manua
   await created.adapter.waitForIdle(TEST_IDS.executionId)
 
   const recovered = created.store.snapshot().taskRuns[0]
-  assert.deepEqual(cloud.commands, ['external_operation.observe'])
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'external_operation.observe'
+  ])
+  assert.deepEqual(cloud.requests.filter((request) => (
+    request.type === 'worker.availability.publish'
+  )).map((request) => request.type === 'worker.availability.publish'
+    ? request.activeTaskCount
+    : -1), [0])
   assert.equal(recovered?.state, 'manual-recovery')
   assert.equal(recovered?.externalJournal[0]?.state, 'outcome_unknown')
   assert.equal(recovered?.lateOutcomes[0]?.outcome, 'outcome_unknown')
@@ -399,6 +469,7 @@ test('restart resumes the same dispatched Agent directive instead of creating an
   }]
   const directives: string[] = []
   const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
     run: async (request) => {
       directives.push(request.clientDirectiveId ?? '')
       return {
@@ -444,6 +515,7 @@ class FakeWorkerCloud {
   task: Task
   execution: TaskExecution
   commands: string[] = []
+  requests: RestRequest[] = []
   store: CollaborationLocalStore | null = null
   private readonly recoveryJournals = new Map<string, ReturnType<
     typeof externalOperationRecoveryJournalEntrySchema.parse
@@ -560,9 +632,11 @@ class FakeWorkerCloud {
   outbox(): DurableCloudOutbox {
     return {
       enqueue: async (_kind: string, request: RestRequest) => {
+        this.requests.push(request)
         this.commands.push(request.type)
       },
       enqueueAndWait: async (_kind: string, request: RestRequest): Promise<RestResponse> => {
+        this.requests.push(request)
         this.commands.push(request.type)
         if (request.type === 'task.offer.accept') {
           this.advance('accepted')
@@ -1079,7 +1153,18 @@ function entityResponse(request: RestRequest, entity: unknown): RestResponse {
 }
 
 function neverAgent(): DomainMainAgentExecutionHost {
-  return { run: async () => { throw new Error('Agent Runtime must not run.') } }
+  return {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => { throw new Error('Agent Runtime must not run.') }
+  }
+}
+
+async function readyRuntimeReadiness() {
+  return {
+    state: 'ready' as const,
+    runtimeId: 'codex',
+    capabilityTags: ['agent-runtime.codex', 'model-access.api']
+  }
 }
 
 function noContentCapabilities(): DomainMainSystemCapabilityInvoker {
@@ -1091,7 +1176,12 @@ function noContentCapabilities(): DomainMainSystemCapabilityInvoker {
 function capabilityInvoker(
   invoke: DomainMainSystemCapabilityInvoker['invoke']
 ): DomainMainSystemCapabilityInvoker {
-  return { invoke }
+  return {
+    invoke,
+    createApprovedBatch: () => {
+      throw new Error('Finite provisioning approval must not run in Worker transfer tests.')
+    }
+  }
 }
 
 class MemoryBackend implements CollaborationStateBackend {

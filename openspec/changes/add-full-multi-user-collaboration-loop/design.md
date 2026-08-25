@@ -67,6 +67,17 @@ Desktop bootstrap order is:
 
 The Device installation identity is stable; Agent identity is Cloud-issued for `(userId, deviceId)` and Run-0 permits one active Agent per Device. Runtime/model selection is local and may change without changing Agent identity. Availability reports capability tags and readiness, never credentials.
 
+每次成功的 Agent heartbeat 都把 Identity 从 canonical Host Runtime readiness 观察到的 capability tags
+写入精确 Agent revision。后续 Worker availability 发布必须 CAS 该 revision，并与其中的
+connection status、last-seen heartbeat 和完整 capability-tag set 一致；Cloud 拒绝调用方替换或
+伪造这些 heartbeat facts。Worker 本地 durable journal 在收到 offer 和进入任一终态时刷新 active
+Task count；Runtime readiness 不可用时 availability 不接受新 offer，automatic preflight 在发送
+accept 前以 `runtime_not_ready` fail closed。
+
+全局 availability 行保持 Project-independent。Provider principal、Membership、Task Authority 和
+当前 Project content readiness 仍是相互独立的 Cloud facts，只在 Project-scoped Worker view 中嵌套
+组合并显式报告 principal snapshot 的 `match | missing | stale`，不复制成另一套全局授权状态。
+
 Logout, Device revoke, ownership conflict or unconfirmable Device state moves Cloud authority to unavailable, stops connection and file work, and fences active executions. Local offline features remain governed separately.
 
 Alternative rejected: create an Agent immediately after login. An Agent with no executable Runtime would advertise false capacity and create orphaned machine credentials.

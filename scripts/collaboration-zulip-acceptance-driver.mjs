@@ -578,6 +578,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     if (response.type !== 'rest.entity' || response.entity.type !== 'agent_node') {
       fail('COLLABORATION_RESPONSE_INVALID')
     }
+    if (online && !response.entity.lastSeenAt) fail('COLLABORATION_RESPONSE_INVALID')
     state.agentRevision = response.entity.revision
     state.online = online
     const availability = await collaborationCommand(state.agentCredential, {
@@ -585,7 +586,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       agentId: state.public.agentId,
       expectedAgentRevision: state.agentRevision,
       connectionStatus: online ? 'online' : 'offline',
-      lastHeartbeatAt: online ? new Date().toISOString() : null,
+      lastHeartbeatAt: online ? response.entity.lastSeenAt : null,
       runtimeReadiness: online ? 'ready' : 'unavailable',
       runtimeCapabilityTags: ['collaboration.acceptance'],
       acceptsNewOffers: Boolean(online),

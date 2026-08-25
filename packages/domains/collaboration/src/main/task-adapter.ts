@@ -257,6 +257,10 @@ export class CollaborationTaskAdapter {
     }
     await mkdir(workspaceRoot, { recursive: true, mode: 0o700 })
     await chmod(workspaceRoot, 0o700)
+    // The durable local run is the Worker-side load fact. Publish it before
+    // execution starts so another Coordinator does not keep seeing the stale
+    // pre-offer count while this exact execution is awaiting HCI or preflight.
+    await this.publishAvailability('online')
     this.schedule(payload.executionId)
   }
 
@@ -283,6 +287,7 @@ export class CollaborationTaskAdapter {
     const state = this.options.store.snapshot()
     const agent = state.agents.find((candidate) => candidate.agentId === agentId)
     if (!agent) return
+    const runtimeReady = await this.runtimeReady()
     const observedAt = this.now().toISOString()
     const activeTaskCount = state.taskRuns.filter((run) => (
       run.offer.recipientAgentId === agentId && !TERMINAL_RUN_STATES.has(run.state)
@@ -292,10 +297,10 @@ export class CollaborationTaskAdapter {
       expectedAgentRevision: agent.revision,
       connectionStatus,
       lastHeartbeatAt: connectionStatus === 'online' ? agent.lastSeenAt ?? observedAt : null,
-      runtimeReadiness: 'ready' as const,
+      runtimeReadiness: runtimeReady ? 'ready' as const : 'unavailable' as const,
       runtimeCapabilityTags: [...agent.capabilities].sort(),
       acceptsNewOffers: connectionStatus === 'online' &&
-        agent.lifecycleStatus === 'active' && activeTaskCount < 10,
+        agent.lifecycleStatus === 'active' && runtimeReady && activeTaskCount < 10,
       activeTaskCount,
       observedAt
     }
@@ -306,6 +311,16 @@ export class CollaborationTaskAdapter {
       idempotencyKey: idempotencyKey('worker.availability', requestFacts),
       ...requestFacts
     }))
+  }
+
+  private async runtimeReady(): Promise<boolean> {
+    const observe = this.options.agentExecution.runtimeReadiness
+    if (!observe) return false
+    try {
+      return (await observe()).state === 'ready'
+    } catch {
+      return false
+    }
   }
 
   private schedule(executionId: string): void {
@@ -845,6 +860,7 @@ export class CollaborationTaskAdapter {
         safeDetail: detail.slice(0, 4_000)
       })
     })
+    await this.publishAvailability('online')
   }
 
   private async observeExternalOperation(
@@ -1073,6 +1089,7 @@ export class CollaborationTaskAdapter {
       agent.agentId === run.offer.recipientAgentId
     ))
     if (!localAgent || localAgent.lifecycleStatus !== 'active') reasons.push('agent_inactive')
+    if (!(await this.runtimeReady())) reasons.push('runtime_not_ready')
     if (
       cloud.execution.executionId !== run.offer.executionId ||
       cloud.execution.assigneeAgentId !== run.offer.recipientAgentId ||
@@ -1272,6 +1289,7 @@ export class CollaborationTaskAdapter {
         error: `Cloud execution is ${execution.state}.`
       })
     }
+    await this.publishAvailability('online')
   }
 
   private async markFenced(run: CollaborationTaskRun, error: string): Promise<void> {
@@ -1279,6 +1297,7 @@ export class CollaborationTaskAdapter {
     await this.updateRun(run.offer.executionId, {
       state: 'fenced', completedAt: this.now().toISOString(), error: error.slice(0, 4_000)
     })
+    await this.publishAvailability('online')
   }
 
   private async recordLateOutcome(

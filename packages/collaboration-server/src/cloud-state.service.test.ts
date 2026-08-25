@@ -21,6 +21,7 @@ import {
 
 const at = new Date('2026-08-24T08:00:00.000Z')
 const now = () => at
+const RUNTIME_CAPABILITY_TAGS = ['content.read', 'content.write', 'research.execute']
 
 async function registeredAgent(
   service: CollaborationService,
@@ -32,7 +33,7 @@ async function registeredAgent(
     deviceId,
     displayName: `${label} Agent`,
     nodeType: 'desktop',
-    capabilities: ['research.execute', 'content.read', 'content.write'],
+    capabilities: RUNTIME_CAPABILITY_TAGS,
     credentialBootstrapPublicKey: createAgentCredentialBootstrap().publicKey,
     idempotencyKey: `idem_agent_register_${label}`
   })
@@ -46,6 +47,19 @@ async function registeredAgent(
     credentialGeneration: result.agent.credentialGeneration,
     assurance: 'device'
   }
+}
+
+async function heartbeatReadyAgent(
+  service: CollaborationService,
+  actor: AgentActor,
+  idempotencyKey: string
+) {
+  return service.heartbeatAgent(actor, {
+    expectedRevision: 1,
+    connectionStatus: 'online',
+    capabilities: RUNTIME_CAPABILITY_TAGS,
+    idempotencyKey
+  })
 }
 
 function providerFactCommand(
@@ -203,11 +217,15 @@ async function activeTextOfferFixture(suffix: string) {
       requestId: `req_${idempotencyKey}`,
       idempotencyKey,
       agentId: actor.agentId,
-      expectedAgentRevision: 1,
+      expectedAgentRevision: (await heartbeatReadyAgent(
+        service,
+        actor,
+        `${idempotencyKey}_heartbeat`
+      )).revision,
       connectionStatus: 'online',
       lastHeartbeatAt: at.toISOString(),
       runtimeReadiness: 'ready',
-      runtimeCapabilityTags: ['research.execute'],
+      runtimeCapabilityTags: RUNTIME_CAPABILITY_TAGS,
       acceptsNewOffers: true,
       activeTaskCount: 0,
       observedAt: at.toISOString()
@@ -355,6 +373,173 @@ describe('vNext Cloud application service', () => {
       deviceId: other.deviceId,
       idempotencyKey: 'idem_provider_fact_cross_user_device'
     })).rejects.toMatchObject({ code: 'permission_denied' })
+  })
+
+  it('binds Worker availability to the exact current Agent heartbeat revision and Runtime tags', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const worker = await seedOidcUserDevice(repository, 'availability-worker', at)
+    const workerAgent = await registeredAgent(
+      service,
+      worker.user,
+      worker.deviceId,
+      'availability-worker'
+    )
+    const heartbeat = await heartbeatReadyAgent(
+      service,
+      workerAgent,
+      'idem_availability_worker_heartbeat'
+    )
+    const command = {
+      protocolVersion: '1.0' as const,
+      type: 'worker.availability.publish' as const,
+      requestId: 'req_availability_worker_publish',
+      idempotencyKey: 'idem_availability_worker_publish',
+      agentId: workerAgent.agentId,
+      expectedAgentRevision: heartbeat.revision,
+      connectionStatus: 'online' as const,
+      lastHeartbeatAt: heartbeat.lastSeenAt ?? null,
+      runtimeReadiness: 'ready' as const,
+      runtimeCapabilityTags: RUNTIME_CAPABILITY_TAGS,
+      acceptsNewOffers: true,
+      activeTaskCount: 0,
+      observedAt: at.toISOString()
+    }
+
+    await expect(service.publishWorkerAvailability(workerAgent, {
+      ...command,
+      requestId: 'req_availability_forged_tags',
+      idempotencyKey: 'idem_availability_forged_tags',
+      runtimeCapabilityTags: ['forged.runtime.tag']
+    })).rejects.toMatchObject({ code: 'validation_failed' })
+    await expect(service.publishWorkerAvailability(workerAgent, {
+      ...command,
+      requestId: 'req_availability_forged_heartbeat',
+      idempotencyKey: 'idem_availability_forged_heartbeat',
+      lastHeartbeatAt: new Date(at.getTime() - 1_000).toISOString()
+    })).rejects.toMatchObject({ code: 'validation_failed' })
+
+    await expect(service.publishWorkerAvailability(workerAgent, command)).resolves.toMatchObject({
+      agentId: workerAgent.agentId,
+      connectionStatus: 'online',
+      lastHeartbeatAt: heartbeat.lastSeenAt,
+      runtimeCapabilityTags: RUNTIME_CAPABILITY_TAGS,
+      activeTaskCount: 0,
+      revision: 1
+    })
+  })
+
+  it('joins current Provider identity and Project readiness without duplicating them into global availability', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const owner = await seedOidcUserDevice(repository, 'availability-owner', at)
+    const worker = await seedOidcUserDevice(repository, 'availability-project-worker', at)
+    const coordinator = await registeredAgent(
+      service,
+      owner.user,
+      owner.deviceId,
+      'availability-owner'
+    )
+    const workerAgent = await registeredAgent(
+      service,
+      worker.user,
+      worker.deviceId,
+      'availability-project-worker'
+    )
+    const ownerFact = await service.publishProviderDirectoryPrincipalFact(
+      owner.user,
+      providerFactCommand(
+        owner.user,
+        owner.deviceId,
+        'availability-provider-owner',
+        'idem_availability_provider_owner'
+      )
+    )
+    const workerFact = await service.publishProviderDirectoryPrincipalFact(
+      worker.user,
+      providerFactCommand(
+        worker.user,
+        worker.deviceId,
+        'availability-provider-worker',
+        'idem_availability_provider_worker'
+      )
+    )
+    const created = await service.createProject(owner.user, {
+      protocolVersion: '1.0', type: 'project.create', requestId: 'req_availability_project',
+      idempotencyKey: 'idem_availability_project', displayName: 'Availability Project',
+      goal: 'Compose independent Worker and Content readiness facts.',
+      coordinatorAgentId: coordinator.agentId, expectedCoordinatorAgentRevision: 1,
+      budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 },
+      content: { mode: 'required', contentOwnerUserId: owner.userId,
+        providerInstance: ownerFact.providerPrincipal.providerInstance,
+        containerDisplayName: 'Availability Project Content', members: [
+          { userId: owner.userId, providerPrincipalFactId: ownerFact.providerPrincipalFactId,
+            expectedFactRevision: ownerFact.revision },
+          { userId: worker.userId, providerPrincipalFactId: workerFact.providerPrincipalFactId,
+            expectedFactRevision: workerFact.revision }
+        ] }
+    })
+    const heartbeat = await heartbeatReadyAgent(
+      service,
+      workerAgent,
+      'idem_availability_project_worker_heartbeat'
+    )
+    await service.publishWorkerAvailability(workerAgent, {
+      protocolVersion: '1.0', type: 'worker.availability.publish',
+      requestId: 'req_availability_project_worker',
+      idempotencyKey: 'idem_availability_project_worker', agentId: workerAgent.agentId,
+      expectedAgentRevision: heartbeat.revision, connectionStatus: 'online',
+      lastHeartbeatAt: heartbeat.lastSeenAt ?? null, runtimeReadiness: 'ready',
+      runtimeCapabilityTags: RUNTIME_CAPABILITY_TAGS, acceptsNewOffers: true,
+      activeTaskCount: 0, observedAt: at.toISOString()
+    })
+
+    const matching = await service.listWorkerAvailability(owner.user, {
+      protocolVersion: '1.0', type: 'worker.availability.list',
+      requestId: 'req_availability_project_list_match', projectId: created.project.projectId,
+      limit: 10
+    })
+    expect(matching.items).toEqual([expect.objectContaining({
+      agentId: workerAgent.agentId,
+      runtimeCapabilityTags: RUNTIME_CAPABILITY_TAGS
+    })])
+    expect(matching.projectItems).toEqual([expect.objectContaining({
+      availability: expect.objectContaining({ agentId: workerAgent.agentId }),
+      membership: expect.objectContaining({ userId: worker.userId, state: 'active' }),
+      providerPrincipalFact: expect.objectContaining({
+        providerPrincipalFactId: workerFact.providerPrincipalFactId,
+        revision: workerFact.revision
+      }),
+      providerPrincipalSnapshotStatus: 'match',
+      contentReadiness: expect.objectContaining({
+        userId: worker.userId,
+        state: 'pending',
+        providerPrincipalFactId: workerFact.providerPrincipalFactId,
+        snapshottedFactRevision: workerFact.revision
+      })
+    })])
+
+    await service.publishProviderDirectoryPrincipalFact(worker.user, {
+      ...providerFactCommand(
+        worker.user,
+        worker.deviceId,
+        'availability-provider-worker',
+        'idem_availability_provider_worker_revision_2'
+      ),
+      providerPrincipalFactId: workerFact.providerPrincipalFactId,
+      expectedFactRevision: workerFact.revision,
+      principalIdentityRevision: 2
+    })
+    const stale = await service.listWorkerAvailability(owner.user, {
+      protocolVersion: '1.0', type: 'worker.availability.list',
+      requestId: 'req_availability_project_list_stale', projectId: created.project.projectId,
+      limit: 10
+    })
+    expect(stale.projectItems).toEqual([expect.objectContaining({
+      providerPrincipalFact: expect.objectContaining({ revision: 2 }),
+      providerPrincipalSnapshotStatus: 'stale',
+      contentReadiness: expect.objectContaining({ snapshottedFactRevision: 1 })
+    })])
   })
 
   it('atomically derives Owner and snapshots exact ready facts into a paused Project', async () => {
@@ -1111,11 +1296,17 @@ describe('vNext Cloud application service', () => {
     }
     const coordinator = await registeredAgent(service, owner.user, owner.deviceId, 'meeting-owner')
     const workerAgent = await registeredAgent(service, worker.user, worker.deviceId, 'meeting-worker')
+    const workerHeartbeat = await heartbeatReadyAgent(
+      service,
+      workerAgent,
+      'idem_worker_available_heartbeat_01'
+    )
     const availability = await service.publishWorkerAvailability(workerAgent, {
       protocolVersion: '1.0', type: 'worker.availability.publish', requestId: 'req_worker_available_01',
       idempotencyKey: 'idem_worker_available_01', agentId: workerAgent.agentId,
-      expectedAgentRevision: 1, connectionStatus: 'online', lastHeartbeatAt: at.toISOString(),
-      runtimeReadiness: 'ready', runtimeCapabilityTags: ['research.execute'], acceptsNewOffers: true,
+      expectedAgentRevision: workerHeartbeat.revision, connectionStatus: 'online',
+      lastHeartbeatAt: workerHeartbeat.lastSeenAt ?? null,
+      runtimeReadiness: 'ready', runtimeCapabilityTags: RUNTIME_CAPABILITY_TAGS, acceptsNewOffers: true,
       activeTaskCount: 0, observedAt: at.toISOString()
     })
     const created = await service.createProject(owner.user, {

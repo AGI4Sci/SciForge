@@ -2303,6 +2303,21 @@ export class CollaborationService {
       ) {
         fail('credential_revoked', 'Availability requires the exact ACTIVE Agent and Device.')
       }
+      const heartbeatCapabilityTags = [...new Set(agent.capabilities)].sort()
+      const publishedCapabilityTags = [...new Set(input.runtimeCapabilityTags)].sort()
+      if (
+        input.connectionStatus !== agent.connectionStatus ||
+        (input.connectionStatus === 'online' && (
+          agent.lastSeenAt === undefined || input.lastHeartbeatAt !== agent.lastSeenAt
+        )) ||
+        (input.connectionStatus === 'offline' && input.lastHeartbeatAt !== null) ||
+        stableDigest(publishedCapabilityTags) !== stableDigest(heartbeatCapabilityTags)
+      ) {
+        fail(
+          'validation_failed',
+          'Worker availability must match the exact current Agent heartbeat and Runtime capability tags.'
+        )
+      }
       if (input.acceptsNewOffers && (
         input.connectionStatus !== 'online' ||
         input.runtimeReadiness !== 'ready'
@@ -2317,10 +2332,10 @@ export class CollaborationService {
         deviceId: device.deviceId,
         agentActive: true,
         deviceActive: true,
-        connectionStatus: input.connectionStatus,
-        lastHeartbeatAt: input.lastHeartbeatAt,
+        connectionStatus: agent.connectionStatus,
+        lastHeartbeatAt: agent.connectionStatus === 'online' ? agent.lastSeenAt! : null,
         runtimeReadiness: input.runtimeReadiness,
-        runtimeCapabilityTags: [...new Set(input.runtimeCapabilityTags)].sort(),
+        runtimeCapabilityTags: heartbeatCapabilityTags,
         acceptsNewOffers: input.acceptsNewOffers,
         activeTaskCount: input.activeTaskCount,
         observedAt: input.observedAt,

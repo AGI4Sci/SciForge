@@ -89,6 +89,7 @@ test('Runtime authority loss stops delivery and fences local executions before r
   const store = await localStore([agentNodeFixture])
   let fenced: Readonly<{ agentId: string; reason: string }> | undefined
   let stopped = false
+  let heartbeatProjectionAttempts = 0
   const connection = new CollaborationConnection({
     store,
     settings: new CollaborationSettingsService(settingsHost()),
@@ -108,7 +109,8 @@ test('Runtime authority loss stops delivery and fences local executions before r
       }
     }),
     inboxHandler: { handle: async () => undefined },
-    onAuthorityLost: async (agentId, reason) => { fenced = { agentId, reason } }
+    onAuthorityLost: async (agentId, reason) => { fenced = { agentId, reason } },
+    afterHeartbeat: async () => { heartbeatProjectionAttempts += 1 }
   })
 
   await assert.rejects(connection.connect(), /Configure an AgentRuntime/u)
@@ -118,6 +120,7 @@ test('Runtime authority loss stops delivery and fences local executions before r
     reason: 'Configure an AgentRuntime before connecting collaboration.'
   })
   assert.equal(stopped, true)
+  assert.equal(heartbeatProjectionAttempts, 0)
   assert.equal(connection.state().state, 'error')
 })
 
@@ -197,6 +200,7 @@ test('registration delegates bootstrap and authority storage to Identity then re
   const userRequests: string[] = []
   const registerInputs: unknown[] = []
   const agentRequests: string[] = []
+  const heartbeatStatuses: string[] = []
   const agentRuntime = createTestAgentCloudRuntime({
     authorityStatus: readyAuthority,
     registerAgent: async (input) => {
@@ -207,11 +211,21 @@ test('registration delegates bootstrap and authority storage to Identity then re
       assert.equal(agentId, TEST_IDS.agentId)
       agentRequests.push(request.type)
       assert.equal(request.type, 'agent.heartbeat')
+      if (request.type !== 'agent.heartbeat') throw new Error('Expected the exact Agent heartbeat command.')
+      assert.deepEqual(request.capabilities, [
+        'agent-runtime.codex',
+        'model-access.api'
+      ])
       return {
         protocolVersion: '1.0',
         type: 'rest.entity',
         requestId: request.requestId,
-        entity: { ...agentNodeFixture, connectionStatus: 'online', revision: 2 }
+        entity: {
+          ...agentNodeFixture,
+          capabilities: request.capabilities,
+          connectionStatus: 'online',
+          revision: 2
+        }
       }
     }
   })
@@ -234,7 +248,8 @@ test('registration delegates bootstrap and authority storage to Identity then re
       }
     }),
     agentCloudRuntime: agentRuntime,
-    inboxHandler: { handle: async () => undefined }
+    inboxHandler: { handle: async () => undefined },
+    afterHeartbeat: async (status) => { heartbeatStatuses.push(status) }
   })
   await connection.configure(BASE_URL)
 
@@ -247,6 +262,11 @@ test('registration delegates bootstrap and authority storage to Identity then re
   assert.equal(store.snapshot().participant?.revision, 2)
   assert.deepEqual(userRequests, ['endpoint.catalog.get', 'participant.get'])
   assert.deepEqual(agentRequests, ['agent.heartbeat'])
+  assert.deepEqual(heartbeatStatuses, ['online'])
+  assert.deepEqual(store.snapshot().agents[0]?.capabilities, [
+    'agent-runtime.codex',
+    'model-access.api'
+  ])
   assert.deepEqual(registerInputs, [{
     displayName: 'Desktop',
     nodeType: 'desktop',

@@ -18,6 +18,13 @@ Identity 从当前可执行 AgentRuntime readiness 派生的 capability tags。O
 或 Agent authority 丢失时连接 fail closed，先停止 outbox/WSS 并 fence 本地 execution，再允许
 显式恢复。
 
+Worker availability 只发布本机事实：它复用最近一次成功 heartbeat 返回的精确 Agent revision、
+last-seen 与完整 Runtime capability tags，并从 durable execution journal 计算 active Task count。
+offer 写入 journal 及 execution 进入 completed/rejected/failed/fenced/manual-recovery 时都会刷新该
+count。automatic preflight 还会直接观察 canonical AgentRuntime readiness；不可用或观察失败时在
+Cloud accept 前以 `runtime_not_ready` 拒绝。Provider identity、Project Membership 和 content
+readiness 不在本地伪造，而由 Cloud 的 Project-scoped availability view 从独立事实组合。
+
 Endpoint challenge 由当前 OIDC User 发起并绑定精确 provider/realm/providerUserId；`/bind`
 只证明 provider endpoint 事实，不创建 User、不签发第二种 User credential，也没有匿名 poll
 secret。Agent presence、WSS、Inbox 与 durable outbox 使用 Identity 持有的独立、可撤销

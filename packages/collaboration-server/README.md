@@ -26,6 +26,12 @@
 Bearer 解析与 OIDC verifier 是 server-owned 私有 network boundary，不是包
 export。公开 service/API 类型只使用不含凭据的 Actor facts。
 
+Worker availability 发布必须引用当前 Agent heartbeat revision，并精确复现该 heartbeat 的
+connection status、last-seen 时间与完整 Runtime capability-tag set；Cloud 对任何 drift fail
+closed，并只把 active Task count/本地是否接收新 offer 作为 Worker 当前观察保存。全局 availability
+不含 Project 字段。Project-scoped 查询再从独立的 Membership、Task Authority、Provider principal
+fact 与 content readiness 组合视图，并显式返回 principal snapshot 的 match/missing/stale 状态。
+
 跨包协议、实体和 wire schema 必须从 `@sciforge/collaboration-contracts` 的公共入口导入；不要依赖本包 `src/` 私有路径。
 
 Cloud 的 Provider Instance identity 只有

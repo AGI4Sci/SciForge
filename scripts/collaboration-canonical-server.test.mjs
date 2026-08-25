@@ -122,6 +122,14 @@ async function registerAgent(rig, participant, slot) {
 }
 
 async function publishAvailability(rig, registered, key) {
+  const heartbeat = await rig.service.heartbeatAgent(registered.actor, {
+    expectedRevision: registered.agent.revision,
+    connectionStatus: 'online',
+    capabilities: registered.agent.capabilities,
+    idempotencyKey: `idem_heartbeat_${key}`
+  })
+  assert.ok(heartbeat.lastSeenAt)
+  registered.agent = heartbeat
   return rig.service.publishWorkerAvailability(registered.actor, {
     protocolVersion: '1.0',
     type: 'worker.availability.publish',
@@ -130,9 +138,9 @@ async function publishAvailability(rig, registered, key) {
     agentId: registered.agent.agentId,
     expectedAgentRevision: registered.agent.revision,
     connectionStatus: 'online',
-    lastHeartbeatAt: rig.clock.now().toISOString(),
+    lastHeartbeatAt: heartbeat.lastSeenAt,
     runtimeReadiness: 'ready',
-    runtimeCapabilityTags: ['research.execute'],
+    runtimeCapabilityTags: heartbeat.capabilities,
     acceptsNewOffers: true,
     activeTaskCount: 0,
     observedAt: rig.clock.now().toISOString()
