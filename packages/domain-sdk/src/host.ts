@@ -438,6 +438,12 @@ export type DomainMainSystemCapabilityInvoker = Readonly<{
       resource?: DomainCapabilityResourceHandle
       expectedRevision?: string
       signal?: AbortSignal
+      /**
+       * Package-owned execution facts carried outside the capability input.
+       * The Host must canonicalize and bind these facts to system authority;
+       * handlers must never accept caller-authored digests in their input.
+       */
+      systemExecutionContext?: DomainPackageJsonValue
       authorization?: Readonly<{
         /**
          * The host may propagate an already-approved outer action. It must
@@ -749,7 +755,7 @@ export type DomainWorkbenchRightPanelPlacement = z.infer<
  */
 export type DomainWorkbenchRightPanelTarget =
   | Readonly<{
-      placement?: 'focused'
+      placement?: 'focused' | undefined
       surfaceId?: never
     }>
   | Readonly<{
@@ -792,7 +798,7 @@ export type DomainWorkbenchExactResource = Readonly<{
   integrity?: Readonly<{
     algorithm: 'sha256'
     expectedDigest: string
-  }>
+  }> | undefined
 }>
 
 export type DomainWorkbenchOpenResourceInput =
