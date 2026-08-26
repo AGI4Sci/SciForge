@@ -196,6 +196,10 @@ const projectCompleteContract = Object.freeze({
   outputSchema: projectCoordinatorWorkspaceSchema
 })
 
+const confirmationApproval = Object.freeze({
+  approval: Object.freeze({ mode: 'confirmation' as const })
+})
+
 export type ProjectCoordinatorRendererClient = Readonly<{
   readWorkspace(input?: ProjectCoordinatorWorkspaceReadInput): Promise<ProjectCoordinatorWorkspace>
   createProject(input: ProjectCoordinatorProjectCreateInput): Promise<ProjectCoordinatorProjectCreateResult>
@@ -233,34 +237,76 @@ export function createProjectCoordinatorRendererClient(
 ): ProjectCoordinatorRendererClient {
   return Object.freeze({
     readWorkspace: (input = {}) => invoker.invoke(workspaceReadContract, input),
-    createProject: (input) => invoker.invoke(projectCreateContract, input),
+    createProject: (input) => invoker.invoke(projectCreateContract, input, confirmationApproval),
     readPlanDraft: (input) => invoker.invoke(planDraftReadContract, input),
     generatePlanDraft: (input) => invoker.invoke(planDraftGenerateContract, input),
     editPlanDraft: (input) => invoker.invoke(planDraftEditContract, input),
-    submitPlanDraft: (input) => invoker.invoke(planSubmitContract, input),
-    confirmPlanAndActivate: (input) => invoker.invoke(planConfirmActivateContract, input),
+    submitPlanDraft: (input) => invoker.invoke(planSubmitContract, input, confirmationApproval),
+    confirmPlanAndActivate: (input) => invoker.invoke(
+      planConfirmActivateContract,
+      input,
+      confirmationApproval
+    ),
     previewProvisioning: (input) => invoker.invoke(contentProvisioningPlanContract, input),
-    applyProvisioning: (input) => invoker.invoke(contentProvisioningApplyContract, input),
+    applyProvisioning: (input) => invoker.invoke(
+      contentProvisioningApplyContract,
+      input,
+      confirmationApproval
+    ),
     observeAndLinkRecovery: (input) => invoker.invoke(
       contentRecoveryObserveLinkContract,
-      input
+      input,
+      confirmationApproval
     ),
-    abandonRecovery: (input) => invoker.invoke(contentRecoveryAbandonContract, input),
+    abandonRecovery: (input) => invoker.invoke(
+      contentRecoveryAbandonContract,
+      input,
+      confirmationApproval
+    ),
     retryRecoverySuccessor: (input) => invoker.invoke(
       contentRecoveryRetrySuccessorContract,
-      input
+      input,
+      confirmationApproval
     ),
-    addMember: (input) => invoker.invoke(membershipAddContract, input),
-    removeMember: (input) => invoker.invoke(membershipRemoveContract, input),
-    createHumanNeeded: (input) => invoker.invoke(humanNeededCreateContract, input),
-    answerHumanNeeded: (input) => invoker.invoke(humanAnswerContract, input),
-    transferCoordinator: (input) => invoker.invoke(coordinatorTransferContract, input),
+    addMember: (input) => invoker.invoke(
+      membershipAddContract,
+      input,
+      confirmationApproval
+    ),
+    removeMember: (input) => invoker.invoke(
+      membershipRemoveContract,
+      input,
+      confirmationApproval
+    ),
+    createHumanNeeded: (input) => invoker.invoke(
+      humanNeededCreateContract,
+      input,
+      confirmationApproval
+    ),
+    answerHumanNeeded: (input) => invoker.invoke(
+      humanAnswerContract,
+      input,
+      confirmationApproval
+    ),
+    transferCoordinator: (input) => invoker.invoke(
+      coordinatorTransferContract,
+      input,
+      confirmationApproval
+    ),
     prepareArtifactReview: (input, options) => invoker.invoke(
       artifactReviewPrepareContract,
       input,
       options
     ),
-    reviewResult: (input) => invoker.invoke(resultReviewContract, input),
-    completeProject: (input) => invoker.invoke(projectCompleteContract, input)
+    reviewResult: (input) => invoker.invoke(
+      resultReviewContract,
+      input,
+      confirmationApproval
+    ),
+    completeProject: (input) => invoker.invoke(
+      projectCompleteContract,
+      input,
+      confirmationApproval
+    )
   })
 }
