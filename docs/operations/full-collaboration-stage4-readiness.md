@@ -111,9 +111,17 @@ the profile must statically bind the exact Principal, authority/root, operation,
 audience, transfer limits, validity interval and, where required, current opaque
 Provider Binding Attestation. Consequently, no artifact built before a reviewed
 profile exists may be called the unique Stage 4 artifact or reused as Run-0
-evidence. `stage4:artifact:mac:arm64` enforces this boundary before invoking the
-builder; the build-issued receipt then rechecks all three private composition
-layers after canonical after-pack validation.
+evidence. `stage4:artifact:mac:arm64` now requires an explicit absolute
+`--private-domain-package`; omission fails at the public CLI boundary. The
+package remains outside Git and is accepted only after canonical path,
+owner-only/no-link structure, generator inventory, Domain SDK manifest,
+verification-profile schema and current-validity checks. Its verified bytes
+enter the ordinary manifest discovery/generated composition only inside one
+`0700` temporary build workspace. The build-issued receipt then rechecks all
+three private composition layers after canonical after-pack validation and
+persists only package name/version/SHA-256/status/redacted provenance. This
+interface is implemented locally but does not itself prove a sealed packaged
+artifact or any live authorization.
 
 At `2026-08-26T06:27:20Z`, the credential-free public edge was also checked
 against the frozen contract:

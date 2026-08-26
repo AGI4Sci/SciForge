@@ -14,16 +14,31 @@ test('formal gate requires the sealed Stage 4 artifact, receipt, and safe execut
   const options = parseArchitecturePrinciplesOptions([
     '--packed-artifact', 'dist/SciForge-0.1.0-mac-arm64.zip',
     '--artifact-receipt', 'dist/stage4-artifact-mac-arm64.json',
-    '--packaged-executable-locator', 'SciForge.app/Contents/MacOS/SciForge'
+    '--packaged-executable-locator', 'SciForge.app/Contents/MacOS/SciForge',
+    '--private-domain-package', '/private/stage4/authorization-a',
+    '--private-domain-package', '/private/stage4/authorization-b'
   ])
   assert.equal(options.mode, 'formal')
   assert.equal(options.packagedExecutableLocator, 'SciForge.app/Contents/MacOS/SciForge')
+  assert.deepEqual(options.privateDomainPackagePaths, [
+    '/private/stage4/authorization-a',
+    '/private/stage4/authorization-b'
+  ])
   assert.throws(
     () => parseArchitecturePrinciplesOptions(['--packed-artifact', 'artifact.zip']),
     /--artifact-receipt is required/u
   )
   assert.throws(() => safeArchiveLocator('../SciForge.app'), /traversal/u)
   assert.throws(() => safeArchiveLocator('/Applications/SciForge.app'), /archive-relative/u)
+  assert.throws(
+    () => parseArchitecturePrinciplesOptions([
+      '--packed-artifact', 'artifact.zip',
+      '--artifact-receipt', 'stage4-artifact-mac-arm64.json',
+      '--packaged-executable-locator', 'SciForge.app/Contents/MacOS/SciForge',
+      '--private-domain-package', './authorization'
+    ]),
+    /must be absolute/u
+  )
 })
 
 test('changed production audit rejects Host feature maps, private imports, and compatibility shims', () => {
@@ -81,13 +96,34 @@ test('packaged bundle contains frozen OIDC/build identities and no source/mock f
     'sciforgeStage4Build',
     'sciforge-stage4-acceptance',
     sourceCommit,
+    '@example/private-authorization',
     'packaged-production-code'
   ].join('\n'))
   assert.doesNotThrow(() => assertBundledStage4Contract(
     bytes,
     '/private/source-root',
-    sourceCommit
+    sourceCommit,
+    {
+      privateDomainPackages: [{ packageName: '@example/private-authorization' }]
+    }
   ))
+  assert.throws(
+    () => assertBundledStage4Contract(
+      Buffer.from([
+        STAGE4_DEPLOYMENT.oidcAudience,
+        STAGE4_DEPLOYMENT.oidcRedirectUri,
+        'sciforgeStage4Build',
+        'sciforge-stage4-acceptance',
+        sourceCommit
+      ].join('\n')),
+      '/private/source-root',
+      sourceCommit,
+      {
+        privateDomainPackages: [{ packageName: '@example/private-authorization' }]
+      }
+    ),
+    /missing private composition identity/u
+  )
   assert.throws(
     () => assertBundledStage4Contract(Buffer.concat([
       bytes,

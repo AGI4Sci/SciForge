@@ -100,25 +100,48 @@ npm run content-space:authorization:generate -- \
 至少由另一位授权审查者逐项核对 manifest 中的 Principal、authority、operation、audience、
 limits、validity 与 binding，并复核 receipt 摘要。生成器不会把“生成成功”当作审查成功。
 
-## 通过标准 composition 激活
+## 通过隔离的标准 build composition 使用
 
-审查完成后，只能按团队批准的受控源码流程把整个输出目录作为
-`packages/domains/*` 的一个直接子包加入目标 acceptance checkout，然后执行：
+授权事实不得复制进公开 checkout。审查完成后，把仓库外 package 的规范绝对路径显式交给
+Stage 4 artifact builder：
 
 ```bash
-npm install --ignore-scripts --package-lock=false
-npm run domain-packages:generate
-npm run domain-packages:check
-npm --workspace '@sciforge-local/content-space-authorization-stage4-run0' run typecheck
-npm --workspace '@sciforge-local/content-space-authorization-stage4-run0' test
+npm run stage4:artifact:mac:arm64 -- \
+  --private-domain-package '/secure/path/content-space-authorization-stage4-run0'
 ```
 
-生成的标准 composition 差异和授权包本身必须一起评审；在 exact-commit Stage 4 流程中还必须
-按受控源代码策略形成可追踪提交。不要使用 `.gitignore`、`assume-unchanged`、环境变量、Renderer
-设置或运行时配置隐藏 profile。移除包后重新运行 `domain-packages:generate` 即完全移除授权。
+builder 仍要求当前源码 worktree 干净、HEAD 已推送且与 `git ls-remote` 返回的同名远端分支
+完全一致。它先验证 package 根目录和全部子目录/文件均为 owner-only，拒绝相对路径、非规范
+路径、symlink、硬链接、额外文件、越界结构和非 canonical generator bytes；随后使用当前 exact
+commit 的 Domain SDK manifest schema 与 Content Space verification-profile schema，重验 profile
+有效期、main-only entrypoint、`publicRelease: "forbidden"` 和逐文件 receipt inventory。
 
-若团队的源码远端或审查渠道不允许承载这些授权事实，停止在“已生成、未激活”状态，先建立
-批准的私有审查路径；不能因此把 profile 降级为运行时 JSON 或绕过 clean/exact-commit 门禁。
+验证通过的 bytes 只复制到本次创建、权限为 `0700` 的系统临时 build workspace 中，成为该
+workspace 的 `packages/domains/*` 子包。之后调用唯一的 `scripts/domain-packages.mjs` discovery/
+generated-composition 路径，再在同一隔离 workspace 中完成 source build 与 Electron packaging。
+它不会修改受 Git 管理的生成文件，不会安装或激活原始 package，也不增加运行时 JSON、环境变量、
+Renderer 设置或第二套 composition。结束时只删除本次明确创建的临时 workspace；原始私有 package
+和任何用户目录都不删除。
+
+缺少 `--private-domain-package` 时 builder 在公共 CLI 边界保持
+`verification_profile_required` fail closed。无效、过期或已漂移的 package 同样在 Electron
+Builder 启动前失败。不要用 `.gitignore`、`assume-unchanged`、伪造 remote ref 或隐藏未跟踪
+文件把授权事实塞进源码树。
+
+正式 architecture gate 必须再次提供同一外部 package，并从原路径重新校验其当前 bytes 和
+有效期，再与 sealed artifact receipt 中的脱敏摘要逐字节比较：
+
+```bash
+npm run architecture-principles:gate -- \
+  --packed-artifact '/absolute/path/SciForge-<version>-mac-arm64.zip' \
+  --artifact-receipt '/absolute/path/stage4-artifact-mac-arm64.json' \
+  --packaged-executable-locator 'SciForge.app/Contents/MacOS/SciForge' \
+  --private-domain-package '/secure/path/content-space-authorization-stage4-run0'
+```
+
+公开 artifact/architecture receipt 对每个外部私有包只记录 package name、version、package
+SHA-256、`verification-profile-verified` 状态和 `external-local-package` 脱敏 provenance；不记录
+package 路径、profile/contribution ID、Principal、Device、binding 或 Provider credential。
 
 ## 验证生成器
 
