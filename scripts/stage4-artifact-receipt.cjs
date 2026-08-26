@@ -17,6 +17,9 @@ const { pathToFileURL } = require('node:url')
 const CONTRACT_VERSION = 1
 const RECEIPT_KIND = 'sciforge-stage4-artifact-receipt'
 const BUILD_IDENTITY_KIND = 'sciforge-stage4-acceptance'
+const CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION =
+  'main.content-space-verification-profile'
+const CONTENT_SPACE_VERIFICATION_PROFILE_VERSION = '2.0.0'
 const SOURCE_COMMIT_PATTERN = /^[a-f0-9]{40}$/u
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u
 const MAX_RECEIPT_BYTES = 1024 * 1024
@@ -305,22 +308,56 @@ async function discoverPrivateContributions(projectRoot) {
   const { discoverDomainPackages } = await import(moduleUrl)
   const packages = await discoverDomainPackages(projectRoot)
   const contributions = []
+  let verificationProfileSchema
   for (const candidate of packages) {
     if (candidate.definition?.composition !== 'production') continue
     for (const entrypoint of candidate.definition.entrypoints || []) {
       for (const contribution of entrypoint.contributions || []) {
         if (contribution.publicRelease !== 'forbidden') continue
+        const contract = candidate.definition.contributionContracts?.[contribution.id]
+        const contractLocation = isRecord(contract) && typeof contract.location === 'string'
+          ? contract.location
+          : null
+        if (contractLocation === CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION) {
+          verificationProfileSchema ??= await loadContentSpaceVerificationProfileSchema(
+            projectRoot
+          )
+          const parsed = verificationProfileSchema.safeParse(contract)
+          if (!parsed.success) {
+            throw new Error(
+              `[stage4-artifact] Private verification profile ${contribution.id} is invalid.`
+            )
+          }
+        }
         contributions.push(Object.freeze({
-          contractSha256: sha256(canonicalJson(contribution.contract)),
+          contractLocation,
+          contractSha256: sha256(canonicalJson(contract)),
           id: contribution.id,
           kind: contribution.kind,
           packageName: candidate.definition.packageName,
-          process: entrypoint.process
+          process: entrypoint.process,
+          version: contribution.version ?? null
         }))
       }
     }
   }
   return Object.freeze(contributions)
+}
+
+async function loadContentSpaceVerificationProfileSchema(projectRoot) {
+  const { tsImport } = await import('tsx/esm/api')
+  const modulePath = resolve(
+    projectRoot,
+    'packages/domains/content-space/src/verification-policy.ts'
+  )
+  const module = await tsImport(pathToFileURL(modulePath).href, {
+    parentURL: pathToFileURL(__filename).href
+  })
+  const schema = module.contentSpaceVerificationProfileContributionSchema
+  if (!schema || typeof schema.safeParse !== 'function') {
+    throw new Error('[stage4-artifact] Content Space verification profile schema is unavailable.')
+  }
+  return schema
 }
 
 function assertAcceptanceComposition(composition) {
@@ -339,9 +376,13 @@ function assertAcceptanceComposition(composition) {
       '[stage4-artifact] Stage 4 acceptance requires an active private deployment configuration.'
     )
   }
-  if (composition.privateContributions.length === 0) {
+  if (!composition.privateContributions.some((contribution) =>
+    contribution.contractLocation === CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION &&
+    contribution.kind === 'main.extension' && contribution.process === 'main' &&
+    contribution.version === CONTENT_SPACE_VERIFICATION_PROFILE_VERSION)) {
     throw new Error(
-      '[stage4-artifact] Stage 4 acceptance requires a reviewed private domain contribution.'
+      '[stage4-artifact] Stage 4 acceptance requires a reviewed private ' +
+      'Content Space verification-profile contribution.'
     )
   }
 }
@@ -522,11 +563,23 @@ function validateComposition(composition) {
     requireRecord(contribution, 'private contribution')
     assertExactKeys(
       contribution,
-      ['contractSha256', 'id', 'kind', 'packageName', 'process'],
+      [
+        'contractLocation',
+        'contractSha256',
+        'id',
+        'kind',
+        'packageName',
+        'process',
+        'version'
+      ],
       'private contribution'
     )
     if (![contribution.id, contribution.kind, contribution.packageName, contribution.process]
       .every((entry) => typeof entry === 'string' && Boolean(entry)) ||
+      !(contribution.contractLocation === null ||
+        (typeof contribution.contractLocation === 'string' && contribution.contractLocation)) ||
+      !(contribution.version === null ||
+        (typeof contribution.version === 'string' && contribution.version)) ||
       !SHA256_PATTERN.test(contribution.contractSha256)) {
       throw new Error('[stage4-artifact] Receipt private contribution is invalid.')
     }
@@ -646,6 +699,10 @@ function requireRecord(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`[stage4-artifact] ${label} must be an object.`)
   }
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function assertExactKeys(value, expectedKeys, label) {

@@ -43,17 +43,29 @@ test('private acceptance composition requires all three generic trust layers', (
       }]
     },
     privateContributions: [{
+      contractLocation: 'main.content-space-verification-profile',
       contractSha256: 'd'.repeat(64),
       id: 'example.profile',
-      kind: 'main-extension',
+      kind: 'main.extension',
       packageName: '@example/profile',
-      process: 'main'
+      process: 'main',
+      version: '2.0.0'
     }]
   })
   assert.doesNotThrow(() => assertAcceptanceComposition(composition))
   assert.throws(
     () => assertAcceptanceComposition({ ...composition, privateContributions: [] }),
-    /reviewed private domain contribution/u
+    /Content Space verification-profile contribution/u
+  )
+  assert.throws(
+    () => assertAcceptanceComposition({
+      ...composition,
+      privateContributions: composition.privateContributions.map((contribution) => ({
+        ...contribution,
+        contractLocation: 'main.unrelated-private-contribution'
+      }))
+    }),
+    /Content Space verification-profile contribution/u
   )
   assert.throws(
     () => assertAcceptanceComposition({ ...composition, internalRuntimes: [] }),
@@ -199,11 +211,13 @@ function receiptFixture({ artifactSha256, artifactSize, source }) {
         }]
       }],
       privateContributions: [{
+        contractLocation: 'main.content-space-verification-profile',
         contractSha256: 'd'.repeat(64),
         id: 'example.profile',
-        kind: 'main-extension',
+        kind: 'main.extension',
         packageName: '@example/profile',
-        process: 'main'
+        process: 'main',
+        version: '2.0.0'
       }]
     },
     artifacts: [{

@@ -83,8 +83,9 @@ try {
   await access(receiptPath)
   process.stdout.write(`[stage4-artifact] Final receipt: ${receiptPath}\n`)
 } catch (error) {
+  const message = error instanceof Error ? error.message : String(error)
   process.stderr.write(
-    `[stage4-artifact] ${error instanceof Error ? error.message : String(error)}\n`
+    `${message.startsWith('[stage4-artifact]') ? message : `[stage4-artifact] ${message}`}\n`
   )
   process.exitCode = 1
 }

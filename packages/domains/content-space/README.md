@@ -40,6 +40,12 @@ renderer state, Agent requests, prompts, Tasks, ordinary
 environment/configuration, package presence, or a successful sibling
 operation.
 
+For controlled acceptance, the repository provides a generic local generator
+for a main-only authorization package. It emits only this existing extension
+contract, does not install the output, and adds no capability or business
+runtime. See
+[`docs/operations/content-space-local-authorization-package.zh-CN.md`](../../../docs/operations/content-space-local-authorization-package.zh-CN.md).
+
 An `ArtifactReference` requires Provider proof of immutable retention and
 version-specific retrieval. A mutable file identity, version number, or digest
 is not that proof. The current OpenContent Provider therefore keeps
