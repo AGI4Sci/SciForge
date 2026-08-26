@@ -18,11 +18,13 @@ import {
   ProjectCoordinatorPlanSection,
   ProjectCoordinatorProvisioningSection,
   ProjectCoordinatorTransferSection,
+  WorkersSection,
   projectCoordinatorCompletionInput,
   projectCoordinatorCreatedSelection,
   projectCoordinatorProvisioningApplyInput,
   projectCoordinatorResultReviewInput,
-  projectCoordinatorTransferCandidates
+  projectCoordinatorTransferCandidates,
+  projectCoordinatorWorkerPresenceSummary
 } from './ProjectCoordinatorPanel.js'
 import { createProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
 import {
@@ -141,6 +143,42 @@ test('Coordinator transfer HCI is Owner-only, exact-Agent, and shows the old aut
   assert.match(markup, /agt_OwnerSuccessor1/u)
   assert.match(markup, /projectCoordinatorAuthorityTransferredOut/u)
   assert.doesNotMatch(markup, /agt_MemberAgent001/u)
+})
+
+test('Worker HCI counts distinct online Users and exact Agents from the Cloud projection', () => {
+  const project = coordinatorTransferProjectFixture()
+  const offlineMember = {
+    ...project,
+    workerGroups: project.workerGroups.map((group) => group.userId === 'usr_ProjectMember01'
+      ? {
+          ...group,
+          agents: group.agents.map((agent) => ({
+            ...agent,
+            projectAvailability: {
+              ...agent.projectAvailability,
+              availability: {
+                ...agent.projectAvailability.availability,
+                connectionStatus: 'offline' as const
+              }
+            }
+          }))
+        }
+      : group)
+  } as ProjectCoordinatorProject
+
+  assert.deepEqual(projectCoordinatorWorkerPresenceSummary(offlineMember), {
+    onlineUsers: 1,
+    visibleUsers: 2,
+    onlineAgents: 2,
+    visibleAgents: 3
+  })
+  const markup = renderToStaticMarkup(createElement(WorkersSection, { project: offlineMember }))
+  assert.match(markup, /data-project-online-users="1"/u)
+  assert.match(markup, /data-project-visible-users="2"/u)
+  assert.match(markup, /data-project-online-agents="2"/u)
+  assert.match(markup, /data-project-visible-agents="3"/u)
+  assert.match(markup, /projectCoordinatorOnlineMembers/u)
+  assert.match(markup, /projectCoordinatorOnlineAgents/u)
 })
 
 test('command focuses an exact Project through the generic panel activation contract', () => {

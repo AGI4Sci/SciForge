@@ -108,6 +108,6 @@ cp .env.example .env
 | `SHA-256 does not match` | 停止安装，重新向交付方核对原始 ZIP 和独立摘要。 |
 | `must not contain runtime credentials` | 交付包混入了 `.env`；由交付方清理并重新出包，不能放宽校验。 |
 | `already exists with different or unreceipted bytes` | 目标技能目录有旧包或手工文件；先确认并备份来源，再安装。 |
-| Provider 可见但调用失败 | 检查私有 Provider deployment configuration、当前用户连接、Provider ACL 与网络；这与技能是否安装无关。 |
+| Provider 可见但调用失败 | 检查公开 Provider endpoint 的网络可达性、当前用户连接和 Provider ACL；这与技能是否安装无关。 |
 | 技能未被发现 | 核对 `--workspace` 是否是当前 Workspace，并重新打开 Workspace/新建会话。 |
 | 技能 CLI 认证失败 | 只检查接收方自己的本机配置和账号权限，不复制其他人的凭据。 |

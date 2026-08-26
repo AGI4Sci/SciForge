@@ -65,6 +65,11 @@ Desktop bootstrap order is:
 
 `oidc_user_ready → device_active → runtime_configured → agent_registered → collaboration_connected`.
 
+OpenContent 的固定测试 Provider endpoint 是 Connector package-owned、`publicRelease: allowed`
+的公开配置，必须随正常 Git clone 和 package tarball 到达；它不是 credential、Skill、私有
+sidecar 或 Stage 4 授权输入。五人源码验收中唯一需要私下分发的 OpenContent 文件是可选的
+`opencontent-base.zip` Agent Skill。
+
 The Device installation identity is stable; Agent identity is Cloud-issued for `(userId, deviceId)` and Run-0 permits one active Agent per Device. Runtime/model selection is local and may change without changing Agent identity. Availability reports capability tags and readiness, never credentials.
 
 每次成功的 Agent heartbeat 都把 Identity 从 canonical Host Runtime readiness 观察到的 capability tags

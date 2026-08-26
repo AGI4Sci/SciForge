@@ -48,10 +48,12 @@ Optional Agent enhancement
   private ZIP -> generic local verifier/installer -> .codex/skills/<skill-name>
 ```
 
-Neither path is a prerequisite for the other. Provider deployment
-configuration remains a private packaging input, and public releases continue
-to reject active configuration marked `publicRelease: forbidden`; that release
-boundary is independent of Agent skill installation.
+Neither path is a prerequisite for the other. The fixed test Provider endpoint
+is public package-owned configuration with `publicRelease: allowed`, so a clean
+Git clone and package tarball can enroll and use the base Provider without any
+private sidecar. Credentials remain node-local and user-owned. The only
+OpenContent artifact that the five-person source workflow distributes out of
+band is the optional Agent skill ZIP.
 
 The earlier `opencontent-attachment-assets` overlay cannot be deleted as a
 pure verification artifact: an audit shows that ordinary file and Team calls

@@ -20,7 +20,7 @@ const deploymentConfigurationDescriptorSchema = z.object({
   sourceRelativePath: packageRelativePathSchema(),
   packagedResourcesRelativePath: packageRelativePathSchema(),
   maxBytes: z.number().int().min(1).max(64 * 1024),
-  publicRelease: z.literal('forbidden')
+  publicRelease: z.literal('allowed')
 }).strict().readonly()
 
 export type OpenContentDeploymentConfiguration = Readonly<{
@@ -63,9 +63,9 @@ const deploymentConfigurationFileOperations: DeploymentConfigurationFileOperatio
   })
 
 /**
- * Resolves the package-owned deployment sidecar once during Connector
- * activation. Absence and every invalid filesystem or JSON state are the same
- * bounded outcome: this Provider deployment is unavailable.
+ * Resolves the package-owned public deployment configuration once during
+ * Connector activation. Absence and every invalid filesystem or JSON state
+ * are the same bounded outcome: this Provider deployment is unavailable.
  */
 export function resolveOpenContentDeploymentConfiguration(
   host: Pick<DomainMainHost, 'getAppRoot' | 'isPackaged'>,

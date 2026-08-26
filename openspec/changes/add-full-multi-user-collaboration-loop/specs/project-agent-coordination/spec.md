@@ -34,6 +34,13 @@ Cloud SHALL 为 Coordinator 提供包含 Agent/Device active 状态、online/off
 - **THEN** Worker SHALL 拒绝或保持未接受并返回有界原因
 - **AND** Cloud SHALL NOT 因旧 projection 强制其执行。
 
+#### Scenario: Coordinator 查看真实在线人数
+
+- **WHEN** Coordinator HCI 读取一个包含多个 User 和多个 Agent/Device 的 Project availability projection
+- **THEN** HCI SHALL 把至少有一个 `online` Agent 的每个可见 User 精确计为一名在线成员
+- **AND** SHALL 同时显示在线 Agent 数与可见 Agent 总数，使同一 User 的多个 Device 不会虚增在线人数
+- **AND** 所有计数 SHALL 直接派生自本次 Cloud projection，不得使用本地窗口、轮询旁路或猜测的 heartbeat 统计。
+
 ### Requirement: 接单策略是每 Agent Device 的本地持久策略
 
 每个 Agent Device SHALL 本地持久化 `manual` 或 `automatic` Task acceptance policy。Cloud Task 合同 SHALL NOT 包含 `acceptancePolicy`，策略 SHALL NOT 跨 Device 同步。自动接单仍 SHALL 在本机检查 Device、Runtime、Task capability、并发、Project membership 和内容 readiness 后明确发送 accept；手动模式 SHALL 要求 Human accept 或 reject 并可附有界原因。

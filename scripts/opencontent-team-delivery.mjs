@@ -380,7 +380,7 @@ function parseDeploymentDescriptor(value) {
     'sourceRelativePath'
   ], 'OpenContent deployment descriptor')
   if (value.contractVersion !== 1 || !Number.isSafeInteger(value.maxBytes) ||
-    value.maxBytes < 1 || value.publicRelease !== 'forbidden') {
+    value.maxBytes < 1 || value.publicRelease !== 'allowed') {
     throw new Error('OpenContent deployment descriptor is invalid.')
   }
   return Object.freeze({

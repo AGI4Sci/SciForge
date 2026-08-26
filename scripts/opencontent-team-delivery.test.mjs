@@ -234,7 +234,7 @@ async function createDeliveryFixture(context) {
       contractVersion: 1,
       maxBytes: 4096,
       packagedResourcesRelativePath: 'domain-deployments/opencontent-connector.json',
-      publicRelease: 'forbidden',
+      publicRelease: 'allowed',
       sourceRelativePath: '.sciforge/private/deployments/opencontent-connector.json'
     },
     sciforgeInternalRuntimeTrust: {

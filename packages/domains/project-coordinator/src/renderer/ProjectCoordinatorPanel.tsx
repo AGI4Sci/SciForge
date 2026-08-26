@@ -587,6 +587,40 @@ export function projectCoordinatorTransferCandidates(
   }) ?? []
 }
 
+export type ProjectCoordinatorWorkerPresenceSummary = Readonly<{
+  onlineUsers: number
+  visibleUsers: number
+  onlineAgents: number
+  visibleAgents: number
+}>
+
+/**
+ * Summarises the exact Cloud worker projection without inventing a second presence source.
+ * A User is online when at least one of their visible Agents is online, so multiple Devices
+ * owned by the same Human never inflate the online member count.
+ */
+export function projectCoordinatorWorkerPresenceSummary(
+  project: ProjectCoordinatorProject
+): ProjectCoordinatorWorkerPresenceSummary {
+  let onlineUsers = 0
+  let onlineAgents = 0
+  let visibleAgents = 0
+  for (const group of project.workerGroups) {
+    const groupOnlineAgents = group.agents.filter(({ projectAvailability }) => (
+      projectAvailability.availability.connectionStatus === 'online'
+    )).length
+    onlineAgents += groupOnlineAgents
+    visibleAgents += group.agents.length
+    if (groupOnlineAgents > 0) onlineUsers += 1
+  }
+  return Object.freeze({
+    onlineUsers,
+    visibleUsers: project.workerGroups.length,
+    onlineAgents,
+    visibleAgents
+  })
+}
+
 export function ProjectCoordinatorTransferSection({
   project,
   canTransfer,
@@ -844,39 +878,66 @@ export function ProjectCoordinatorPlanSection({
   )
 }
 
-function WorkersSection({ project }: Readonly<{ project?: ProjectCoordinatorProject }>): ReactElement {
+export function WorkersSection({
+  project
+}: Readonly<{ project?: ProjectCoordinatorProject }>): ReactElement {
   const { t } = useTranslation('common')
+  const presence = project ? projectCoordinatorWorkerPresenceSummary(project) : undefined
   return (
     <Section id="workers" title={t('projectCoordinatorWorkers')} icon={<UsersRound className="h-4 w-4" />}>
       {!project?.workerGroups.length ? (
         <Empty message={project ? t('projectCoordinatorNoWorkers') : undefined} />
-      ) : project.workerGroups.map((group) => (
-        <div key={group.userId} className="mb-2 rounded border border-ds-border p-2 text-xs">
-          <div className="flex items-start justify-between gap-2">
-            <span className="font-medium">{group.displayName}</span>
-            <Status value={group.agents[0]?.projectAvailability.membership?.state ?? 'not_member'} />
+      ) : (
+        <>
+          <div
+            className="mb-2 rounded border border-ds-border bg-ds-bg p-2 text-xs"
+            data-project-online-users={presence?.onlineUsers}
+            data-project-visible-users={presence?.visibleUsers}
+            data-project-online-agents={presence?.onlineAgents}
+            data-project-visible-agents={presence?.visibleAgents}
+          >
+            <div className="font-medium">
+              {t('projectCoordinatorOnlineMembers', {
+                online: presence?.onlineUsers,
+                total: presence?.visibleUsers
+              })}
+            </div>
+            <div className="mt-0.5 text-[10px] text-ds-muted">
+              {t('projectCoordinatorOnlineAgents', {
+                online: presence?.onlineAgents,
+                total: presence?.visibleAgents
+              })}
+            </div>
           </div>
-          <div className="break-all text-[10px] font-mono text-ds-faint">{group.userId}</div>
-          <div className="mt-2 space-y-1.5">
-            {group.agents.map((agent) => (
-              <div key={agent.projectAvailability.agentId} className="rounded bg-ds-bg px-2 py-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span>{agent.displayName}</span>
-                  <Status value={agent.projectAvailability.availability.connectionStatus} />
-                </div>
-                <div className="break-all text-[10px] font-mono text-ds-faint">
-                  {agent.projectAvailability.agentId}
-                </div>
-                <div className="mt-1 text-[10px] text-ds-muted">
-                  {t('projectCoordinatorActiveTasks', {
-                    count: agent.projectAvailability.availability.activeTaskCount
-                  })}
-                </div>
+          {project.workerGroups.map((group) => (
+            <div key={group.userId} className="mb-2 rounded border border-ds-border p-2 text-xs">
+              <div className="flex items-start justify-between gap-2">
+                <span className="font-medium">{group.displayName}</span>
+                <Status value={group.agents[0]?.projectAvailability.membership?.state ?? 'not_member'} />
               </div>
-            ))}
-          </div>
-        </div>
-      ))}
+              <div className="break-all text-[10px] font-mono text-ds-faint">{group.userId}</div>
+              <div className="mt-2 space-y-1.5">
+                {group.agents.map((agent) => (
+                  <div key={agent.projectAvailability.agentId} className="rounded bg-ds-bg px-2 py-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>{agent.displayName}</span>
+                      <Status value={agent.projectAvailability.availability.connectionStatus} />
+                    </div>
+                    <div className="break-all text-[10px] font-mono text-ds-faint">
+                      {agent.projectAvailability.agentId}
+                    </div>
+                    <div className="mt-1 text-[10px] text-ds-muted">
+                      {t('projectCoordinatorActiveTasks', {
+                        count: agent.projectAvailability.availability.activeTaskCount
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </>
+      )}
     </Section>
   )
 }

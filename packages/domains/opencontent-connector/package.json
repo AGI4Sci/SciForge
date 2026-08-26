@@ -1,16 +1,16 @@
 {
   "name": "@sciforge/domain-opencontent-connector",
-  "version": "4.0.2",
+  "version": "4.0.3",
   "license": "MIT",
   "type": "module",
   "private": false,
   "description": "Principal-bound OpenContent enrollment and transport integration for SciForge.",
   "sciforgeDeploymentConfiguration": {
     "contractVersion": 1,
-    "sourceRelativePath": ".sciforge/private/deployments/opencontent-connector.json",
+    "sourceRelativePath": "packages/domains/opencontent-connector/config/opencontent-connector.json",
     "packagedResourcesRelativePath": "domain-deployments/opencontent-connector.json",
     "maxBytes": 4096,
-    "publicRelease": "forbidden"
+    "publicRelease": "allowed"
   },
   "sciforgeInternalRuntimeTrust": {
     "contractVersion": 1,
@@ -84,6 +84,7 @@
     "./renderer/enrollment": "./src/renderer/enrollment-renderer.ts"
   },
   "files": [
+    "config",
     "src",
     "sciforge.domain.json",
     "package.json",

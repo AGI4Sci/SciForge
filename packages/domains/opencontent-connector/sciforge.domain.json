@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.opencontent-connector",
     "displayName": "OpenContent Connector",
-    "version": "4.0.2",
+    "version": "4.0.3",
     "hostApi": {
       "minimum": "1.5.0",
       "maximumExclusive": "2.0.0"

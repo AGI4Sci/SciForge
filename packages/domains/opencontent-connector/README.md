@@ -2,11 +2,12 @@
 
 Owns existing-account enrollment, Principal-bound connection state, secure Token use, pinned OpenContent schemas, and main-process transport. It exposes no Content Space or Shared Documents business semantics.
 
-The package manifest declares one private deployment-configuration contract:
-contract version `1`, source path
-`.sciforge/private/deployments/opencontent-connector.json`, packaged Resources
-path `domain-deployments/opencontent-connector.json`, a `4096`-byte ceiling,
-and `publicRelease: forbidden`. The sidecar is strict JSON containing only
+The package manifest declares one public, package-owned deployment-configuration
+contract: contract version `1`, source path
+`packages/domains/opencontent-connector/config/opencontent-connector.json`,
+packaged Resources path `domain-deployments/opencontent-connector.json`, a
+`4096`-byte ceiling, and `publicRelease: allowed`. The configuration is strict
+JSON containing only
 `contractVersion`, the fixed `opencontent-edoc2-demo` Provider Instance, and an
 absolute HTTPS `origin`. Activation requests no-follow semantics where the
 platform exposes them and always binds the opened descriptor to the pre-open
@@ -23,22 +24,22 @@ definitions, and the internal service descriptor remain registered.
 There is no environment, argv, caller, renderer, package-setting,
 alternate-path, or fallback endpoint channel.
 
-Local and packaged-private builds use one generic domain-package deployment
-composition that preserves every manifest declaration and activates a copy only
-when its source exists. Electron Builder captures that immutable composition
+Source and packaged builds use one generic domain-package deployment
+composition that preserves every manifest declaration. Because this Provider
+configuration is public package data, a normal Git clone and package tarball
+contain it without an out-of-band install. Electron Builder captures that immutable composition
 once; after packing it requires each active target to match the captured size
 and SHA-256 receipt and each inactive target to be absent. Official public
 releases reject every active deployment configuration marked `forbidden`. The
-sidecar is outside the package's npm `files` allowlist and its isolated packaged
-namespace does not create a supplier overlay.
+public configuration is inside the package's npm `files` allowlist and its
+isolated packaged namespace does not create a supplier overlay.
 
-For the immutable team-delivery ZIP, the package also owns the outer-delivery,
-deployment-sidecar, and overlay trust anchors. Team members use the current
-checkout's `opencontent:delivery:verify` and `opencontent:delivery:install`
-entrypoints; archived README instructions cannot select an older branch or
-weaken current package trust. Installation is idempotent and refuses to
-overwrite a different private deployment or overlay. See the
-[team deployment runbook](../../../docs/operations/opencontent-private-attachment-team-deployment.zh-CN.md).
+The public deployment configuration is not an Agent skill and is never supplied
+through a private team ZIP. For the normal source workflow, the only optional
+out-of-band OpenContent input is the user-provided `opencontent-base.zip` Agent
+skill, installed into a Workspace with the generic private-skill installer.
+Provider discovery, enrollment, ordinary file operations and Team operations do
+not read that ZIP.
 
 The Connector owns the SciForge-authored supplier wire contract, asset
 verification, isolated process transport, and runtime snapshot mechanism. Its

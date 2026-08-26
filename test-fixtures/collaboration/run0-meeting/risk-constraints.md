@@ -14,5 +14,5 @@
 
 - 所有 User、Device、Agent、Project、Task 和 execution 识别符在最终回执中脱敏。
 - 真实登录和 Provider 凭据只由对应 Human 在自己 Desktop 的私有运行边界输入。
-- 完整 live 验收使用同一 exact commit 的 packaged artifact，五个独立 profile 且至少三台物理机或独立 VM。
+- 完整 live 验收使用同一 exact commit 的 canonical source `out/`，五个独立 profile 且至少三台物理机或独立 VM。
 - 冻结的 cloud-test/login-test DNS 与 TLS 若实测不一致，先暂停并报告；真机矩阵不足时状态是 awaiting_real_devices。

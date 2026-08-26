@@ -9,7 +9,7 @@
 - 每个 Agent Device 本地独立保存 manual 或 automatic 接单策略；Cloud 不保存策略字段。
 - Worker 只能在本机 Device、Runtime、Membership、Provider readiness 和 execution fence 都通过时接单。
 - 拒绝后改派必须创建新 execution，旧 execution 不得写回。
-- Worker 可创建 HumanNeeded，但只有 Project Owner 的 OIDC Human 可回答。
+- 三项结果通过复审后，Coordinator 以 `coordinator_project` 发起一次 HumanNeeded；只有 Project Owner 的 OIDC Human 可回答。Worker execution HumanNeeded 只在 focused/recovery tests 覆盖，不进入本次 live happy path。
 - 结果必须经 Coordinator 复审；request revision 会产生新的当前 execution/revision。
 
 ## 文件需求

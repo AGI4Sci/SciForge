@@ -37,11 +37,16 @@
 | --- | --- | --- | --- | --- |
 | U0 | Project Owner + 该 Owner 所有的 Coordinator Agent | 任意 | 创建/确认计划、provision、回答 HumanNeeded、复审、完成 Project | 独立 Desktop profile |
 | U1 | Worker Agent | `manual` | 手动接受一个文件 Task 并提交真实结果 | 独立 Desktop profile |
-| U2 | Worker Agent | `automatic` | 本地 preflight 后显式自动接受，并向 U0 发起 HumanNeeded | 独立 Desktop profile |
+| U2 | Worker Agent | `automatic` | 本地 preflight 后显式自动接受并提交真实结果 | 独立 Desktop profile |
 | U3 | 首选 Worker Agent | `manual` | 显式拒绝一个 offer 并给出有界原因 | 独立 Desktop profile |
 | U4 | 替代 Worker Agent | 任意 | 接受 U3 被改派的全新 execution 并完成结果 | 独立 Desktop profile |
 
 五个 profile 至少分布在三台物理机器或相互独立的 VM。一个物理机上的多个普通进程、共享 user-data、测试 harness 或 source renderer 不算独立设备。
+
+明早的 cold-clone、exact-commit 前检、独立 profile 启动和现场停线条件见
+[五人现场执行单](./full-collaboration-run0-five-person-field-guide.zh-CN.md)。五人基线不得安装
+`opencontent-base.zip`；先证明公开 Provider 在无 Skill 时可用，Skill 只允许在基线回执完成后
+作为独立可选验收安装。
 
 ## 合成会议输入
 
@@ -88,18 +93,19 @@ Coordinator 与 Worker 必须使用各自 Desktop 当前配置的真实 AgentRun
 4. U1 手动接受其 offer；U2 经本地 preflight 自动发送 accept；U3 显式 reject。
 5. Coordinator 选择 U4 的精确 Agent 重新分派 U3 Task；Cloud 创建新的 `executionId` 并 fence U3 旧 execution。
 6. U1/U2/U4 分别真实下载输入、使用本机真实 Runtime/模型转换、通过 OpenContent real upload-new 提交各自输出。
-7. U2 在执行中创建 HumanNeeded；只有 U0 的 OIDC Human 可回答，答案回到同一 execution。
+7. `architecture-review.md` 与 `meeting-minutes.md` 的两个当前 execution 必须在时间线上真实重叠，并分别形成可复核的 download → Runtime → upload → review 闭环；U3 拒绝/U4 改派作为独立控制支路保留。
 
 每个文件 transfer 的 evidence 必须含 exact resource/root、execution 和真实 operation observation。实现可保留 bytes/SHA-256 作为诊断，但它们以及汇总 `integrityVerified` 暂不作为本 PoC 完成门禁。
 
 ### 4. 复审与完成
 
-1. U0 Coordinator HCI 默认可见 pending HumanNeeded、计划确认和结果审阅卡。
+1. U0 Coordinator HCI 默认可见计划确认和结果审阅卡。
 2. U0 至少对一个结果执行 `accept`，对另一个结果执行一次 `request_revision`。
 3. 被要求修订的 Worker 接受新 revision/execution，真实修改并上传新的 no-overwrite 输出名称或按冻结合同关联精确 observed output。
-4. U0 接受三个当前结果，形成带 User/Agent/Task/execution/revision provenance 的 Project Record 和 final summary。
-5. 由授权 Desktop 重新下载并人工核对三个最终文件；逐文件 bytes/SHA-256 暂不作为本 PoC 门禁。
-6. U0 显式完成 Project；Cloud 关闭业务写入，而 OpenContent Team/目录和内容继续存在。
+4. U0 接受三个当前结果后，Coordinator 仅以 `coordinator_project` scope 发起一次真人决策 HumanNeeded；live happy path 不使用 `worker_execution` HumanNeeded。
+5. 只有 U0 的 OIDC Human 可提交 HumanAnswer；Coordinator 收到答案后写入 decision、带 User/Agent/Task/execution/revision provenance 的 Project Record 和 final summary。
+6. 由授权 Desktop 重新下载并人工核对三个最终文件；逐文件 bytes/SHA-256 暂不作为本 PoC 门禁。
+7. U0 显式完成 Project；Cloud 关闭业务写入，而 OpenContent Team/目录和内容继续存在。
 
 ## 恢复矩阵
 
