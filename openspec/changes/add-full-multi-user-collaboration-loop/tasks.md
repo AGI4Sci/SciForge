@@ -69,6 +69,7 @@
 - [ ] 7.4 candidate 全部门禁通过后切换现有 Caddy `cloud-test` upstream，保持 `login-test/realms/SciForge` issuer 不变；验证 source-app live 后再决定退役旧栈，期间必须能精确回滚旧 upstream/app/database。
   - 2026-08-26 经用户对 `743907e2` 包单独授权，首次 Edge 切换的 revision/mount/公网 200/200/401/issuer 门禁通过；随后 U0 packaged configure 因 bootstrap Identity 仍绑定隔离 loopback、与公网 HTTPS Collaboration origin 不一致而在写设置/建 Agent 前按设计 fail closed。已立即恢复原 Edge revision/Caddy SHA/公网门禁并撤下候选 Edge 网络，旧 DB v5 与候选 DB v14 聚合均未漂移。7.4 保持 unchecked；脱敏回执与需重新批准的启动顺序见 `docs/operations/full-collaboration-stage4-a-host-cutover-attempt-1.md`。
   - 2026-08-26 经用户对 `7d946636` 修订顺序单独授权，第二次先停 loopback U0，再完成同一 Edge 切换；公网 Identity 恢复同一 Device 且 candidate Device/Agent 聚合保持 23/15。HTTPS Collaboration 设置写入后，renderer 错把 active phone endpoint 作为首个 Agent 注册前置条件，真实 packaged 路径无法继续，遂先停公网 U0，再精确恢复旧 Edge、公网门禁、candidate 隔离/restart policy 和 loopback profile。无 Agent/endpoint/Project/Provider 写入；7.4 继续 unchecked。通用最小 UI 修复及新 artifact/再次审批边界见 `docs/operations/full-collaboration-stage4-a-host-cutover-attempt-2.md`。
+  - 2026-08-27 经用户对 clean/pushed `ac5c9656` source-app 顺序单独授权，第三次切换通过 candidate revision/mount/公网 200/200/401/issuer、同一 OIDC User/Device、唯一 U0 Agent、Collaboration connected 和 7/7/24/16 无重复门禁。Coordinator 建 Project 随即因 renderer 未携带 main 声明的 confirmation approval 而在 Cloud 写入前 fail closed；只读复核 U0 Owner Project 仍为 0。已先停 U0，再精确恢复旧 Edge、公网门禁、candidate 隔离及 `restart=no`，旧栈/候选/审计证据均保留。通用 renderer/main 契约修复 `bc702433` 及新审批边界见 `docs/operations/full-collaboration-stage4-a-host-cutover-attempt-3.md`；7.4 继续 unchecked。
 
 ## 8. 自动化、源码应用与真机验收
 
