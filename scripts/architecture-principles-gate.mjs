@@ -26,13 +26,10 @@ import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 
-import {
-  verifyStage4PrivateDomainPackageInputs
-} from './stage4-private-domain-package.mjs'
-
 const require = createRequire(import.meta.url)
 const {
   EXPECTED_ORIGIN,
+  discoverPrivateContributions,
   readExactSourceState,
   summarizePrivateComposition,
   verifyStage4ArtifactReceipt
@@ -83,45 +80,25 @@ export function parseArchitecturePrinciplesOptions(argv) {
   const allowed = new Set([
     '--packed-artifact',
     '--artifact-receipt',
-    '--packaged-executable-locator',
-    '--private-domain-package'
-  ])
-  const required = new Set([
-    '--packed-artifact',
-    '--artifact-receipt',
     '--packaged-executable-locator'
   ])
   const values = new Map()
-  const privateDomainPackagePaths = []
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index]
     if (!allowed.has(flag)) throw new Error(`Unknown architecture gate option: ${flag}`)
     if (values.has(flag)) throw new Error(`Duplicate architecture gate option: ${flag}`)
     const value = argv[index + 1]?.trim()
     if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value.`)
-    if (flag === '--private-domain-package') {
-      if (!isAbsolute(value)) {
-        throw new Error('Architecture gate private domain package path must be absolute.')
-      }
-      privateDomainPackagePaths.push(value)
-      index += 1
-      continue
-    }
-    if (values.has(flag)) throw new Error(`Duplicate architecture gate option: ${flag}`)
     values.set(flag, value)
     index += 1
   }
-  for (const flag of required) {
+  for (const flag of allowed) {
     if (!values.has(flag)) throw new Error(`${flag} is required for the formal gate.`)
-  }
-  if (privateDomainPackagePaths.length === 0) {
-    throw new Error('--private-domain-package is required for the formal gate.')
   }
   return Object.freeze({
     mode: 'formal',
     artifactReceipt: resolve(values.get('--artifact-receipt')),
     packagedArtifact: resolve(values.get('--packed-artifact')),
-    privateDomainPackagePaths: Object.freeze(privateDomainPackagePaths),
     packagedExecutableLocator: safeArchiveLocator(
       values.get('--packaged-executable-locator')
     )
@@ -186,38 +163,25 @@ export function assertDomainPackageIdentity(packageJson, manifest, path) {
 }
 
 export function assertBundledStage4Contract(
-  contractSurfaces,
+  bytes,
   repositoryRoot = REPOSITORY_ROOT,
-  sourceCommit,
-  privateComposition
+  sourceCommit
 ) {
-  const surfaces = Buffer.isBuffer(contractSurfaces)
-    ? [contractSurfaces]
-    : contractSurfaces
-  if (!Array.isArray(surfaces) || surfaces.length === 0 ||
-    surfaces.some((bytes) => !Buffer.isBuffer(bytes) || bytes.byteLength === 0)) {
-    throw new Error('Packaged application contract bytes are empty or unavailable.')
+  if (!Buffer.isBuffer(bytes) || bytes.byteLength === 0) {
+    throw new Error('Packaged app.asar is empty or unavailable.')
   }
-  const includes = (identity) => surfaces.some((bytes) => bytes.includes(Buffer.from(identity)))
   const requiredIdentities = [
     ...REQUIRED_BUNDLED_IDENTITIES,
     ...(sourceCommit ? ['sciforgeStage4Build', 'sciforge-stage4-acceptance', sourceCommit] : [])
   ]
   for (const identity of requiredIdentities) {
-    if (!includes(identity)) {
-      throw new Error(`Packaged application is missing required OIDC identity: ${identity}`)
-    }
-  }
-  for (const identity of [
-    ...(privateComposition?.privateDomainPackages ?? []).map((entry) => entry.packageName)
-  ]) {
-    if (!includes(identity)) {
-      throw new Error(`Packaged application is missing private composition identity: ${identity}`)
+    if (!bytes.includes(Buffer.from(identity))) {
+      throw new Error(`Packaged app.asar is missing required OIDC identity: ${identity}`)
     }
   }
   for (const identity of [...FORBIDDEN_BUNDLED_IDENTITIES, resolve(repositoryRoot)]) {
-    if (includes(identity)) {
-      throw new Error(`Packaged application contains a forbidden source/test identity: ${identity}`)
+    if (bytes.includes(Buffer.from(identity))) {
+      throw new Error(`Packaged app.asar contains a forbidden source/test identity: ${identity}`)
     }
   }
 }
@@ -390,28 +354,16 @@ async function verifyAndExtractArtifact(options, source) {
       'Resources',
       'app.asar'
     )
+    assertBundledStage4Contract(
+      await readRegularFile(appAsar),
+      REPOSITORY_ROOT,
+      source.commit
+    )
     const resourcesRoot = join(
       extractionRoot,
       ...options.packagedExecutableLocator.split('/').slice(0, appBundle + 1),
       'Contents',
       'Resources'
-    )
-    const contractSurfaces = [await readRegularFile(appAsar)]
-    const unpackedMain = join(
-      resourcesRoot,
-      'app.asar.unpacked',
-      'out',
-      'main',
-      'index.js'
-    )
-    if (await pathExists(unpackedMain)) {
-      contractSurfaces.push(await readRegularFile(unpackedMain))
-    }
-    assertBundledStage4Contract(
-      contractSurfaces,
-      REPOSITORY_ROOT,
-      source.commit,
-      receiptHandle.receipt.composition
     )
     const internalRuntimeComposition = createInternalRuntimeComposition(REPOSITORY_ROOT)
     const deploymentConfigurationComposition =
@@ -421,15 +373,11 @@ async function verifyAndExtractArtifact(options, source) {
       resourcesRoot,
       deploymentConfigurationComposition
     )
-    const privateComposition = await verifyStage4PrivateDomainPackageInputs({
-      repositoryRoot: REPOSITORY_ROOT,
-      privateDomainPackagePaths: options.privateDomainPackagePaths,
-      now: new Date()
-    })
+    const privateContributions = await discoverPrivateContributions(REPOSITORY_ROOT)
     const freshComposition = summarizePrivateComposition({
       deploymentConfigurationComposition,
       internalRuntimeComposition,
-      privateComposition
+      privateContributions
     })
     if (JSON.stringify(freshComposition) !== JSON.stringify(receiptHandle.receipt.composition)) {
       throw new Error('Stage 4 receipt private composition differs from the gate checkout.')

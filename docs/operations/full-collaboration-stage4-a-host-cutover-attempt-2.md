@@ -102,30 +102,6 @@ evidence. The same U0 profile then restarted against the retained loopback
 candidate and recovered its connected Identity state. No native secret store or
 OpenContent setting was moved or rewritten.
 
-## Fresh read-only state recheck
-
-At `2026-08-26T11:10:50Z`, a new SSH session repeated only read-only Docker,
-filesystem, HTTP/OIDC and PostgreSQL catalog observations. The old Edge, old
-Cloud app and old Cloud database were healthy with zero restarts; the Edge and
-old app still identified revision
-`eaf9925092db2d488fa3dc61ae35ec054c80539a`, and the mounted old Caddyfile still
-hashed to
-`4079cc5e551cef1ba388d701591e8b09b1496d90ff8967db5e3200710f81d3c0`.
-Public Cloud returned 200/200/401 and the frozen issuer plus its authorization,
-token and JWKS endpoints matched exactly.
-
-The retained candidate app still used image
-`sha256:4b59283c4afad5d8a557d8cdc09fa5a12c95c4df2ae63c87e4724e7ebf89fdcf`,
-revision `763cc5a5619cc11cc491e75edb5f04dfb2e4deac`, restart policy `no`, only its
-two candidate networks, and only `127.0.0.1:18789`; both loopback readiness
-probes returned 200. Its database was healthy at schema v14 while the old public
-database remained v5. The candidate root remained root-owned mode `0700`, the
-prepared Caddyfile retained SHA-256
-`05b84b2dc234b7bd5ce127ec859e8740ce70aa0a1239a9dbd50dda2f0b292a9d`, and the
-retained approval marker remained mode `0440`, owner `root:10002`. The candidate
-was not attached to the Edge network. No container, network, restart policy,
-database, Edge file, approval marker or public selection was changed.
-
 ## Next approval boundary
 
 The retained server candidate, database, cutover assets, validators, approval

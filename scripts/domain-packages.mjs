@@ -166,13 +166,8 @@ function renderRuntimeMcp(packages) {
   return `${GENERATED_HEADER}import type { DomainRuntimeMcpServerLauncher } from '@sciforge/domain-sdk/node/runtime-mcp-launcher'\nimport { selectedDomainRuntimeMcpContributionId } from '@sciforge/domain-sdk/node/runtime-mcp-launcher'\n${imports.join('\n')}${imports.length > 0 ? '\n' : ''}\nconst installedDomainRuntimeMcpServerLaunchers: Readonly<Record<string, DomainRuntimeMcpServerLauncher>> = Object.freeze({\n${launchers.join(',\n')}\n})\n\nexport async function runInstalledDomainRuntimeMcpServerFromArgv(\n  argv: string[]\n): Promise<boolean> {\n  const contributionId = selectedDomainRuntimeMcpContributionId(argv)\n  if (contributionId === null) return false\n  const launcher = installedDomainRuntimeMcpServerLaunchers[contributionId]\n  if (!launcher) {\n    throw new Error(\`Installed domain runtime MCP contribution is unavailable: \${contributionId}\`)\n  }\n  await launcher(argv)\n  return true\n}\n`
 }
 
-export async function generateDomainPackageFiles(
-  root,
-  { check = false, parseDefinition } = {}
-) {
-  const packages = await discoverDomainPackages(root, {
-    ...(parseDefinition ? { parseDefinition } : {})
-  })
+export async function generateDomainPackageFiles(root, { check = false } = {}) {
+  const packages = await discoverDomainPackages(root)
   const mainBundlePackageNames = await discoverMainBundlePackageNames(root, packages)
   const generated = renderGeneratedDomainPackageFiles(packages, { mainBundlePackageNames })
   const stale = []

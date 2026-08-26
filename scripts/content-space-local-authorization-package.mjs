@@ -41,9 +41,6 @@ const GENERATED_FILES = Object.freeze([
   'tsconfig.json'
 ])
 
-export const LOCAL_CONTENT_SPACE_AUTHORIZATION_PACKAGE_FILES = GENERATED_FILES
-const verificationPolicyModulePromises = new Map()
-
 export async function generateLocalContentSpaceAuthorizationPackage(options) {
   const repositoryRoot = resolve(options?.repositoryRoot || REPOSITORY_ROOT)
   await requireRealDirectory(repositoryRoot, 'SciForge repository')
@@ -117,28 +114,6 @@ export async function generateLocalContentSpaceAuthorizationPackage(options) {
   } finally {
     if (!complete) await rm(outputDirectory, { recursive: true, force: true })
   }
-}
-
-export function localContentSpaceAuthorizationRuntimeSources() {
-  return Object.freeze({
-    'src/definition.ts': renderDefinitionSource(),
-    'src/main.ts': renderMainSource()
-  })
-}
-
-export async function renderLocalContentSpaceAuthorizationPackageFiles({
-  repositoryRoot,
-  packageId,
-  profiles,
-  sourceRequestSha256
-}) {
-  const packageVersions = await readPackageVersions(resolve(repositoryRoot))
-  return renderAuthorizationPackage({
-    packageId,
-    packageVersions,
-    profiles,
-    sourceRequestSha256
-  }).files
 }
 
 function parseRequest(bytes) {
@@ -388,13 +363,7 @@ async function loadVerificationPolicyModule(repositoryRoot) {
     repositoryRoot,
     'packages/domains/content-space/src/verification-policy.ts'
   )
-  const url = pathToFileURL(path).href
-  let pending = verificationPolicyModulePromises.get(url)
-  if (!pending) {
-    pending = tsImport(url, { parentURL: import.meta.url })
-    verificationPolicyModulePromises.set(url, pending)
-  }
-  const module = await pending
+  const module = await tsImport(pathToFileURL(path).href, { parentURL: import.meta.url })
   if (typeof module.defineContentSpaceVerificationPolicy !== 'function' ||
     typeof module.contentSpaceVerificationProfileSchema?.parse !== 'function') {
     throw new Error('Content Space verification policy contract is unavailable.')

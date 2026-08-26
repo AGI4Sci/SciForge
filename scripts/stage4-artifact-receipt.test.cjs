@@ -19,8 +19,7 @@ const {
 const SOURCE_COMMIT = 'a'.repeat(40)
 const ARTIFACT_NAME = 'SciForge-0.1.0-mac-arm64.zip'
 
-test('private acceptance receipt records only redacted package verification evidence', () => {
-  const privateMarker = 'principal-device-provider-private-marker'
+test('private acceptance composition requires all three generic trust layers', () => {
   const composition = summarizePrivateComposition({
     internalRuntimeComposition: {
       packagedRuntimes: [{
@@ -43,45 +42,30 @@ test('private acceptance receipt records only redacted package verification evid
         size: 64
       }]
     },
-    privateComposition: {
-      privateContributions: [{
-        contractLocation: 'main.content-space-verification-profile',
-        contractSha256: 'd'.repeat(64),
-        id: privateMarker,
-        kind: 'main.extension',
-        packageName: '@example/profile',
-        process: 'main',
-        version: '2.0.0'
-      }],
-      privateDomainPackages: [{
-        packageName: '@example/profile',
-        packageVersion: '1.0.0',
-        provenance: 'external-local-package',
-        sha256: 'e'.repeat(64),
-        verificationStatus: 'verification-profile-verified'
-      }]
-    }
+    privateContributions: [{
+      contractLocation: 'main.content-space-verification-profile',
+      contractSha256: 'd'.repeat(64),
+      id: 'example.profile',
+      kind: 'main.extension',
+      packageName: '@example/profile',
+      process: 'main',
+      version: '2.0.0'
+    }]
   })
-  assert.deepEqual(Object.keys(composition), [
-    'deploymentConfigurations',
-    'internalRuntimes',
-    'privateDomainPackages'
-  ])
-  assert.doesNotMatch(JSON.stringify(composition), new RegExp(privateMarker, 'u'))
   assert.doesNotThrow(() => assertAcceptanceComposition(composition))
   assert.throws(
-    () => assertAcceptanceComposition({ ...composition, privateDomainPackages: [] }),
-    /verified external private domain package/u
+    () => assertAcceptanceComposition({ ...composition, privateContributions: [] }),
+    /Content Space verification-profile contribution/u
   )
   assert.throws(
     () => assertAcceptanceComposition({
       ...composition,
-      privateDomainPackages: composition.privateDomainPackages.map((entry) => ({
-        ...entry,
-        verificationStatus: 'verified'
+      privateContributions: composition.privateContributions.map((contribution) => ({
+        ...contribution,
+        contractLocation: 'main.unrelated-private-contribution'
       }))
     }),
-    /verified external private domain package/u
+    /Content Space verification-profile contribution/u
   )
   assert.throws(
     () => assertAcceptanceComposition({ ...composition, internalRuntimes: [] }),
@@ -189,7 +173,7 @@ function sourceIdentity() {
 
 function receiptFixture({ artifactSha256, artifactSize, source }) {
   return {
-    contractVersion: 2,
+    contractVersion: 1,
     kind: 'sciforge-stage4-artifact-receipt',
     source,
     build: {
@@ -226,12 +210,14 @@ function receiptFixture({ artifactSha256, artifactSize, source }) {
           packagedResourcesPath: 'runtime/assets'
         }]
       }],
-      privateDomainPackages: [{
+      privateContributions: [{
+        contractLocation: 'main.content-space-verification-profile',
+        contractSha256: 'd'.repeat(64),
+        id: 'example.profile',
+        kind: 'main.extension',
         packageName: '@example/profile',
-        packageVersion: '1.0.0',
-        provenance: 'external-local-package',
-        sha256: 'e'.repeat(64),
-        verificationStatus: 'verification-profile-verified'
+        process: 'main',
+        version: '2.0.0'
       }]
     },
     artifacts: [{

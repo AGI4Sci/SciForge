@@ -142,26 +142,21 @@ Coordinator 与 Worker 必须使用各自 Desktop 当前配置的真实 AgentRun
 
 ```bash
 npm run architecture-principles:test
-npm run stage4:artifact:mac:arm64 -- \
-  --private-domain-package '/secure/path/reviewed-verification-profile-package'
+npm run stage4:artifact:mac:arm64
 npm run architecture-principles:gate -- \
   --packed-artifact dist/stage4-<commit>-mac-arm64/SciForge-<version>-mac-arm64.zip \
   --artifact-receipt dist/stage4-<commit>-mac-arm64/stage4-artifact-mac-arm64.json \
-  --packaged-executable-locator SciForge.app/Contents/MacOS/SciForge \
-  --private-domain-package '/secure/path/reviewed-verification-profile-package'
+  --packaged-executable-locator SciForge.app/Contents/MacOS/SciForge
 ```
 
 正式运行要求 clean exact commit 与同 commit 的 `origin` 远端分支、该提交的
 source `out/`、build-issued Stage 4 private acceptance artifact/receipt 和 archive 内
 executable locator。Stage 4 构建在 after-pack 后重新核对三项通用私有 composition：
 receipted internal runtime、`publicRelease: forbidden` deployment configuration，以及
-通过仓库外绝对路径显式输入、经标准 manifest/generated composition 纳入的 main-only
-verification-profile domain package。缺少任一项都拒绝
+经过评审的 `publicRelease: forbidden` trusted domain contribution。缺少任一项都拒绝
 签发收据；不能以公共发布包、仅附件包或运行时/Renderer 输入替代静态 verification
-profile。builder 只在本次 `0700` 临时 workspace 中 staging 外部 package，不修改或隐藏源码
-worktree。该门禁从 receipt 持有的 artifact bytes 解包并运行 packaged executable，并从显式
-外部路径重新校验 package bytes/有效期后复核脱敏 private composition，且要求 app.asar 内嵌
-同一 source commit；缺少任一输入、任一路径
+profile。该门禁从 receipt 持有的 artifact bytes 解包并运行 packaged executable，逐字节
+复核 private composition，且要求 app.asar 内嵌同一 source commit；缺少任一输入、任一路径
 为 `not_run`、工作树/remote/commit 在运行中变化，整体都为 `failed`，不得准备 upstream PR。
 
 ### Secret boundary gate

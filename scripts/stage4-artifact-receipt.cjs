@@ -6,18 +6,20 @@ const {
   fstatSync,
   lstatSync,
   openSync,
-  realpathSync,
   readFileSync,
   readSync,
   writeFileSync
 } = require('node:fs')
 const { release } = require('node:os')
-const { basename, dirname, isAbsolute, resolve } = require('node:path')
+const { basename, dirname, resolve } = require('node:path')
 const { pathToFileURL } = require('node:url')
 
-const CONTRACT_VERSION = 2
+const CONTRACT_VERSION = 1
 const RECEIPT_KIND = 'sciforge-stage4-artifact-receipt'
 const BUILD_IDENTITY_KIND = 'sciforge-stage4-acceptance'
+const CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION =
+  'main.content-space-verification-profile'
+const CONTENT_SPACE_VERIFICATION_PROFILE_VERSION = '2.0.0'
 const SOURCE_COMMIT_PATTERN = /^[a-f0-9]{40}$/u
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u
 const MAX_RECEIPT_BYTES = 1024 * 1024
@@ -49,8 +51,7 @@ function readConfiguredStage4BuildIdentity(projectRoot, environment = process.en
     environment.SCIFORGE_STAGE4_SOURCE_COMMIT,
     'SCIFORGE_STAGE4_SOURCE_COMMIT'
   )
-  const sourceRoot = configuredStage4SourceRoot(projectRoot, environment)
-  const checkoutCommit = gitText(sourceRoot, ['rev-parse', 'HEAD'])
+  const checkoutCommit = gitText(projectRoot, ['rev-parse', 'HEAD'])
   if (sourceCommit !== checkoutCommit) {
     throw new Error('[stage4-artifact] Configured source commit does not match the checkout.')
   }
@@ -71,7 +72,6 @@ function createStage4ArtifactHooks({
     throw new TypeError('[stage4-artifact] Canonical afterPack hook is required.')
   }
   const absoluteProjectRoot = resolve(projectRoot)
-  const sourceRoot = configuredStage4SourceRoot(absoluteProjectRoot)
   const capturedInternalComposition = canonicalJson(internalRuntimeComposition)
   const capturedDeploymentComposition = canonicalJson(deploymentConfigurationComposition)
   let verifiedAfterPackCount = 0
@@ -93,7 +93,7 @@ function createStage4ArtifactHooks({
       throw new TypeError('[stage4-artifact] Electron Builder artifact result is invalid.')
     }
 
-    const source = readExactSourceState(sourceRoot, true)
+    const source = readExactSourceState(absoluteProjectRoot, true)
     if (source.commit !== identity.sourceCommit) {
       throw new Error('[stage4-artifact] Source state changed before receipt issuance.')
     }
@@ -119,11 +119,11 @@ function createStage4ArtifactHooks({
       canonicalJson(freshDeploymentComposition) !== capturedDeploymentComposition) {
       throw new Error('[stage4-artifact] Private composition drifted during packaging.')
     }
-    const privateComposition = await discoverPrivateComposition(absoluteProjectRoot)
+    const privateContributions = await discoverPrivateContributions(absoluteProjectRoot)
     const composition = summarizePrivateComposition({
       deploymentConfigurationComposition: freshDeploymentComposition,
       internalRuntimeComposition: freshInternalComposition,
-      privateComposition
+      privateContributions
     })
     assertAcceptanceComposition(composition)
 
@@ -187,21 +187,6 @@ function createStage4ArtifactHooks({
   }
 
   return Object.freeze({ afterPack: wrappedAfterPack, afterAllArtifactBuild })
-}
-
-function configuredStage4SourceRoot(projectRoot, environment = process.env) {
-  const absoluteProjectRoot = resolve(projectRoot)
-  const configured = environment.SCIFORGE_STAGE4_SOURCE_ROOT
-  if (configured === undefined) return absoluteProjectRoot
-  if (environment.SCIFORGE_STAGE4_ACCEPTANCE !== '1' ||
-    typeof configured !== 'string' || !isAbsolute(configured)) {
-    throw new Error('[stage4-artifact] Stage 4 source root must be an absolute acceptance path.')
-  }
-  const absolute = resolve(configured)
-  if (realpathSync(absolute) !== absolute) {
-    throw new Error('[stage4-artifact] Stage 4 source root must be a canonical real directory.')
-  }
-  return absolute
 }
 
 function stage4ArtifactReceiptPath(distDir, platform, architecture) {
@@ -291,7 +276,7 @@ function verifyStage4ArtifactReceipt({ artifactPath, receiptPath, source }) {
 function summarizePrivateComposition({
   deploymentConfigurationComposition,
   internalRuntimeComposition,
-  privateComposition
+  privateContributions
 }) {
   const internalRuntimes = internalRuntimeComposition.packagedRuntimes.map((runtime) => ({
     packageName: runtime.packageName,
@@ -312,49 +297,74 @@ function summarizePrivateComposition({
   return deepFreeze({
     deploymentConfigurations,
     internalRuntimes,
-    privateDomainPackages: [...privateComposition.privateDomainPackages].sort(
-      comparePackageName
+    privateContributions: [...privateContributions].sort((left, right) =>
+      `${left.packageName}:${left.id}`.localeCompare(`${right.packageName}:${right.id}`)
     )
   })
 }
 
-async function discoverPrivateComposition(projectRoot, now = new Date()) {
+async function discoverPrivateContributions(projectRoot) {
   const moduleUrl = pathToFileURL(resolve(__dirname, 'domain-packages.mjs')).href
   const { discoverDomainPackages } = await import(moduleUrl)
   const packages = await discoverDomainPackages(projectRoot)
   const contributions = []
-  const privateDomainPackages = []
+  let verificationProfileSchema
   for (const candidate of packages) {
     if (candidate.definition?.composition !== 'production') continue
-    const forbiddenContributions = candidate.definition.entrypoints.flatMap((entrypoint) =>
-      entrypoint.contributions.filter((contribution) =>
-        contribution.publicRelease === 'forbidden'
-      )
-    )
-    if (forbiddenContributions.length === 0) continue
-    const privatePackageModuleUrl = pathToFileURL(
-      resolve(__dirname, 'stage4-private-domain-package.mjs')
-    ).href
-    const { verifyStage4PrivateDomainPackage } = await import(privatePackageModuleUrl)
-    const verified = await verifyStage4PrivateDomainPackage({
-      repositoryRoot: projectRoot,
-      packagePath: candidate.packageRoot,
-      now
-    })
-    privateDomainPackages.push(verified.privateDomainPackage)
-    contributions.push(...verified.privateContributions)
+    for (const entrypoint of candidate.definition.entrypoints || []) {
+      for (const contribution of entrypoint.contributions || []) {
+        if (contribution.publicRelease !== 'forbidden') continue
+        const contract = candidate.definition.contributionContracts?.[contribution.id]
+        const contractLocation = isRecord(contract) && typeof contract.location === 'string'
+          ? contract.location
+          : null
+        if (contractLocation === CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION) {
+          verificationProfileSchema ??= await loadContentSpaceVerificationProfileSchema(
+            projectRoot
+          )
+          const parsed = verificationProfileSchema.safeParse(contract)
+          if (!parsed.success) {
+            throw new Error(
+              `[stage4-artifact] Private verification profile ${contribution.id} is invalid.`
+            )
+          }
+        }
+        contributions.push(Object.freeze({
+          contractLocation,
+          contractSha256: sha256(canonicalJson(contract)),
+          id: contribution.id,
+          kind: contribution.kind,
+          packageName: candidate.definition.packageName,
+          process: entrypoint.process,
+          version: contribution.version ?? null
+        }))
+      }
+    }
   }
-  return deepFreeze({
-    privateContributions: contributions,
-    privateDomainPackages
+  return Object.freeze(contributions)
+}
+
+async function loadContentSpaceVerificationProfileSchema(projectRoot) {
+  const { tsImport } = await import('tsx/esm/api')
+  const modulePath = resolve(
+    projectRoot,
+    'packages/domains/content-space/src/verification-policy.ts'
+  )
+  const module = await tsImport(pathToFileURL(modulePath).href, {
+    parentURL: pathToFileURL(__filename).href
   })
+  const schema = module.contentSpaceVerificationProfileContributionSchema
+  if (!schema || typeof schema.safeParse !== 'function') {
+    throw new Error('[stage4-artifact] Content Space verification profile schema is unavailable.')
+  }
+  return schema
 }
 
 function assertAcceptanceComposition(composition) {
   requireRecord(composition, 'composition')
   if (!Array.isArray(composition.internalRuntimes) ||
     !Array.isArray(composition.deploymentConfigurations) ||
-    !Array.isArray(composition.privateDomainPackages)) {
+    !Array.isArray(composition.privateContributions)) {
     throw new Error('[stage4-artifact] Private composition inventories are required.')
   }
   if (composition.internalRuntimes.length === 0) {
@@ -366,13 +376,13 @@ function assertAcceptanceComposition(composition) {
       '[stage4-artifact] Stage 4 acceptance requires an active private deployment configuration.'
     )
   }
-  const verifiedPrivatePackages = new Set(composition.privateDomainPackages
-    .filter((entry) => entry?.verificationStatus === 'verification-profile-verified' &&
-      entry?.provenance === 'external-local-package')
-    .map((entry) => entry.packageName))
-  if (verifiedPrivatePackages.size === 0) {
+  if (!composition.privateContributions.some((contribution) =>
+    contribution.contractLocation === CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION &&
+    contribution.kind === 'main.extension' && contribution.process === 'main' &&
+    contribution.version === CONTENT_SPACE_VERIFICATION_PROFILE_VERSION)) {
     throw new Error(
-      '[stage4-artifact] Stage 4 acceptance requires a verified external private domain package.'
+      '[stage4-artifact] Stage 4 acceptance requires a reviewed private ' +
+      'Content Space verification-profile contribution.'
     )
   }
 }
@@ -493,16 +503,12 @@ function validateComposition(composition) {
   requireRecord(composition, 'composition')
   assertExactKeys(
     composition,
-    [
-      'deploymentConfigurations',
-      'internalRuntimes',
-      'privateDomainPackages'
-    ],
+    ['deploymentConfigurations', 'internalRuntimes', 'privateContributions'],
     'composition'
   )
   if (!Array.isArray(composition.internalRuntimes) ||
     !Array.isArray(composition.deploymentConfigurations) ||
-    !Array.isArray(composition.privateDomainPackages)) {
+    !Array.isArray(composition.privateContributions)) {
     throw new Error('[stage4-artifact] Receipt composition inventories are invalid.')
   }
   for (const runtime of composition.internalRuntimes) {
@@ -553,25 +559,29 @@ function validateComposition(composition) {
       throw new Error('[stage4-artifact] Receipt deployment configuration is invalid.')
     }
   }
-  for (const privatePackage of composition.privateDomainPackages) {
-    requireRecord(privatePackage, 'private domain package')
+  for (const contribution of composition.privateContributions) {
+    requireRecord(contribution, 'private contribution')
     assertExactKeys(
-      privatePackage,
+      contribution,
       [
+        'contractLocation',
+        'contractSha256',
+        'id',
+        'kind',
         'packageName',
-        'packageVersion',
-        'provenance',
-        'sha256',
-        'verificationStatus'
+        'process',
+        'version'
       ],
-      'private domain package'
+      'private contribution'
     )
-    if (typeof privatePackage.packageName !== 'string' || !privatePackage.packageName ||
-      typeof privatePackage.packageVersion !== 'string' || !privatePackage.packageVersion ||
-      privatePackage.provenance !== 'external-local-package' ||
-      privatePackage.verificationStatus !== 'verification-profile-verified' ||
-      !SHA256_PATTERN.test(privatePackage.sha256)) {
-      throw new Error('[stage4-artifact] Receipt private domain package is invalid.')
+    if (![contribution.id, contribution.kind, contribution.packageName, contribution.process]
+      .every((entry) => typeof entry === 'string' && Boolean(entry)) ||
+      !(contribution.contractLocation === null ||
+        (typeof contribution.contractLocation === 'string' && contribution.contractLocation)) ||
+      !(contribution.version === null ||
+        (typeof contribution.version === 'string' && contribution.version)) ||
+      !SHA256_PATTERN.test(contribution.contractSha256)) {
+      throw new Error('[stage4-artifact] Receipt private contribution is invalid.')
     }
   }
 }
@@ -581,21 +591,7 @@ function readExactSourceState(projectRoot, requireClean) {
   const commit = gitText(projectRoot, ['rev-parse', 'HEAD'])
   const origin = gitText(projectRoot, ['remote', 'get-url', 'origin'])
   const remoteRef = `origin/${branch}`
-  const remoteHeadLines = gitText(projectRoot, [
-    'ls-remote',
-    '--heads',
-    'origin',
-    branch
-  ]).split('\n').filter(Boolean)
-  const expectedRemoteHead = `refs/heads/${branch}`
-  if (remoteHeadLines.length !== 1) {
-    throw new Error('[stage4-artifact] Exact remote branch head is unavailable.')
-  }
-  const [remoteCommit, remoteHead, ...unexpected] = remoteHeadLines[0].split(/\s+/u)
-  if (unexpected.length > 0 || remoteHead !== expectedRemoteHead ||
-    !SOURCE_COMMIT_PATTERN.test(remoteCommit)) {
-    throw new Error('[stage4-artifact] Exact remote branch head is invalid.')
-  }
+  const remoteCommit = gitText(projectRoot, ['rev-parse', remoteRef])
   const status = gitText(projectRoot, ['status', '--porcelain=v1', '--untracked-files=all'])
   const source = Object.freeze({
     branch,
@@ -739,7 +735,7 @@ module.exports = {
   assertAcceptanceComposition,
   canonicalBuildCommand,
   createStage4ArtifactHooks,
-  discoverPrivateComposition,
+  discoverPrivateContributions,
   readConfiguredStage4BuildIdentity,
   readExactSourceState,
   readStage4ArtifactReceipt,
