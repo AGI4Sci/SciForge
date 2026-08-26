@@ -19,9 +19,9 @@ const PROVIDER_PACKAGE_PATH =
   'packages/domains/opencontent-connector/package.json'
 const LEGACY_PRIVATE_PROVIDER_PATH =
   '.sciforge/private/deployments/opencontent-connector.json'
-const REQUIRED_BUILD_PATHS = Object.freeze([
+export const REQUIRED_RUN0_BUILD_PATHS = Object.freeze([
   'out/main/index.js',
-  'out/preload/index.js',
+  'out/preload/index.cjs',
   'out/renderer/index.html'
 ])
 
@@ -171,7 +171,7 @@ async function verifyRepository(expectedCommit) {
 }
 
 async function verifyBuildAndProvider() {
-  for (const path of REQUIRED_BUILD_PATHS) {
+  for (const path of REQUIRED_RUN0_BUILD_PATHS) {
     if (!await pathExists(path)) {
       throw new Error(`Missing source build output ${path}; run npm ci and npm run build.`)
     }
@@ -198,7 +198,7 @@ async function verifyBuildAndProvider() {
     )
   }
   return Object.freeze({
-    buildOutputs: REQUIRED_BUILD_PATHS.length,
+    buildOutputs: REQUIRED_RUN0_BUILD_PATHS.length,
     providerInstanceRef: provider.providerInstanceRef,
     providerOrigin: provider.origin,
     privateSkillRequired: false

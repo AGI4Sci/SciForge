@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  REQUIRED_RUN0_BUILD_PATHS,
   assertRun0CandidateContract,
   assertSupportedNodeVersion,
   githubRepositorySlug,
@@ -10,6 +11,14 @@ import {
 } from './run0-source-participant.mjs'
 
 const COMMIT = 'a'.repeat(40)
+
+test('checks the canonical Electron source build outputs', () => {
+  assert.deepEqual(REQUIRED_RUN0_BUILD_PATHS, [
+    'out/main/index.js',
+    'out/preload/index.cjs',
+    'out/renderer/index.html'
+  ])
+})
 
 test('parses the frozen five-person check and launch inputs', () => {
   assert.deepEqual(parseRun0ParticipantOptions([
