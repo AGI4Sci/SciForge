@@ -108,6 +108,52 @@ ALTER TABLE sciforge_collaboration.projects
   ADD COLUMN execution_authority_epoch bigint,
   ADD COLUMN content_owner_user_id text;
 
+-- Historical public-v5/staging-v9 data could retain a nonterminal Project
+-- whose Coordinator Agent belonged to another User. The final contract never
+-- authorizes that shape. Fence its outstanding work and make the Project
+-- terminal instead of guessing a replacement Agent or transferring authority.
+WITH unsafe_projects AS (
+  SELECT project.project_id
+  FROM sciforge_collaboration.projects AS project
+  JOIN sciforge_collaboration.agent_nodes AS coordinator
+    ON coordinator.agent_id = project.coordinator_agent_id
+  WHERE project.status IN ('active', 'paused')
+    AND coordinator.owner_user_id <> project.owner_user_id
+)
+UPDATE sciforge_collaboration.tasks AS task
+SET status = 'cancelled',
+    completed_at = COALESCE(task.completed_at, CURRENT_TIMESTAMP),
+    revision = task.revision + 1,
+    updated_at = CURRENT_TIMESTAMP
+FROM unsafe_projects AS project
+WHERE task.project_id = project.project_id
+  AND task.status IN ('offered', 'accepted', 'in_progress', 'needs_human');
+
+WITH unsafe_projects AS (
+  SELECT project.project_id
+  FROM sciforge_collaboration.projects AS project
+  JOIN sciforge_collaboration.agent_nodes AS coordinator
+    ON coordinator.agent_id = project.coordinator_agent_id
+  WHERE project.status IN ('active', 'paused')
+    AND coordinator.owner_user_id <> project.owner_user_id
+)
+UPDATE sciforge_collaboration.human_requests AS request
+SET status = 'cancelled',
+    revision = request.revision + 1,
+    updated_at = CURRENT_TIMESTAMP
+FROM unsafe_projects AS project
+WHERE request.project_id = project.project_id
+  AND request.status = 'pending';
+
+UPDATE sciforge_collaboration.projects AS project
+SET status = 'cancelled',
+    revision = project.revision + 1,
+    updated_at = CURRENT_TIMESTAMP
+FROM sciforge_collaboration.agent_nodes AS coordinator
+WHERE coordinator.agent_id = project.coordinator_agent_id
+  AND project.status IN ('active', 'paused')
+  AND coordinator.owner_user_id <> project.owner_user_id;
+
 UPDATE sciforge_collaboration.projects AS project
 SET status = CASE WHEN project.status = 'failed' THEN 'cancelled' ELSE project.status END,
     content_mode = CASE WHEN EXISTS (
@@ -848,17 +894,26 @@ ALTER TABLE sciforge_collaboration.task_resource_refs
   ADD CONSTRAINT task_resource_refs_execution_fk FOREIGN KEY (execution_id)
     REFERENCES sciforge_collaboration.task_executions(execution_id);
 
--- HumanNeeded is one contract with two exact scopes. Existing v12 requests are
--- all execution-bound; Coordinator-Project requests are introduced only after
--- this migration and deliberately carry no synthetic Task/execution identity.
+-- HumanNeeded is one contract with two exact scopes. Historical
+-- public-v5/staging-v9 Coordinator requests already carry no Task/execution;
+-- preserve that meaning rather than inventing an execution identity.
 ALTER TABLE sciforge_collaboration.human_requests
   ADD COLUMN request_scope text,
   ADD COLUMN coordinator_authority_epoch bigint,
   ALTER COLUMN task_id DROP NOT NULL,
   ALTER COLUMN execution_id DROP NOT NULL;
 
-UPDATE sciforge_collaboration.human_requests
-SET request_scope = 'worker_execution';
+UPDATE sciforge_collaboration.human_requests AS request
+SET request_scope = CASE
+      WHEN request.task_id IS NULL THEN 'coordinator_project'
+      ELSE 'worker_execution'
+    END,
+    coordinator_authority_epoch = CASE
+      WHEN request.task_id IS NULL THEN project.coordinator_authority_epoch
+      ELSE NULL
+    END
+FROM sciforge_collaboration.projects AS project
+WHERE project.project_id = request.project_id;
 
 ALTER TABLE sciforge_collaboration.human_requests
   ALTER COLUMN request_scope SET NOT NULL,
@@ -876,8 +931,11 @@ ALTER TABLE sciforge_collaboration.human_answers
   ALTER COLUMN task_id DROP NOT NULL,
   ALTER COLUMN execution_id DROP NOT NULL;
 
-UPDATE sciforge_collaboration.human_answers
-SET request_scope = 'worker_execution';
+UPDATE sciforge_collaboration.human_answers AS answer
+SET request_scope = request.request_scope,
+    coordinator_authority_epoch = request.coordinator_authority_epoch
+FROM sciforge_collaboration.human_requests AS request
+WHERE request.human_request_id = answer.human_request_id;
 
 ALTER TABLE sciforge_collaboration.human_answers
   ALTER COLUMN request_scope SET NOT NULL,

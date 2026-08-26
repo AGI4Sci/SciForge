@@ -54,6 +54,67 @@ describe.skipIf(connectionString === undefined).sequential(
       }
     })
 
+    it('preserves public-v5 Project-scoped HumanNeeded and fences an unsafe Coordinator', async () => {
+      assertSafeStage3Database(connectionString!)
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
+      try {
+        await installRoute(pool, 'public-v5')
+        await seedHistoricalProjectScopedRequests(pool)
+
+        await runCollaborationMigrations(pool)
+
+        const projects = await pool.query(
+          `SELECT project_id,status,revision::text AS revision
+           FROM sciforge_collaboration.projects
+           WHERE project_id IN ('prj_stage3_scope_safe','prj_stage3_scope_unsafe')
+           ORDER BY project_id`
+        )
+        expect(projects.rows).toEqual([
+          { project_id: 'prj_stage3_scope_safe', status: 'paused', revision: '1' },
+          { project_id: 'prj_stage3_scope_unsafe', status: 'cancelled', revision: '2' }
+        ])
+
+        const requests = await pool.query(
+          `SELECT human_request_id,status,request_scope,task_id,execution_id,
+                  coordinator_authority_epoch::text AS coordinator_authority_epoch,
+                  revision::text AS revision
+           FROM sciforge_collaboration.human_requests
+           WHERE human_request_id IN ('hrq_stage3_scope_safe','hrq_stage3_scope_unsafe')
+           ORDER BY human_request_id`
+        )
+        expect(requests.rows).toEqual([
+          {
+            human_request_id: 'hrq_stage3_scope_safe', status: 'answered',
+            request_scope: 'coordinator_project', task_id: null, execution_id: null,
+            coordinator_authority_epoch: '1', revision: '1'
+          },
+          {
+            human_request_id: 'hrq_stage3_scope_unsafe', status: 'cancelled',
+            request_scope: 'coordinator_project', task_id: null, execution_id: null,
+            coordinator_authority_epoch: '1', revision: '2'
+          }
+        ])
+
+        const answers = await pool.query(
+          `SELECT human_answer_id,request_scope,task_id,execution_id,
+                  coordinator_authority_epoch::text AS coordinator_authority_epoch
+           FROM sciforge_collaboration.human_answers
+           WHERE human_answer_id = 'han_stage3_scope_safe'`
+        )
+        expect(answers.rows).toEqual([{
+          human_answer_id: 'han_stage3_scope_safe', request_scope: 'coordinator_project',
+          task_id: null, execution_id: null, coordinator_authority_epoch: '1'
+        }])
+        await expect(isCollaborationDatabaseReady(pool)).resolves.toBe(true)
+
+        const beforeRestart = await migrationRestartSnapshot(pool)
+        await runCollaborationMigrations(pool)
+        expect(await migrationRestartSnapshot(pool)).toEqual(beforeRestart)
+      } finally {
+        await pool.end()
+      }
+    })
+
     it('rejects unknown source drift before applying any forward migration', async () => {
       assertSafeStage3Database(connectionString!)
       const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
@@ -320,6 +381,95 @@ async function installRoute(pool: SqlPool, route: CollaborationSchemaRoute): Pro
   for (const name of FORWARD_MIGRATIONS.slice(0, forwardCount)) {
     await pool.query(await migrationSource(name))
   }
+}
+
+async function seedHistoricalProjectScopedRequests(pool: SqlPool): Promise<void> {
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.user_principals
+       (user_id,display_name,status,revision,created_at,updated_at)
+     VALUES
+       ('usr_stage3_scope_owner','Scope owner','active',1,
+        '2026-08-26T00:00:00Z','2026-08-26T00:00:00Z'),
+       ('usr_stage3_scope_other','Scope other','active',1,
+        '2026-08-26T00:00:00Z','2026-08-26T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.devices
+       (device_id,user_id,installation_id,display_name,platform,public_key_jwk,
+        capability_summary,status,revision,created_at,updated_at)
+     VALUES
+       ('dev_stage3_scope_owner','usr_stage3_scope_owner','ins_stage3_scope_owner',
+        'Scope owner device','{"os":"linux","arch":"x64","appVersion":"test"}'::jsonb,
+        jsonb_build_object('kty','OKP','crv','Ed25519','alg','EdDSA','use','sig',
+          'kid','stage3-scope-owner','x',repeat('a',43)),
+        '[]'::jsonb,'active',1,'2026-08-26T00:00:00Z','2026-08-26T00:00:00Z'),
+       ('dev_stage3_scope_other','usr_stage3_scope_other','ins_stage3_scope_other',
+        'Scope other device','{"os":"linux","arch":"x64","appVersion":"test"}'::jsonb,
+        jsonb_build_object('kty','OKP','crv','Ed25519','alg','EdDSA','use','sig',
+          'kid','stage3-scope-other','x',repeat('b',43)),
+        '[]'::jsonb,'active',1,'2026-08-26T00:00:00Z','2026-08-26T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.agent_nodes
+       (agent_id,installation_id,device_id,owner_user_id,display_name,node_type,capabilities,
+        status,connection_status,credential_generation,revision,updated_at)
+     VALUES
+       ('agn_stage3_scope_owner',NULL,'dev_stage3_scope_owner','usr_stage3_scope_owner',
+        'Scope owner Agent','desktop','[]'::jsonb,'active','online',1,1,
+        '2026-08-26T00:00:00Z'),
+       ('agn_stage3_scope_other',NULL,'dev_stage3_scope_other','usr_stage3_scope_other',
+        'Scope other Agent','desktop','[]'::jsonb,'active','online',1,1,
+        '2026-08-26T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.human_endpoint_bindings
+       (human_endpoint_id,user_id,provider,realm_id,provider_user_id,display_name,assurance,
+        status,revision,verified_at,updated_at,created_at)
+     VALUES ('hep_stage3_scope_owner','usr_stage3_scope_owner','test','stage3-scope',
+       'owner','Scope owner','verified','active',1,'2026-08-26T00:00:00Z',
+       '2026-08-26T00:00:00Z','2026-08-26T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.projects
+       (project_id,owner_user_id,display_name,goal,status,coordinator_agent_id,max_tasks,
+        max_tasks_per_round,max_task_retries,max_coordination_rounds,coordination_round,
+        revision,created_at,updated_at)
+     VALUES
+       ('prj_stage3_scope_safe','usr_stage3_scope_owner','Safe scope project',
+        'Preserve a Project-scoped answer','paused','agn_stage3_scope_owner',10,5,2,4,1,1,
+        '2026-08-26T00:00:00Z','2026-08-26T00:00:00Z'),
+       ('prj_stage3_scope_unsafe','usr_stage3_scope_owner','Unsafe scope project',
+        'Fence a Coordinator ownership mismatch','paused','agn_stage3_scope_other',10,5,2,4,1,1,
+        '2026-08-26T00:00:00Z','2026-08-26T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.project_members
+       (project_id,user_id,role,active,created_at)
+     VALUES
+       ('prj_stage3_scope_safe','usr_stage3_scope_owner','owner',true,
+        '2026-08-26T00:00:00Z'),
+       ('prj_stage3_scope_unsafe','usr_stage3_scope_owner','owner',true,
+        '2026-08-26T00:00:00Z'),
+       ('prj_stage3_scope_unsafe','usr_stage3_scope_other','member',true,
+        '2026-08-26T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.human_requests
+       (human_request_id,project_id,task_id,target_user_id,requested_by_agent_id,
+        required_assurance,prompt,status,revision,expires_at,created_at,updated_at,
+        source_kind,execution_id,source_inbox_message_id,confirmable_action)
+     VALUES
+       ('hrq_stage3_scope_safe','prj_stage3_scope_safe',NULL,'usr_stage3_scope_owner',
+        'agn_stage3_scope_owner','verified','Preserve this answer.','answered',1,
+        '2026-08-27T00:00:00Z','2026-08-26T00:00:00Z','2026-08-26T00:00:00Z',
+        'coordinator',NULL,'inb_stage3_scope_safe',NULL),
+       ('hrq_stage3_scope_unsafe','prj_stage3_scope_unsafe',NULL,'usr_stage3_scope_owner',
+        'agn_stage3_scope_other','verified','This request must be fenced.','pending',1,
+        '2026-08-27T00:00:00Z','2026-08-26T00:00:00Z','2026-08-26T00:00:00Z',
+        'coordinator',NULL,'inb_stage3_scope_unsafe',NULL);
+
+     INSERT INTO sciforge_collaboration.human_answers
+       (human_answer_id,human_request_id,project_id,task_id,request_revision,answered_by_user_id,
+        answered_from_human_endpoint_id,assurance,answer,revision,answered_at,created_at,updated_at,
+        execution_id,decision,confirmation_id)
+     VALUES ('han_stage3_scope_safe','hrq_stage3_scope_safe','prj_stage3_scope_safe',NULL,1,
+       'usr_stage3_scope_owner','hep_stage3_scope_owner','verified','Preserved answer.',1,
+       '2026-08-26T00:10:00Z','2026-08-26T00:10:00Z','2026-08-26T00:10:00Z',NULL,NULL,NULL)`
+  )
 }
 
 function expectedCurrentCatalog(route: CollaborationSchemaRoute): string {

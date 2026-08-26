@@ -280,8 +280,19 @@ WHERE request.task_id = task.task_id AND request.execution_id IS NULL;
 DO $$
 BEGIN
   IF EXISTS (
-    SELECT 1 FROM sciforge_collaboration.human_requests
-    WHERE task_id IS NULL OR execution_id IS NULL
+    SELECT 1
+    FROM sciforge_collaboration.human_requests AS request
+    LEFT JOIN sciforge_collaboration.tasks AS task
+      ON task.task_id = request.task_id
+    WHERE (request.task_id IS NULL) <> (request.execution_id IS NULL)
+      OR (
+        request.task_id IS NOT NULL
+        AND (
+          task.task_id IS NULL
+          OR task.project_id IS DISTINCT FROM request.project_id
+          OR task.execution_id IS DISTINCT FROM request.execution_id
+        )
+      )
   ) THEN
     RAISE EXCEPTION USING
       ERRCODE = 'P0001',
@@ -291,9 +302,25 @@ END
 $$;
 
 ALTER TABLE sciforge_collaboration.human_requests
-  ALTER COLUMN task_id SET NOT NULL,
-  ALTER COLUMN execution_id SET NOT NULL,
   DROP CONSTRAINT IF EXISTS human_requests_confirmable_action_shape;
+
+-- The public-v5/staging-v9 coordination contract has an explicit source_kind
+-- and permits Coordinator-Project requests with no Task. The common v4/v11
+-- lineage has no such column and keeps its published NOT NULL catalog shape.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'sciforge_collaboration'
+      AND table_name = 'human_requests'
+      AND column_name = 'source_kind'
+  ) THEN
+    ALTER TABLE sciforge_collaboration.human_requests
+      ALTER COLUMN task_id SET NOT NULL,
+      ALTER COLUMN execution_id SET NOT NULL;
+  END IF;
+END
+$$;
 
 ALTER TABLE sciforge_collaboration.human_requests
   ADD CONSTRAINT human_requests_confirmable_action_shape CHECK (
@@ -325,12 +352,44 @@ UPDATE sciforge_collaboration.human_answers
 SET confirmation_id = 'cfm_' || substr(md5(human_answer_id || ':a-schema-11'), 1, 24)
 WHERE decision IS NOT NULL AND confirmation_id IS NULL;
 
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM sciforge_collaboration.human_answers AS answer
+    LEFT JOIN sciforge_collaboration.human_requests AS request
+      ON request.human_request_id = answer.human_request_id
+    WHERE request.human_request_id IS NULL
+      OR answer.project_id IS DISTINCT FROM request.project_id
+      OR answer.task_id IS DISTINCT FROM request.task_id
+      OR answer.execution_id IS DISTINCT FROM request.execution_id
+  ) THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'P0001',
+      MESSAGE = 'migration_0011_unfenced_human_answer';
+  END IF;
+END
+$$;
+
 ALTER TABLE sciforge_collaboration.human_answers
-  ALTER COLUMN task_id SET NOT NULL,
-  ALTER COLUMN execution_id SET NOT NULL,
   ALTER COLUMN answered_from_human_endpoint_id DROP NOT NULL,
   DROP CONSTRAINT IF EXISTS human_answers_source_xor,
   DROP CONSTRAINT IF EXISTS human_answers_decision_confirmation_consistent;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'sciforge_collaboration'
+      AND table_name = 'human_requests'
+      AND column_name = 'source_kind'
+  ) THEN
+    ALTER TABLE sciforge_collaboration.human_answers
+      ALTER COLUMN task_id SET NOT NULL,
+      ALTER COLUMN execution_id SET NOT NULL;
+  END IF;
+END
+$$;
 
 ALTER TABLE sciforge_collaboration.human_answers
   ADD CONSTRAINT human_answers_source_xor CHECK (

@@ -291,6 +291,30 @@ describe('collaboration forward-only migration lineage', () => {
     expect(migration).toContain('project_records_source_human_answer_unique')
   })
 
+  it('preserves historical Project-scoped HumanNeeded without inventing an execution', async () => {
+    const migration11 = await migrationSource('0011_a_content_space_execution_identity.sql')
+    const migration13 = await migrationSource('0013_full_multi_user_loop.sql')
+
+    expect(migration11).toContain(
+      '(request.task_id IS NULL) <> (request.execution_id IS NULL)'
+    )
+    expect(migration11).toContain(
+      'answer.execution_id IS DISTINCT FROM request.execution_id'
+    )
+    expect(migration11).toContain("column_name = 'source_kind'")
+    expect(migration11).toContain('ALTER COLUMN task_id SET NOT NULL')
+    expect(migration11).toContain('ALTER COLUMN execution_id SET NOT NULL')
+    expect(migration13).toContain(
+      "WHEN request.task_id IS NULL THEN 'coordinator_project'"
+    )
+    expect(migration13).toContain(
+      'WHEN request.task_id IS NULL THEN project.coordinator_authority_epoch'
+    )
+    expect(migration13).toContain('SET request_scope = request.request_scope')
+    expect(migration13).toContain("project.status IN ('active', 'paused')")
+    expect(migration13).toContain('coordinator.owner_user_id <> project.owner_user_id')
+  })
+
   it('indexes every canonical stable-ID coordination page without a nested collection scan', async () => {
     const migration = await migrationSource('0013_full_multi_user_loop.sql')
     for (const index of [
