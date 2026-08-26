@@ -498,6 +498,10 @@ async function createProductionCrashComposition(
     appRoot: '/app',
     environment: Object.freeze({ NODE_ENV: 'test' }),
     agentExecution: {
+      prepareSession: async () => ({
+        runtimeId: 'codex',
+        threadId: CRASH_REPLAY_THREAD_ID
+      }),
       run: async () => {
         throw new Error('Agent execution is unavailable in this checkpoint-only test.')
       }
