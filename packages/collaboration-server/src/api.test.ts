@@ -348,6 +348,87 @@ describe('production HTTP OIDC-only boundary', () => {
     expect(JSON.stringify(unparsedBody)).not.toContain(secretMarker)
   })
 
+  it('returns the strict Worker availability entity after an Agent heartbeat commit', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const identity = await seedOidcUserDevice(repository, 'http-worker-availability', now())
+    const bootstrap = createAgentCredentialBootstrap()
+    const capabilities = ['agent-runtime.codex', 'model-access.coding-plan']
+    const registered = await service.registerAgent(identity.user, {
+      deviceId: identity.deviceId,
+      displayName: 'HTTP Worker',
+      nodeType: 'desktop',
+      capabilities,
+      credentialBootstrapPublicKey: bootstrap.publicKey,
+      idempotencyKey: 'idem_http_worker_agent_register'
+    })
+    const agentCredential = bootstrap.open(registered.sealedCredential!)
+    const server = createCollaborationHttpServer({
+      service,
+      authentication: new AuthenticationService(repository, now),
+      readiness: async () => true
+    })
+    servers.push(server)
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+
+    const heartbeatResponse = await postCommand(baseUrl, {
+      protocolVersion: '1.0',
+      requestId: 'req_HttpWorkerHeartbeat1',
+      type: 'agent.heartbeat',
+      idempotencyKey: 'idem_http_worker_heartbeat_01',
+      agentId: registered.agent.agentId,
+      expectedRevision: registered.agent.revision,
+      connectionStatus: 'online',
+      capabilities
+    }, agentCredential)
+    expect(heartbeatResponse.status).toBe(200)
+    const heartbeat = await heartbeatResponse.json() as {
+      entity: { revision: number; lastSeenAt: string }
+    }
+    expect(heartbeat).toMatchObject({
+      type: 'rest.entity',
+      entity: {
+        type: 'agent_node',
+        agentId: registered.agent.agentId,
+        connectionStatus: 'online'
+      }
+    })
+
+    const availabilityResponse = await postCommand(baseUrl, {
+      protocolVersion: '1.0',
+      requestId: 'req_HttpWorkerAvailable1',
+      type: 'worker.availability.publish',
+      idempotencyKey: 'idem_http_worker_availability_01',
+      agentId: registered.agent.agentId,
+      expectedAgentRevision: heartbeat.entity.revision,
+      connectionStatus: 'online',
+      lastHeartbeatAt: heartbeat.entity.lastSeenAt,
+      runtimeReadiness: 'ready',
+      runtimeCapabilityTags: capabilities,
+      acceptsNewOffers: true,
+      activeTaskCount: 0,
+      observedAt: now().toISOString()
+    }, agentCredential)
+    expect(availabilityResponse.status).toBe(200)
+    await expect(availabilityResponse.json()).resolves.toMatchObject({
+      protocolVersion: '1.0',
+      type: 'rest.entity',
+      requestId: 'req_HttpWorkerAvailable1',
+      entity: {
+        type: 'worker_availability_projection',
+        agentId: registered.agent.agentId,
+        connectionStatus: 'online',
+        lastHeartbeatAt: heartbeat.entity.lastSeenAt,
+        runtimeCapabilityTags: capabilities,
+        acceptsNewOffers: true
+      }
+    })
+  })
+
   it('serves the canonical Provider directory and OIDC-derived atomic Project create responses', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
