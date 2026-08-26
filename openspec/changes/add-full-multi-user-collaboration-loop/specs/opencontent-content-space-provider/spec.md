@@ -23,17 +23,17 @@ For `system-upload-new`, the adapter SHALL use only the current Principal-bound 
 ### Requirement: V4 file-operation readiness remains evidence-gated
 
 The V4 `observe-entry`, `upload-new`, and `download` implementations SHALL remain
-`poc_only` with reason `runtime_authorization_required` until a real packaged
-multi-user loop produces reviewable operation evidence for the exact shipped
+`poc_only` with reason `runtime_authorization_required` until a real source-application
+multi-user loop produces reviewable operation evidence for the exact tested
 commit and current Principal-owned Provider connection. Donor characterization,
-unit/integration tests, source-only execution, schema conformance, optional skill
+unit/integration tests, automated source smoke, schema conformance, optional skill
 installation, or successful sibling operations SHALL NOT promote any of these
 operations to `production_ready`. The operations MAY execute only after live
 Provider binding attestation and their real per-operation Provider ACL checks.
 
-#### Scenario: V4 contracts pass without packaged-live evidence
+#### Scenario: V4 contracts pass without source-app live evidence
 
-- **WHEN** the V4 implementation and repository tests pass but no qualifying real packaged loop receipt exists
+- **WHEN** the V4 implementation and repository tests pass but no qualifying real source-app loop receipt exists
 - **THEN** all three operations SHALL remain `poc_only` / `runtime_authorization_required`
 - **AND** the Provider SHALL advertise no `production_ready` claim for them.
 

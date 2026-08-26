@@ -19,7 +19,7 @@ All donor code is therefore reviewed by behavior and rewritten behind final pack
 - One Cloud-authoritative collaboration state machine with durable revision, idempotency, execution fencing, Inbox and recovery.
 - One Owner-Desktop-orchestrated Project content saga using ordinary Content Space operations and a Device-signed fact attestation.
 - One real Worker file path using the executing User's Provider Connection, operation-time Provider authorization and bounded Workspace transfer.
-- Independently ownable domain packages discovered through manifests/generated composition in source and packaged builds.
+- Independently ownable domain packages discovered through manifests/generated composition in the source application.
 - A reproducible, reversible blue-green upgrade of the existing A test deployment and a fixed evidence script that does not constrain product dynamism.
 
 **Non-Goals:**
@@ -167,19 +167,19 @@ Run-0 is the first live acceptance run, not a second public DNS/issuer stack. It
 
 Before any mutation, the running Cloud database, Keycloak database/realm configuration, edge configuration and current image metadata are backed up and a restore rehearsal is proven. The current Cloud database is copied into independently named candidate database/volume/container/network resources, forward-only migrations and the recovery-branch image run only on that candidate, and synthetic acceptance identities are used. The existing Keycloak issuer remains canonical; any required realm/client change is separately backed up, bounded and reversible.
 
-Only after candidate migration, health and focused acceptance pass may the existing Caddy `cloud-test` upstream be switched to the candidate. The previous Cloud app/database remain intact as a rollback target until packaged and live acceptance complete. Direct mutation of the running database/container, a new issuer fallback, new Run-0 DNS, or an unverified cutover is rejected. This trades environment-isolation purity for delivery speed while retaining reproducibility and rollback.
+Only after candidate migration, health and focused acceptance pass may the existing Caddy `cloud-test` upstream be switched to the candidate. The previous Cloud app/database remain intact as a rollback target until source-application live acceptance completes. Direct mutation of the running database/container, a new issuer fallback, new Run-0 DNS, or an unverified cutover is rejected. This trades environment-isolation purity for delivery speed while retaining reproducibility and rollback.
 
 ### 12. Acceptance status is evidence-derived
 
-The acceptance runner records but does not fake Human/device interactions. Source and packaged automated suites may use fakes only in their test entries. Live completion requires a verified A candidate/cutover, five independent packaged profiles on at least three machines/VMs, real OIDC/Provider/Runtime interactions, the fixed meeting script and recovery matrix. An unfinished backup/migration/candidate/cutover yields `awaiting_candidate`; insufficient devices yields `awaiting_real_devices`; any failed required gate yields `failed` or `incomplete`, never “complete with caveats.”
+The acceptance runner records but does not fake Human/device interactions. Source automated suites may use fakes only in their test entries. Live completion requires a verified A candidate/cutover, five independent source-application profiles from one exact commit on at least three machines/VMs, real OIDC/Provider/Runtime interactions, the fixed meeting script and recovery matrix. An unfinished backup/migration/candidate/cutover yields `awaiting_candidate`; insufficient devices yields `awaiting_real_devices`; any failed required gate yields `failed` or `incomplete`, never “complete with caveats.”
 
-The receipt uses fixture labels U0-U4 and redacted entity IDs, but records exact commit/package/image/schema and non-secret digests.
+The receipt uses fixture labels U0-U4 and redacted entity IDs, but records exact source commit/image/schema and non-secret digests.
 
-### 13. Repository architecture principles are a release gate
+### 13. Repository architecture principles are a source acceptance gate
 
-`Repository architecture principles gate` is a mandatory source and packaged release gate for the production paths added or modified by this change, not advisory review text. The exact frozen requirements are: **不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证。**
+`Repository architecture principles gate` is a mandatory source-application gate for the production paths added or modified by this change, not advisory review text. The exact frozen requirements are: **不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，并验证标准 source composition。**
 
-The gate SHALL fail this change if one of its changed production paths requires Host-private routing, imports a domain implementation rather than a generic SDK contract, retains old and new entrypoints together, uses acceptance/provider/domain identifiers to select production behavior, splits one business domain's backend and UI ownership/versioning, or lacks source or packaged composition evidence. Repository-wide scans MAY report pre-existing findings, but only findings introduced by or directly blocking the changed collaboration path are release blockers for this change; they SHALL NOT authorize unrelated historical-debt refactors. Passing unit tests cannot override an in-scope architecture failure.
+The gate SHALL fail this change if one of its changed production paths requires Host-private routing, imports a domain implementation rather than a generic SDK contract, retains old and new entrypoints together, uses acceptance/provider/domain identifiers to select production behavior, splits one business domain's backend and UI ownership/versioning, or lacks source production-composition evidence. Repository-wide scans MAY report pre-existing findings, but only findings introduced by or directly blocking the changed collaboration path are blockers for this change; they SHALL NOT authorize unrelated historical-debt refactors. Passing unit tests cannot override an in-scope architecture failure.
 
 ## Risks / Trade-offs
 
@@ -189,7 +189,7 @@ The gate SHALL fail this change if one of its changed production paths requires 
 - [Cloud and Provider membership diverge for extended periods] → display Project Membership, Provider observation, derived Content Readiness and command-time Task Authority independently; fence Task authority first and provide explicit Owner reconcile.
 - [A late Provider success occurs after execution fencing] → retain observation in recovery journal but reject Task association until an authorized Human reconciles it.
 - [Donor code embeds obsolete contract assumptions] → port behavior behind new public contracts and tests instead of merging commits wholesale.
-- [Five-device live validation cannot run locally] → complete code/source/packaged gates, produce a packaged artifact and mark final status `awaiting_real_devices` until the real matrix is supplied.
+- [Five-device live validation cannot run locally] → complete code/source gates and mark final status `awaiting_real_devices` until five independent source-application profiles on the real matrix are supplied.
 - [The shared A test environment is damaged during upgrade] → verified backups/restores, independently named candidate resources, candidate-only migrations, explicit edge cutover and retained old app/database rollback targets.
 
 ## Migration Plan
@@ -200,7 +200,7 @@ The gate SHALL fail this change if one of its changed production paths requires 
 4. Add Project coordinator package and manifest composition; port B's useful UI/runner behavior behind current contracts and remove production mock/fallback code.
 5. Add Content Space system transfers and OpenContent operation-time checks; port E1 Workspace/receipt behavior while correcting ACL semantics.
 6. Revalidate the A test deployment, back up and rehearse restore, clone its Cloud database into independently named candidate resources, migrate/deploy the recovery image there, then switch only the existing `cloud-test` upstream after candidate gates pass.
-7. Run focused, full, architecture, generated-composition, source and packaged tests; build one exact packaged artifact.
+7. Run focused, full, architecture, generated-composition and source-application tests from one exact commit; no DMG or packaged artifact is required for this project acceptance.
 8. Execute the live device/meeting/recovery matrix and seal the redacted receipt on the recovery branch. Only after all gates pass and the User confirms is an upstream PR prepared from that branch.
 
 Rollback before live activity restores the existing Caddy upstream to the retained old Cloud app/database; candidate resources remain evidence until the rollback is verified. After Provider provisioning, rollback also closes Cloud binding and preserves Provider content for Human cleanup. Database migrations are forward-only and run only on the cloned candidate; rollback never down-migrates the old or candidate database.

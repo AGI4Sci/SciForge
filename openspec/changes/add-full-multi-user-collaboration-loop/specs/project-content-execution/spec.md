@@ -95,10 +95,10 @@ Worker 只有在当前 `executionId` 仍 active、Task revision 匹配、Device/
 
 ### Requirement: 生产 Worker 不得注入 Mock Content Space
 
-生产 source、packaged 和 A-upgrade-live composition SHALL 只发现标准 Content Space 与安装的真实 Provider integration。Fake repository、Mock Content Space、fixture file result、直接数据库更新和测试-only bypass SHALL 只存在于测试入口，不得从 production manifest、runtime factory 或 fallback 被加载；缺少真实 binding 时执行 SHALL fail closed。
+生产 source 与 A-upgrade-live composition SHALL 只发现标准 Content Space 与安装的真实 Provider integration。Fake repository、Mock Content Space、fixture file result、直接数据库更新和测试-only bypass SHALL 只存在于测试入口，不得从 production manifest、runtime factory 或 fallback 被加载；缺少真实 binding 时执行 SHALL fail closed。
 
-#### Scenario: Packaged Worker 未绑定 OpenContent
+#### Scenario: Source-app Worker 未绑定 OpenContent
 
-- **WHEN** packaged Worker 接收需要文件的 Task 但本机没有可用 Provider Connection
+- **WHEN** source-app Worker 接收需要文件的 Task 但本机没有可用 Provider Connection
 - **THEN** Worker SHALL 拒绝/暂停为 provider_not_ready
 - **AND** SHALL NOT 生成 Mock 文件引用或伪造成功 receipt。

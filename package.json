@@ -92,6 +92,7 @@
     "test:e2e-product-stack": "node --test ./scripts/e2e/product-stack-supervisor.test.mjs",
     "e2e:product-stack": "node ./scripts/e2e/product-stack-supervisor.mjs",
     "smoke:electron:source": "node ./scripts/e2e/product-stack-supervisor.mjs --config ./scripts/e2e/electron-domain-source.json",
+    "smoke:electron:source:cloud": "node ./scripts/e2e/product-stack-supervisor.mjs --config ./scripts/e2e/electron-domain-source-cloud.json",
     "smoke:electron:packaged": "node ./scripts/electron-domain-packaged-smoke.mjs",
     "smoke:electron:packaged:build": "npm run dist:dir && npm run smoke:electron:packaged",
     "smoke:provider-credentials:source": "node ./scripts/electron-provider-credential-source-smoke.mjs",

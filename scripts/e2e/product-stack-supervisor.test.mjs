@@ -398,6 +398,26 @@ test('checked-in source Electron smoke config uses the supervisor as its canonic
   assert.deepEqual(normalized.profileDirectories, ['profiles/electron-domain-smoke'])
 })
 
+test('checked-in Cloud source smoke freezes the Run-0 origin and issuer', async () => {
+  const directory = dirname(fileURLToPath(import.meta.url))
+  const input = JSON.parse(
+    await readFile(join(directory, 'electron-domain-source-cloud.json'), 'utf8')
+  )
+  const normalized = normalizeProductStackConfig(input, { cwd: directory })
+  assert.equal(normalized.roots.length, 0)
+  assert.equal(normalized.task?.role, 'electron-domain-source-cloud')
+  assert.deepEqual(normalized.task?.args, [
+    'scripts/electron-domain-smoke.mjs',
+    '--expected-cloud-origin',
+    'https://cloud-test.sciforge.cn',
+    '--expected-oidc-issuer',
+    'https://login-test.sciforge.cn/realms/SciForge',
+    '--timeout-ms',
+    '180000'
+  ])
+  assert.deepEqual(normalized.profileDirectories, ['profiles/electron-domain-smoke'])
+})
+
 async function waitForChildExit(child, timeoutMs) {
   if (child.exitCode !== null || child.signalCode !== null) return
   await new Promise((resolve, reject) => {

@@ -1,6 +1,6 @@
 ## Purpose
 
-定义基于现有 A 测试环境蓝绿升级的 Run-0 验收，以真实 OIDC、Device/Agent、AgentRuntime、OpenContent 和多台 packaged Desktop 证明“像开会一样”的端到端多用户协作闭环及其可审计完成门禁。
+定义基于现有 A 测试环境蓝绿升级的 Run-0 验收，以真实 OIDC、Device/Agent、AgentRuntime、OpenContent 和多台设备上的源码应用证明“像开会一样”的端到端多用户协作闭环及其可审计完成门禁；DMG、安装包或发布 artifact 不属于本项目验收条件。
 
 ## ADDED Requirements
 
@@ -24,13 +24,13 @@ Run-0 SHALL 使用现有 `login-test` Keycloak issuer 的真实 OIDC/PKCE、JIT 
 - **THEN** Cloud SHALL JIT 创建唯一 SciForge User 并进入 Device/Runtime/Agent 配置流程
 - **AND** SHALL NOT 要求 pairing 创建 User。
 
-### Requirement: 真机矩阵使用同一 commit 的五个独立 packaged Desktop
+### Requirement: 真机矩阵使用同一 commit 的五个独立源码应用 profile
 
-完整 live 验收 SHALL 使用至少三台物理机器或相互独立 VM 上的五个独立 Desktop installations/profiles。所有 Desktop SHALL 来自同一 exact commit 的 packaged artifact，并各自拥有唯一 native secret store、Device、Agent、Runtime configuration 和真实 OpenContent account；不得使用 acceptance harness、共享 profile、直接数据库操作、Mock provider 或 source-only renderer 代替。
+完整 live 验收 SHALL 使用至少三台物理机器或相互独立 VM 上的五个独立源码应用 profiles。所有实例 SHALL checkout 同一 exact commit、通过 canonical source build/start path 启动，并各自拥有唯一 user-data、native secret store、Device、Agent、Runtime configuration 和真实 OpenContent account；不得使用 acceptance harness、共享 profile、直接数据库操作、Mock provider 或孤立测试 renderer 代替。
 
 #### Scenario: 只有两台真实设备可用
 
-- **WHEN** source 和 packaged 自动测试通过但五个独立 profile/至少三台机器矩阵未满足
+- **WHEN** source 自动测试通过但五个独立 profile/至少三台机器矩阵未满足
 - **THEN** 交付状态 SHALL 为 `awaiting_real_devices`
 - **AND** SHALL NOT 宣告完整多用户闭环完成。
 
@@ -83,7 +83,7 @@ Run-0 SHALL 至少验证：Worker accept 后重启并恢复同一 execution、We
 
 ### Requirement: 验收回执可复核且不泄密
 
-最终 verification receipt SHALL 记录 exact commit、packaged artifact、server image/schema、脱敏 User/Device/Agent/Project/Task/execution timeline、provisioning/member receipts、runtime/model IDs、source/packaged/A-upgrade-live 结果、失败、跳过项和 Human manual operations。逐文件 bytes/SHA-256 与汇总 `integrityVerified` MAY 作为诊断记录，但不属于本 PoC 的完成门禁。会议输入 SHALL 为合成内容，实体 ID SHALL 脱敏，真实 credential SHALL 只由对应 Human 在自己的 Desktop 输入；回执 SHALL NOT 包含秘密、完整 prompt、真实敏感会议内容或可重放授权。
+最终 verification receipt SHALL 记录 exact source commit、server image/schema、脱敏 User/Device/Agent/Project/Task/execution timeline、provisioning/member receipts、runtime/model IDs、source/A-upgrade-live 结果、失败、跳过项和 Human manual operations。逐文件 bytes/SHA-256 与汇总 `integrityVerified` MAY 作为诊断记录，但不属于本 PoC 的完成门禁。会议输入 SHALL 为合成内容，实体 ID SHALL 脱敏，真实 credential SHALL 只由对应 Human 在自己的 Desktop 输入；回执 SHALL NOT 包含秘密、完整 prompt、真实敏感会议内容或可重放授权。
 
 #### Scenario: 某一 live recovery 未完成
 
@@ -91,9 +91,9 @@ Run-0 SHALL 至少验证：Worker accept 后重启并恢复同一 execution、We
 - **THEN** 该门禁 SHALL 明确为 not_run、blocked 或 failed
 - **AND** 总体状态 SHALL 不得把它计算为通过。
 
-### Requirement: Repository architecture principles gate 是发布硬门禁
+### Requirement: Repository architecture principles gate 是源码验收硬门禁
 
-本变更在 source、packaged 和 upstream PR 准备前 SHALL 对本变更新增或修改的生产路径通过独立的 `Repository architecture principles gate`。门禁必须按以下原文执行：**不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证。** 任一 in-scope 项缺少非秘密自动化证据或发现违反时，整体门禁 SHALL fail，不得被 focused test 或人工说明覆盖。全仓扫描 MAY 报告历史发现，但除非该发现直接阻断 changed collaboration path，否则 SHALL 作为后续债务而不是本次重构授权或阻塞项。
+本变更在 source 验收和 upstream PR 准备前 SHALL 对本变更新增或修改的生产路径通过独立的 `Repository architecture principles gate`。门禁必须按以下原文执行：**不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，并验证标准 source composition。** 任一 in-scope 项缺少非秘密自动化证据或发现违反时，整体门禁 SHALL fail，不得被 focused test 或人工说明覆盖。全仓扫描 MAY 报告历史发现，但除非该发现直接阻断 changed collaboration path，否则 SHALL 作为后续债务而不是本次重构授权或阻塞项。
 
 #### Scenario: 新增 Coordinator 包
 
@@ -101,8 +101,8 @@ Run-0 SHALL 至少验证：Worker accept 后重启并恢复同一 execution、We
 - **THEN** standard manifest/generated composition SHALL 是唯一组合路径
 - **AND** Host central feature map、domain ID switch 和 Host-private import SHALL 保持无变更。
 
-#### Scenario: source 通过但 packaged 未验证
+#### Scenario: 单元测试通过但 source composition 未验证
 
-- **WHEN** source composition 测试通过而 packaged composition 无同 commit 证据或仍可达 legacy/双注册路径
+- **WHEN** focused tests 通过而同 commit 的 source production composition 无证据或仍可达 legacy/双注册路径
 - **THEN** Repository architecture principles gate SHALL fail
 - **AND** 变更 SHALL NOT 进入 upstream PR 准备状态。

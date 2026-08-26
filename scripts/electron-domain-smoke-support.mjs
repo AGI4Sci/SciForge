@@ -605,8 +605,13 @@ async function smokeRendererWorkflow({
     projectCoordinatorWorkspace.output?.connection?.state !== expectedProjectCoordinatorState ||
     !Array.isArray(projectCoordinatorWorkspace.output?.projects) ||
     projectCoordinatorWorkspace.output.projects.length !== 0) {
+    const actualState = projectCoordinatorWorkspace.output?.connection?.state ?? 'missing'
+    const projectCount = Array.isArray(projectCoordinatorWorkspace.output?.projects)
+      ? projectCoordinatorWorkspace.output.projects.length
+      : 'invalid'
     throw new Error(
-      'Project Coordinator did not stop at the expected pre-login Cloud identity boundary.'
+      'Project Coordinator did not stop at the expected pre-login Cloud identity boundary: ' +
+      `expected=${expectedProjectCoordinatorState}, actual=${actualState}, projects=${projectCount}.`
     )
   }
 

@@ -66,27 +66,28 @@
   - 2026-08-26 用户授权的 session-prefixed 演练完成 Cloud DB 行级快照恢复、public-v5 catalog 复核、Keycloak DB 恢复、Realm 导出后向全新数据库导入、edge 归档安全解包和现网不变性复查；全部隔离资源无公开端口并已停止保留。脱敏证据见 `docs/operations/full-collaboration-stage4-a-host-backup-restore.md`。
 - [x] 7.3 从旧 Cloud DB 复制独立 candidate database/volume/container/network，candidate-only 执行 forward migration、目标 image health 和合成账号 smoke；不得直接迁移运行中的旧数据库或新增 issuer fallback。
   - 2026-08-26 使用 session 前缀隔离数据库/卷/双网络/loopback app，从 7.2 public-v5 dump 续跑真实 v12 中断点至 ready v14，完成 no-op migration、聚合安全审计、重复启动、健康/401/唯一 issuer 验证，并由 Human 通过 system-browser PKCE 注册一个新合成账号，证明 candidate 重启前后 JIT User/OIDC identity 与 revision 持久稳定；旧 Cloud/DB/Caddy 未变。脱敏证据见 `docs/operations/full-collaboration-stage4-a-host-candidate.md`。
-- [ ] 7.4 candidate 全部门禁通过后切换现有 Caddy `cloud-test` upstream，保持 `login-test/realms/SciForge` issuer 不变；验证 packaged/live 后再决定退役旧栈，期间必须能精确回滚旧 upstream/app/database。
+- [ ] 7.4 candidate 全部门禁通过后切换现有 Caddy `cloud-test` upstream，保持 `login-test/realms/SciForge` issuer 不变；验证 source-app live 后再决定退役旧栈，期间必须能精确回滚旧 upstream/app/database。
   - 2026-08-26 经用户对 `743907e2` 包单独授权，首次 Edge 切换的 revision/mount/公网 200/200/401/issuer 门禁通过；随后 U0 packaged configure 因 bootstrap Identity 仍绑定隔离 loopback、与公网 HTTPS Collaboration origin 不一致而在写设置/建 Agent 前按设计 fail closed。已立即恢复原 Edge revision/Caddy SHA/公网门禁并撤下候选 Edge 网络，旧 DB v5 与候选 DB v14 聚合均未漂移。7.4 保持 unchecked；脱敏回执与需重新批准的启动顺序见 `docs/operations/full-collaboration-stage4-a-host-cutover-attempt-1.md`。
   - 2026-08-26 经用户对 `7d946636` 修订顺序单独授权，第二次先停 loopback U0，再完成同一 Edge 切换；公网 Identity 恢复同一 Device 且 candidate Device/Agent 聚合保持 23/15。HTTPS Collaboration 设置写入后，renderer 错把 active phone endpoint 作为首个 Agent 注册前置条件，真实 packaged 路径无法继续，遂先停公网 U0，再精确恢复旧 Edge、公网门禁、candidate 隔离/restart policy 和 loopback profile。无 Agent/endpoint/Project/Provider 写入；7.4 继续 unchecked。通用最小 UI 修复及新 artifact/再次审批边界见 `docs/operations/full-collaboration-stage4-a-host-cutover-attempt-2.md`。
 
-## 8. 自动化、packaged 与真机验收
+## 8. 自动化、源码应用与真机验收
 
 - [x] 8.1 完成 contracts、server、identity、collaboration、coordinator、Content Space/OpenContent focused tests 和 changed-file lint/typecheck。
-- [ ] 8.2 对本变更新增/修改的生产路径执行 `Repository architecture principles gate`：不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证；全仓历史发现只报告，不扩展本任务。
+- [x] 8.2 对本变更新增/修改的生产路径执行 `Repository architecture principles gate`：不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，并验证标准 source composition；全仓历史发现只报告，不扩展本任务。
+  - 2026-08-26 按用户明确的 source-app 纵向范围重跑：架构/组合测试 `25/25`、通用私有 Skill 安装器 `3/3`，changed-path gate 审计 419 个路径、144 个生产源码和 27 个 domain package，零 finding；真实 Electron `source/out` 使用冻结 Cloud/OIDC 组合 256 个能力，Identity/Device 正常停在 `signed-out`，Coordinator 精确停在 `identity_required`，OpenContent Provider 在无静态 profile 前提下可发现。该证据不完成 live 7.4/8.6–8.8，也不冒充已暂缓的 8.4。
 - [x] 8.3 运行与 changed collaboration path 相关的 package boundary、private-import、generated composition freshness、capability governance、secret audit 和 full regression tests；只有直接阻断该路径的既有问题才允许最小通用适配。
   - Stage 4 使用 arm64 Node `22.22.1`、FTS5-capable SQLite、arm64 Python `3.13` 和两个隔离的 loopback PostgreSQL 17 数据库完成最终回归：root Vitest `366/366` files、`3389/3389` tests 通过且 root aggregate 无 skip；全部 domain/package/tarball/internal-overlay/public-release 前置门禁、root typecheck 和全量 lint 也通过。Computer Use 4 项和 Scientific Plotting 2 项既有硬件/可选依赖 package-level skip 被单独保留，没有冒充真机证据或计入 root aggregate。
-- [ ] 8.4 验证 source app 的真实生产 composition，并构建同一 exact commit 的 packaged artifact；验证 packaged app 无 mock/fallback，且只指向冻结的 A-upgrade PoC origin/issuer。
-  - Source 半程曾在 pushed commit `d86b8e15dc4305c3eb26899d2bdc833d06a008e0` 由 canonical `npm run build` 和真实 Electron `source/out` smoke 验证：固定 Cloud/OIDC 被精确注入，Cloud Identity/Device 均为 `signed-out` 且无配置错误，真实 OpenContent Provider 可发现，Project Coordinator 精确停在 `identity_required`。旧静态 profile 构件门禁现已删除，Stage 4 只要求真实私有 Provider deployment configuration；仍须从本次修改后的同一 clean/pushed exact commit 重新构建并验证 packaged artifact，因此 8.4 保持 unchecked。
+- [ ] 8.4 正式安装包/发布 artifact 的 production-composition 验证。
+  - 2026-08-26 用户明确暂缓 8.4：当前首要目标是从源码纵向完成并进行真实闭环测试，不追求 DMG、安装包或发布 artifact。8.4 保持 unchecked，且不作为当前 source-app live 闭环的前置；源码 composition 由 8.2 约束，真实 Cloud/设备路径由 7.4、8.6–8.8 约束。
 - [x] 8.5 准备 U0-U4 合成账号/议程/需求、三文件 Task、HumanNeeded、reject/reassign、review/revision 和 completion 验收脚本。
-- [ ] 8.6 在至少三台机器/独立 VM 的五个 packaged profiles 上完成真实 OIDC、Device/Agent、OpenContent provisioning 与并发会议 happy path。
+- [ ] 8.6 在至少三台机器/独立 VM 的五个独立 source-app profiles 上，以同一 exact commit 完成真实 OIDC、Device/Agent、OpenContent provisioning 与并发会议 happy path。
 - [ ] 8.7 完成 restart、WSS refill、duplicate、old execution fence、Device revoke、Coordinator transfer、Provider removal 和 outcome_unknown recovery matrix。
 - [ ] 8.8 从授权 Desktop 下载并人工核对最终产物，生成不含秘密的 verification receipt；逐文件 bytes/SHA-256 不作为本 PoC 门禁，candidate/cutover 或设备门禁未满足时精确标记 `awaiting_candidate`/`awaiting_real_devices`。
 
 ## 9. 清理与交付
 
 - [x] 9.1 审计并删除旧 anonymous pairing、Token duplication、0.2 parallel contract、mock/fallback、private cross-boundary import、domain/provider hard-code、dead file/export/dependency。
-  - Stage 4 changed-path gate 从基线 `e0038b8c7109390445dccb691052fec74a153c09` 审计 403 个变更路径、143 个生产源码和 27 个 domain package，零 finding；416 个公开候选文件 secret audit 通过，OpenContent 旧 Provider migration/compatibility 路径已删除。packaged reachability 仍由未完成的 8.2 exact-artifact formal gate 独立约束，未被本项冒充为已完成。
+  - Stage 4 changed-path gate 从基线 `e0038b8c7109390445dccb691052fec74a153c09` 审计 419 个变更路径、144 个生产源码和 27 个 domain package，零 finding；当前 Collaboration secret audit 417 个候选文件通过，OpenContent 旧 Provider migration/compatibility 路径已删除。正式安装包验证已按用户指示移出当前纵向闭环范围并保留在未完成的 8.4，未被本项冒充为已完成。
 - [x] 9.2 按 docs、identity、cloud、content-space、collaboration/coordinator、deployment/E2E 的逻辑系列提交 commits，并在每次提交后保持 OpenSpec checkbox 与真实进度一致。
   - Stage 4 依次提交 OpenContent compatibility 清理 `ea4903c9`、团队附件信任/安装器 `ff80c4a5`、封闭打包/验收门禁 `c52b7d1b`、团队部署与 readiness 文档 `d86b8e15`、通用本地授权包生成器 `aa81f88e`；没有把真实环境缺口伪装为完成。
 - [x] 9.3 持续推送唯一集成主线 `codex/full-collaboration-loop-recovery` 到个人 Fork；只在所有必需门禁通过并经 User 确认后准备 upstream PR。
