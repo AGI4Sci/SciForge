@@ -1305,6 +1305,8 @@ describe('FloatingComposer capability controls', () => {
     expect(html).not.toContain('aria-label="Attach file"')
     expect(html).toContain('type="file"')
     expect(html).toContain('.fasta')
+    expect(html).toContain('.html')
+    expect(html).toContain('.mhtml')
   })
 
   it('renders image attachment thumbnails when a local preview is available', () => {
