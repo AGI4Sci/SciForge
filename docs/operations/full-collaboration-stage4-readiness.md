@@ -29,11 +29,11 @@ No pending OpenSpec checkbox is satisfied merely by this matrix.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 7.1 | ADR-0036; Run-0 frozen origin/issuer; read-only audit before mutation | Keycloak test delivery/runbook and Collaboration deployment metadata | Two-stage user-authorized SSH audit records OS/resources, exact DNS/443 containers and immutable images, Cloud/Keycloak DB identities, admitted `public-v5` catalog fingerprint, exact realm/client, Caddyfile digest/upstreams, capacity and rollback identity in `full-collaboration-stage4-a-host-baseline.md` | Not applicable | None for this read-only row | Required SSH and read-only non-interactive sudo authority were supplied and used without reading secrets | None | Fresh redacted timestamped receipt exists; preserve it as the pre-mutation baseline | `passed_server` |
 | 7.2 | Backup Cloud DB, Keycloak DB/realm, edge config and image/resource metadata; restore into isolated resources before mutation | `packages/collaboration-server/deploy/backup-collaboration-db.sh`; Keycloak `backup-db.sh` and `restore-verify-db.sh` | Fresh session-prefixed Cloud/Keycloak dumps, Realm export/import, edge archive and image/resource metadata are sealed by one SHA-256 ledger; Cloud rows/catalog and both Keycloak restore paths passed in isolated resources | Not applicable | None for this row; the protected backup tree and stopped restore resources are retained under their exact names, while candidate work remains separately gated by 7.3 | Required A-host authority was supplied and used only for the bounded backup/restore rehearsal; no secret value entered the repository | None | Redacted receipt exists in `full-collaboration-stage4-a-host-backup-restore.md`; independently rechecked manifest, permissions, internal networks, zero ports, stopped containers and unchanged live stack | `passed_server` |
-| 7.3 | Clone old Cloud DB; migrate only an independently named loopback/internal candidate; real health/OIDC/synthetic persistence smoke | Formal `migrations.ts`, supported fingerprints, PostgreSQL repository/server restart paths | Stage 3 real PostgreSQL migration/rollback/restart suite | Candidate image must correspond to the exact sealed Desktop/source commit where applicable; no candidate artifact exists yet | No independently named Stage 4 database/volume/container/network, candidate-only port, target image, migration, repeated-start, health or synthetic smoke evidence | A-host SSH/Docker/DB authority and designated synthetic OIDC account | None | Exact resource ledger, old/candidate image digest, clone/migration/rollback/no-op/restart/catalog/health/OIDC/Inbox/receipt/journal receipt | `awaiting_candidate` |
-| 7.4 | Switch only the existing Caddy `cloud-test` upstream after all candidate gates; retain exact rollback target | Existing edge contract is documented; no second issuer/DNS/listener is allowed | Keycloak edge-contract tests validate the frozen public contract; 7.1 fixes the current Caddyfile digest, dynamic `app:8787` upstream and complete old-stack rollback identity, while 7.2 proves the protected restore path | Packaged/live smoke must be ready before approval is requested | Proposed exact diff, candidate upstream, validated config/reload and rollback commands do not exist because 7.3 has not run | A-host mutation authority and a separate explicit cutover approval | Live profiles must be available for post-cutover verification | Pre-cutover evidence packet, explicit user approval, applied diff, immediate health/OIDC/API smoke and rollback verification | `approval_required` |
+| 7.3 | Clone old Cloud DB; migrate only an independently named loopback/internal candidate; real health/OIDC/synthetic persistence smoke | Formal `migrations.ts`, supported fingerprints, PostgreSQL repository/server restart paths | Stage 3 real PostgreSQL migration/rollback/restart suite plus the exact A-host receipt in `full-collaboration-stage4-a-host-candidate.md` | Server image is the exact pushed source commit; sealed Desktop artifact remains a separate 8.4 gate | Session-prefixed clone migrated from the committed v12 boundary to ready v14, no-op/restart/catalog/health/issuer and aggregate audits passed, and real PKCE JIT identity persisted across candidate restart | Human registered/logged in one new synthetic account only in the system browser; no credential or Token entered evidence | None | Exact resource/image/schema ledger, redacted identity transition and retained failure/success containers are recorded | `passed_server` |
+| 7.4 | Switch only the existing Caddy `cloud-test` upstream after all candidate gates; retain exact rollback target | Existing edge contract is documented; no second issuer/DNS/listener is allowed | Keycloak edge-contract tests validate the frozen public contract; 7.1 fixes the current Caddyfile digest, dynamic `app:8787` upstream and complete old-stack rollback identity, 7.2 proves restore, and 7.3 proves the isolated candidate | Packaged/live smoke must be ready before approval is requested | Exact cutover diff/reload/rollback packet is not yet approved or applied; old Caddy upstream remains selected and candidate remains loopback-only | A-host mutation authority and a separate explicit cutover approval | Live profiles must be available for post-cutover verification | Pre-cutover evidence packet, explicit user approval, applied diff, immediate health/OIDC/API smoke and rollback verification | `approval_required` |
 | 8.2 | Repository architecture principles gate: no central feature map, Host-private/domain switch, compatibility/dual registration or hard-coded acceptance/provider behavior; same-package backend/UI; source and packaged composition | Standard manifests/generated composition, generic Domain SDK contracts, package-owned Collaboration/Coordinator/Content Space entrypoints; canonical changed-path/formal architecture gate and sealed Stage 4 receipt are implemented | Architecture/receipt/generator/manifest/tarball suite passed `28/28`; production-marker and private-import audit found no changed production violation | Formal gate still requires one exact clean/pushed artifact receipt and independently extracted packaged executable; artifact issuance is correctly blocked because the reviewed private verification-profile contribution count is zero | None | None | None for automated gate | Post-commit changed-path report plus source and sealed packaged executable evidence from one unchanged commit | `ready_local` |
 | 8.3 | Focused gates, boundary/private-import, generated freshness, capability governance, secret audit and complete root regression | Stage 3 paths and aggregate scripts exist | Native Node/Python and two real loopback PostgreSQL databases produced `366/366` root files and `3389/3389` tests; all domain/package/tarball/internal-overlay/public-release pre-gates, typecheck, lint and secret audit passed | Existing optional package-level hardware/dependency skips remain explicitly outside root aggregate and are not live evidence | None | None | None | Preserve the exact command/result ledger and do not promote package-level skips to live evidence | `passed_local` |
-| 8.4 | Source production composition and one packaged artifact from the same exact clean commit; no mock/fallback; frozen Cloud/OIDC contract | Source and packaged Electron smoke harnesses now inject and verify one exact Cloud/OIDC pair, exercise Identity pre-login readiness, and are consumed by the sealed-artifact formal gate | Source production composition and frozen pre-login boundary have passed locally | No sealed Stage 4 archive/receipt/digest exists; issuance remains fail-closed until the reviewed private verification-profile contribution exists, after which the formal gate must extract and run the receipted bytes outside the source tree | Public discovery/JWKS passed without login; authenticated Cloud smoke waits for the live boundary | First OIDC login requires the assigned U0-U4 account or user-driven browser login | One local machine is enough for pre-login packaged smoke | Build metadata, artifact absolute path/size/SHA-256/time/platform/arch/tool versions, executable locator, source smoke and unpacked-from-archive packaged smoke | `gap_local` |
+| 8.4 | Source production composition and one packaged artifact from the same exact clean commit; no mock/fallback; frozen Cloud/OIDC contract | Source and packaged Electron smoke harnesses now inject and verify one exact Cloud/OIDC pair, exercise Identity pre-login readiness, and are consumed by the sealed-artifact formal gate | Source production composition and frozen pre-login boundary have passed locally | No sealed Stage 4 archive/receipt/digest exists; issuance remains fail-closed until the reviewed private verification-profile contribution exists, after which the formal gate must extract and run the receipted bytes outside the source tree | Public discovery/JWKS passed without login; authenticated packaged Cloud smoke waits for the live boundary | First packaged OIDC login requires the assigned U0-U4 account or user-driven browser login | One local machine is enough for pre-login packaged smoke | Build metadata, artifact absolute path/size/SHA-256/time/platform/arch/tool versions, executable locator, source smoke and unpacked-from-archive packaged smoke | `gap_local` |
 | 8.5 | Fixed synthetic meeting input and dynamic U0-U4 evidence labels; fixture must not alter deployment contracts | `test-fixtures/collaboration/run0-meeting` and `scripts/run0-meeting-fixture.test.mjs` | Fixture test passed in Stage 2/3; OpenSpec 8.5 is already checked | Fixture must be shipped/read through the real Project/Content Space path during Run-0, not as a runtime response | None | None | None | Re-run fixture checks; remove the stale `awaiting_dns` wording because Run-0 reuses the frozen endpoints | `ready_local` |
 | 8.6 | Five isolated profiles from one artifact across at least three physical machines/independent VMs; real OIDC, Device/Agent, Runtime and OpenContent | Product paths and fixed role script exist | Source tests characterize each contract but cannot satisfy live evidence | Artifact not yet sealed or distributed | Candidate/cutover must pass first | User must map U0-U4 to fresh Keycloak, OpenContent and Runtime credentials and perform/provide each login | Five profiles and at least three machines/independent VMs are not yet assigned | Redacted profile/device/agent/runtime/provider mapping and full happy-path timeline | `awaiting_real_devices` |
 | 8.7 | R1-R10 on real packaged/Cloud/OIDC/Runtime/OpenContent; no duplicate Runtime turn or Provider write; permanent old-execution fencing | Durable Cloud/Desktop/Runtime/provider recovery implementation exists | Stage 3 focused tests cover recovery semantics only | No packaged-live recovery run | Candidate/cutover and live Cloud observability are missing | U0-U4 plus revoke/provider administration slots as explicitly assigned | Same five-profile/three-machine matrix as 8.6 | Per-recovery actor/entity/revision/epoch/sequence/idempotency/journal/runtime/provider/time expected-vs-actual receipt | `awaiting_real_devices` |
@@ -97,10 +97,15 @@ check reproduced the exact manifest and receipt hashes, verified every listed
 file as `OK`, observed all six retained restore containers stopped with zero
 published ports, and reconfirmed the original five live image IDs, zero restart
 counts, Caddyfile digest and public health/OIDC responses. OpenSpec 7.2 is
-therefore complete; the next mutating boundary is the independently named 7.3
-candidate, not the current DNS-selected stack.
+therefore complete. The independently named 7.3 candidate is recorded in
+[`full-collaboration-stage4-a-host-candidate.md`](./full-collaboration-stage4-a-host-candidate.md):
+the restored public-v5 data reached ready v14, no-op and restart checks were
+stable, and one real PKCE/JIT synthetic identity persisted across an application
+restart without creating a fake Device or Agent. The next mutating boundary is
+the separately approval-gated 7.4 Caddy cutover, not the current database.
 
-The third row is a real fail-closed blocker, not a packaging inconvenience.
+The packaged-artifact row is a real fail-closed blocker, not a packaging
+inconvenience.
 OpenContent operations remain `poc_only / verification_profile_required`, and
 the profile must statically bind the exact Principal, authority/root, operation,
 audience, transfer limits, validity interval and, where required, current opaque
@@ -121,12 +126,15 @@ against the frozen contract:
 - the canonical `verify-edge-contract.sh` external-public route accepted the
   exact frozen issuer, same-origin authorization/token/JWKS endpoints, one
   RS256 signing key and a minimum RSA size of 2048 bits; token-claim validation
-  remained explicitly skipped because no user login has occurred.
+  remained explicitly skipped in that credential-free observation because no
+  login had occurred there. The later 7.3 candidate receipt records the real
+  signed-token validation and JIT persistence smoke.
 
 Those credential-free public observations prove the public edge contract only.
-The separately authorized 7.1 receipt closes the hidden topology portion, and
-the later 7.2 receipt independently closes backup/restore. Neither provides
-candidate migration or cutover evidence for 7.3–7.4.
+The separately authorized 7.1 receipt closes the hidden topology portion, the
+7.2 receipt independently closes backup/restore, and the later 7.3 receipt
+closes isolated candidate migration/health/synthetic persistence. None of them
+authorizes or supplies 7.4 cutover evidence.
 
 At pushed source commit `d86b8e15dc4305c3eb26899d2bdc833d06a008e0`,
 the canonical production build completed with 292 governed actions, 27 fresh
@@ -142,14 +150,14 @@ private-contribution requirement. No DMG/ZIP or receipt was emitted.
 
 ## Execution order
 
-1. Close only credential-free local gaps: tests, architecture gate, cleanup audit,
-   source composition, sealed packaged artifact, packaged pre-login smoke and
-   public OIDC contract checks.
-2. Stop at the first real login boundary and request the exact U0-U4 mapping or
-   user-driven system-browser operation.
-3. Preserve the completed 7.1 baseline and 7.2 protected backup/isolated-restore
-   evidence while creating only independently named 7.3 candidate resources.
-4. Preserve exact backup/candidate resource names and request a separate,
-   explicit 7.4 cutover approval after presenting the complete candidate packet.
+1. Preserve the completed local/source gates and finish the reviewed static
+   verification-profile plus sealed packaged artifact without weakening PoC
+   admission.
+2. Preserve the completed 7.1 baseline, 7.2 protected restore evidence and 7.3
+   loopback candidate/resource ledger.
+3. Present the exact cutover/rollback packet and stop for a separate explicit
+   7.4 approval; do not infer it from the completed candidate.
+4. Map U0-U4 to five real packaged profiles on at least three machines/VMs;
+   every Human enters only their own OIDC, Runtime and OpenContent credentials.
 5. Run the five-profile happy path and R1-R10 only through the packaged product;
    source tests, direct SQL and fixture responses never satisfy those rows.

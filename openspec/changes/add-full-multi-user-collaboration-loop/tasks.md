@@ -63,7 +63,8 @@
   - 2026-08-26 用户授权的两阶段只读审计确认 DNS/443 当前栈、精确 image ID/manifest、Cloud `public-v5` catalog fingerprint、Keycloak realm/client、Caddyfile SHA-256/动态 upstream 和完整 rollback identity；数据库会话强制 read-only，未执行容器、数据库、Caddy 或文件写入。脱敏证据见 `docs/operations/full-collaboration-stage4-a-host-baseline.md`。
 - [x] 7.2 对 Cloud DB、Keycloak DB/realm、edge 配置和当前 image metadata 完成备份与隔离 restore rehearsal；任何 migration/cutover 前必须证明旧栈可恢复。
   - 2026-08-26 用户授权的 session-prefixed 演练完成 Cloud DB 行级快照恢复、public-v5 catalog 复核、Keycloak DB 恢复、Realm 导出后向全新数据库导入、edge 归档安全解包和现网不变性复查；全部隔离资源无公开端口并已停止保留。脱敏证据见 `docs/operations/full-collaboration-stage4-a-host-backup-restore.md`。
-- [ ] 7.3 从旧 Cloud DB 复制独立 candidate database/volume/container/network，candidate-only 执行 forward migration、目标 image health 和合成账号 smoke；不得直接迁移运行中的旧数据库或新增 issuer fallback。
+- [x] 7.3 从旧 Cloud DB 复制独立 candidate database/volume/container/network，candidate-only 执行 forward migration、目标 image health 和合成账号 smoke；不得直接迁移运行中的旧数据库或新增 issuer fallback。
+  - 2026-08-26 使用 session 前缀隔离数据库/卷/双网络/loopback app，从 7.2 public-v5 dump 续跑真实 v12 中断点至 ready v14，完成 no-op migration、聚合安全审计、重复启动、健康/401/唯一 issuer 验证，并由 Human 通过 system-browser PKCE 注册一个新合成账号，证明 candidate 重启前后 JIT User/OIDC identity 与 revision 持久稳定；旧 Cloud/DB/Caddy 未变。脱敏证据见 `docs/operations/full-collaboration-stage4-a-host-candidate.md`。
 - [ ] 7.4 candidate 全部门禁通过后切换现有 Caddy `cloud-test` upstream，保持 `login-test/realms/SciForge` issuer 不变；验证 packaged/live 后再决定退役旧栈，期间必须能精确回滚旧 upstream/app/database。
 
 ## 8. 自动化、packaged 与真机验收
