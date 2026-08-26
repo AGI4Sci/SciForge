@@ -61,7 +61,8 @@
 
 - [x] 7.1 只读重验 `47.76.230.118` 上现有 A 的 exact image、schema、`cloud-test` origin、`login-test/realms/SciForge` issuer、Keycloak/Cloud 数据库和 Caddy upstream，并记录不含秘密的基线回执。
   - 2026-08-26 用户授权的两阶段只读审计确认 DNS/443 当前栈、精确 image ID/manifest、Cloud `public-v5` catalog fingerprint、Keycloak realm/client、Caddyfile SHA-256/动态 upstream 和完整 rollback identity；数据库会话强制 read-only，未执行容器、数据库、Caddy 或文件写入。脱敏证据见 `docs/operations/full-collaboration-stage4-a-host-baseline.md`。
-- [ ] 7.2 对 Cloud DB、Keycloak DB/realm、edge 配置和当前 image metadata 完成备份与隔离 restore rehearsal；任何 migration/cutover 前必须证明旧栈可恢复。
+- [x] 7.2 对 Cloud DB、Keycloak DB/realm、edge 配置和当前 image metadata 完成备份与隔离 restore rehearsal；任何 migration/cutover 前必须证明旧栈可恢复。
+  - 2026-08-26 用户授权的 session-prefixed 演练完成 Cloud DB 行级快照恢复、public-v5 catalog 复核、Keycloak DB 恢复、Realm 导出后向全新数据库导入、edge 归档安全解包和现网不变性复查；全部隔离资源无公开端口并已停止保留。脱敏证据见 `docs/operations/full-collaboration-stage4-a-host-backup-restore.md`。
 - [ ] 7.3 从旧 Cloud DB 复制独立 candidate database/volume/container/network，candidate-only 执行 forward migration、目标 image health 和合成账号 smoke；不得直接迁移运行中的旧数据库或新增 issuer fallback。
 - [ ] 7.4 candidate 全部门禁通过后切换现有 Caddy `cloud-test` upstream，保持 `login-test/realms/SciForge` issuer 不变；验证 packaged/live 后再决定退役旧栈，期间必须能精确回滚旧 upstream/app/database。
 
