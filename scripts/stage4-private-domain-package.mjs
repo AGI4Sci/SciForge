@@ -185,6 +185,35 @@ export async function verifyStage4PrivateDomainPackageInputs(options) {
   })
 }
 
+export async function resealStage4PrivateDomainPackageStaging(options) {
+  const stagingProjectRoot = await requireCanonicalDirectory(
+    options?.stagingProjectRoot,
+    'Stage 4 composition workspace'
+  )
+  const packages = options?.privateDomainPackages
+  if (!Array.isArray(packages) || packages.length < 1 || packages.length > 16) {
+    throw new Error('[stage4-private-domain] Staged private package inventory is invalid.')
+  }
+  const domainsRoot = resolve(stagingProjectRoot, 'packages', 'domains')
+  await requireCanonicalDirectory(domainsRoot, 'Stage 4 domains staging directory')
+  const digests = new Set()
+  for (const candidate of packages) {
+    if (!candidate || typeof candidate !== 'object' ||
+      candidate.provenance !== 'external-local-package' ||
+      candidate.verificationStatus !== 'verification-profile-verified' ||
+      !SHA256_PATTERN.test(candidate.sha256) || digests.has(candidate.sha256)) {
+      throw new Error('[stage4-private-domain] Staged private package inventory is invalid.')
+    }
+    digests.add(candidate.sha256)
+    const packageRoot = resolveContained(
+      domainsRoot,
+      `private-${candidate.sha256.slice(0, 24)}`
+    )
+    await resealPrivatePackageTree(packageRoot)
+    await readPrivatePackageFiles(packageRoot)
+  }
+}
+
 async function loadCanonicalContracts(repositoryRoot) {
   const definitionModule = await importRepositoryModule(
     repositoryRoot,
@@ -470,6 +499,65 @@ async function readPrivatePackageFiles(root) {
         sha256: sha256(bytes)
       }))
     }
+  }
+}
+
+async function resealPrivatePackageTree(root) {
+  await visit(root)
+
+  async function visit(path) {
+    let stats
+    try {
+      stats = await lstat(path)
+    } catch {
+      throw new Error('[stage4-private-domain] Staged private package is unavailable.')
+    }
+    if (stats.isSymbolicLink() || await realpath(path) !== path) {
+      throw new Error('[stage4-private-domain] Staged private package contains a symbolic link.')
+    }
+    if (stats.isDirectory()) {
+      await setOwnerOnlyMode(path, stats, 0o700)
+      const entries = await readdir(path, { withFileTypes: true })
+      for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+        if (!entry.name || entry.name === '.' || entry.name === '..' || entry.name.includes(sep)) {
+          throw new Error('[stage4-private-domain] Staged private package path is invalid.')
+        }
+        await visit(join(path, entry.name))
+      }
+      return
+    }
+    if (!stats.isFile() || stats.nlink !== 1 || stats.size < 1 ||
+      stats.size > MAX_PACKAGE_FILE_BYTES) {
+      throw new Error('[stage4-private-domain] Staged private package file is invalid.')
+    }
+    await setOwnerOnlyMode(path, stats, 0o600)
+  }
+}
+
+async function setOwnerOnlyMode(path, expectedStats, mode) {
+  let handle
+  try {
+    const directoryFlag = expectedStats.isDirectory()
+      ? (fileConstants.O_DIRECTORY ?? 0)
+      : 0
+    handle = await open(
+      path,
+      fileConstants.O_RDONLY | directoryFlag | (fileConstants.O_NOFOLLOW ?? 0)
+    )
+    const before = await handle.stat()
+    if (before.dev !== expectedStats.dev || before.ino !== expectedStats.ino ||
+      before.isDirectory() !== expectedStats.isDirectory() ||
+      before.isFile() !== expectedStats.isFile()) {
+      throw new Error('[stage4-private-domain] Staged private package changed during reseal.')
+    }
+    await handle.chmod(mode)
+    const current = await lstat(path)
+    if (current.isSymbolicLink() || current.dev !== before.dev || current.ino !== before.ino ||
+      (current.mode & 0o777) !== mode || await realpath(path) !== path) {
+      throw new Error('[stage4-private-domain] Staged private package changed during reseal.')
+    }
+  } finally {
+    await handle?.close()
   }
 }
 

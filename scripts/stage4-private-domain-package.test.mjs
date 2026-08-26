@@ -23,6 +23,7 @@ import {
 } from './content-space-local-authorization-package.mjs'
 import {
   composeStage4PrivateDomainPackages,
+  resealStage4PrivateDomainPackageStaging,
   verifyStage4PrivateDomainPackage
 } from './stage4-private-domain-package.mjs'
 
@@ -97,6 +98,63 @@ test('composes an external private verification package through the standard gen
     const publicSummary = JSON.stringify(composition.privateDomainPackages)
     assert.doesNotMatch(publicSummary, /stage4-user|stage4-device|provider-instance-a/u)
     assert.doesNotMatch(publicSummary, new RegExp(escapeRegExp(packageRoot), 'u'))
+  })
+})
+
+test('reseals only the staged package copy after a workspace installer changes modes', async () => {
+  if (process.platform === 'win32') return
+  await withTemporaryRoot(async (root) => {
+    const requestPath = join(root, 'request.json')
+    const packageRoot = join(root, 'external-authorization-package')
+    const stagingProjectRoot = join(root, 'build-workspace')
+    await writeFile(requestPath, `${JSON.stringify(validRequest(), null, 2)}\n`, {
+      mode: 0o600
+    })
+    await generateLocalContentSpaceAuthorizationPackage({
+      requestPath,
+      outputDirectory: packageRoot,
+      now: TEST_NOW
+    })
+    await mkdir(join(stagingProjectRoot, 'packages', 'domains'), {
+      recursive: true,
+      mode: 0o700
+    })
+    await writeFile(
+      join(stagingProjectRoot, 'package.json'),
+      `${JSON.stringify({
+        name: '@fixture/stage4-build-workspace',
+        private: true,
+        workspaces: ['packages/domains/*']
+      }, null, 2)}\n`,
+      { mode: 0o600 }
+    )
+    const composition = await composeStage4PrivateDomainPackages({
+      repositoryRoot: REPOSITORY_ROOT,
+      stagingProjectRoot,
+      privateDomainPackagePaths: [packageRoot],
+      now: TEST_NOW
+    })
+    const [summary] = composition.privateDomainPackages
+    assert.ok(summary)
+    const stagedPackageRoot = join(
+      stagingProjectRoot,
+      'packages',
+      'domains',
+      `private-${summary.sha256.slice(0, 24)}`
+    )
+    await chmod(stagedPackageRoot, 0o755)
+    await chmod(join(stagedPackageRoot, 'src'), 0o755)
+
+    await resealStage4PrivateDomainPackageStaging({
+      stagingProjectRoot,
+      privateDomainPackages: composition.privateDomainPackages
+    })
+    const verified = await verifyStage4PrivateDomainPackage({
+      repositoryRoot: REPOSITORY_ROOT,
+      packagePath: stagedPackageRoot,
+      now: TEST_NOW
+    })
+    assert.deepEqual(verified.privateDomainPackage, summary)
   })
 })
 

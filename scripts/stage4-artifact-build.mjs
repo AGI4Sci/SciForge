@@ -15,7 +15,8 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
-  composeStage4PrivateDomainPackages
+  composeStage4PrivateDomainPackages,
+  resealStage4PrivateDomainPackageStaging
 } from './stage4-private-domain-package.mjs'
 
 const require = createRequire(import.meta.url)
@@ -99,6 +100,10 @@ async function main(argv) {
         '--audit=false',
         '--fund=false'
       ], installEnvironment, stagingProjectRoot)
+      await resealStage4PrivateDomainPackageStaging({
+        stagingProjectRoot,
+        privateDomainPackages: privatePackageComposition.privateDomainPackages
+      })
       await run(
         'npm',
         ['run', 'domain-packages:check'],
