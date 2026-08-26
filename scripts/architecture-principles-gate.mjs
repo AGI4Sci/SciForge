@@ -186,33 +186,38 @@ export function assertDomainPackageIdentity(packageJson, manifest, path) {
 }
 
 export function assertBundledStage4Contract(
-  bytes,
+  contractSurfaces,
   repositoryRoot = REPOSITORY_ROOT,
   sourceCommit,
   privateComposition
 ) {
-  if (!Buffer.isBuffer(bytes) || bytes.byteLength === 0) {
-    throw new Error('Packaged app.asar is empty or unavailable.')
+  const surfaces = Buffer.isBuffer(contractSurfaces)
+    ? [contractSurfaces]
+    : contractSurfaces
+  if (!Array.isArray(surfaces) || surfaces.length === 0 ||
+    surfaces.some((bytes) => !Buffer.isBuffer(bytes) || bytes.byteLength === 0)) {
+    throw new Error('Packaged application contract bytes are empty or unavailable.')
   }
+  const includes = (identity) => surfaces.some((bytes) => bytes.includes(Buffer.from(identity)))
   const requiredIdentities = [
     ...REQUIRED_BUNDLED_IDENTITIES,
     ...(sourceCommit ? ['sciforgeStage4Build', 'sciforge-stage4-acceptance', sourceCommit] : [])
   ]
   for (const identity of requiredIdentities) {
-    if (!bytes.includes(Buffer.from(identity))) {
-      throw new Error(`Packaged app.asar is missing required OIDC identity: ${identity}`)
+    if (!includes(identity)) {
+      throw new Error(`Packaged application is missing required OIDC identity: ${identity}`)
     }
   }
   for (const identity of [
     ...(privateComposition?.privateDomainPackages ?? []).map((entry) => entry.packageName)
   ]) {
-    if (!bytes.includes(Buffer.from(identity))) {
-      throw new Error(`Packaged app.asar is missing private composition identity: ${identity}`)
+    if (!includes(identity)) {
+      throw new Error(`Packaged application is missing private composition identity: ${identity}`)
     }
   }
   for (const identity of [...FORBIDDEN_BUNDLED_IDENTITIES, resolve(repositoryRoot)]) {
-    if (bytes.includes(Buffer.from(identity))) {
-      throw new Error(`Packaged app.asar contains a forbidden source/test identity: ${identity}`)
+    if (includes(identity)) {
+      throw new Error(`Packaged application contains a forbidden source/test identity: ${identity}`)
     }
   }
 }
@@ -385,17 +390,28 @@ async function verifyAndExtractArtifact(options, source) {
       'Resources',
       'app.asar'
     )
-    assertBundledStage4Contract(
-      await readRegularFile(appAsar),
-      REPOSITORY_ROOT,
-      source.commit,
-      receiptHandle.receipt.composition
-    )
     const resourcesRoot = join(
       extractionRoot,
       ...options.packagedExecutableLocator.split('/').slice(0, appBundle + 1),
       'Contents',
       'Resources'
+    )
+    const contractSurfaces = [await readRegularFile(appAsar)]
+    const unpackedMain = join(
+      resourcesRoot,
+      'app.asar.unpacked',
+      'out',
+      'main',
+      'index.js'
+    )
+    if (await pathExists(unpackedMain)) {
+      contractSurfaces.push(await readRegularFile(unpackedMain))
+    }
+    assertBundledStage4Contract(
+      contractSurfaces,
+      REPOSITORY_ROOT,
+      source.commit,
+      receiptHandle.receipt.composition
     )
     const internalRuntimeComposition = createInternalRuntimeComposition(REPOSITORY_ROOT)
     const deploymentConfigurationComposition =

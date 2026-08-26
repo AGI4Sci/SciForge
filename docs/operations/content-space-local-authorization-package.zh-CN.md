@@ -136,7 +136,10 @@ Builder 启动前失败。不要用 `.gitignore`、`assume-unchanged`、伪造 r
 文件把授权事实塞进源码树。
 
 正式 architecture gate 必须再次提供同一外部 package，并从原路径重新校验其当前 bytes 和
-有效期，再与 sealed artifact receipt 中的脱敏摘要逐字节比较：
+有效期，再与 sealed artifact receipt 中的脱敏摘要逐字节比较。Electron 因 native dependency
+把 canonical main bundle 放入 `app.asar.unpacked` 时，gate 会把该 regular file 与 `app.asar`
+共同作为 packaged contract surface，仍要求冻结 OIDC/build/package identity 并拒绝 mock、fallback
+和源码路径 marker：
 
 ```bash
 npm run architecture-principles:gate -- \

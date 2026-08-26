@@ -107,6 +107,26 @@ test('packaged bundle contains frozen OIDC/build identities and no source/mock f
       privateDomainPackages: [{ packageName: '@example/private-authorization' }]
     }
   ))
+  assert.doesNotThrow(() => assertBundledStage4Contract(
+    [
+      Buffer.from([
+        'sciforgeStage4Build',
+        'sciforge-stage4-acceptance',
+        sourceCommit,
+        '@example/private-authorization'
+      ].join('\n')),
+      Buffer.from([
+        STAGE4_DEPLOYMENT.oidcAudience,
+        STAGE4_DEPLOYMENT.oidcRedirectUri,
+        'packaged-production-code'
+      ].join('\n'))
+    ],
+    '/private/source-root',
+    sourceCommit,
+    {
+      privateDomainPackages: [{ packageName: '@example/private-authorization' }]
+    }
+  ))
   assert.throws(
     () => assertBundledStage4Contract(
       Buffer.from([
