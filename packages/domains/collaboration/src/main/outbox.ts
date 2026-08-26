@@ -67,6 +67,7 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
       throw new Error('Durable cloud outbox accepts idempotent write commands only.')
     }
     const bodyHash = idempotentCommandHash(parsed)
+    const supersession = commandSupersession(kind, parsed)
     await this.options.store.transact((draft) => {
       const existing = draft.outbox.find((entry) => entry.idempotencyKey === parsed.idempotencyKey)
       if (existing) {
@@ -74,6 +75,24 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
           throw new Error('Outbox idempotency key was reused for a different command.')
         }
         return
+      }
+      if (supersession) {
+        // Availability is a heartbeat-fenced current observation, not an
+        // append-only external effect. Once a newer observation exists, an
+        // older non-sending command can only fail its Agent revision CAS and
+        // must not block the current projection. An actively sending command
+        // remains so its in-flight delivery can settle against a durable row.
+        let newerFactAlreadyQueued = false
+        draft.outbox = draft.outbox.filter((entry) => {
+          const queued = commandSupersession(entry.kind, entry.body)
+          if (!queued || queued.key !== supersession.key) return true
+          if (compareSupersessionOrder(queued, supersession) > 0) {
+            newerFactAlreadyQueued = true
+            return true
+          }
+          return entry.state === 'sending'
+        })
+        if (newerFactAlreadyQueued) return
       }
       const now = this.now().toISOString()
       draft.outbox.push({
@@ -414,6 +433,38 @@ function idempotentCommandHash(value: unknown): string {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return sha256(canonicalJson(value))
   const { requestId: _requestId, ...command } = value as Record<string, unknown>
   return sha256(canonicalJson(command))
+}
+
+type CommandSupersession = Readonly<{
+  key: string
+  agentRevision: number
+  observedAt: number
+}>
+
+function commandSupersession(
+  kind: CollaborationOutboxEntry['kind'],
+  body: Readonly<Record<string, unknown>>
+): CommandSupersession | undefined {
+  if (
+    kind === 'worker.availability' &&
+    body.type === 'worker.availability.publish' &&
+    typeof body.agentId === 'string' &&
+    typeof body.expectedAgentRevision === 'number' &&
+    typeof body.observedAt === 'string'
+  ) {
+    const observedAt = Date.parse(body.observedAt)
+    if (!Number.isFinite(observedAt)) return undefined
+    return {
+      key: `worker.availability:${body.agentId}`,
+      agentRevision: body.expectedAgentRevision,
+      observedAt
+    }
+  }
+  return undefined
+}
+
+function compareSupersessionOrder(left: CommandSupersession, right: CommandSupersession): number {
+  return left.agentRevision - right.agentRevision || left.observedAt - right.observedAt
 }
 
 function safeError(error: unknown, sanitizeText?: (value: string) => string): string {

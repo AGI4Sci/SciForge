@@ -70,6 +70,86 @@ test('a pending command wakes after exact Agent authority becomes ready', async 
   assert.equal(authority.businessCommits, 1)
 })
 
+test('a current Worker availability supersedes stale undelivered heartbeat facts', async () => {
+  const store = await localStore()
+  const attemptedAgentRevisions: number[] = []
+  const outbox = availabilityOutbox(store, attemptedAgentRevisions)
+  outbox.stop()
+
+  await outbox.enqueue('worker.availability', availabilityCommand({
+    expectedAgentRevision: 45,
+    connectionStatus: 'offline',
+    observedAt: TEST_TIMESTAMP
+  }))
+  await outbox.enqueue('worker.availability', availabilityCommand({
+    expectedAgentRevision: 46,
+    connectionStatus: 'online',
+    observedAt: TEST_LATER_TIMESTAMP
+  }))
+  outbox.start()
+  await outbox.waitForIdle()
+
+  assert.deepEqual(attemptedAgentRevisions, [46])
+  const entries = store.snapshot().outbox.filter(({ kind }) => kind === 'worker.availability')
+  assert.equal(entries.length, 1)
+  assert.equal(entries[0]?.state, 'delivered', entries[0]?.error)
+})
+
+test('a late stale Worker availability cannot supersede the current Agent revision', async () => {
+  const store = await localStore()
+  const attemptedAgentRevisions: number[] = []
+  const outbox = availabilityOutbox(store, attemptedAgentRevisions)
+  outbox.stop()
+
+  await outbox.enqueue('worker.availability', availabilityCommand({
+    expectedAgentRevision: 46,
+    connectionStatus: 'online',
+    observedAt: TEST_LATER_TIMESTAMP
+  }))
+  await outbox.enqueue('worker.availability', availabilityCommand({
+    expectedAgentRevision: 45,
+    connectionStatus: 'offline',
+    observedAt: TEST_TIMESTAMP
+  }))
+  outbox.start()
+  await outbox.waitForIdle()
+
+  assert.deepEqual(attemptedAgentRevisions, [46])
+  const entries = store.snapshot().outbox.filter(({ kind }) => kind === 'worker.availability')
+  assert.equal(entries.length, 1)
+  assert.equal(entries[0]?.state, 'delivered', entries[0]?.error)
+})
+
+test('an in-flight Worker availability is retained while the current fact is queued', async () => {
+  const store = await localStore()
+  const outbox = availabilityOutbox(store, [])
+  outbox.stop()
+  await outbox.enqueue('worker.availability', availabilityCommand({
+    expectedAgentRevision: 45,
+    connectionStatus: 'offline',
+    observedAt: TEST_TIMESTAMP
+  }))
+  await store.transact((draft) => {
+    const sending = draft.outbox[0]
+    assert.ok(sending)
+    sending.state = 'sending'
+  })
+
+  await outbox.enqueue('worker.availability', availabilityCommand({
+    expectedAgentRevision: 46,
+    connectionStatus: 'online',
+    observedAt: TEST_LATER_TIMESTAMP
+  }))
+
+  assert.deepEqual(store.snapshot().outbox.map(({ state, body }) => ({
+    state,
+    expectedAgentRevision: body.expectedAgentRevision
+  })), [
+    { state: 'sending', expectedAgentRevision: 45 },
+    { state: 'pending', expectedAgentRevision: 46 }
+  ])
+})
+
 test('an uncertain response retries durably without duplicating the cloud write', async () => {
   const store = await localStore()
   const authority = new IdempotentAgentAuthority()
@@ -401,6 +481,94 @@ function receiptFor(request: RestRequest): RestResponse {
       providerMessageId: 'provider-outbox-message-1'
     }
   }
+}
+
+function availabilityCommand(input: Readonly<{
+  expectedAgentRevision: number
+  connectionStatus: 'online' | 'offline'
+  observedAt: string
+}>): RestRequest {
+  return {
+    protocolVersion: '1.0',
+    requestId: input.expectedAgentRevision === 45
+      ? 'req_AvailabilityStale01'
+      : 'req_AvailabilityCurrent1',
+    idempotencyKey: `idem_worker.availability.${input.expectedAgentRevision}`,
+    type: 'worker.availability.publish',
+    agentId: TEST_IDS.agentId,
+    expectedAgentRevision: input.expectedAgentRevision,
+    connectionStatus: input.connectionStatus,
+    lastHeartbeatAt: input.connectionStatus === 'online' ? TEST_LATER_TIMESTAMP : null,
+    runtimeReadiness: 'ready',
+    runtimeCapabilityTags: ['agent-runtime.codex', 'model-access.api'],
+    acceptsNewOffers: input.connectionStatus === 'online',
+    activeTaskCount: 0,
+    observedAt: input.observedAt
+  }
+}
+
+function availabilityOutbox(
+  store: CollaborationLocalStore,
+  attemptedAgentRevisions: number[]
+): DurableCloudOutbox {
+  return new DurableCloudOutbox({
+    store,
+    agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: async (agentId) => ({
+        state: 'ready',
+        agentId,
+        userId: agentNodeFixture.ownerUserId,
+        deviceId: agentNodeFixture.deviceId!,
+        generation: agentNodeFixture.credentialVersion,
+        runtimeId: 'codex',
+        capabilityTags: ['agent-runtime.codex', 'model-access.api']
+      }),
+      execute: async (_agentId, request) => {
+        assert.equal(request.type, 'worker.availability.publish')
+        if (request.type !== 'worker.availability.publish') {
+          throw new Error('Expected a Worker availability command.')
+        }
+        attemptedAgentRevisions.push(request.expectedAgentRevision)
+        if (request.expectedAgentRevision === 45) {
+          return {
+            protocolVersion: '1.0',
+            type: 'rest.error',
+            requestId: request.requestId,
+            error: createCollaborationError(
+              'revision_conflict',
+              'The resource revision is stale.'
+            )
+          }
+        }
+        return {
+          protocolVersion: '1.0',
+          type: 'rest.entity',
+          requestId: request.requestId,
+          entity: {
+            schemaVersion: 1,
+            type: 'worker_availability_projection',
+            userId: agentNodeFixture.ownerUserId,
+            agentId: TEST_IDS.agentId,
+            deviceId: agentNodeFixture.deviceId!,
+            agentActive: true,
+            deviceActive: true,
+            connectionStatus: 'online',
+            lastHeartbeatAt: TEST_LATER_TIMESTAMP,
+            runtimeReadiness: 'ready',
+            runtimeCapabilityTags: ['agent-runtime.codex', 'model-access.api'],
+            acceptsNewOffers: true,
+            activeTaskCount: 0,
+            observedAt: TEST_LATER_TIMESTAMP,
+            expiresAt: '2099-08-15T09:01:30.000Z',
+            revision: 2,
+            createdAt: TEST_TIMESTAMP,
+            updatedAt: TEST_LATER_TIMESTAMP
+          }
+        }
+      }
+    }),
+    localAgentId: () => TEST_IDS.agentId
+  })
 }
 
 function coordinatorWithdrawCommand(): RestRequest {

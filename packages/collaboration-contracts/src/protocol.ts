@@ -655,6 +655,7 @@ export const restEntitySchema = z.union([
   taskSchema,
   cloudResourceRefSchema,
   projectRecordSchema,
+  workerAvailabilityProjectionSchema,
   humanNeededSchema,
   humanAnswerSchema,
   cloudStateEntitySchema

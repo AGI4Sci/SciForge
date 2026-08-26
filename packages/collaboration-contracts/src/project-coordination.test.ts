@@ -7,6 +7,7 @@ import {
   workerAvailabilityProjectionSchema
 } from './project-coordination.js'
 import { projectContentReadinessSchema } from './project-content.js'
+import { restResponseSchema } from './protocol.js'
 import { TEST_HASH, TEST_IDS, TEST_LATER_TIMESTAMP, TEST_TIMESTAMP } from './testing.js'
 
 const metadata = {
@@ -68,6 +69,20 @@ const textAuthority = taskAuthoritySchema.parse({
 })
 
 describe('orthogonal Project collaboration authority', () => {
+  it('accepts the canonical Worker availability write response', () => {
+    expect(restResponseSchema.parse({
+      protocolVersion: '1.0',
+      type: 'rest.entity',
+      requestId: TEST_IDS.requestId,
+      entity: globalAvailability
+    })).toEqual({
+      protocolVersion: '1.0',
+      type: 'rest.entity',
+      requestId: TEST_IDS.requestId,
+      entity: globalAvailability
+    })
+  })
+
   it('retains activation history throughout removal pending and removed states', () => {
     const pendingRemoval = projectMembershipSchema.parse({
       ...activeMembership,
