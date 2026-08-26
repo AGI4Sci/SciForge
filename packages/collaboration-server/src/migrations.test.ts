@@ -7,6 +7,7 @@ import { visibleRecoveryActionKindSchema } from '@sciforge/collaboration-contrac
 import {
   COLLABORATION_CATALOG_FINGERPRINT,
   COLLABORATION_SOURCE_CATALOG_FINGERPRINTS,
+  COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS,
   COLLABORATION_SCHEMA_DESCRIPTOR,
   COLLABORATION_SCHEMA_FINGERPRINT,
   COLLABORATION_SCHEMA_VERSION,
@@ -143,6 +144,31 @@ describe('collaboration forward-only migration lineage', () => {
     expect(harness.migrations[0]).toContain('migration_0014_requires_v13')
     expect(harness.migrations[0]).toContain('VALUES (14)')
     expect(harness.migrations[0]).not.toContain('VALUES (13)')
+  })
+
+  it.each([
+    ['a-v11', 11, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['public-v5-v11'], 3],
+    ['a-v11', 11, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['staging-v9-v11'], 3],
+    ['current-v12', 12, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['public-v5-v12'], 2],
+    ['current-v12', 12, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['staging-v9-v12'], 2],
+    ['current-v13', 13, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['public-v5-v13'], 1],
+    ['current-v13', 13, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['staging-v9-v13'], 1]
+  ] as const)('resumes the exact %s transition checkpoint', async (
+    route, version, sourceFingerprint, expectedMigrations
+  ) => {
+    const harness = migrationHarness(facts(version, {
+      managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
+      taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: version >= 13
+    }))
+    await runCollaborationMigrations(harness.pool, {
+      sourceCatalogFingerprint: async () => sourceFingerprint,
+      currentCatalogFingerprint: harness.currentCatalogFingerprint
+    })
+    expect(detectCollaborationSchemaRoute(facts(version, {
+      managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
+      taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: version >= 13
+    }))).toBe(route)
+    expect(harness.migrations).toHaveLength(expectedMigrations)
   })
 
   it('computes the same deterministic canonical schema fingerprint used by readiness', async () => {

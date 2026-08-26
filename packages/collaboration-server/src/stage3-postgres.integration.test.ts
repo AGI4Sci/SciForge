@@ -8,6 +8,7 @@ import {
   COLLABORATION_CURRENT_CATALOG_FINGERPRINTS,
   COLLABORATION_SCHEMA_FINGERPRINT,
   COLLABORATION_SOURCE_CATALOG_FINGERPRINTS,
+  COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS,
   type CollaborationSchemaRoute,
   collaborationCatalogFingerprint,
   collaborationSchemaFingerprint,
@@ -119,6 +120,35 @@ describe.skipIf(connectionString === undefined).sequential(
         const beforeRestart = await migrationRestartSnapshot(pool)
         await runCollaborationMigrations(pool)
         expect(await migrationRestartSnapshot(pool)).toEqual(beforeRestart)
+      } finally {
+        await pool.end()
+      }
+    })
+
+    it('resumes public-v5 and staging-v9 after every committed forward boundary', async () => {
+      assertSafeStage3Database(connectionString!)
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
+      try {
+        for (const sourceRoute of ['public-v5', 'staging-v9'] as const) {
+          for (const [version, forwardCount] of [[11, 1], [12, 2], [13, 3]] as const) {
+            await installRoute(pool, sourceRoute)
+            for (const name of FORWARD_MIGRATIONS.slice(0, forwardCount)) {
+              await pool.query(await migrationSource(name))
+            }
+            const checkpoint = `${sourceRoute}-v${version}` as
+              keyof typeof COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS
+            expect(await collaborationCatalogFingerprint(pool), checkpoint)
+              .toBe(COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS[checkpoint])
+
+            await runCollaborationMigrations(pool)
+            expect(await collaborationCatalogFingerprint(pool), checkpoint)
+              .toBe(expectedCurrentCatalog(sourceRoute))
+            await expect(isCollaborationDatabaseReady(pool), checkpoint).resolves.toBe(true)
+            const beforeRestart = await migrationRestartSnapshot(pool)
+            await runCollaborationMigrations(pool)
+            expect(await migrationRestartSnapshot(pool), checkpoint).toEqual(beforeRestart)
+          }
+        }
       } finally {
         await pool.end()
       }

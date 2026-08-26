@@ -26,6 +26,21 @@ export const COLLABORATION_SOURCE_CATALOG_FINGERPRINTS = {
 } as const
 
 /**
+ * A forward migration file commits independently. These fingerprints admit
+ * only the exact public-v5/staging-v9 catalogs that can exist after a process
+ * stops between 0011, 0012, 0013 and 0014. They are recovery checkpoints, not
+ * alternate application schemas or compatibility write paths.
+ */
+export const COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS = {
+  'public-v5-v11': '2523bc6188b523f02f6c84f2bf3376da35686a5bb6578bd6c2a9f788ba307915',
+  'public-v5-v12': '3ed2b79dd3b18792f828a96a62ccae78156bd38dcac3212aa31fe133eeda1cf2',
+  'public-v5-v13': '4fa9360715ddd76d039217e0263a0efca45dbcaa8431bfc5126f15b16fd658cd',
+  'staging-v9-v11': '46fc6e982823a636aac8bfeb495512fcbf6d39b7c25323dec84d922c2f767a90',
+  'staging-v9-v12': 'bbdff3ac1489610939605bbfff83b72fd29059dfc6d5c02ebdb9ddffb33da246',
+  'staging-v9-v13': 'ef0e936e2267cb987723925a61c43c085aa22d38cbcc6f8a0d8ebbd15dafda02'
+} as const
+
+/**
  * Full admitted v14 catalogs. PostgreSQL retains the immutable migration
  * ledger and historical column ordinals, so public-v5 and staging-v9 remain
  * distinguishable audit lineages after converging on the same frozen v14
@@ -44,6 +59,30 @@ export const COLLABORATION_CATALOG_FINGERPRINT =
 const admittedCurrentCatalogFingerprints = new Set<string>(
   Object.values(COLLABORATION_CURRENT_CATALOG_FINGERPRINTS)
 )
+
+const admittedSourceCatalogFingerprints: Readonly<
+Record<Exclude<CollaborationSchemaRoute, 'fresh-v4'>, ReadonlySet<string>>
+> = {
+  'upstream-v4': new Set([COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['upstream-v4']]),
+  'public-v5': new Set([COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['public-v5']]),
+  'staging-v9': new Set([COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['staging-v9']]),
+  'a-v11': new Set([
+    COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['a-v11'],
+    COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['public-v5-v11'],
+    COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['staging-v9-v11']
+  ]),
+  'current-v12': new Set([
+    COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v12'],
+    COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['public-v5-v12'],
+    COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['staging-v9-v12']
+  ]),
+  'current-v13': new Set([
+    COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v13'],
+    COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['public-v5-v13'],
+    COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['staging-v9-v13']
+  ]),
+  'current-v14': admittedCurrentCatalogFingerprints
+}
 
 type LineageFacts = Readonly<{
   version: number | null
@@ -315,9 +354,8 @@ export async function runCollaborationMigrations(
   const actualSourceFingerprint = await (
     runtime.sourceCatalogFingerprint ?? collaborationCatalogFingerprint
   )(pool)
-  const sourceFingerprintMatches = route === 'current-v14'
-    ? admittedCurrentCatalogFingerprints.has(actualSourceFingerprint)
-    : actualSourceFingerprint === COLLABORATION_SOURCE_CATALOG_FINGERPRINTS[route]
+  const sourceFingerprintMatches = admittedSourceCatalogFingerprints[route]
+    .has(actualSourceFingerprint)
   if (!sourceFingerprintMatches) {
     throw new Error(`collaboration_schema_source_fingerprint_mismatch:${route}`)
   }
