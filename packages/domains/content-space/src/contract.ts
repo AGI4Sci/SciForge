@@ -207,7 +207,7 @@ export const contentSpaceOperationSchema = z.enum([
 ])
 export const contentSpaceReadinessReasonSchema = z.enum([
   'available',
-  'verification_profile_required',
+  'runtime_authorization_required',
   'provider_contract_missing',
   'instance_policy_blocked',
   'resource_capability_missing',
@@ -217,12 +217,12 @@ export const contentSpaceReadinessReasonSchema = z.enum([
 export const contentSpaceCapabilityAdmissionSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('admitted'),
-    reasonCode: z.enum(['production_ready', 'verification_profile_admitted'])
+    reasonCode: z.enum(['production_ready', 'runtime_authorized'])
   }).strict().readonly(),
   z.object({
     status: z.literal('blocked'),
     reasonCode: z.enum([
-      'verification_profile_required',
+      'runtime_authorization_required',
       'provider_contract_missing',
       'instance_policy_blocked',
       'resource_capability_missing',
@@ -285,13 +285,13 @@ export const contentSpaceAdmittedCapabilityStateSchema = z.object({
     })
   }
   if (state.admission.status === 'admitted' &&
-    state.admission.reasonCode === 'verification_profile_admitted' &&
+    state.admission.reasonCode === 'runtime_authorized' &&
     (state.readiness !== 'poc_only' ||
-      state.reasonCode !== 'verification_profile_required')) {
+      state.reasonCode !== 'runtime_authorization_required')) {
     context.addIssue({
       code: 'custom',
       path: ['admission', 'reasonCode'],
-      message: 'Only exact PoC verification-required evidence may be admitted by a profile.'
+      message: 'Only PoC evidence requiring live Provider authorization may be runtime-authorized.'
     })
   }
 }).readonly()

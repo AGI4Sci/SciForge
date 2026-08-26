@@ -224,7 +224,7 @@ describe('ContentSpacePanel', () => {
     )
   })
 
-  it('enters an exact-root profile after provider-scoped discovery admits only list-containers', async () => {
+  it('enters an exact root after provider-scoped discovery runtime-authorizes list-containers', async () => {
     const listContainers = vi.fn(async () => ok({
       providerInstanceRef: providerOne,
       items: [{
@@ -237,19 +237,19 @@ describe('ContentSpacePanel', () => {
       {
         operation: 'observe-entry',
         readiness: 'poc_only',
-        reasonCode: 'verification_profile_required',
+        reasonCode: 'runtime_authorization_required',
         admission: {
           status: 'admitted',
-          reasonCode: 'verification_profile_admitted'
+          reasonCode: 'runtime_authorized'
         }
       },
       {
         operation: 'list-entries',
         readiness: 'poc_only',
-        reasonCode: 'verification_profile_required',
+        reasonCode: 'runtime_authorization_required',
         admission: {
           status: 'admitted',
-          reasonCode: 'verification_profile_admitted'
+          reasonCode: 'runtime_authorized'
         }
       }
     ]
@@ -271,19 +271,19 @@ describe('ContentSpacePanel', () => {
           {
             operation: 'list-containers',
             readiness: 'poc_only',
-            reasonCode: 'verification_profile_required',
+            reasonCode: 'runtime_authorization_required',
             admission: {
               status: 'admitted',
-              reasonCode: 'verification_profile_admitted'
+              reasonCode: 'runtime_authorized'
             }
           },
           {
             operation: 'list-entries',
             readiness: 'poc_only',
-            reasonCode: 'verification_profile_required',
+            reasonCode: 'runtime_authorization_required',
             admission: {
               status: 'blocked',
-              reasonCode: 'verification_profile_required'
+              reasonCode: 'runtime_authorization_required'
             }
           }
         ]
@@ -300,7 +300,7 @@ describe('ContentSpacePanel', () => {
       '[aria-label="Content Space Provider readiness"]'
     )
     expect(readiness?.textContent)
-      .toContain('list-containers: PoC (verification profile admitted)')
+      .toContain('list-containers: PoC (runtime authorized)')
     expect(readiness?.closest('details')?.open).toBe(false)
     expect(readiness?.closest('details')?.querySelector('summary')?.textContent)
       .toContain('1 of 2 operations available')
@@ -326,7 +326,7 @@ describe('ContentSpacePanel', () => {
       ok: false as const,
       error: {
         code: 'blocked_by_contract' as const,
-        message: 'Exact root verification is required.',
+        message: 'Exact root authority is required.',
         retry: 'never' as const
       }
     })) satisfies ContentSpaceCapabilityClient['observeEntry']
@@ -337,19 +337,19 @@ describe('ContentSpacePanel', () => {
           {
             operation: 'list-containers',
             readiness: 'poc_only',
-            reasonCode: 'verification_profile_required',
+            reasonCode: 'runtime_authorization_required',
             admission: {
               status: 'admitted',
-              reasonCode: 'verification_profile_admitted'
+              reasonCode: 'runtime_authorized'
             }
           },
           {
             operation: 'list-entries',
             readiness: 'poc_only',
-            reasonCode: 'verification_profile_required',
+            reasonCode: 'runtime_authorization_required',
             admission: {
               status: 'blocked',
-              reasonCode: 'verification_profile_required'
+              reasonCode: 'runtime_authorization_required'
             }
           }
         ]
@@ -374,7 +374,7 @@ describe('ContentSpacePanel', () => {
     })
     expect(listEntries).not.toHaveBeenCalled()
     expect(mounted.container.querySelector('[role="alert"]')?.textContent)
-      .toContain('Exact root verification is required.')
+      .toContain('Exact root authority is required.')
   })
 
   it('does not list containers when PoC evidence has no current admission', async () => {
@@ -384,10 +384,10 @@ describe('ContentSpacePanel', () => {
         items: [{
           operation: 'list-containers',
           readiness: 'poc_only',
-          reasonCode: 'verification_profile_required',
+          reasonCode: 'runtime_authorization_required',
           admission: {
             status: 'blocked',
-            reasonCode: 'verification_profile_required'
+            reasonCode: 'runtime_authorization_required'
           }
         }]
       }),
@@ -401,7 +401,7 @@ describe('ContentSpacePanel', () => {
       '[aria-label="Content Space Provider readiness"]'
     )
     expect(readiness?.textContent)
-      .toContain('list-containers: PoC unavailable (verification required)')
+      .toContain('list-containers: PoC unavailable (connect Provider)')
     expect(readiness?.closest('details')?.querySelector('summary')?.textContent)
       .toContain('0 of 1 operations available')
     expect(mounted.container.textContent)
@@ -1105,7 +1105,7 @@ function panelClient(
     openPortal: async () => ok({ opened: true as const }),
     observeImmutableVersion: async () => ok({
       proven: false as const,
-      reasonCode: 'verification_profile_required' as const
+      reasonCode: 'runtime_authorization_required' as const
     }),
     observeResource: async () => ({
       reference: rootReference,

@@ -152,7 +152,6 @@ import {
   createContentSpacePortableAuthorityResolver
 } from './portable-authority-resolver.js'
 import { ContentSpaceProviderCatalog } from './provider-catalog.js'
-import { composeContentSpaceVerificationPolicy } from './verification-policy-catalog.js'
 import {
   ContentSpaceService,
   type ContentSpaceServiceCallContext,
@@ -265,7 +264,6 @@ export function createDomainMainEntry(
         throw new Error('Content Space requires complete main extension composition.')
       }
       const catalog = new ContentSpaceProviderCatalog(contributions)
-      const verificationPolicy = composeContentSpaceVerificationPolicy(contributions)
       runtime = Object.freeze({
         catalog,
         service: new ContentSpaceService({
@@ -274,8 +272,7 @@ export function createDomainMainEntry(
             fileTransfers: Boolean(host.fileTransfers),
             externalNavigation: Boolean(host.externalNavigation)
           }),
-          ...(host.fileTransfers ? { featureFileTransfers: host.fileTransfers } : {}),
-          ...(verificationPolicy ? { verificationPolicy } : {})
+          ...(host.fileTransfers ? { featureFileTransfers: host.fileTransfers } : {})
         })
       })
       return () => {
@@ -395,7 +392,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
     }
   }>
   const agentResources = new Map<string, AgentResourceRecord>()
-  const verificationBinding = (record: AgentResourceRecord) => Object.freeze({
+  const authorityBinding = (record: AgentResourceRecord) => Object.freeze({
     root: record.root,
     reference: record.reference
   })
@@ -569,7 +566,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
             reauthorizedPrincipal: caller.principal,
             assertPrincipalCurrent,
             audience: record.audience,
-            verificationBinding: verificationBinding(record),
+            authorityBinding: authorityBinding(record),
             ...(observationContext.signal ? { signal: observationContext.signal } : {})
           })
           record.revisionState.observedRevision = contentSpaceResourceRevision(
@@ -1579,7 +1576,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
           const parent = record.reference as ContentContainerReference
           const listed = await options.getService().listEntries(
             { parent, page },
-            call(context, verificationBinding(record))
+            call(context, authorityBinding(record))
           )
           return Object.freeze({
             parent: listed.parent,
@@ -1610,7 +1607,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
             () => options.getService().createFolder({
               parent: record.reference as ContentContainerReference,
               name
-            }, writeCall(context, verificationBinding(record))),
+            }, writeCall(context, authorityBinding(record))),
             (receipt) => {
               record.revisionState.writeInvocationId = receipt.invocationId
               return Object.freeze({
@@ -1650,7 +1647,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
                   signal
                 })
               }
-            }, writeCall(context, verificationBinding(record))),
+            }, writeCall(context, authorityBinding(record))),
             (receipt) => {
               record.revisionState.writeInvocationId = receipt.invocationId
               return Object.freeze({
@@ -1691,7 +1688,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
                   signal
                 })
               }
-            }, writeCall(context, verificationBinding(record))),
+            }, writeCall(context, authorityBinding(record))),
             () => Object.freeze({ changed: false })
           )
         }
@@ -2239,7 +2236,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
 
 function call(
   context: ContentSpaceCapabilityContext,
-  verificationBinding?: ContentSpaceServiceCallContext['verificationBinding']
+  authorityBinding?: ContentSpaceServiceCallContext['authorityBinding']
 ): ContentSpaceServiceCallContext {
   if (!context.caller.principal) {
     throw operationError('unauthorized', 'A Host-reauthorized Principal is required.')
@@ -2248,7 +2245,7 @@ function call(
     reauthorizedPrincipal: context.caller.principal,
     assertPrincipalCurrent: context.assertPrincipalCurrent,
     audience: context.caller.audience,
-    ...(verificationBinding ? { verificationBinding } : {}),
+    ...(authorityBinding ? { authorityBinding } : {}),
     ...(context.signal ? { signal: context.signal } : {})
   })
 }
@@ -2278,9 +2275,9 @@ function agentResourceRevision(record: Readonly<{
 
 function writeCall(
   context: ContentSpaceCapabilityContext,
-  verificationBinding?: ContentSpaceServiceCallContext['verificationBinding']
+  authorityBinding?: ContentSpaceServiceCallContext['authorityBinding']
 ): ContentSpaceServiceWriteCallContext {
-  const base = call(context, verificationBinding)
+  const base = call(context, authorityBinding)
   if (!context.invocationId || !(context.signal instanceof AbortSignal)) {
     throw operationError(
       'invalid_input',

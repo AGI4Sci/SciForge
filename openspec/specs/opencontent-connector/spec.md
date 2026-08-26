@@ -106,14 +106,19 @@ Create-folder/upload-new SHALL never overwrite, auto-rename, retarget, retry bli
 - **WHEN** the second-stage response is lost or invalid after bytes may have reached OpenContent
 - **THEN** the Connector SHALL return `outcome_unknown` and SHALL NOT upload again
 
-### Requirement: Development admission is exact and production remains blocked
+### Requirement: Runtime authorization uses the current Principal-owned connection
 
-The fixed Provider Instance MAY execute a `poc_only` operation only through a trusted development profile that fixes the Provider Instance, complete Host Principal snapshot, exact authority, operation, transfer limits, bounded validity window, and UI/Agent audience. Any operation that is not an explicitly allowed bootstrap or exact-root zero-transfer read SHALL also bind the profile to the Connector-attested opaque external subject and current binding revision. Deployment configuration establishes runtime availability only; it is not an operation verification profile and cannot change readiness or admission. Renderer, Agent, Task, portable input, environment text, Host assurance, or ordinary configuration SHALL NOT nominate an external account or widen the profile. Production readiness remains a separate decision.
+The fixed Provider Instance MAY execute a contract-complete `poc_only / runtime_authorization_required` operation only for a trusted Broker invocation carrying the complete current Host Principal. The Connector SHALL attest that Principal's current Provider connection with the exact Provider Instance, opaque stable external subject, and opaque binding revision, then re-attest those values immediately before business dispatch. Deployment configuration establishes Provider reachability only; renderer state, Agent input, Task data, portable input, environment text, Host assurance, an optional skill package, or ordinary configuration SHALL NOT nominate an external account or synthesize operation authority. Production readiness remains a separate decision.
 
 #### Scenario: One operation lacks a pinned contract
 
-- **WHEN** another operation in the profile has passed its probe
-- **THEN** only the proven operation MAY execute and the incomplete operation SHALL remain `blocked_by_contract`
+- **WHEN** a sibling operation succeeds under the same current connection
+- **THEN** the incomplete operation SHALL remain `blocked_by_contract` and SHALL fail before supplier dispatch
+
+#### Scenario: Current connection changes during invocation
+
+- **WHEN** the Principal signs out, rebinds, changes credentials, or the opaque binding revision changes
+- **THEN** the Connector SHALL reject the stale expected binding before the requested business dispatch
 
 ### Requirement: Shared Documents and Project semantics remain absent
 

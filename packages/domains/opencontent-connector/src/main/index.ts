@@ -34,8 +34,8 @@ import { createOpenContentClient } from './opencontent-client.js'
 import { createNativeOpenContentPrivateAccountRuntime } from './native-enrollment/index.js'
 import { createOpenContentTeamAdministration } from './team-administration.js'
 import {
-  createOpenContentSkillRuntimeSession,
-  resolveOpenContentSkillRuntimeAssets
+  createOpenContentSupplierRuntimeSession,
+  resolveOpenContentSupplierRuntimeAssets
 } from './skill-runtime.js'
 import { createOpenContentContentSpaceFacade } from './facade.js'
 import { resolveOpenContentDeploymentConfiguration } from './deployment-config.js'
@@ -100,44 +100,44 @@ export function createDomainMainEntry(
     const teamAdministration = createOpenContentTeamAdministration({
       baseUrl: deployment.origin
     })
-    const skillAssets = resolveOpenContentSkillRuntimeAssets(host)
-    const skillAssetPaths = skillAssets === undefined
+    const supplierAssets = resolveOpenContentSupplierRuntimeAssets(host)
+    const supplierAssetPaths = supplierAssets === undefined
       ? undefined
-      : assertOpenContentSkillBundledAssetsPresent(skillAssets)
-    const executablePath = skillAssets === undefined
+      : assertOpenContentSkillBundledAssetsPresent(supplierAssets)
+    const executablePath = supplierAssets === undefined
       ? undefined
       : host.getExecutablePath?.()
-    if (skillAssets !== undefined && executablePath === undefined) {
+    if (supplierAssets !== undefined && executablePath === undefined) {
       throw new Error('OpenContent Connector requires the Host executable.')
     }
-    const assertSkillAssetsCurrent = skillAssets === undefined
+    const assertSupplierAssetsCurrent = supplierAssets === undefined
       ? undefined
       : () => {
-          const currentAssets = resolveOpenContentSkillRuntimeAssets(host)
-          if (currentAssets === undefined || !sameSkillAssetLocation(skillAssets, currentAssets)) {
+          const currentAssets = resolveOpenContentSupplierRuntimeAssets(host)
+          if (currentAssets === undefined || !sameSupplierAssetLocation(supplierAssets, currentAssets)) {
             throw new TypeError('Bundled OpenContent assets are unavailable or invalid.')
           }
           assertOpenContentSkillBundledAssetsPresent(currentAssets)
         }
-    const skillRuntime = skillAssets === undefined || skillAssetPaths === undefined ||
+    const supplierRuntime = supplierAssets === undefined || supplierAssetPaths === undefined ||
       executablePath === undefined
       ? undefined
-      : createOpenContentSkillRuntimeSession({
+      : createOpenContentSupplierRuntimeSession({
           providerInstanceRef: instance.providerInstanceRef,
           connections,
           processPort: createNodeOpenContentCliProcessPort({
-            trustedEntrypoint: skillAssetPaths.cliEntrypoint,
+            trustedEntrypoint: supplierAssetPaths.cliEntrypoint,
             executablePath,
             electronRunAsNode: true
           }),
-          assets: skillAssets,
+          assets: supplierAssets,
           site: deployment.origin,
-          assertAssetsCurrent: assertSkillAssetsCurrent
+          assertAssetsCurrent: assertSupplierAssetsCurrent
         })
     runtime = Object.freeze({
       client,
       teamAdministration,
-      ...(skillRuntime ? { skillRuntime } : {})
+      ...(supplierRuntime ? { supplierRuntime } : {})
     })
   }
   const facade = createOpenContentContentSpaceFacade({
@@ -176,7 +176,7 @@ export function createDomainMainEntry(
   }
 }
 
-function sameSkillAssetLocation(
+function sameSupplierAssetLocation(
   expected: OpenContentSkillBundledAssetLocation,
   current: OpenContentSkillBundledAssetLocation
 ): boolean {

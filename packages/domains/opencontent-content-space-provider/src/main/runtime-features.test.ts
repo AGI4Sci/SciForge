@@ -112,7 +112,7 @@ describe('OpenContent optional runtime features', () => {
     expect(states).toContainEqual({
       operation: 'getCurrentPrincipal',
       readiness: 'poc_only',
-      reasonCode: 'verification_profile_required'
+      reasonCode: 'runtime_authorization_required'
     })
     for (const operation of [
       'searchUsers',
@@ -696,7 +696,7 @@ describe('OpenContent optional runtime features', () => {
         {
           operation: 'getCurrentPrincipal',
           readiness: 'poc_only',
-          reasonCode: 'verification_profile_required'
+          reasonCode: 'runtime_authorization_required'
         }
       ])
     expect(states.filter(({ readiness }) => readiness === 'blocked_by_contract'))

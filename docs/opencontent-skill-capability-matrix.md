@@ -34,13 +34,13 @@ CLI argument strings, and arbitrary request payloads are adapter-private transla
 The public contracts enumerate exactly **20 native-document operations** and **50 extended
 operations**. OpenContent currently has **zero** `production_ready` operations. The exact-operation
 ledger below records the limited packaged canonical live evidence; every `live_verified` operation
-still declares `poc_only` / `verification_profile_required`. Runtime availability is intentionally
+still declares `poc_only` / `runtime_authorization_required`. Runtime availability is intentionally
 different from inventory status. Provider-declared readiness (`poc_only`, `blocked_by_contract`, or
 `production_ready`) records evidence; current invocation admission independently reports whether
-the exact caller, Principal, authority, audience, platform and verification facts may execute now.
-An admitted verification invocation remains `poc_only`.
+the exact caller, Principal, authority, audience, platform and current Provider binding may execute
+now. An admitted runtime-authorized invocation remains `poc_only`.
 
-| Installation | `poc_only` / `verification_profile_required` | Blocked or omitted |
+| Installation | `poc_only` / `runtime_authorization_required` | Blocked or omitted |
 |---|---|---|
 | Public checkout, without the private attachment | The six ordinary file operations (`list-containers`, `list-entries`, `observe-entry`, `create-folder`, `upload-new`, `download`); all ten Team Administration operations; session-backed `getCurrentPrincipal` | The native-document feature is not registered. The other 49 extended operations are `blocked_by_contract` / `provider_contract_missing`. Portal targets and immutable-version observation remain blocked. Project provisioning is absent from the Content Space and Provider contracts. |
 | Valid private attachment installed | The same public PoC candidates; nine safely contract-shaped native-document operations; 40 of 50 extended operations | Eleven native-document operations are `blocked_by_contract`: ten hash-bound mutations including `edit`, plus `import` without a verifiable source/content postcondition. Ten extended operations are blocked: `resolveInternalLink`, `listMetadataChoices`, `updateFileVersion`, `searchUsers`, `searchDepartments`, `searchPositions`, `searchGroups`, `resolveCollaborationInvitation`, `listKnowledgeCollections`, and `searchKnowledgeCollections`. Portal targets and immutable-version observation remain blocked. Project provisioning remains absent. |
@@ -61,45 +61,34 @@ but not in SciForge's admitted or executable command unions.
 Provider Instance discovery can enumerate an installed candidate independently of operation
 readiness. It is not an OpenContent business-operation pass and does not promote any row.
 
-### Trusted verification admission
+### Runtime authorization
 
-`poc_only` remains unavailable in the default product composition. A separately reviewed generic
-Content Space verification profile may admit an invocation only when all of these trusted facts
-match exactly:
+A `poc_only` invocation may execute only when these current facts match exactly:
 
 - exact Provider Instance;
 - exact current Host Principal snapshot (authority, subject, assurance, device, and identity
   version); Host assurance is not an external OpenContent account class;
 - exact authority (Provider Instance or authorized personal/shared root);
 - exact operation ID and audience;
-- bounded upload/download maxima and an unexpired validity window no longer than 24 hours; and
-- for Provider-scoped operations, mutations, administration, or non-zero transfers, the exact
-  expected Provider Binding Attestation.
+- Host-enforced bounded upload/download maxima; and
+- the exact expected Provider Binding Attestation.
 
 The v2 Provider Binding Attestation is token-free, non-portable evidence for the exact Provider
 Instance and complete Principal plus an opaque external subject and opaque Connection revision.
-Content Space obtains it only from the pinned Provider and matches it against the static profile.
-It then carries the exact expectation in-process; immediately before business dispatch, the
+Content Space obtains it only from the pinned Provider and matches it to the current invocation.
+It carries the exact expectation in-process; immediately before business dispatch, the
 Provider passes it through the canonical Connector boundary. The Connector reauthenticates the
 actual current session, observes the current external subject, recomputes both opaque values, and
 requires an exact match. Unbind, rebind, credential replacement, stable external-subject identity
 change, or revision drift therefore fails before the Provider business operation; mutable account
 and display labels are not identity keys. Raw external account identifiers do not enter capability
-input or portable authority.
+input or portable authority. The Provider's real read check or write remains the ACL oracle.
 
-Without an attestation, only zero-transfer `list-containers` bootstrap and zero-transfer reads on
-an exact Broker-authoritative content root are profile-safe. The matched upload/download maxima
-are enforced during the actual invocation; they are not compared as descriptive metadata and they
-do not widen the global Content Space bounds.
-
-The profile is supplied by trusted service composition, narrows only that invocation, and leaves
-the Provider declaration as `poc_only`. Caller payloads, renderer state, Agent requests, prompts,
-Tasks, filenames, MIME types, ordinary environment/configuration, attachment presence, or a
-successful sibling operation cannot install, select, or widen it. A verification profile can never
-admit `blocked_by_contract`.
-
-When one operation depends on another gated operation, such as observation before a bounded file
-action, every prerequisite needs its own exact matching profile; one match never widens another.
+Runtime authorization narrows only that invocation and leaves the Provider declaration as
+`poc_only`. Caller payloads, renderer state, Agent requests, prompts, Tasks, filenames, MIME types,
+ordinary environment/configuration, private attachment or Agent-skill presence, and a successful
+sibling operation cannot select the current binding or widen authority. Runtime authorization can
+never admit `blocked_by_contract`; every gated prerequisite is evaluated independently.
 
 ## Canonical Content Space acceptance surface
 
@@ -270,17 +259,17 @@ does not claim a separate DocumentProvider or any live-tenant verification.
 ## Current packaged canonical evidence
 
 This is the sole public live-evidence ledger. It intentionally stores no environment-specific
-Provider, Principal, account, root, resource, profile, or binding identifiers. Each row is scoped to
+Provider, Principal, account, root, resource, or binding identifiers. Each row is scoped to
 the exact operation and abstract authority class shown; it does not verify a composite workflow or
 any sibling operation.
 
 | Exact operation | Sanitized packaged outcome | Evidence | Declared readiness |
 |---|---|---|---|
-| `list-containers` | Personal-root bootstrap completed through the canonical packaged path with a zero-transfer result. | `live_verified` | `poc_only` / `verification_profile_required` |
-| `observe-entry` | Observation completed against the exact authorized personal-root scope with zero transfer. | `live_verified` | `poc_only` / `verification_profile_required` |
-| `list-entries` | A bounded listing completed against the exact authorized personal-root scope. | `live_verified` | `poc_only` / `verification_profile_required` |
-| `upload-new` | The physical packaged UI completed a bounded 157-byte new-file upload; required pre-dispatch re-attestation matched and a refresh observed the new entry. | `live_verified` | `poc_only` / `verification_profile_required` |
-| `download` | A bounded download completed from the exact authorized personal-root scope through the canonical packaged path. | `live_verified` | `poc_only` / `verification_profile_required` |
+| `list-containers` | Personal-root bootstrap completed through the canonical packaged path with a zero-transfer result. | `live_verified` | `poc_only` / `runtime_authorization_required` |
+| `observe-entry` | Observation completed against the exact authorized personal-root scope with zero transfer. | `live_verified` | `poc_only` / `runtime_authorization_required` |
+| `list-entries` | A bounded listing completed against the exact authorized personal-root scope. | `live_verified` | `poc_only` / `runtime_authorization_required` |
+| `upload-new` | The physical packaged UI completed a bounded 157-byte new-file upload; required pre-dispatch re-attestation matched and a refresh observed the new entry. | `live_verified` | `poc_only` / `runtime_authorization_required` |
+| `download` | A bounded download completed from the exact authorized personal-root scope through the canonical packaged path. | `live_verified` | `poc_only` / `runtime_authorization_required` |
 
 The re-attestation result above is path and safety evidence for `upload-new`; it is not a separate
 OpenContent business operation. OpenContent still has **zero** `production_ready` operations.
@@ -304,7 +293,7 @@ does not admit a supplier command outside that union.
 
 | Exact operation | Sanitized packaged outcome | Evidence classification | Declared readiness |
 |---|---|---|---|
-| `content-space.get-current-principal` | An earlier B-side invocation through the retired `user-info` mapping returned a typed current external principal for that exact authorized session. The current implementation instead uses the Connector-revalidated session identity and dispatches no supplier command. | Historical live evidence for the retired supplier route; not a live claim for the current semantic route | `poc_only` / `verification_profile_required` |
+| `content-space.get-current-principal` | An earlier B-side invocation through the retired `user-info` mapping returned a typed current external principal for that exact authorized session. The current implementation instead uses the Connector-revalidated session identity and dispatches no supplier command. | Historical live evidence for the retired supplier route; not a live claim for the current semantic route | `poc_only` / `runtime_authorization_required` |
 
 ### Native-document packaged outcomes
 
@@ -313,18 +302,18 @@ These outcomes are acceptance evidence, but none is a native-document live succe
 
 | Exact operation | Sanitized packaged outcome | Evidence classification | Declared readiness |
 |---|---|---|---|
-| `native-document:create` | Returned `outcome_unknown`; one unique new `.mdoc` was observed and was attributable to the attempt, but the typed outcome remained uncertain. | not `live_verified` | `poc_only` / `verification_profile_required` |
-| `native-document:read` | Returned `provider_contract_error`. | not `live_verified` | `poc_only` / `verification_profile_required` |
-| `native-document:probe` | Returned `provider_contract_error`. | not `live_verified` | `poc_only` / `verification_profile_required` |
-| `native-document:plan` | Not executed; no packaged live evidence was produced. | not `live_verified` | `poc_only` / `verification_profile_required` |
+| `native-document:create` | Returned `outcome_unknown`; one unique new `.mdoc` was observed and was attributable to the attempt, but the typed outcome remained uncertain. | not `live_verified` | `poc_only` / `runtime_authorization_required` |
+| `native-document:read` | Returned `provider_contract_error`. | not `live_verified` | `poc_only` / `runtime_authorization_required` |
+| `native-document:probe` | Returned `provider_contract_error`. | not `live_verified` | `poc_only` / `runtime_authorization_required` |
+| `native-document:plan` | Not executed; no packaged live evidence was produced. | not `live_verified` | `poc_only` / `runtime_authorization_required` |
 | `native-document:edit` | Failed closed before adapter invocation or supplier process launch, with zero remote mutation. | packaged pre-dispatch fail-closed evidence; not `live_verified` | `blocked_by_contract` |
 
 ### Team-administration packaged outcome
 
 | Exact operation | Sanitized packaged outcome | Evidence classification | Declared readiness |
 |---|---|---|---|
-| `content-space-administration.createSpace` | An earlier packaged invocation reached a remote commit but failed during Agent result delivery; it was not retried, and later canonical read-only reconciliation confirmed exactly one resulting shared root. After the delivery defect was fixed, exactly one new packaged Agent invocation traversed Broker → Content Space → Provider → Connector and reached terminal success. | post-fix invocation `live_verified`; earlier invocation remains remote-commit/reconciliation evidence only | `poc_only` / `verification_profile_required` |
-| `content-space-administration.addMember` | Exactly one packaged current-account Agent invocation caused the canonical path to issue exactly one `SaveTeamUserList` write, and the write succeeded. Post-write `listMembers` reconciliation observed two distinct members, with the B-side canonical Provider directory user reference present exactly once. No second member write was issued, and no public role value is inferred from the historical response. | `live_verified` with exact read-after-write postcondition | `poc_only` / `verification_profile_required` |
+| `content-space-administration.createSpace` | An earlier packaged invocation reached a remote commit but failed during Agent result delivery; it was not retried, and later canonical read-only reconciliation confirmed exactly one resulting shared root. After the delivery defect was fixed, exactly one new packaged Agent invocation traversed Broker → Content Space → Provider → Connector and reached terminal success. | post-fix invocation `live_verified`; earlier invocation remains remote-commit/reconciliation evidence only | `poc_only` / `runtime_authorization_required` |
+| `content-space-administration.addMember` | Exactly one packaged current-account Agent invocation caused the canonical path to issue exactly one `SaveTeamUserList` write, and the write succeeded. Post-write `listMembers` reconciliation observed two distinct members, with the B-side canonical Provider directory user reference present exactly once. No second member write was issued, and no public role value is inferred from the historical response. | `live_verified` with exact read-after-write postcondition | `poc_only` / `runtime_authorization_required` |
 
 The live Team-member response used a previously unmodeled `teamUser` collection key. A value-free
 response-shape fingerprint identified the key without retaining account, member, root, or binding
@@ -365,8 +354,8 @@ Every promotion record must include:
 - the exact SciForge commit, packaged application identity, platform, Connector and Provider package versions, and
   private overlay identity/digest when used;
 - the exact Provider Instance, complete Host Principal snapshot (including assurance),
-  authority/root, operation ID, audience, verification-profile identity, enforced limits, validity
-  window, and opaque Provider Binding Attestation when required; raw credentials and external
+  authority/root, operation ID, audience, enforced limits, and opaque current Provider Binding
+  Attestation; raw credentials and external
   account identifiers must remain outside the record;
 - a run through the packaged Broker → Content Space → pinned Provider → Connector path, including
   pre-dispatch Connector re-attestation, with the canonical

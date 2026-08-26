@@ -171,7 +171,7 @@ describe('local mock Content Space Provider', () => {
     })
     expect(observed).toEqual({
       proven: false,
-      reasonCode: 'verification_profile_required'
+      reasonCode: 'runtime_authorization_required'
     })
     const chunks: Uint8Array[] = []
     const lease = await provider.authorizeDownload({

@@ -73,7 +73,10 @@ function publicFiles(root: string): string[] {
       excludedDirectoryNames.has(segment)
     ))
     .map((path) => join(root, ...path.split('/')))
-    .filter((path) => lstatSync(path).isFile())
+    // `git ls-files --cached` still reports a tracked file that the current
+    // pre-commit change deletes. Deleted private/public boundary inputs carry
+    // no current bytes to inspect and must not make the audit reopen them.
+    .filter((path) => existsSync(path) && lstatSync(path).isFile())
     .sort()
 }
 

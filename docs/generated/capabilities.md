@@ -49343,7 +49343,7 @@ Reads operation readiness for one pinned Provider Instance.
                             "reasonCode": {
                               "enum": [
                                 "production_ready",
-                                "verification_profile_admitted"
+                                "runtime_authorized"
                               ],
                               "type": "string"
                             },
@@ -49364,7 +49364,7 @@ Reads operation readiness for one pinned Provider Instance.
                           "properties": {
                             "reasonCode": {
                               "enum": [
-                                "verification_profile_required",
+                                "runtime_authorization_required",
                                 "provider_contract_missing",
                                 "instance_policy_blocked",
                                 "resource_capability_missing",
@@ -49411,7 +49411,7 @@ Reads operation readiness for one pinned Provider Instance.
                     "reasonCode": {
                       "enum": [
                         "available",
-                        "verification_profile_required",
+                        "runtime_authorization_required",
                         "provider_contract_missing",
                         "instance_policy_blocked",
                         "resource_capability_missing",
@@ -50925,7 +50925,7 @@ Reads provider-neutral metadata for an exact Content Space reference.
                             "reasonCode": {
                               "enum": [
                                 "production_ready",
-                                "verification_profile_admitted"
+                                "runtime_authorized"
                               ],
                               "type": "string"
                             },
@@ -50946,7 +50946,7 @@ Reads provider-neutral metadata for an exact Content Space reference.
                           "properties": {
                             "reasonCode": {
                               "enum": [
-                                "verification_profile_required",
+                                "runtime_authorization_required",
                                 "provider_contract_missing",
                                 "instance_policy_blocked",
                                 "resource_capability_missing",
@@ -50993,7 +50993,7 @@ Reads provider-neutral metadata for an exact Content Space reference.
                     "reasonCode": {
                       "enum": [
                         "available",
-                        "verification_profile_required",
+                        "runtime_authorization_required",
                         "provider_contract_missing",
                         "instance_policy_blocked",
                         "resource_capability_missing",
@@ -51284,7 +51284,7 @@ Issues an ArtifactReference only from exact Provider proof.
                   "reasonCode": {
                     "enum": [
                       "available",
-                      "verification_profile_required",
+                      "runtime_authorization_required",
                       "provider_contract_missing",
                       "instance_policy_blocked",
                       "resource_capability_missing",

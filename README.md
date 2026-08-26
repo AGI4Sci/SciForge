@@ -185,7 +185,7 @@ npm run build
 | [Content Space 架构](./docs/content-space-architecture.md) | Provider-neutral 术语、模块所有权、唯一 Broker → Provider → Connector 调用链、readiness/admission 与 OpenContent operation matrix |
 | [OpenContent 附件分发边界](./docs/opencontent-attachment-distribution.md) | OpenContent 公开集成与仅限内部供应商附件的精确拆分 |
 | [OpenContent 团队交付包部署](./docs/operations/opencontent-private-attachment-team-deployment.zh-CN.md) | 从当前 upstream 验证并幂等安装受信团队 ZIP 的唯一入口 |
-| [Content Space 本地授权包生成器](./docs/operations/content-space-local-authorization-package.zh-CN.md) | 生成经审查、main-only、最长 24 小时且禁止公开发布的静态 verification profiles |
+| [OpenContent 私有技能包安装](./docs/operations/opencontent-private-skill-install.zh-CN.md) | Provider 无技能可用；收到私有 ZIP 后通过通用校验器安装到标准 Workspace skill root |
 | [架构说明](./DESIGN.md) | Agent runtime、GUI 与服务边界 |
 | [Context Map](./CONTEXT-MAP.md) | Identity、Cloud Collaboration、Content Space、Shared Documents 与 Provider Integration 的权威边界 |
 | [架构决策索引](./docs/adr/README.md) | ADR 生命周期、superseded/deferred 状态与当前决策优先级 |

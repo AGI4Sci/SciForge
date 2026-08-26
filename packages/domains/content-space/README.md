@@ -14,37 +14,23 @@ Standard composition registers a Provider and its declared operation families;
 it does not make an operation `production_ready` or `live_verified`. Provider
 readiness is descriptive evidence; current invocation admission separately
 evaluates the Principal, Broker authority, audience, platform, transfer and
-verification facts. An admitted PoC invocation remains `poc_only`.
+runtime-authorization facts. Every `poc_only` invocation requires a trusted
+Broker audience and an exact v2 Provider Binding Attestation from the pinned
+Provider. The attestation binds the Provider Instance and complete current
+Principal to an opaque external subject and Connection revision; the Provider
+passes the exact expectation to its Connector for immediate pre-dispatch
+reauthentication. The Provider's real read check or write remains the ACL
+oracle. Unbind, rebind, credential replacement, Principal drift or binding
+revision drift therefore fails closed. Host transfer maxima remain enforced,
+an admitted PoC invocation remains `poc_only`, and `blocked_by_contract` is
+never admitted.
 
-A package-owned `main.content-space-verification-profile` extension may
-contribute one static, separately reviewed verification profile. Manifest and
-runtime values must match exactly, and invalid, drifting, duplicate, or unsafe
-profiles fail composition; the contribution declaration must explicitly set
-`"publicRelease": "forbidden"`, and omission or `allowed` also fails Content
-Space composition. The generic official-release guard rejects that declaration
-through standard domain discovery without knowing the Content Space location or
-package identity. The default composition installs no profile. Each
-profile binds one Provider Instance, the complete Host Principal snapshot
-(including assurance), exact authority and operation, audience, bounded
-upload/download maxima, and a validity window of at most 24 hours. The matched
-maxima are enforced for the invocation. Provider-scoped operations, mutations,
-administration, and non-zero transfers additionally require an exact v2
-Provider Binding Attestation from the pinned Provider. The attestation binds the
-Provider Instance and Principal to an opaque external subject and opaque
-Connection revision; the Provider must pass the exact expectation to its
-Connector for immediate pre-dispatch re-attestation. Zero-transfer
-`list-containers` bootstrap and exact-root reads are the only profiles safe
-without it. A profile only narrows one `poc_only` invocation, cannot admit
-`blocked_by_contract`, and cannot be installed or widened by caller input,
-renderer state, Agent requests, prompts, Tasks, ordinary
-environment/configuration, package presence, or a successful sibling
-operation.
-
-For controlled acceptance, the repository provides a generic local generator
-for a main-only authorization package. It emits only this existing extension
-contract, does not install the output, and adds no capability or business
-runtime. See
-[`docs/operations/content-space-local-authorization-package.zh-CN.md`](../../../docs/operations/content-space-local-authorization-package.zh-CN.md).
+Content Space has no static verification-profile extension or local
+authorization-package generator. Caller input, renderer state, Agent requests,
+prompts, Tasks, ordinary configuration, skill presence or a successful sibling
+operation cannot select a Connection, widen authority or promote readiness.
+Optional Agent skills are discovered separately from the Workspace skill root
+and are never required to discover or use a Provider.
 
 An `ArtifactReference` requires Provider proof of immutable retention and
 version-specific retrieval. A mutable file identity, version number, or digest
@@ -126,4 +112,5 @@ it is `outcome_unknown`, and neither result permits automatic retry.
 See [the Content Space glossary](../../../docs/contexts/content-space/CONTEXT.md),
 [the architecture and canonical call chain](../../../docs/content-space-architecture.md),
 [ADR-0030](../../../docs/adr/0030-activate-provider-native-documents-through-content-space.md),
+[ADR-0037](../../../docs/adr/0037-authorize-content-space-at-runtime-and-keep-agent-skills-optional.md),
 and [the OpenContent capability matrix](../../../docs/opencontent-skill-capability-matrix.md).

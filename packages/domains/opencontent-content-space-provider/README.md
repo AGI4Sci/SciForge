@@ -30,7 +30,7 @@ remains `poc_only`, no native-document operation has a live-success claim, and
 sibling operation does not imply Agent eligibility.
 
 V4 keeps `observeEntry`, `uploadNewFile`, and download in that same
-`poc_only` / `verification_profile_required` state. Metadata observation is
+`poc_only` / `runtime_authorization_required` state. Metadata observation is
 non-authorizing; download requires a real Provider `DownloadCheck` and an opaque
 one-use lease before Content Space may open the destination; upload-new requires
 an exact write-after observation and maps an indeterminate mutation outcome to
@@ -39,27 +39,31 @@ is promoted to `production_ready`.
 
 - The six ordinary file operations, all ten Team Administration operations,
   nine safely contract-shaped native-document operations, and 40 of the 50
-  extended operations are `poc_only` / `verification_profile_required` when
+  extended operations are `poc_only` / `runtime_authorization_required` when
   their required runtime is installed. The exact extended blocked set, in
   catalog order, is `resolveInternalLink`, `listMetadataChoices`,
   `updateFileVersion`, `searchUsers`, `searchDepartments`, `searchPositions`,
   `searchGroups`, `resolveCollaborationInvitation`,
   `listKnowledgeCollections`, and `searchKnowledgeCollections`. Without the
   overlay, only session-backed `getCurrentPrincipal` is PoC-only and the other
-  49 extended operations are blocked. The default product composition cannot
-  execute PoC-only operations.
+  49 extended operations are blocked. Ordinary file and Team Provider behavior
+  does not require an Agent skill package.
 - Provider-declared readiness and current invocation admission remain separate.
-  A separately reviewed package-owned Content Space profile can admit only one
-  exact PoC invocation matching the Provider Instance, complete Host Principal
-  snapshot and assurance, authority, operation, audience, bounded transfer
-  maxima, and validity window. Admission does not promote readiness.
-- Provider-scoped operations, mutations, Administration, and non-zero transfers
-  additionally require a v2 Provider Binding Attestation. This adapter obtains
+  A trusted Broker audience plus a current v2 Provider Binding Attestation may
+  authorize only one exact PoC invocation matching the Provider Instance,
+  complete Host Principal, authority and operation. Admission does not promote
+  readiness.
+- Every PoC invocation requires that Provider Binding Attestation. This adapter obtains
   the token-free attestation from the Connector, maps it to the provider-neutral
   contract, and passes the exact expectation back through every Connector
   business call. The Connector reauthenticates and recomputes it immediately
   before dispatch, closing the admission-to-dispatch rebind window. Raw external
   account identifiers remain adapter-private.
+- The separately distributed `opencontent-base` package is an optional Agent
+  skill. It is not this Provider integration or its private supplier overlay;
+  installing or removing it changes neither Provider discovery nor Content
+  Space authorization. The generic private-skill installer and recipient
+  procedure are documented in the repository operations guide.
 - `updateFileVersion` is `blocked_by_contract`: the supplier exposes neither an
   exact expected version identity nor an atomic compare-and-update operation.
   A receipt-verified static characterization of pinned attachment `1.0.1` and

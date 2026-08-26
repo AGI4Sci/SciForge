@@ -1,12 +1,12 @@
 import { OpenContentConnectorError } from '../contract.js'
-import type { OpenContentSkillRuntimeSession } from './skill-runtime.js'
+import type { OpenContentSupplierRuntimeSession } from './skill-runtime.js'
 import type { OpenContentClient } from './opencontent-client.js'
 import type { OpenContentTeamAdministration } from './team-administration.js'
 
 export type OpenContentDeploymentRuntime = Readonly<{
   client: OpenContentClient
   teamAdministration: OpenContentTeamAdministration
-  skillRuntime?: OpenContentSkillRuntimeSession
+  supplierRuntime?: OpenContentSupplierRuntimeSession
 }>
 
 export type OpenContentDeploymentRuntimeGetter = () =>

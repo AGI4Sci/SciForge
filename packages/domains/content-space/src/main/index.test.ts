@@ -62,11 +62,6 @@ import {
   CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_CONTRIBUTION,
   CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_CONTRIBUTION
 } from '../definition.js'
-import {
-  CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
-  MAIN_CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION,
-  defineContentSpaceVerificationProfileContribution
-} from '../verification-policy.js'
 import * as mainExports from './index.js'
 import { createDomainMainEntry } from './index.js'
 
@@ -381,18 +376,11 @@ describe('Content Space main composition', () => {
         portableResources,
         fileTransfers: unusedFileTransfers()
       })).contributions,
-      contributionHost([
-        ...providerContributions(() => providerFixture({
-          attestExternalBinding,
-          listEntries,
-          observeEntry
-        })),
-        systemVerificationProfileContribution(
-          'fixture-recovery-observation',
-          'upload-new',
-          64
-        )
-      ])
+      contributionHost(providerContributions(() => providerFixture({
+        attestExternalBinding,
+        listEntries,
+        observeEntry
+      })))
     )
 
     const result = await definition(
@@ -506,14 +494,7 @@ describe('Content Space main composition', () => {
         portableResources,
         fileTransfers: unusedFileTransfers()
       })).contributions,
-      contributionHost([
-        ...providerContributions(createProvider),
-        systemVerificationProfileContribution(
-          'fixture-recovery-rejection',
-          'upload-new',
-          64
-        )
-      ])
+      contributionHost(providerContributions(createProvider))
     )
     const action = definition(
       definitions,
@@ -685,14 +666,7 @@ describe('Content Space main composition', () => {
           openWorkspaceDownloadDestination: vi.fn(async () => { throw new Error('unused') })
         }
       })).contributions,
-      contributionHost([
-        ...providerContributions(createProvider),
-        systemVerificationProfileContribution(
-          'fixture-system-materialization-required',
-          'upload-new',
-          64
-        )
-      ])
+      contributionHost(providerContributions(createProvider))
     )
 
     const result = await definition(
@@ -754,13 +728,11 @@ describe('Content Space main composition', () => {
     expect(openWorkspaceDownloadDestination).not.toHaveBeenCalled()
   })
 
-  it('propagates exact profile limits through real system upload and download receipts', async () => {
+  it('propagates bounded Host limits through real system upload and download receipts', async () => {
     const uploadBytes = new TextEncoder().encode('real upload bytes')
     const downloadBytes = new TextEncoder().encode('real download bytes')
     const uploadSha256 = createHash('sha256').update(uploadBytes).digest('hex')
     const downloadSha256 = createHash('sha256').update(downloadBytes).digest('hex')
-    const uploadLimit = uploadBytes.byteLength + 11
-    const downloadLimit = downloadBytes.byteLength + 13
     const uploadedReference = Object.freeze({
       providerInstanceRef: PROVIDER_INSTANCE_REF,
       fileId: 'uploaded-system-file'
@@ -921,19 +893,7 @@ describe('Content Space main composition', () => {
           openWorkspaceDownloadDestination
         }
       })).contributions,
-      contributionHost([
-        ...providerContributions(() => provider),
-        systemVerificationProfileContribution(
-          'fixture-system-upload',
-          'upload-new',
-          uploadLimit
-        ),
-        systemVerificationProfileContribution(
-          'fixture-system-download',
-          'download',
-          downloadLimit
-        )
-      ])
+      contributionHost(providerContributions(() => provider))
     )
     const systemAuthority = {
       workspaceId: 'workspace-one',
@@ -1215,7 +1175,6 @@ describe('Content Space main composition', () => {
   it('preserves outcome_unknown when Principal drift aborts after Provider write dispatch', async () => {
     const bytes = new TextEncoder().encode('possibly dispatched')
     const sha256 = createHash('sha256').update(bytes).digest('hex')
-    const transferLimit = bytes.byteLength + 7
     const sourceClose = vi.fn(async () => undefined)
     const controller = new AbortController()
     let principalCurrent = true
@@ -1266,17 +1225,10 @@ describe('Content Space main composition', () => {
           })
         }
       })).contributions,
-      contributionHost([
-        ...providerContributions(() => providerFixture({
-          attestExternalBinding: async () => externalBinding,
-          uploadNewFile
-        })),
-        systemVerificationProfileContribution(
-          'fixture-system-post-dispatch-drift',
-          'upload-new',
-          transferLimit
-        )
-      ])
+      contributionHost(providerContributions(() => providerFixture({
+        attestExternalBinding: async () => externalBinding,
+        uploadNewFile
+      })))
     )
 
     const result = await definition(
@@ -1309,29 +1261,7 @@ describe('Content Space main composition', () => {
     expect(sourceClose).toHaveBeenCalledOnce()
   })
 
-  it('admits an exact PoC list-containers profile through composed Broker capability routing', async () => {
-    const currentTime = Date.now()
-    const profileContribution = defineContentSpaceVerificationProfileContribution({
-      location: MAIN_CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION,
-      contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
-      profile: Object.freeze({
-        profileId: 'fixture-list-containers',
-        providerInstanceRef: PROVIDER_INSTANCE_REF,
-        principal,
-        audience: 'agent' as const,
-        authority: Object.freeze({
-          kind: 'provider-instance' as const,
-          providerInstanceRef: PROVIDER_INSTANCE_REF
-        }),
-        operation: Object.freeze({
-          family: 'ordinary' as const,
-          operation: 'list-containers' as const
-        }),
-        transferLimits: Object.freeze({ maxUploadBytes: 0, maxDownloadBytes: 0 }),
-        validFrom: new Date(currentTime - 60_000).toISOString(),
-        expiresAt: new Date(currentTime + 60_000).toISOString()
-      })
-    })
+  it('admits a PoC Provider through live binding in composed Broker capability routing', async () => {
     const listContainers = vi.fn(async () => ({
       providerInstanceRef: PROVIDER_INSTANCE_REF,
       items: [{
@@ -1340,26 +1270,19 @@ describe('Content Space main composition', () => {
         label: 'Root'
       }]
     }))
+    const attestExternalBinding = vi.fn(async () => externalBinding)
     const provider = providerFixture({
+      attestExternalBinding,
       describeCapabilities: async () => ([{
         operation: 'list-containers' as const,
         readiness: 'poc_only' as const,
-        reasonCode: 'verification_profile_required' as const
+        reasonCode: 'runtime_authorization_required' as const
       }]),
       listContainers
     })
     const definitions = await activateDefinitions(
       createDomainMainEntry(mainHost()).contributions,
-      contributionHost([
-        ...providerContributions(() => provider),
-        contribution(
-          'fixture.verification-profile',
-          profileContribution,
-          profileContribution,
-          CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
-          'forbidden'
-        )
-      ])
+      contributionHost(providerContributions(() => provider))
     )
 
     const listCandidates = definition(
@@ -1379,6 +1302,7 @@ describe('Content Space main composition', () => {
       items: [{ libraryLabel: 'Root' }]
     }))
     expect(listContainers).toHaveBeenCalledOnce()
+    expect(attestExternalBinding).toHaveBeenCalledOnce()
 
     const principalMismatch = await listCandidates.handler(input, capabilityContext(
       undefined,
@@ -1387,7 +1311,7 @@ describe('Content Space main composition', () => {
     ))
     expect(principalMismatch.output).toMatchObject({
       ok: false,
-      error: { code: 'blocked_by_contract' }
+      error: { code: 'unauthorized' }
     })
     expect(listContainers).toHaveBeenCalledOnce()
   })
@@ -3583,48 +3507,6 @@ function nativeDocumentsFixture(
     })),
     execute
   })
-}
-
-function systemVerificationProfileContribution(
-  profileId: string,
-  operation: 'upload-new' | 'download',
-  maxBytes: number,
-  currentTime = Date.now()
-): DomainMainContribution {
-  const profileContribution = defineContentSpaceVerificationProfileContribution({
-    location: MAIN_CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION,
-    contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
-    profile: Object.freeze({
-      profileId,
-      providerInstanceRef: PROVIDER_INSTANCE_REF,
-      principal,
-      audience: 'system' as const,
-      authority: Object.freeze({
-        kind: 'content-root' as const,
-        root: ROOT
-      }),
-      operation: Object.freeze({
-        family: 'ordinary' as const,
-        operation
-      }),
-      transferLimits: operation === 'upload-new'
-        ? Object.freeze({ maxUploadBytes: maxBytes, maxDownloadBytes: 0 })
-        : Object.freeze({ maxUploadBytes: 0, maxDownloadBytes: maxBytes }),
-      externalBinding: Object.freeze({
-        externalSubject: externalBinding.externalSubject,
-        bindingRevision: externalBinding.bindingRevision
-      }),
-      validFrom: new Date(currentTime - 60_000).toISOString(),
-      expiresAt: new Date(currentTime + 60_000).toISOString()
-    })
-  })
-  return contribution(
-    `fixture.verification-profile.${profileId}`,
-    profileContribution,
-    profileContribution,
-    CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
-    'forbidden'
-  )
 }
 
 function providerFixture(overrides: Partial<ContentSpaceProvider> = {}): ContentSpaceProvider {

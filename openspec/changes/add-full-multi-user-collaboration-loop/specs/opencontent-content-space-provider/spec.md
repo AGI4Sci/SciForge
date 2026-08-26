@@ -23,17 +23,38 @@ For `system-upload-new`, the adapter SHALL use only the current Principal-bound 
 ### Requirement: V4 file-operation readiness remains evidence-gated
 
 The V4 `observe-entry`, `upload-new`, and `download` implementations SHALL remain
-`poc_only` with reason `verification_profile_required` until a real packaged
+`poc_only` with reason `runtime_authorization_required` until a real packaged
 multi-user loop produces reviewable operation evidence for the exact shipped
-commit and Provider profile. Donor characterization, unit/integration tests,
-source-only execution, schema conformance, or successful sibling operations
-SHALL NOT promote any of these operations to `production_ready`.
+commit and current Principal-owned Provider connection. Donor characterization,
+unit/integration tests, source-only execution, schema conformance, optional skill
+installation, or successful sibling operations SHALL NOT promote any of these
+operations to `production_ready`. The operations MAY execute only after live
+Provider binding attestation and their real per-operation Provider ACL checks.
 
 #### Scenario: V4 contracts pass without packaged-live evidence
 
 - **WHEN** the V4 implementation and repository tests pass but no qualifying real packaged loop receipt exists
-- **THEN** all three operations SHALL remain `poc_only` / `verification_profile_required`
+- **THEN** all three operations SHALL remain `poc_only` / `runtime_authorization_required`
 - **AND** the Provider SHALL advertise no `production_ready` claim for them.
+
+### Requirement: OpenContent base Provider is independent of the optional Agent skill ZIP
+
+The public OpenContent Content Space Provider factory and enrollment contribution SHALL remain
+discoverable when no `opencontent-base` skill package is installed. The six contract-complete
+ordinary file operations and Provider connection flow SHALL use the canonical Content Space →
+Provider → Connector path and live runtime authorization only. Installing a user-supplied private
+skill ZIP into the standard project skill root MAY add Agent instructions and supplier commands,
+but SHALL NOT create or unlock the Provider, change readiness, or supply another user's authority.
+
+#### Scenario: User has not installed the optional skill
+
+- **WHEN** public SciForge composition includes the OpenContent Provider and the user connects their own Provider account without installing `opencontent-base`
+- **THEN** Provider discovery, enrollment, container browsing, and contract-complete ordinary operations SHALL remain available through current-connection authorization
+
+#### Scenario: User installs the private skill ZIP later
+
+- **WHEN** the bounded local installer verifies and installs a root `SKILL.md` package into `.codex/skills/<skill-name>`
+- **THEN** the canonical skill discovery backend SHALL find it without adding its private bytes to Git or changing Content Space authority
 
 ### Requirement: Team provisioning uses exact ordinary Provider operations
 

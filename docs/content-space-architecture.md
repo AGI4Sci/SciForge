@@ -40,7 +40,7 @@ vendor switch, alternate IPC channel, MCP server, or fallback Provider.
 
 Installed domain manifests and generated composition contribute the Content
 Space domain, trusted Provider Instance declarations, Provider factories,
-optional enrollment UI, and optional static verification profiles. Removing an
+and optional enrollment UI. Removing an
 integration package removes its contributions without changing Host code.
 
 Every operation follows one path:
@@ -83,8 +83,8 @@ remain available without the sidecar and perform no Provider business call.
 The integration-owned unavailable enrollment view exposes that local cleanup
 only after explicit Human confirmation and makes clear that remote files are
 unchanged.
-This availability gate is independent of
-Content Space verification profiles and the optional supplier overlay. The
+This availability gate is independent of runtime Content Space authorization
+and the optional supplier overlay. The
 isolated `resources/domain-deployments/**` namespace means a sidecar-only build
 does not manufacture the separate `resources/opencontent/**` supplier overlay.
 
@@ -167,26 +167,14 @@ questions and are reported separately.
 | **Readiness** | What evidence and Provider contract exist for this exact operation? | `poc_only`, `blocked_by_contract`, `production_ready` |
 | **Invocation admission** | May this exact caller, Principal, authority, audience, platform and transfer execute now? | `admitted` or `blocked`, with a bounded reason |
 
-An admitted verification call remains `poc_only`; admission never rewrites it
-as `production_ready`. `blocked_by_contract` can never be admitted. The default
-composition installs no verification profile, so PoC operations fail closed.
-
-A trusted verification profile is a static package contribution whose manifest
-declaration explicitly sets the generic `publicRelease: "forbidden"` policy.
-Content Space rejects a profile that omits or weakens that policy. Official
-prebuild and after-pack checks use standard domain discovery to reject every
-active contribution with that generic policy; the release guard contains no
-Content Space location, package, or domain-ID switch. The profile binds one exact
-Provider Instance, full Host Principal snapshot and assurance, authority,
-operation, audience, bounded validity window, and upload/download maxima. The
-matched byte maxima are execution limits, not descriptive metadata. Caller input,
-renderer state, prompts, Tasks, environment variables, ordinary config,
-attachment presence, or a sibling success cannot install or widen a profile.
-
-Zero-transfer `list-containers` bootstrap and exact-root reads may be profiled
-without an external binding. Provider-scoped operations, mutations,
-administration, and non-zero transfers also require a current Provider Binding
-Attestation.
+An admitted runtime-authorized call remains `poc_only`; admission never rewrites
+it as `production_ready`, and `blocked_by_contract` can never be admitted. A
+`poc_only` invocation requires a trusted Broker audience, the exact current
+Principal and authority, the pinned Provider Instance and its current Provider
+Binding Attestation. Host transfer maxima remain the execution bounds. Caller
+input, renderer state, prompts, Tasks, environment variables, ordinary config,
+skill-package presence or a sibling success cannot select the binding, widen
+authority or promote readiness.
 
 ## Provider Binding Attestation v2
 
@@ -203,8 +191,8 @@ It is neither a credential nor portable authority, and raw identifiers used to
 establish the binding do not enter capability input or portable references.
 
 To close the admission-to-dispatch race, Content Space first asks the pinned
-Provider for the current attestation and matches it against the static profile.
-It then carries that exact expected attestation only in the in-process Provider
+Provider for the current attestation and requires the exact Provider Instance
+and complete current Principal. It then carries that exact expected attestation only in the in-process Provider
 operation context. Immediately before each remote business dispatch (including
 a Connector-owned supplier subprocess), the Provider passes the expectation through the
 canonical Connector boundary. The Connector revalidates the Principal,
@@ -217,17 +205,17 @@ account authority.
 
 ## Operation matrix
 
-| Surface | Private overlay | Declared OpenContent readiness | Additional admission boundary |
+| Surface | Optional Provider supplier overlay | Declared OpenContent readiness | Additional admission boundary |
 | --- | --- | --- | --- |
 | Provider discovery and enrollment | Not required | Not a Provider business operation | Human-only enrollment; discovery grants no content authority |
-| Container bootstrap and exact-root reads | Not required | `poc_only` | Exact static profile; bootstrap/root authority; zero transfer may omit binding attestation |
+| Container bootstrap and exact-root reads | Not required | `poc_only` | Trusted Broker audience, exact bootstrap/root authority, current Principal and live binding attestation |
 | Create folder | Not required | `poc_only` | Exact Broker root resource plus current binding attestation |
-| Upload new / download | Not required | `poc_only` | Exact Broker resource, current binding attestation, Workspace authority, and enforced profile byte limit |
+| Upload new / download | Not required | `poc_only` | Exact Broker resource, current binding attestation, Workspace authority, and Host-enforced byte limit |
 | Shared-root / Team administration | Not required | Ten operations are `poc_only` | Exact root/provider-administration Broker authority plus current binding attestation; Agent create input contains only the label, while member mutations accept only an authoritative same-instance Provider directory user reference |
-| Safe native-document operations | Required | Nine operations are `poc_only` | Exact feature/resource authority, profile, binding when required, and bounded transfers |
-| Hash-bound native-document mutations, including `edit` | Required | `blocked_by_contract` | Requires Provider-atomic `baseHash` compare-and-mutate; no profile can bypass it |
+| Safe native-document operations | Required | Nine operations are `poc_only` | Exact feature/resource authority, current binding, and Host-bounded transfers |
+| Hash-bound native-document mutations, including `edit` | Required | `blocked_by_contract` | Requires Provider-atomic `baseHash` compare-and-mutate; runtime authorization cannot bypass it |
 | Native-document import | Required | `blocked_by_contract` | Requires a frozen source-identity/content postcondition; the pinned command remains inventory-only and is blocked before source transfer or subprocess dispatch |
-| Extended operations | Required except session-backed `getCurrentPrincipal` | With overlay, 40 of 50 are `poc_only`; in catalog order, `resolveInternalLink`, `listMetadataChoices`, `updateFileVersion`, `searchUsers`, `searchDepartments`, `searchPositions`, `searchGroups`, `resolveCollaborationInvitation`, `listKnowledgeCollections`, and `searchKnowledgeCollections` are blocked | Exact typed operation/resource/profile; writes and transfers require binding attestation |
+| Extended operations | Required except session-backed `getCurrentPrincipal` | With overlay, 40 of 50 are `poc_only`; in catalog order, `resolveInternalLink`, `listMetadataChoices`, `updateFileVersion`, `searchUsers`, `searchDepartments`, `searchPositions`, `searchGroups`, `resolveCollaborationInvitation`, `listKnowledgeCollections`, and `searchKnowledgeCollections` are blocked | Exact typed operation/resource, trusted audience and current binding; writes and transfers remain Host-bounded |
 | Same-file version update | Required | `blocked_by_contract` | Requires one frozen exact-version CAS contract and unambiguous `UPDATE` versus `UPGRADE` semantics |
 | Immutable artifact observation | Not required | `blocked_by_contract` | Requires immutable retention and exact version-specific retrieval before issuing `ArtifactReference` |
 | Project Content Directory provisioning | Not applicable | Absent | Requires a future separately reviewed Project-owning contract; no Content Space operation, Provider port, or generic Agent entrypoint exists |
@@ -258,8 +246,14 @@ candidate without supplier assets; the other 49 extended operations fail closed 
 packaging do not search private `node_modules` or walk ancestor directories.
 
 With a valid overlay, static receipt/inventory/digest verification enables only
-the additional supplier-backed candidates. It does not install a verification profile,
-promote readiness, create a Connection, or bypass Broker authority.
+the additional supplier-backed candidates. The current overlay inventory has
+43 files, but the Connector loads only five package-pinned runtime contract
+files; the rest do not become Host or Broker capabilities. It does not promote
+readiness, create a Connection, or bypass Broker authority. Installing the raw
+`opencontent-base` ZIP into a Workspace is a separate Agent-skill use of the
+supplier payload: it adds optional Agent instructions/CLI discovery, does not
+activate this Provider supplier transport, and is not required for Provider
+selection or ordinary/Team Provider use.
 
 ## Evidence and remaining gates
 

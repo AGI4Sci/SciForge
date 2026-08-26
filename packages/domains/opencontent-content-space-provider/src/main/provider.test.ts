@@ -582,7 +582,7 @@ describe('OpenContent Content Space Provider', () => {
     })
     expect(administrationStates).toHaveLength(10)
     expect(administrationStates.every(({ readiness, reasonCode }) => (
-      readiness === 'poc_only' && reasonCode === 'verification_profile_required'
+      readiness === 'poc_only' && reasonCode === 'runtime_authorization_required'
     ))).toBe(true)
     expect(administrationStates.some(({ readiness }) => readiness === 'production_ready'))
       .toBe(false)
@@ -610,32 +610,32 @@ describe('OpenContent Content Space Provider', () => {
       {
         operation: 'list-containers',
         readiness: 'poc_only',
-        reasonCode: 'verification_profile_required'
+        reasonCode: 'runtime_authorization_required'
       },
       {
         operation: 'list-entries',
         readiness: 'poc_only',
-        reasonCode: 'verification_profile_required'
+        reasonCode: 'runtime_authorization_required'
       },
       {
         operation: 'observe-entry',
         readiness: 'poc_only',
-        reasonCode: 'verification_profile_required'
+        reasonCode: 'runtime_authorization_required'
       },
       {
         operation: 'create-folder',
         readiness: 'poc_only',
-        reasonCode: 'verification_profile_required'
+        reasonCode: 'runtime_authorization_required'
       },
       {
         operation: 'upload-new',
         readiness: 'poc_only',
-        reasonCode: 'verification_profile_required'
+        reasonCode: 'runtime_authorization_required'
       },
       {
         operation: 'download',
         readiness: 'poc_only',
-        reasonCode: 'verification_profile_required'
+        reasonCode: 'runtime_authorization_required'
       }
     ]))
     expect(capabilities.filter(({ readiness }) => readiness === 'poc_only')).toHaveLength(6)
@@ -667,7 +667,7 @@ describe('OpenContent Content Space Provider', () => {
         {
           operation: 'getCurrentPrincipal',
           readiness: 'poc_only',
-          reasonCode: 'verification_profile_required'
+          reasonCode: 'runtime_authorization_required'
         }
       ])
     expect(states.filter(({ readiness }) => readiness === 'blocked_by_contract'))
@@ -716,7 +716,7 @@ describe('OpenContent Content Space Provider', () => {
       })))
     expect(states.filter(({ readiness }) => readiness === 'poc_only')
       .every(({ readiness, reasonCode }) =>
-        readiness === 'poc_only' && reasonCode === 'verification_profile_required'))
+        readiness === 'poc_only' && reasonCode === 'runtime_authorization_required'))
       .toBe(true)
     expect(states.filter(({ readiness }) => readiness === 'poc_only')).toHaveLength(40)
 
@@ -747,7 +747,7 @@ describe('OpenContent Content Space Provider', () => {
     expect(nativeStates.filter(({ readiness }) => readiness === 'poc_only'))
       .toHaveLength(9)
     expect(nativeStates.filter(({ readiness }) => readiness === 'poc_only')
-      .every(({ reasonCode }) => reasonCode === 'verification_profile_required')).toBe(true)
+      .every(({ reasonCode }) => reasonCode === 'runtime_authorization_required')).toBe(true)
     expect(nativeStates.some(({ readiness }) => readiness === 'production_ready')).toBe(false)
   })
 
@@ -794,7 +794,7 @@ describe('OpenContent Content Space Provider', () => {
     }
   )
 
-  it('maps the personal root and Team roots to stable scoped containers', async () => {
+  it('uses personal and Team roots without any optional OpenContent Agent skill package', async () => {
     const listRootFolders = vi.fn<OpenContentContentSpaceFacade['listRootFolders']>()
       .mockResolvedValueOnce({
         roots: [{

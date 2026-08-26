@@ -26,7 +26,7 @@ import {
 import type {
   OpenContentBoundTeamAdministration
 } from '../team-administration-contract.js'
-import type { OpenContentSkillRuntimeSession } from './skill-runtime.js'
+import type { OpenContentSupplierRuntimeSession } from './skill-runtime.js'
 import {
   createOpenContentTeamAdministration,
   type OpenContentTeamAdministration
@@ -797,12 +797,12 @@ function teamAdministration(): OpenContentTeamAdministration {
 function facadeRuntime(
   client: OpenContentClient,
   teamAdministration: OpenContentTeamAdministration,
-  skillRuntime?: OpenContentSkillRuntimeSession
+  supplierRuntime?: OpenContentSupplierRuntimeSession
 ) {
   const runtime = Object.freeze({
     client,
     teamAdministration,
-    ...(skillRuntime ? { skillRuntime } : {})
+    ...(supplierRuntime ? { supplierRuntime } : {})
   })
   return () => runtime
 }

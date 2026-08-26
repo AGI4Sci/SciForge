@@ -36,7 +36,7 @@ describe('Content Space provider feature ports', () => {
     const describeOperations = vi.fn(() => [{
       operation: 'updateFileVersion' as const,
       readiness: 'poc_only' as const,
-      reasonCode: 'verification_profile_required' as const
+      reasonCode: 'runtime_authorization_required' as const
     }])
     const administrationBind = vi.fn()
     const describeAdministrationOperations = vi.fn(() => [])
@@ -80,18 +80,18 @@ describe('Content Space provider feature ports', () => {
     expect(contentSpaceNativeDocumentOperationStateListSchema.parse([{
       operation: 'read',
       readiness: 'poc_only',
-      reasonCode: 'verification_profile_required'
+      reasonCode: 'runtime_authorization_required'
     }])).toHaveLength(1)
     expect(() => contentSpaceNativeDocumentOperationStateListSchema.parse([{
       operation: 'read',
       readiness: 'production_ready',
-      reasonCode: 'verification_profile_required'
+      reasonCode: 'runtime_authorization_required'
     }])).toThrow()
     expect(() => contentSpaceNativeDocumentOperationStateListSchema.parse([
       {
         operation: 'read',
         readiness: 'poc_only',
-        reasonCode: 'verification_profile_required'
+        reasonCode: 'runtime_authorization_required'
       },
       {
         operation: 'read',
@@ -103,18 +103,18 @@ describe('Content Space provider feature ports', () => {
     expect(contentSpaceExtendedOperationStateListSchema.parse([{
       operation: 'updateFileVersion',
       readiness: 'poc_only',
-      reasonCode: 'verification_profile_required'
+      reasonCode: 'runtime_authorization_required'
     }])).toHaveLength(1)
     expect(() => contentSpaceExtendedOperationStateListSchema.parse([{
       operation: 'updateFileVersion',
       readiness: 'production_ready',
-      reasonCode: 'verification_profile_required'
+      reasonCode: 'runtime_authorization_required'
     }])).toThrow()
     expect(() => contentSpaceExtendedOperationStateListSchema.parse([
       {
         operation: 'updateFileVersion',
         readiness: 'poc_only',
-        reasonCode: 'verification_profile_required'
+        reasonCode: 'runtime_authorization_required'
       },
       {
         operation: 'updateFileVersion',

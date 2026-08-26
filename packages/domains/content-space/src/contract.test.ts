@@ -476,14 +476,14 @@ describe('Content Space public contract', () => {
     }).readiness).toBe('production_ready')
   })
 
-  it('admits a verification profile only for exact PoC verification evidence', () => {
+  it('admits runtime authorization only for exact PoC evidence', () => {
     expect(contract.contentSpaceAdmittedCapabilityStateSchema.parse({
       operation: 'list-containers',
       readiness: 'poc_only',
-      reasonCode: 'verification_profile_required',
+      reasonCode: 'runtime_authorization_required',
       admission: {
         status: 'admitted',
-        reasonCode: 'verification_profile_admitted'
+        reasonCode: 'runtime_authorized'
       }
     }).admission.status).toBe('admitted')
     expect(() => contract.contentSpaceAdmittedCapabilityStateSchema.parse({
@@ -492,7 +492,7 @@ describe('Content Space public contract', () => {
       reasonCode: 'provider_contract_missing',
       admission: {
         status: 'admitted',
-        reasonCode: 'verification_profile_admitted'
+        reasonCode: 'runtime_authorized'
       }
     })).toThrow()
   })

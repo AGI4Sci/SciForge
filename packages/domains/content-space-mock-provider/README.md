@@ -13,4 +13,4 @@ production fallback or evidence that portable metadata grants Provider access.
 All content and version history are process-local and are lost on restart.
 Accordingly, this mock never claims the retention guarantee required to issue
 an `ArtifactReference`; immutable-version observation reports
-`verification_profile_required` instead of manufacturing a durable proof.
+`runtime_authorization_required` instead of manufacturing a durable proof.

@@ -133,6 +133,8 @@ The sole Worker runner is the canonical task adapter owned by `domain-collaborat
 
 For download, metadata proves identity/ancestry only; OpenContent `DownloadCheck` runs before Host opens the local destination. For upload, the real no-overwrite Provider write is the final ACL check. Both transfers enforce byte bounds and return receipts bound to the exact operation and resource identity. Implementations may retain byte counts or content digests as non-secret diagnostics, but per-file bytes/SHA-256 are not a Run-0 completion gate in this PoC. Production composition has no mock factory.
 
+Content Space admits a `poc_only` invocation from the trusted Broker audience, exact current Principal/authority and the pinned Provider's live Binding Attestation; the Connector recomputes that binding immediately before dispatch. There is no static verification-profile contract, package contribution or local authorization-package generator. The separately delivered `opencontent-base` Agent skill is optional Workspace data: ordinary and Team OpenContent Provider operations remain usable without it, while a provider-neutral verifier/installer may place a private ZIP into `.codex/skills/<skill-name>` without executing it or publishing its bytes. Installing a skill never creates a Provider Connection or changes readiness/authority.
+
 Alternative rejected: B's `productionMockContentSpace()` and E1's metadata-as-ACL interpretation. Both can report success after the real member has lost access.
 
 ### 9. External write uncertainty is reconciled, never guessed

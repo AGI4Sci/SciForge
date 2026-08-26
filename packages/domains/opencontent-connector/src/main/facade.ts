@@ -174,7 +174,7 @@ export function createOpenContentContentSpaceFacade(options: Readonly<{
       })
     }
 
-  const supplierRuntime = options.getRuntime()?.skillRuntime
+  const supplierRuntime = options.getRuntime()?.supplierRuntime
   return Object.freeze({
     attestExternalBinding: async (input) => {
       requireRuntime(input.providerInstanceRef)

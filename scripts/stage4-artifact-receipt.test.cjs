@@ -19,7 +19,7 @@ const {
 const SOURCE_COMMIT = 'a'.repeat(40)
 const ARTIFACT_NAME = 'SciForge-0.1.0-mac-arm64.zip'
 
-test('private acceptance composition requires all three generic trust layers', () => {
+test('private acceptance requires deployment configuration but not optional overlays', () => {
   const composition = summarizePrivateComposition({
     internalRuntimeComposition: {
       packagedRuntimes: [{
@@ -42,35 +42,14 @@ test('private acceptance composition requires all three generic trust layers', (
         size: 64
       }]
     },
-    privateContributions: [{
-      contractLocation: 'main.content-space-verification-profile',
-      contractSha256: 'd'.repeat(64),
-      id: 'example.profile',
-      kind: 'main.extension',
-      packageName: '@example/profile',
-      process: 'main',
-      version: '2.0.0'
-    }]
+    privateContributions: []
   })
   assert.doesNotThrow(() => assertAcceptanceComposition(composition))
-  assert.throws(
-    () => assertAcceptanceComposition({ ...composition, privateContributions: [] }),
-    /Content Space verification-profile contribution/u
-  )
-  assert.throws(
-    () => assertAcceptanceComposition({
-      ...composition,
-      privateContributions: composition.privateContributions.map((contribution) => ({
-        ...contribution,
-        contractLocation: 'main.unrelated-private-contribution'
-      }))
-    }),
-    /Content Space verification-profile contribution/u
-  )
-  assert.throws(
-    () => assertAcceptanceComposition({ ...composition, internalRuntimes: [] }),
-    /receipted internal runtime/u
-  )
+  assert.doesNotThrow(() => assertAcceptanceComposition({
+    ...composition,
+    internalRuntimes: [],
+    privateContributions: []
+  }))
   assert.throws(
     () => assertAcceptanceComposition({ ...composition, deploymentConfigurations: [] }),
     /private deployment configuration/u
@@ -211,13 +190,13 @@ function receiptFixture({ artifactSha256, artifactSize, source }) {
         }]
       }],
       privateContributions: [{
-        contractLocation: 'main.content-space-verification-profile',
+        contractLocation: 'main.example-private-extension',
         contractSha256: 'd'.repeat(64),
-        id: 'example.profile',
+        id: 'example.private-extension',
         kind: 'main.extension',
-        packageName: '@example/profile',
+        packageName: '@example/private-extension',
         process: 'main',
-        version: '2.0.0'
+        version: '1.0.0'
       }]
     },
     artifacts: [{

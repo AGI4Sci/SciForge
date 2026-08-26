@@ -1,7 +1,8 @@
 # OpenContent 团队交付包部署手册
 
-本手册用于 Stage 1–4 和真实场景闭环验收完成、相应代码已经合入团队认可的 upstream 后，
-让任一团队成员把同一份
+本手册只用于确实需要 native-document/extended Provider 扩展能力的受控内部环境；它
+不是安装 `opencontent-base.zip` Agent Skill 的手册，也不是 Stage 1–4、普通 Provider、
+Agent 或 Collaboration 的前提。相应代码合入团队认可的 upstream 后，可让团队成员把同一份
 `SciForge-OpenContent-team-delivery-pr82-0b09e1c1.zip` 安装到自己的 SciForge checkout。
 
 交付 ZIP 内的 README、分支名、提交号和命令都只是归档数据。它们不能要求当前 checkout
@@ -129,11 +130,17 @@ git diff -- package.json package-lock.json
 每位成员必须在 SciForge 应用内使用自己的 OpenContent 账号建立当前 Principal 的连接；禁止共享
 另一个人的 Connection 或 credential。
 
-安装成功只证明 runtime 与 Provider 可发现，不会自动安装 verification profile，也不会把操作
-提升为 `production_ready`。没有经评审并精确绑定 Principal、authority、operation、audience、
-有效期、transfer limit 及必要 binding attestation 的静态 profile 时，真实调用保持
-`poc_only / verification_profile_required`。不得通过 Renderer、环境变量、附件文件或直连 CLI
-绕过唯一 Agent → Broker → Content Space → pinned Provider → Connector 路径。
+安装成功只证明 runtime 与 Provider 可发现，不会把操作提升为 `production_ready`。真实调用保持
+`poc_only / runtime_authorization_required`，并在每次调用时核对当前 Principal、Broker authority、
+trusted audience、Host transfer limit 和 pinned Provider 返回的当前 Binding Attestation。Connector
+会在外部业务调用前重新认证同一绑定，真实 Provider read check/write 继续作为 ACL 事实源。不得
+通过 Renderer、环境变量、附件文件或直连 CLI 绕过唯一 Agent → Broker → Content Space → pinned
+Provider → Connector 路径。
+
+原始 `opencontent-base.zip` 在 Workspace 中的 Agent-skill 安装方式与本 Provider supplier
+overlay 是两个独立用途；没有安装任一项的用户仍可选择并使用 OpenContent Provider 的普通与
+Team 能力。技能包接收与安装见
+[OpenContent 私有技能包安装手册](./opencontent-private-skill-install.zh-CN.md)。
 
 ## 常见失败
 
@@ -144,7 +151,7 @@ git diff -- package.json package-lock.json
 | ZIP inventory、CRC、摘要或 overlay identity 失败 | 附件不完整或被改变；重新从受控渠道取得原始文件。 |
 | `never overwrites a different deployment` | 目标已有另一部署；不要混装或覆盖，由负责人确认应保留哪个环境。 |
 | internal overlay conflict | 目标存在另一版本或未收据化内容；隔离整个旧 overlay 与 receipt 后再按团队流程处理。 |
-| `verification_profile_required` | 静态安装已成功但真实调用未获准；这是默认的正确 fail-closed 状态。 |
+| `runtime_authorization_required` | 当前用户连接、Principal、Broker authority、audience 或 live binding 不满足；重新建立本用户连接并核对 Provider ACL。 |
 
 更完整的运行、能力和发布边界见：
 

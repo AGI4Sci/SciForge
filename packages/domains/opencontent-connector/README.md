@@ -57,6 +57,16 @@ packaged mode resolves them only from
 invalid, changed, extra, unreceipted, or wrong-version assets fail closed before
 supplier dispatch.
 
+The supplier overlay is optional Provider functionality, not the Agent skill
+installation path. Ordinary personal/Team listing, observation, folder,
+upload/download and Team-administration calls use the public `OpenContentClient`
+and bound Team port without `useSupplierTransport`. Only native-document and
+supplier-backed extended features receive that optional port. Consequently a
+missing overlay removes those extra feature contributions but cannot hide the
+Provider, block enrollment, or disable ordinary/Team operations. Installing the
+raw ZIP under a Workspace's `.codex/skills` directory does not activate the
+Connector supplier transport.
+
 The pinned CLI characterization freezes 86 inventory commands and the exact
 50-command admitted adapter union. Inventory is not an execution allowlist or
 packaged-live claim. The supplier `download`, `file-list`, `kbox-list`,

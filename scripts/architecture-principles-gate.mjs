@@ -198,7 +198,12 @@ export async function auditRepositoryArchitecture(repositoryRoot = REPOSITORY_RO
   const entries = []
   for (const path of changedPaths) {
     if (!isProductionSourcePath(path)) continue
-    entries.push({ path, source: await readFile(join(root, path), 'utf8') })
+    const currentPath = join(root, path)
+    // The pre-commit changed-path gate also runs against the working tree.
+    // A production file removed by the current change is not auditable source
+    // and must not make the gate try to reopen its committed predecessor.
+    if (!await pathExists(currentPath)) continue
+    entries.push({ path, source: await readFile(currentPath, 'utf8') })
   }
   const findings = [...auditChangedProductionSources(entries)]
   const retiredPackagePath = join(root, 'packages', 'collaboration-identity')

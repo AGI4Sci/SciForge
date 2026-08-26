@@ -33,11 +33,12 @@
 - [x] 4.1 从 E1 donor 重写 generic `system-download`/`system-upload-new` 合同、Content Space capability/service、Domain SDK system grant 和源/packaged composition。
 - [x] 4.2 实现 execution-bound Workspace relative path、realpath/symlink/no-overwrite/bounds 和 exact operation/resource transfer receipts；逐文件 bytes/SHA-256 可保留为诊断，但不作为本 PoC 门禁。
 - [x] 4.3 实现 portable Project root/file resolver，metadata 仅验证 locator/ancestry，不授予 ACL；资源绑定 caller/Principal/Workspace/execution。
-- [x] 4.4 在 OpenContent download 中接入真实 DownloadCheck，并保证授权结果早于 Host 打开目标；增加 metadata-visible-but-unauthorized 测试；V4 readiness 保持 `poc_only` / `verification_profile_required`。
-- [x] 4.5 在 OpenContent upload-new 中接入真实 Provider write、collision/unauthorized/outcome_unknown 分类和 exact write-after-observation；V4 readiness 保持 `poc_only` / `verification_profile_required`。
+- [x] 4.4 在 OpenContent download 中接入真实 DownloadCheck，并保证授权结果早于 Host 打开目标；增加 metadata-visible-but-unauthorized 测试；V4 readiness 保持 `poc_only` / `runtime_authorization_required`。
+- [x] 4.5 在 OpenContent upload-new 中接入真实 Provider write、collision/unauthorized/outcome_unknown 分类和 exact write-after-observation；V4 readiness 保持 `poc_only` / `runtime_authorization_required`。
 - [x] 4.6 复用真实 create/list/add/remove/list Team Administration 路径和 Provider Directory Principal Reference，不增加 Project/provider 特权端口或 identity inference。
 - [x] 4.7 实现 confirmed full-plan digest 绑定、exact finite provisioning batch approval 与 one-use per-operation proofs；首次计划替换或任何 revision/operation drift 都拒绝复用同一确认。
 - [x] 4.8 删除生产 Mock Content Space、fallback、metadata ACL helper 和重复传输入口；测试 mock 只从测试入口可达。
+- [x] 4.9 删除静态 verification-profile 合同、组合、生成器与 Stage 4 门禁；以当前 Principal + Broker audience + Provider binding attestation + 实时 ACL/DownloadCheck 作为唯一运行授权路径。证明未安装 `opencontent-base` 时 Provider 普通能力正常，真实私有 ZIP 可经通用本地安装器进入标准 skill root 并被发现，且私有字节不进入 Git。
 
 ## 5. 本地 Collaboration Agent 执行
 
@@ -76,7 +77,7 @@
 - [x] 8.3 运行与 changed collaboration path 相关的 package boundary、private-import、generated composition freshness、capability governance、secret audit 和 full regression tests；只有直接阻断该路径的既有问题才允许最小通用适配。
   - Stage 4 使用 arm64 Node `22.22.1`、FTS5-capable SQLite、arm64 Python `3.13` 和两个隔离的 loopback PostgreSQL 17 数据库完成最终回归：root Vitest `366/366` files、`3389/3389` tests 通过且 root aggregate 无 skip；全部 domain/package/tarball/internal-overlay/public-release 前置门禁、root typecheck 和全量 lint 也通过。Computer Use 4 项和 Scientific Plotting 2 项既有硬件/可选依赖 package-level skip 被单独保留，没有冒充真机证据或计入 root aggregate。
 - [ ] 8.4 验证 source app 的真实生产 composition，并构建同一 exact commit 的 packaged artifact；验证 packaged app 无 mock/fallback，且只指向冻结的 A-upgrade PoC origin/issuer。
-  - Source 半程已在 pushed commit `d86b8e15dc4305c3eb26899d2bdc833d06a008e0` 由 canonical `npm run build` 和真实 Electron `source/out` smoke 验证：固定 Cloud/OIDC 被精确注入，Cloud Identity/Device 均为 `signed-out` 且无配置错误，真实 OpenContent Provider 可发现，Project Coordinator 精确停在 `identity_required`。正式 artifact 入口在 builder 启动前因缺少 reviewed private verification-profile contribution 而 fail closed；packaged 半程未运行，因此 8.4 保持 unchecked。
+  - Source 半程曾在 pushed commit `d86b8e15dc4305c3eb26899d2bdc833d06a008e0` 由 canonical `npm run build` 和真实 Electron `source/out` smoke 验证：固定 Cloud/OIDC 被精确注入，Cloud Identity/Device 均为 `signed-out` 且无配置错误，真实 OpenContent Provider 可发现，Project Coordinator 精确停在 `identity_required`。旧静态 profile 构件门禁现已删除，Stage 4 只要求真实私有 Provider deployment configuration；仍须从本次修改后的同一 clean/pushed exact commit 重新构建并验证 packaged artifact，因此 8.4 保持 unchecked。
 - [x] 8.5 准备 U0-U4 合成账号/议程/需求、三文件 Task、HumanNeeded、reject/reassign、review/revision 和 completion 验收脚本。
 - [ ] 8.6 在至少三台机器/独立 VM 的五个 packaged profiles 上完成真实 OIDC、Device/Agent、OpenContent provisioning 与并发会议 happy path。
 - [ ] 8.7 完成 restart、WSS refill、duplicate、old execution fence、Device revoke、Coordinator transfer、Provider removal 和 outcome_unknown recovery matrix。

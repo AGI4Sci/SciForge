@@ -774,9 +774,9 @@ export function ContentSpacePanel({
   const readyCapabilityCount = displayedCapabilities.filter((state) =>
     state.admission.status === 'admitted'
   ).length
-  const verificationRequiredCount = displayedCapabilities.filter((state) =>
+  const runtimeAuthorizationRequiredCount = displayedCapabilities.filter((state) =>
     state.admission.status === 'blocked' &&
-      state.admission.reasonCode === 'verification_profile_required'
+      state.admission.reasonCode === 'runtime_authorization_required'
   ).length
 
   return (
@@ -836,14 +836,14 @@ export function ContentSpacePanel({
           {providerInstanceRef && displayedCapabilities.length > 0 && (
             <details className="content-space-readiness">
               <summary>
-                <span className={verificationRequiredCount > 0
+                <span className={runtimeAuthorizationRequiredCount > 0
                   ? 'content-space-status-dot is-development'
                   : 'content-space-status-dot is-ready'} aria-hidden />
                 <span className="content-space-readiness-summary">
                   Provider details · {readyCapabilityCount} of {displayedCapabilities.length} operations available
                 </span>
-                {verificationRequiredCount > 0 && (
-                  <span className="content-space-readiness-profile">Verification required</span>
+                {runtimeAuthorizationRequiredCount > 0 && (
+                  <span className="content-space-readiness-runtime-auth">Provider connection required</span>
                 )}
                 <ChevronDown className="content-space-readiness-chevron" size={14}
                   strokeWidth={1.8} aria-hidden />
@@ -1129,12 +1129,12 @@ function readinessLabel(state: ContentSpaceAdmittedCapabilityState): string {
   if (state.admission.status === 'admitted') {
     return state.readiness === 'production_ready'
       ? 'ready'
-      : 'PoC (verification profile admitted)'
+      : 'PoC (runtime authorized)'
   }
-  if (state.admission.reasonCode === 'verification_profile_required') {
+  if (state.admission.reasonCode === 'runtime_authorization_required') {
     return state.readiness === 'poc_only'
-      ? 'PoC unavailable (verification required)'
-      : 'unavailable (verification required)'
+      ? 'PoC unavailable (connect Provider)'
+      : 'unavailable (connect Provider)'
   }
   if (state.admission.reasonCode === 'platform_gate_blocked') {
     return 'unavailable (Host platform gate)'

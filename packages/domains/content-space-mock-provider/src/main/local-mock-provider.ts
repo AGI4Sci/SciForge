@@ -348,7 +348,7 @@ export function createLocalMockContentSpaceProvider(
       // must never produce the proof required for an ArtifactReference.
       return Object.freeze({
         proven: false as const,
-        reasonCode: 'verification_profile_required' as const
+        reasonCode: 'runtime_authorization_required' as const
       })
     }
   })

@@ -17,9 +17,6 @@ const { pathToFileURL } = require('node:url')
 const CONTRACT_VERSION = 1
 const RECEIPT_KIND = 'sciforge-stage4-artifact-receipt'
 const BUILD_IDENTITY_KIND = 'sciforge-stage4-acceptance'
-const CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION =
-  'main.content-space-verification-profile'
-const CONTENT_SPACE_VERIFICATION_PROFILE_VERSION = '2.0.0'
 const SOURCE_COMMIT_PATTERN = /^[a-f0-9]{40}$/u
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u
 const MAX_RECEIPT_BYTES = 1024 * 1024
@@ -308,7 +305,6 @@ async function discoverPrivateContributions(projectRoot) {
   const { discoverDomainPackages } = await import(moduleUrl)
   const packages = await discoverDomainPackages(projectRoot)
   const contributions = []
-  let verificationProfileSchema
   for (const candidate of packages) {
     if (candidate.definition?.composition !== 'production') continue
     for (const entrypoint of candidate.definition.entrypoints || []) {
@@ -318,17 +314,6 @@ async function discoverPrivateContributions(projectRoot) {
         const contractLocation = isRecord(contract) && typeof contract.location === 'string'
           ? contract.location
           : null
-        if (contractLocation === CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION) {
-          verificationProfileSchema ??= await loadContentSpaceVerificationProfileSchema(
-            projectRoot
-          )
-          const parsed = verificationProfileSchema.safeParse(contract)
-          if (!parsed.success) {
-            throw new Error(
-              `[stage4-artifact] Private verification profile ${contribution.id} is invalid.`
-            )
-          }
-        }
         contributions.push(Object.freeze({
           contractLocation,
           contractSha256: sha256(canonicalJson(contract)),
@@ -344,22 +329,6 @@ async function discoverPrivateContributions(projectRoot) {
   return Object.freeze(contributions)
 }
 
-async function loadContentSpaceVerificationProfileSchema(projectRoot) {
-  const { tsImport } = await import('tsx/esm/api')
-  const modulePath = resolve(
-    projectRoot,
-    'packages/domains/content-space/src/verification-policy.ts'
-  )
-  const module = await tsImport(pathToFileURL(modulePath).href, {
-    parentURL: pathToFileURL(__filename).href
-  })
-  const schema = module.contentSpaceVerificationProfileContributionSchema
-  if (!schema || typeof schema.safeParse !== 'function') {
-    throw new Error('[stage4-artifact] Content Space verification profile schema is unavailable.')
-  }
-  return schema
-}
-
 function assertAcceptanceComposition(composition) {
   requireRecord(composition, 'composition')
   if (!Array.isArray(composition.internalRuntimes) ||
@@ -367,22 +336,10 @@ function assertAcceptanceComposition(composition) {
     !Array.isArray(composition.privateContributions)) {
     throw new Error('[stage4-artifact] Private composition inventories are required.')
   }
-  if (composition.internalRuntimes.length === 0) {
-    throw new Error('[stage4-artifact] Stage 4 acceptance requires a receipted internal runtime.')
-  }
   if (!composition.deploymentConfigurations.some((entry) =>
     entry?.publicRelease === 'forbidden')) {
     throw new Error(
       '[stage4-artifact] Stage 4 acceptance requires an active private deployment configuration.'
-    )
-  }
-  if (!composition.privateContributions.some((contribution) =>
-    contribution.contractLocation === CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION &&
-    contribution.kind === 'main.extension' && contribution.process === 'main' &&
-    contribution.version === CONTENT_SPACE_VERIFICATION_PROFILE_VERSION)) {
-    throw new Error(
-      '[stage4-artifact] Stage 4 acceptance requires a reviewed private ' +
-      'Content Space verification-profile contribution.'
     )
   }
 }

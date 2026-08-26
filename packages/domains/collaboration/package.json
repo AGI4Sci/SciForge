@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-collaboration",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@sciforge/collaboration-contracts": "2.0.0",
-    "@sciforge/domain-content-space": "^4.0.0",
+    "@sciforge/domain-content-space": "^5.0.0",
     "@sciforge/domain-identity-access": "^2.0.0",
     "@sciforge/domain-sdk": "^0.2.3",
     "lucide-react": "^0.544.0",

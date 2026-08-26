@@ -73,12 +73,12 @@ A descriptive per-operation evidence state of `poc_only`, `blocked_by_contract`,
 _Avoid_: environment flag as production approval, partial means complete
 
 **Content Space Invocation Admission**:
-The decision whether one exact operation may execute now for the current Principal, authority, audience, platform, resource capability, transfer limits, and trusted verification evidence. Admission never rewrites readiness, and `blocked_by_contract` is never admissible.
+The decision whether one exact operation may execute now for the current Principal, authority, audience, platform, resource capability, transfer limits, and current Provider binding. Admission never rewrites readiness, and `blocked_by_contract` is never admissible.
 _Avoid_: readiness promotion, package presence, global feature enablement
 
-**Trusted Content Space Verification Policy**:
-A trusted set of static profiles that may admit one exact `poc_only` invocation by matching its Provider Instance, complete Host Principal and assurance, authority, operation, audience, bounded transfer maxima, validity window, and any required Provider Binding Attestation. It narrows authority for that invocation and can never admit `blocked_by_contract` or be selected or widened by the caller.
-_Avoid_: development mode bypass, caller-selected profile, Provider-specific Host switch, bulk promotion
+**Runtime Content Space Authorization**:
+The per-invocation match between a trusted Broker audience, the exact current Principal and authority, the pinned Provider Instance, and that Provider's live Binding Attestation. The Provider passes the exact opaque expectation to its Connector for immediate reauthentication before the external operation, and the real Provider read check or write remains the ACL oracle. It can never admit `blocked_by_contract` or promote readiness.
+_Avoid_: static verification package, development mode bypass, caller-selected binding, bulk promotion
 
 **Broker Resource**:
 A process-local executable resource bound to one caller, current Principal, audience, and exact Content Space authority. It is issued only after Human selection or portable-reference reauthorization and is never interchangeable with a raw Provider ID or portable reference.

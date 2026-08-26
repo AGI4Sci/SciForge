@@ -92,7 +92,7 @@ test('publishable dependencies target the frozen Host and domain contract majors
   ) as { dependencies: Record<string, string> }
   assert.equal(packageJson.dependencies['@sciforge/collaboration-contracts'], '2.0.0')
   assert.equal(packageJson.dependencies['@sciforge/domain-collaboration'], '^3.0.0')
-  assert.equal(packageJson.dependencies['@sciforge/domain-content-space'], '^4.6.0')
+  assert.equal(packageJson.dependencies['@sciforge/domain-content-space'], '^5.0.0')
   assert.equal(packageJson.dependencies['@sciforge/domain-identity-access'], '^2.0.0')
   assert.equal(packageJson.dependencies['@sciforge/domain-sdk'], '^0.2.3')
 })

@@ -21,17 +21,18 @@ This directory preserves architectural decisions together with their lifecycle. 
 | 0027 | accepted | Provider integration owns Human enrollment UI while credentials and transport stay main-process only. |
 | 0028 | accepted | Cloud Collaboration owns exclusive Project-to-shared-directory bindings; Provider ACL and content lifecycle remain external. |
 | 0029 | accepted | Agent content access begins at a Human-confirmed Broker root resource and expands only through authorized directory descendants. |
-| 0030 | accepted | Provider-native documents run through Content Space; the Provider owns semantic adapters, the Connector owns supplier transport, and the optional private overlay changes inventory without changing readiness or authority. |
+| 0030 | accepted, amended by 0037 | Provider-native documents run through Content Space; the Provider owns semantic adapters, the Connector owns supplier transport, and the optional private overlay changes inventory without changing readiness or authority. |
 | 0031 | accepted | OIDC JIT is the only Connected Mode User path; Identity owns Token/Device authority and exposes only token-free Cloud transport. |
 | 0032 | accepted | Cloud owns provisioning intent/binding; the Owner Desktop orchestrates exact ordinary Content Space operations with no shared Provider credential. |
 | 0033 | accepted | Device-signed provisioning attestation records observed facts and never becomes Provider ACL or persistent authorization scope. |
 | 0034 | accepted | Metadata proves containment only; real Provider DownloadCheck/write operations are the content authorization oracle. |
 | 0035 | accepted | Every Coordinator Agent belongs to the Project Owner; Run-0 initial content ownership also stays with that Owner, while any future transfer is a separate new-owner Desktop saga. |
 | 0036 | accepted | The first live PoC upgrades the existing A test environment through a backed-up candidate migration and reversible edge cutover instead of waiting for new Run-0 DNS. |
+| 0037 | accepted | Content Space authorizes PoC operations from the current Principal, Broker authority and live Provider binding; static verification profiles are removed, and optional Agent skills never gate Provider use. |
 
 ## Current authority order
 
-The canonical full-collaboration target is `CONTEXT-MAP.md`, the context glossaries, ADR-0031 through ADR-0036, and `openspec/changes/add-full-multi-user-collaboration-loop/`. `docs/SciForge_New_Cloudcolab.md`, the same-named root document, meeting summaries and donor-branch reports are historical or supporting evidence only; they cannot override the current OpenSpec or delivery gates.
+The canonical full-collaboration target is `CONTEXT-MAP.md`, the context glossaries, ADR-0031 through ADR-0037, and `openspec/changes/add-full-multi-user-collaboration-loop/`. `docs/SciForge_New_Cloudcolab.md`, the same-named root document, meeting summaries and donor-branch reports are historical or supporting evidence only; they cannot override the current OpenSpec or delivery gates.
 
 When documents disagree, use this order:
 

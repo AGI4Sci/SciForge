@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-content-space",
-  "version": "4.6.0",
+  "version": "5.0.0",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -13,8 +13,7 @@
     "./main": "./src/main/index.ts",
     "./native-document-contract": "./src/native-document-contract.ts",
     "./provider-features": "./src/provider-features.ts",
-    "./renderer": "./src/renderer/index.tsx",
-    "./verification-policy": "./src/verification-policy.ts"
+    "./renderer": "./src/renderer/index.tsx"
   },
   "files": [
     "src",

@@ -71,7 +71,7 @@ describe('OpenContent provider-neutral administration adapter', () => {
     expect(new Set(states.map(({ operation }) => operation)).size).toBe(states.length)
     expect(states).toHaveLength(10)
     expect(states.every(({ readiness, reasonCode }) => (
-      readiness === 'poc_only' && reasonCode === 'verification_profile_required'
+      readiness === 'poc_only' && reasonCode === 'runtime_authorization_required'
     ))).toBe(true)
     expect(states.some(({ readiness }) => readiness === 'production_ready')).toBe(false)
     expect(states.some(({ operation }) => operation.includes('delete'))).toBe(false)

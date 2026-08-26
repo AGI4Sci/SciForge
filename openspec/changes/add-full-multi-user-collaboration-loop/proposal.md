@@ -9,6 +9,7 @@ SciForge 已分别具备 OIDC/Device 身份、云端 Project/Task、OpenContent 
 - 将手动/自动接单保留为每台 Agent Device 的本地持久策略；Cloud 只保存 Task offer/accept/reject、execution fence、revision、幂等、Inbox、Project Record 与恢复事实。
 - 新增 Project Owner 驱动的内容 provisioning saga：Run-0 初始 content owner 固定为 Project Owner；Cloud 保存 intent，Owner Desktop 通过 Content Space 创建一个共享目录、精确维护 Provider 成员、写后核验，并提交由当前 Device 签名的无秘密 provisioning attestation 后激活 Project。未来更换 content owner 必须由新 content owner Desktop 执行独立 saga，不属于本次验收。
 - 建立唯一的真实文件任务通道：portable reference 在 Worker 本机重新授权；download 在打开本地目标前执行 Provider `DownloadCheck`，upload 使用 Provider 的真实写入授权；元数据仅验证 locator/ancestry，不充当 ACL 事实源。
+- 删除 Content Space 静态 verification profile 与授权包门禁，改由当前 Principal、Broker audience/authority、pinned Provider 的 live Binding Attestation 和真实 Provider ACL 在每次调用时授权；OpenContent Provider 在没有 `opencontent-base` Agent 技能包时仍可正常使用，私有技能 ZIP 只通过通用本地校验/安装器作为可选增强进入标准 Workspace skill root。
 - 对成员移除、Owner 失权、Device 撤销、断线重连、重复消息、改派 fencing 和 `outcome_unknown` 定义 fail-closed、可人工恢复的状态机。
 - 基于现有 A 测试环境执行可回滚蓝绿升级和真机会议验收：沿用 `cloud-test`/`login-test` 与现有 issuer，先完成备份/恢复演练和独立 candidate migration，再切换现有 edge 上游；五个动态 User fixture、至少三台物理机或独立 VM 上的五个独立 packaged Desktop profile 使用真实 Runtime/模型、真实 OpenContent 账号与可脱敏验证回执。
 - 本次只交付 Content Space 文件传递、复审和 Provider-native 操作；provider-neutral Shared Documents 与实时共同编辑明确延后。
@@ -26,8 +27,8 @@ SciForge 已分别具备 OIDC/Device 身份、云端 Project/Task、OpenContent 
 
 ### Modified Capabilities
 
-- `content-space`: 增加 Project-owned 系统执行通道、下载前 Provider 检查、写后强核验和不以元数据推断授权的行为要求。
-- `opencontent-content-space-provider`: 增加 Project provisioning 所需的真实共享目录、成员、DownloadCheck、上传与精确 observation 语义，同时保持凭据和 vendor 细节在 Connector 私有边界内。
+- `content-space`: 增加 Project-owned 系统执行通道、下载前 Provider 检查、写后强核验和不以元数据推断授权的行为要求；移除静态 verification-profile 合同并统一为当前绑定的运行时授权。
+- `opencontent-content-space-provider`: 增加 Project provisioning 所需的真实共享目录、成员、DownloadCheck、上传与精确 observation 语义，同时保持凭据和 vendor 细节在 Connector 私有边界内，并明确 Provider 能力不依赖可选 Agent 技能包。
 
 ## Impact
 

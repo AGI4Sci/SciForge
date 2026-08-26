@@ -59,10 +59,6 @@ import {
   type ContentSpaceServiceCallContext,
   type ContentSpaceServiceWriteCallContext
 } from './service.js'
-import {
-  CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
-  type ContentSpaceVerificationPolicy
-} from '../verification-policy.js'
 
 const PROVIDER_INSTANCE_REF = 'provider-instance-alpha'
 const PROVIDER_KIND = 'fixture-content-space'
@@ -600,110 +596,68 @@ describe('ContentSpaceService', () => {
     expect(listSpaces).not.toHaveBeenCalled()
   })
 
-  it('keeps PoC-only reads blocked without a separately reviewed trusted gate', async () => {
+  it('admits a PoC read through the current Provider binding without a static profile', async () => {
+    const attestExternalBinding = vi.fn(async () => externalBinding)
+    const listContainers = vi.fn(providerFixture().listContainers)
     const provider = providerFixture({
+      attestExternalBinding,
+      listContainers,
       describeCapabilities: async () => operations.map((operation) => ({
         operation,
         readiness: operation === 'list-containers' ? 'poc_only' : 'blocked_by_contract',
         reasonCode: operation === 'list-containers'
-          ? 'verification_profile_required'
+          ? 'runtime_authorization_required'
           : 'provider_contract_missing'
       }))
     })
     const service = serviceFor(provider)
     const request = { providerInstanceRef: PROVIDER_INSTANCE_REF, page: { limit: 10 } }
 
-    for (const audience of ['ui', 'agent', 'system'] as const) {
-      await expect(service.listContainers(request, {
-        ...readCall(),
-        audience
-      })).rejects.toMatchObject({ detail: { code: 'blocked_by_contract' } })
-    }
-  })
-
-  it('admits only one exact constructor-installed PoC verification profile', async () => {
-    const now = new Date('2026-08-21T01:00:00.000Z')
-    const provider = providerFixture({
-      describeCapabilities: async () => operations.map((operation) => ({
-        operation,
-        readiness: operation === 'list-containers' ? 'poc_only' : 'blocked_by_contract',
-        reasonCode: operation === 'list-containers'
-          ? 'verification_profile_required'
-          : 'provider_contract_missing'
-      }))
-    })
-    const verificationPolicy: ContentSpaceVerificationPolicy = Object.freeze({
-      contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
-      profiles: Object.freeze([Object.freeze({
-        profileId: 'fixture-list-containers',
-        providerInstanceRef: PROVIDER_INSTANCE_REF,
-        principal,
-        audience: 'agent' as const,
-        authority: Object.freeze({
-          kind: 'provider-instance' as const,
-          providerInstanceRef: PROVIDER_INSTANCE_REF
-        }),
-        operation: Object.freeze({
-          family: 'ordinary' as const,
-          operation: 'list-containers' as const
-        }),
-        transferLimits: Object.freeze({ maxUploadBytes: 0, maxDownloadBytes: 0 }),
-        validFrom: '2026-08-21T00:00:00.000Z',
-        expiresAt: '2026-08-21T02:00:00.000Z'
-      })])
-    })
-    const service = serviceFor(provider, {
-      verificationPolicy,
-      now: () => now
-    })
-    const request = { providerInstanceRef: PROVIDER_INSTANCE_REF, page: { limit: 10 } }
-
     await expect(service.listContainers(request, {
       ...readCall(),
       audience: 'agent'
     })).resolves.toMatchObject({ providerInstanceRef: PROVIDER_INSTANCE_REF })
-    await expect(service.listContainers(request, {
-      ...readCall(),
-      audience: 'ui'
-    })).rejects.toMatchObject({ detail: { code: 'blocked_by_contract' } })
-    await expect(service.listContainers(request, {
-      ...readCall(),
-      audience: 'agent',
-      reauthorizedPrincipal: { ...principal, identityVersion: 2 }
-    })).rejects.toMatchObject({ detail: { code: 'blocked_by_contract' } })
+
+    expect(attestExternalBinding).toHaveBeenCalledOnce()
+    expect(listContainers).toHaveBeenCalledWith(expect.objectContaining({
+      context: expect.objectContaining({ expectedExternalBinding: externalBinding })
+    }))
   })
 
-  it('reports Provider PoC evidence separately from exact current UI admission', async () => {
-    const now = new Date('2026-08-21T01:00:00.000Z')
+  it('fails closed before business dispatch when no trusted audience or Provider binding exists', async () => {
+    const listContainers = vi.fn(providerFixture().listContainers)
     const provider = providerFixture({
+      listContainers,
       describeCapabilities: async () => operations.map((operation) => ({
         operation,
         readiness: operation === 'list-containers' ? 'poc_only' : 'blocked_by_contract',
         reasonCode: operation === 'list-containers'
-          ? 'verification_profile_required'
+          ? 'runtime_authorization_required'
           : 'provider_contract_missing'
       }))
     })
-    const service = serviceFor(provider, {
-      verificationPolicy: {
-        contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
-        profiles: [{
-          profileId: 'fixture-ui-list-containers',
-          providerInstanceRef: PROVIDER_INSTANCE_REF,
-          principal,
-          audience: 'ui',
-          authority: {
-            kind: 'provider-instance',
-            providerInstanceRef: PROVIDER_INSTANCE_REF
-          },
-          operation: { family: 'ordinary', operation: 'list-containers' },
-          transferLimits: { maxUploadBytes: 0, maxDownloadBytes: 0 },
-          validFrom: '2026-08-21T00:00:00.000Z',
-          expiresAt: '2026-08-21T02:00:00.000Z'
-        }]
-      },
-      now: () => now
+    const service = serviceFor(provider)
+    const request = { providerInstanceRef: PROVIDER_INSTANCE_REF, page: { limit: 10 } }
+
+    await expect(service.listContainers(request, readCall()))
+      .rejects.toMatchObject({ detail: { code: 'blocked_by_contract' } })
+    await expect(service.listContainers(request, { ...readCall(), audience: 'agent' }))
+      .rejects.toMatchObject({ detail: { code: 'blocked_by_contract' } })
+    expect(listContainers).not.toHaveBeenCalled()
+  })
+
+  it('reports Provider PoC evidence separately from live runtime admission', async () => {
+    const provider = providerFixture({
+      attestExternalBinding: async () => externalBinding,
+      describeCapabilities: async () => operations.map((operation) => ({
+        operation,
+        readiness: operation === 'list-containers' ? 'poc_only' : 'blocked_by_contract',
+        reasonCode: operation === 'list-containers'
+          ? 'runtime_authorization_required'
+          : 'provider_contract_missing'
+      }))
     })
+    const service = serviceFor(provider)
 
     const described = await service.describeCapabilities(PROVIDER_INSTANCE_REF, {
       ...readCall(),
@@ -714,23 +668,22 @@ describe('ContentSpaceService', () => {
       .toEqual({
         operation: 'list-containers',
         readiness: 'poc_only',
-        reasonCode: 'verification_profile_required',
+        reasonCode: 'runtime_authorization_required',
         admission: {
           status: 'admitted',
-          reasonCode: 'verification_profile_admitted'
+          reasonCode: 'runtime_authorized'
         }
       })
   })
 
-  it('admits an exact Broker verification binding and rejects a different target', async () => {
-    const now = new Date('2026-08-21T01:00:00.000Z')
+  it('admits an exact Broker authority binding and rejects a different target', async () => {
     const poc = operations.map((operation) => ({
       operation,
       readiness: ['list-entries', 'observe-entry'].includes(operation)
         ? 'poc_only' as const
         : 'blocked_by_contract' as const,
       reasonCode: ['list-entries', 'observe-entry'].includes(operation)
-        ? 'verification_profile_required' as const
+        ? 'runtime_authorization_required' as const
         : 'provider_contract_missing' as const
     }))
     const observeEntry = vi.fn<ContentSpaceProvider['observeEntry']>(async ({ reference }) => ({
@@ -742,33 +695,17 @@ describe('ContentSpaceService', () => {
       items: []
     }))
     const provider = providerFixture({
+      attestExternalBinding: async () => externalBinding,
       describeCapabilities: async () => poc,
       observeEntry,
       listEntries
     })
-    const profiles = (['list-entries', 'observe-entry'] as const).map((operation) => ({
-      profileId: `fixture-${operation}`,
-      providerInstanceRef: PROVIDER_INSTANCE_REF,
-      principal,
-      audience: 'agent' as const,
-      authority: { kind: 'content-root' as const, root: ROOT },
-      operation: { family: 'ordinary' as const, operation },
-      transferLimits: { maxUploadBytes: 0, maxDownloadBytes: 0 },
-      validFrom: '2026-08-21T00:00:00.000Z',
-      expiresAt: '2026-08-21T02:00:00.000Z'
-    }))
-    const service = serviceFor(provider, {
-      verificationPolicy: {
-        contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
-        profiles
-      },
-      now: () => now
-    })
+    const service = serviceFor(provider)
 
     await expect(service.listEntries({ parent: ROOT, page: { limit: 10 } }, {
       ...readCall(),
       audience: 'agent',
-      verificationBinding: { root: ROOT, reference: ROOT }
+      authorityBinding: { root: ROOT, reference: ROOT }
     })).resolves.toMatchObject({ parent: ROOT, items: [] })
     expect(observeEntry).toHaveBeenCalledOnce()
     expect(listEntries).toHaveBeenCalledOnce()
@@ -778,7 +715,7 @@ describe('ContentSpaceService', () => {
     await expect(service.listEntries({ parent: OTHER_ROOT, page: { limit: 10 } }, {
       ...readCall(),
       audience: 'agent',
-      verificationBinding: { root: ROOT, reference: ROOT }
+      authorityBinding: { root: ROOT, reference: ROOT }
     })).rejects.toMatchObject({
       detail: { code: 'unauthorized' }
     })
@@ -786,37 +723,14 @@ describe('ContentSpaceService', () => {
     expect(listEntries).not.toHaveBeenCalled()
   })
 
-  it('does not let caller data install a verification policy or admit blocked readiness', async () => {
-    const provider = providerFixture({
-      describeCapabilities: async () => operations.map((operation) => ({
-        operation,
-        readiness: operation === 'list-containers' ? 'poc_only' : 'blocked_by_contract',
-        reasonCode: operation === 'list-containers'
-          ? 'verification_profile_required'
-          : 'provider_contract_missing'
-      }))
-    })
-    const service = serviceFor(provider)
-    await expect(service.listContainers({
-      providerInstanceRef: PROVIDER_INSTANCE_REF,
-      page: { limit: 10 }
-    }, {
-      ...readCall(),
-      audience: 'agent',
-      verificationPolicy: { admit: true }
-    } as ContentSpaceServiceCallContext)).rejects.toMatchObject({
-      detail: { code: 'blocked_by_contract' }
-    })
-  })
-
-  it('keeps PoC resource reads blocked without a separately reviewed trusted gate', async () => {
+  it('keeps PoC resource reads blocked when the current Provider connection is absent', async () => {
     const poc = operations.map((operation) => ({
       operation,
       readiness: ['list-entries', 'observe-entry'].includes(operation)
         ? 'poc_only' as const
         : 'blocked_by_contract' as const,
       reasonCode: ['list-entries', 'observe-entry'].includes(operation)
-        ? 'verification_profile_required' as const
+        ? 'runtime_authorization_required' as const
         : 'provider_contract_missing' as const
     }))
     const provider = providerFixture({
@@ -1243,45 +1157,16 @@ describe('ContentSpaceService', () => {
     expect(blockedOpen).not.toHaveBeenCalled()
   })
 
-  it('rechecks an exact external binding before opening a PoC upload source', async () => {
-    const now = new Date('2026-08-21T01:00:00.000Z')
+  it('rechecks the current external binding before opening a PoC upload source', async () => {
     const pocCapabilities = readyCapabilities.map((state) =>
       ['upload-new', 'observe-entry'].includes(state.operation)
         ? Object.freeze({
             operation: state.operation,
             readiness: 'poc_only' as const,
-            reasonCode: 'verification_profile_required' as const
+            reasonCode: 'runtime_authorization_required' as const
           })
         : state
     )
-    const profiles = [
-      {
-        profileId: 'fixture-upload-new',
-        providerInstanceRef: PROVIDER_INSTANCE_REF,
-        principal,
-        audience: 'agent' as const,
-        authority: { kind: 'content-root' as const, root: ROOT },
-        operation: { family: 'ordinary' as const, operation: 'upload-new' as const },
-        transferLimits: { maxUploadBytes: CONTENT_SPACE_LIMITS.maxUploadBytes, maxDownloadBytes: 0 },
-        externalBinding: {
-          externalSubject: externalBinding.externalSubject,
-          bindingRevision: externalBinding.bindingRevision
-        },
-        validFrom: '2026-08-21T00:00:00.000Z',
-        expiresAt: '2026-08-21T02:00:00.000Z'
-      },
-      {
-        profileId: 'fixture-upload-observation',
-        providerInstanceRef: PROVIDER_INSTANCE_REF,
-        principal,
-        audience: 'agent' as const,
-        authority: { kind: 'content-root' as const, root: ROOT },
-        operation: { family: 'ordinary' as const, operation: 'observe-entry' as const },
-        transferLimits: { maxUploadBytes: 0, maxDownloadBytes: 0 },
-        validFrom: '2026-08-21T00:00:00.000Z',
-        expiresAt: '2026-08-21T02:00:00.000Z'
-      }
-    ]
     const openSource = vi.fn(async () => ({
       name: 'acceptance.txt',
       size: 1,
@@ -1319,13 +1204,7 @@ describe('ContentSpaceService', () => {
       }),
       uploadNewFile
     })
-    const service = serviceFor(provider, {
-      verificationPolicy: {
-        contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
-        profiles
-      },
-      now: () => now
-    })
+    const service = serviceFor(provider)
 
     await expect(service.uploadNewFile({ parent: ROOT, name: 'acceptance.txt', openSource }, {
       ...writeCall(),
@@ -1347,7 +1226,7 @@ describe('ContentSpaceService', () => {
     const wrongBinding = serviceFor(providerFixture({
       attestExternalBinding: async () => ({
         ...externalBinding,
-        bindingRevision: 'c'.repeat(64)
+        principal: { ...principal, identityVersion: principal.identityVersion + 1 }
       }),
       describeCapabilities: async () => pocCapabilities,
       observeEntry: async ({ reference }) => ({
@@ -1355,19 +1234,13 @@ describe('ContentSpaceService', () => {
         capabilities: pocCapabilities
       }),
       uploadNewFile: blockedUpload
-    }), {
-      verificationPolicy: {
-        contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
-        profiles
-      },
-      now: () => now
-    })
+    }))
     await expect(wrongBinding.uploadNewFile({
       parent: ROOT,
       name: 'blocked.txt',
       openSource: blockedOpenSource
     }, { ...writeCall(), audience: 'agent' })).rejects.toMatchObject({
-      detail: { code: 'blocked_by_contract' }
+      detail: { code: 'unauthorized' }
     })
     expect(blockedOpenSource).not.toHaveBeenCalled()
     expect(blockedUpload).not.toHaveBeenCalled()
@@ -1470,20 +1343,14 @@ describe('ContentSpaceService', () => {
       state.operation === 'upload-new'
         ? Object.freeze({
             operation: state.operation,
-            readiness: 'poc_only' as const,
-            reasonCode: 'verification_profile_required' as const
+            readiness: 'blocked_by_contract' as const,
+            reasonCode: 'instance_policy_blocked' as const
           })
         : state)
     const providerNotReadyService = serviceFor(providerFixture({
       ...providerCalls,
       describeCapabilities: async () => pocCapabilities
-    }), {
-      verificationPolicy: systemTransferPolicy(
-        'upload-new',
-        CONTENT_SPACE_LIMITS.maxUploadBytes,
-        new Date()
-      )
-    })
+    }))
     await expect(providerNotReadyService.preflightSystemTransfer({
       operation: 'upload-new',
       root: ROOT
@@ -1782,7 +1649,6 @@ describe('ContentSpaceService', () => {
       proveFileDescendant,
       authorizeDownload: authorizeDownloadUsing(downloadFile)
     }), {
-      verificationPolicy: systemTransferPolicy('download', 1, now),
       now: () => now,
       monotonicNow: () => 0
     })
@@ -1826,7 +1692,6 @@ describe('ContentSpaceService', () => {
       }),
       authorizeDownload: authorizeDownloadUsing(downloadFile)
     }), {
-      verificationPolicy: systemTransferPolicy('download', 1, now),
       now: () => now,
       monotonicNow: () => monotonicRead++ === 0
         ? 0
@@ -1866,10 +1731,7 @@ describe('ContentSpaceService', () => {
       },
       proveFileDescendant: proveBlocked,
       authorizeDownload: authorizeDownloadUsing(blockedDownload)
-    }), {
-      verificationPolicy: systemTransferPolicy('download', 1, now),
-      now: () => now
-    })
+    }), { now: () => now })
 
     await expect(blockedService.downloadFile({
       reference: FILE,
@@ -1897,10 +1759,7 @@ describe('ContentSpaceService', () => {
       observeEntry: observeBlocked,
       proveFileDescendant: proveBlocked,
       authorizeDownload: authorizeDownloadUsing(blockedDownload)
-    }), {
-      verificationPolicy: systemTransferPolicy('download', 1, now),
-      now: () => now
-    })
+    }), { now: () => now })
     await expect(globallyBlockedService.downloadFile({
       reference: FILE,
       proofRoot: ROOT,
@@ -2381,7 +2240,7 @@ describe('ContentSpaceService', () => {
     }, readCall())).rejects.toMatchObject({ detail: { code: 'provider_unavailable' } })
   })
 
-  it('blocks unverified native-document operations before transfer or Provider dispatch', async () => {
+  it('blocks runtime-authorized native-document operations without a Provider connection', async () => {
     const execute = vi.fn(async () => { throw new Error('must not dispatch') })
     const openWorkspaceUploadSource = vi.fn(async () => {
       throw new Error('must not open transfer')
@@ -2392,7 +2251,7 @@ describe('ContentSpaceService', () => {
           {
             operation: 'update',
             readiness: 'poc_only',
-            reasonCode: 'verification_profile_required'
+            reasonCode: 'runtime_authorization_required'
           },
           {
             operation: 'edit',
@@ -2942,12 +2801,12 @@ describe('ContentSpaceService', () => {
     expect(execute).not.toHaveBeenCalled()
   })
 
-  it('keeps extended PoC operations blocked without a separately reviewed trusted gate', async () => {
+  it('keeps extended PoC operations blocked without a current Provider connection', async () => {
     const execute = vi.fn(async () => ({ ok: true as const, value: { items: [] } }))
     let operationStates: ContentSpaceExtendedOperationState[] = [{
       operation: 'listMetadataTypes' as const,
       readiness: 'poc_only' as const,
-      reasonCode: 'verification_profile_required' as const
+      reasonCode: 'runtime_authorization_required' as const
     }]
     const service = serviceFor(providerFixture({
       features: {
@@ -3409,7 +3268,6 @@ function serviceFor(
     operationDeadlineMs?: number
     platform?: Readonly<{ fileTransfers: boolean; externalNavigation: boolean }>
     featureFileTransfers?: DomainMainFileTransferHost
-    verificationPolicy?: ContentSpaceVerificationPolicy
     now?: () => Date
     monotonicNow?: () => number
   }> = {}
@@ -3423,7 +3281,6 @@ function serviceForFactory(
     operationDeadlineMs?: number
     platform?: Readonly<{ fileTransfers: boolean; externalNavigation: boolean }>
     featureFileTransfers?: DomainMainFileTransferHost
-    verificationPolicy?: ContentSpaceVerificationPolicy
     now?: () => Date
     monotonicNow?: () => number
   }> = {}
@@ -3437,9 +3294,6 @@ function serviceForFactory(
     platform: options.platform ?? { fileTransfers: true, externalNavigation: true },
     ...(options.featureFileTransfers
       ? { featureFileTransfers: options.featureFileTransfers }
-      : {}),
-    ...(options.verificationPolicy
-      ? { verificationPolicy: options.verificationPolicy }
       : {}),
     ...(options.now ? { now: options.now } : {}),
     ...(options.monotonicNow ? { monotonicNow: options.monotonicNow } : {}),
@@ -3535,35 +3389,7 @@ function systemWriteCall(
 ): ContentSpaceServiceWriteCallContext {
   return Object.freeze({
     ...writeCall(signal, assertPrincipalCurrent),
-    audience: 'system' as const,
-    requireVerificationProfile: true
-  })
-}
-
-function systemTransferPolicy(
-  operation: 'upload-new' | 'download',
-  maxBytes: number,
-  now: Date
-): ContentSpaceVerificationPolicy {
-  return Object.freeze({
-    contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
-    profiles: Object.freeze([{
-      profileId: `system-${operation}`,
-      providerInstanceRef: PROVIDER_INSTANCE_REF,
-      principal,
-      audience: 'system' as const,
-      authority: Object.freeze({ kind: 'content-root' as const, root: ROOT }),
-      operation: Object.freeze({ family: 'ordinary' as const, operation }),
-      transferLimits: operation === 'upload-new'
-        ? Object.freeze({ maxUploadBytes: maxBytes, maxDownloadBytes: 0 })
-        : Object.freeze({ maxUploadBytes: 0, maxDownloadBytes: maxBytes }),
-      externalBinding: Object.freeze({
-        externalSubject: externalBinding.externalSubject,
-        bindingRevision: externalBinding.bindingRevision
-      }),
-      validFrom: new Date(now.getTime() - 60_000).toISOString(),
-      expiresAt: new Date(now.getTime() + 60_000).toISOString()
-    }])
+    audience: 'system' as const
   })
 }
 
