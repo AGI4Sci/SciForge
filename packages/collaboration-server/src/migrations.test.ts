@@ -304,6 +304,8 @@ describe('collaboration forward-only migration lineage', () => {
     expect(migration11).toContain("column_name = 'source_kind'")
     expect(migration11).toContain('ALTER COLUMN task_id SET NOT NULL')
     expect(migration11).toContain('ALTER COLUMN execution_id SET NOT NULL')
+    expect(migration11).toContain('SET confirmable_action = NULL')
+    expect(migration11).toContain("status = CASE WHEN status = 'pending' THEN 'cancelled'")
     expect(migration13).toContain(
       "WHEN request.task_id IS NULL THEN 'coordinator_project'"
     )

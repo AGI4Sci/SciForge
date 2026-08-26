@@ -75,7 +75,7 @@ describe.skipIf(connectionString === undefined).sequential(
         ])
 
         const requests = await pool.query(
-          `SELECT human_request_id,status,request_scope,task_id,execution_id,
+          `SELECT human_request_id,status,request_scope,task_id,execution_id,confirmable_action,
                   coordinator_authority_epoch::text AS coordinator_authority_epoch,
                   revision::text AS revision
            FROM sciforge_collaboration.human_requests
@@ -86,12 +86,12 @@ describe.skipIf(connectionString === undefined).sequential(
           {
             human_request_id: 'hrq_stage3_scope_safe', status: 'answered',
             request_scope: 'coordinator_project', task_id: null, execution_id: null,
-            coordinator_authority_epoch: '1', revision: '1'
+            confirmable_action: null, coordinator_authority_epoch: '1', revision: '2'
           },
           {
             human_request_id: 'hrq_stage3_scope_unsafe', status: 'cancelled',
             request_scope: 'coordinator_project', task_id: null, execution_id: null,
-            coordinator_authority_epoch: '1', revision: '2'
+            confirmable_action: null, coordinator_authority_epoch: '1', revision: '2'
           }
         ])
 
@@ -456,11 +456,13 @@ async function seedHistoricalProjectScopedRequests(pool: SqlPool): Promise<void>
        ('hrq_stage3_scope_safe','prj_stage3_scope_safe',NULL,'usr_stage3_scope_owner',
         'agn_stage3_scope_owner','verified','Preserve this answer.','answered',1,
         '2026-08-27T00:00:00Z','2026-08-26T00:00:00Z','2026-08-26T00:00:00Z',
-        'coordinator',NULL,'inb_stage3_scope_safe',NULL),
+        'coordinator',NULL,'inb_stage3_scope_safe',
+        jsonb_build_object('kind','project.complete','projectId','prj_stage3_scope_safe')),
        ('hrq_stage3_scope_unsafe','prj_stage3_scope_unsafe',NULL,'usr_stage3_scope_owner',
         'agn_stage3_scope_other','verified','This request must be fenced.','pending',1,
         '2026-08-27T00:00:00Z','2026-08-26T00:00:00Z','2026-08-26T00:00:00Z',
-        'coordinator',NULL,'inb_stage3_scope_unsafe',NULL);
+        'coordinator',NULL,'inb_stage3_scope_unsafe',
+        jsonb_build_object('kind','project.complete','projectId','prj_stage3_scope_unsafe'));
 
      INSERT INTO sciforge_collaboration.human_answers
        (human_answer_id,human_request_id,project_id,task_id,request_revision,answered_by_user_id,

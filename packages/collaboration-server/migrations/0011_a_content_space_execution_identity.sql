@@ -304,6 +304,24 @@ $$;
 ALTER TABLE sciforge_collaboration.human_requests
   DROP CONSTRAINT IF EXISTS human_requests_confirmable_action_shape;
 
+-- Older coordination-contract actions are durable history, not current
+-- confirmation authority. Retire any non-canonical action instead of
+-- translating its legacy digest into a new executable action. A still-pending
+-- legacy confirmation is cancelled so it cannot become an ordinary answer.
+UPDATE sciforge_collaboration.human_requests
+SET confirmable_action = NULL,
+    status = CASE WHEN status = 'pending' THEN 'cancelled' ELSE status END,
+    revision = revision + 1,
+    updated_at = CURRENT_TIMESTAMP
+WHERE confirmable_action IS NOT NULL
+  AND NOT (
+    jsonb_typeof(confirmable_action) = 'object'
+    AND confirmable_action ?& ARRAY['actionType', 'safeSummary', 'effect', 'actionDigest']
+    AND confirmable_action - ARRAY['actionType', 'safeSummary', 'effect', 'actionDigest'] = '{}'::jsonb
+    AND confirmable_action ->> 'effect' IN ('workspace-write', 'external-write', 'destructive')
+    AND confirmable_action ->> 'actionDigest' ~ '^[a-f0-9]{64}$'
+  );
+
 -- The public-v5/staging-v9 coordination contract has an explicit source_kind
 -- and permits Coordinator-Project requests with no Task. The common v4/v11
 -- lineage has no such column and keeps its published NOT NULL catalog shape.
