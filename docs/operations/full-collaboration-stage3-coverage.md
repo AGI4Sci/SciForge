@@ -91,13 +91,25 @@ every recovery-loop command in a grouped row is named explicitly.
 | Desktop Inbox | Collaboration `connection.test.ts` | authority loss fences before reconnect | duplicate page/message and reconnect produce one handler fact/ACK; multi-page drain | page 100, durable sequence, no socket business payload |
 | Runtime / Provider | Worker `task-adapter.test.ts`, Coordinator `recovery.test.ts` | execution/membership/Device fence and exact recovery tuple | one Runtime provider turn after restart; no upload retry from `outcome_unknown` | stable safe IDs/digests; no credentials or absolute paths in public recovery command |
 
+## Gate evidence
+
+| Gate | Result |
+| --- | --- |
+| Real PostgreSQL 17 Stage 3 suite | 4/4 passed on loopback session container: all eight routes, unknown drift, migration rollback, transaction rollback, Server/repository restart, business receipt, Inbox cursor/ACK receipt and journal. |
+| Collaboration server with both real PostgreSQL URLs | 17 files, 144/144 passed, 0 skipped. The older A rollback environment test and the Stage 3 integration both ran. |
+| `npm run collaboration:test` | Contracts 103, Zulip provider 38, server 144, Desktop Collaboration 98, root collaboration/security scripts 23: 406/406 passed, plus secret audit and Provider composition checks. |
+| Focused product loop | Identity 134, Coordinator 58, Content Space 249, OpenContent connector 291, OpenContent Content Space provider 212; all passed with no skip. Domain SDK 144 and production AgentExecution Host 6 also passed. |
+| Architecture/security | Affected ESLint passed; package/tarball/private-import 19/19; generated composition fresh for 27 packages; capability governance passed for 292 actions; secret audit passed across 414 files; web and node root typechecks passed. |
+| Root aggregate typecheck | Attempted. It stops only in three unchanged baseline Create Loop test mocks that omit the already-required `createApprovedBatch`; affected packages plus root web/node typechecks pass. Create Loop is outside the authorized Stage 3 paths and was not modified. |
+| Complete root regression | `npm test` was attempted. After fixing the one Stage 3 composition fixture, direct root Vitest is 3,387/3,389 passed: the known Node 23 SQLite/FTS5 Paper Radar file fails, and a pre-existing packaged DAG Python host-architecture check observes x86_64 while the Darwin Node process expects arm64. Neither path was modified; this is not reported as a full pass and 8.3 remains unchecked. |
+
 ## Completion ledger
 
-- [ ] 3.4: characterization, implementation and focused recovery gates complete.
-- [ ] 3.8: every route and rollback/transaction/restart case proven on real PostgreSQL.
-- [ ] 3.9: public matrix tests, security audit and recovery operations runbook complete.
-- [ ] Stage 3 gates recorded with exact command counts, skips and failures.
-- [ ] OpenSpec 3.4/3.8/3.9 updated only after the matching evidence above passes.
+- [x] 3.4: characterization, implementation and focused recovery gates complete.
+- [x] 3.8: every route and rollback/transaction/restart case proven on real PostgreSQL.
+- [x] 3.9: public matrix tests, security audit and recovery operations runbook complete.
+- [x] Stage 3 gates recorded with exact command counts, skips and failures.
+- [x] OpenSpec 3.4/3.8/3.9 updated only after the matching evidence above passes.
 
 Stage 4 packaged, multi-device and live recovery evidence remains explicitly out
 of scope here; OpenSpec 8.3, 8.4 and 8.7 remain unchecked.

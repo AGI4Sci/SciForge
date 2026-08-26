@@ -21,12 +21,12 @@
 - [x] 3.1 升级 collaboration contracts，增加 Worker availability、Project Membership/content readiness、content provisioning intent/attestation/binding、Task execution/file intent/review/recovery 的 strict versioned schemas。
 - [x] 3.2 保持 OIDC JIT 为唯一 User 创建路径并使 pairing 仅绑定 endpoint；删除匿名 pairing 与 first-pairing user creation。
 - [x] 3.3 实现每 Project 唯一且始终由 Project Owner 所有的 Coordinator Agent、动态 User/精确 Worker Agent 选择、Owner-owned Agent 间 Coordinator transfer 和权限 fencing。
-- [ ] 3.4 实现 offer/accept/reject/timeout/revoke/reassign、每次新 executionId、expected revision/idempotency 和旧 execution 全写入 fencing。
+- [x] 3.4 实现 offer/accept/reject/timeout/revoke/reassign、每次新 executionId、expected revision/idempotency 和旧 execution 全写入 fencing。
 - [x] 3.5 实现 Project Membership lifecycle、Provider Membership Observation、derived Project Content Readiness、command-time Task Authority 四项独立事实及普通成员/Owner 失权降级规则。
 - [x] 3.6 实现 provisioning intent/attestation verification/binding saga、dynamic add、removal pending、closed/degraded lifecycle 和 durable recovery journal。
 - [x] 3.7 实现 Project plan、统一 `worker_execution | coordinator_project` HumanNeeded to Owner、HumanAnswer → Coordinator Inbox、result review accept/request-revision、Coordinator-only observation/decision/summary/final completion 与 visible recovery actions。
-- [ ] 3.8 添加 forward-only PostgreSQL migrations、从所有受支持旧 schema 的升级测试、transactional Inbox/receipt 和 restart recovery。
-- [ ] 3.9 完成 REST/SDK/WSS contract、authorization matrix、rate/bounds/redaction、revision/idempotency 和运维恢复手册。
+- [x] 3.8 添加 forward-only PostgreSQL migrations、从所有受支持旧 schema 的升级测试、transactional Inbox/receipt 和 restart recovery。
+- [x] 3.9 完成 REST/SDK/WSS contract、authorization matrix、rate/bounds/redaction、revision/idempotency 和运维恢复手册。
 
 ## 4. Content Space 与 OpenContent 真实系统通道
 
@@ -69,7 +69,7 @@
 - [x] 8.1 完成 contracts、server、identity、collaboration、coordinator、Content Space/OpenContent focused tests 和 changed-file lint/typecheck。
 - [ ] 8.2 对本变更新增/修改的生产路径执行 `Repository architecture principles gate`：不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证；全仓历史发现只报告，不扩展本任务。
 - [ ] 8.3 运行与 changed collaboration path 相关的 package boundary、private-import、generated composition freshness、capability governance、secret audit 和 full regression tests；只有直接阻断该路径的既有问题才允许最小通用适配。
-  - changed-path、架构、capability、secret 与除无关 Paper Radar 单文件外的根回归已通过；当前 Node 23 内置 SQLite 缺少 FTS5，完整根回归仍不满足，因此 8.3 保持 unchecked。
+  - changed-path、架构、capability 与 secret 门禁已通过。完整根 Vitest 为 3387/3389：当前 Node 23 内置 SQLite 缺少 FTS5，且 session 的 packaged DAG Python 为 x86_64、Darwin Node 期望 arm64；root aggregate typecheck 还被 baseline 中三个未实现既有 `createApprovedBatch` 的 Create Loop test mock 阻断。上述路径不在 Stage 3 授权修改范围，因此 8.3 保持 unchecked，且不得把排除后的结果冒充完整通过。
 - [ ] 8.4 验证 source app 的真实生产 composition，并构建同一 exact commit 的 packaged artifact；验证 packaged app 无 mock/fallback，且只指向冻结的 A-upgrade PoC origin/issuer。
   - Source 半程已由 `npm run build` 与 `npm run smoke:electron:source` 验证：Collaboration/Project Coordinator 生产 capabilities 已组合，并在未配置 Cloud 时 fail closed；packaged 半程未运行，因此 8.4 保持 unchecked。
 - [x] 8.5 准备 U0-U4 合成账号/议程/需求、三文件 Task、HumanNeeded、reject/reassign、review/revision 和 completion 验收脚本。
