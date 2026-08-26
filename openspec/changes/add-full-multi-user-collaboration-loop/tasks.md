@@ -81,7 +81,7 @@
 ## 9. 清理与交付
 
 - [x] 9.1 审计并删除旧 anonymous pairing、Token duplication、0.2 parallel contract、mock/fallback、private cross-boundary import、domain/provider hard-code、dead file/export/dependency。
-  - Stage 4 changed-path gate 从基线 `e0038b8c7109390445dccb691052fec74a153c09` 审计 399 个变更路径、143 个生产源码和 27 个 domain package，零 finding；416 个公开候选文件 secret audit 通过，OpenContent 旧 Provider migration/compatibility 路径已删除。packaged reachability 仍由未完成的 8.2 exact-artifact formal gate 独立约束，未被本项冒充为已完成。
+  - Stage 4 changed-path gate 从基线 `e0038b8c7109390445dccb691052fec74a153c09` 审计 403 个变更路径、143 个生产源码和 27 个 domain package，零 finding；416 个公开候选文件 secret audit 通过，OpenContent 旧 Provider migration/compatibility 路径已删除。packaged reachability 仍由未完成的 8.2 exact-artifact formal gate 独立约束，未被本项冒充为已完成。
 - [x] 9.2 按 docs、identity、cloud、content-space、collaboration/coordinator、deployment/E2E 的逻辑系列提交 commits，并在每次提交后保持 OpenSpec checkbox 与真实进度一致。
   - Stage 4 依次提交 OpenContent compatibility 清理 `ea4903c9`、团队附件信任/安装器 `ff80c4a5`、封闭打包/验收门禁 `c52b7d1b`、团队部署与 readiness 文档 `d86b8e15`、通用本地授权包生成器 `aa81f88e`；没有把真实环境缺口伪装为完成。
 - [x] 9.3 持续推送唯一集成主线 `codex/full-collaboration-loop-recovery` 到个人 Fork；只在所有必需门禁通过并经 User 确认后准备 upstream PR。

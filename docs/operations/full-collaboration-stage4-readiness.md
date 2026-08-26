@@ -71,7 +71,7 @@ verification:
 - zero trusted domain contributions with `publicRelease: forbidden`.
 
 The current Stage 4 changed-path architecture suite passed `28/28` tests and
-then audited 399 paths from the frozen baseline, including 143 production source
+then audited 403 paths from the frozen baseline, including 143 production source
 files and all 27 domain packages, with zero findings. The separate production
 marker/private-import scan and the 416-file secret audit also passed. This closes
 the local cleanup obligation in OpenSpec 9.1; it does not replace the sealed
