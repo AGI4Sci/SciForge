@@ -66,6 +66,7 @@
 - [x] 7.3 从旧 Cloud DB 复制独立 candidate database/volume/container/network，candidate-only 执行 forward migration、目标 image health 和合成账号 smoke；不得直接迁移运行中的旧数据库或新增 issuer fallback。
   - 2026-08-26 使用 session 前缀隔离数据库/卷/双网络/loopback app，从 7.2 public-v5 dump 续跑真实 v12 中断点至 ready v14，完成 no-op migration、聚合安全审计、重复启动、健康/401/唯一 issuer 验证，并由 Human 通过 system-browser PKCE 注册一个新合成账号，证明 candidate 重启前后 JIT User/OIDC identity 与 revision 持久稳定；旧 Cloud/DB/Caddy 未变。脱敏证据见 `docs/operations/full-collaboration-stage4-a-host-candidate.md`。
 - [ ] 7.4 candidate 全部门禁通过后切换现有 Caddy `cloud-test` upstream，保持 `login-test/realms/SciForge` issuer 不变；验证 packaged/live 后再决定退役旧栈，期间必须能精确回滚旧 upstream/app/database。
+  - 2026-08-26 经用户对 `743907e2` 包单独授权，首次 Edge 切换的 revision/mount/公网 200/200/401/issuer 门禁通过；随后 U0 packaged configure 因 bootstrap Identity 仍绑定隔离 loopback、与公网 HTTPS Collaboration origin 不一致而在写设置/建 Agent 前按设计 fail closed。已立即恢复原 Edge revision/Caddy SHA/公网门禁并撤下候选 Edge 网络，旧 DB v5 与候选 DB v14 聚合均未漂移。7.4 保持 unchecked；脱敏回执与需重新批准的启动顺序见 `docs/operations/full-collaboration-stage4-a-host-cutover-attempt-1.md`。
 
 ## 8. 自动化、packaged 与真机验收
 

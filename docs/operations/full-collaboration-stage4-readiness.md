@@ -171,3 +171,13 @@ Agent count remains zero because the product correctly rejects an HTTP
 Collaboration URL; registering that Agent over the existing public HTTPS origin
 is the immediate post-cutover smoke. This evidence prepares but does not approve
 or complete 7.4, 8.4, 8.6, 8.7 or 8.8.
+
+The first separately approved 7.4 attempt is recorded in
+[`full-collaboration-stage4-a-host-cutover-attempt-1.md`](./full-collaboration-stage4-a-host-cutover-attempt-1.md).
+The Edge selection and public candidate gates passed, but the retained U0
+bootstrap process correctly rejected a Collaboration origin different from its
+active loopback Identity endpoint. The exact rollback passed before the
+candidate Edge attachment was removed. No settings or Agent were created, so
+7.4 remains `approval_required`; a reattempt must first stop the loopback-bound
+process, then relaunch the same profile against public HTTPS only while the
+candidate is publicly selected.
