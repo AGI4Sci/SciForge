@@ -280,7 +280,6 @@ describe('OpenContent deployment runtime availability', () => {
               state: 'connected',
               updatedAt: '2026-08-23T00:00:00.000Z'
             }],
-            retiredConnections: []
           } satisfies DomainPackageJsonValue
         })),
         write: vi.fn(async (value: DomainPackageJsonValue) => ({ revision: 2, value })),

@@ -34,7 +34,6 @@ const storedPrincipalSchema = z.object({
 }).strict()
 
 const connectionIdSchema = z.string().trim().min(1).max(256)
-const legacyProviderInstanceRefSchema = z.enum(['opencontent-default'])
 
 const connectionRecordSchema = z.object({
   principal: storedPrincipalSchema,
@@ -53,30 +52,14 @@ const connectionRecordSchema = z.object({
 
 type ConnectionRecord = z.infer<typeof connectionRecordSchema>
 
-const legacyConnectionSettingsSchema = z.object({
-  version: z.literal(1),
-  connections: z.array(connectionRecordSchema).max(256)
-}).strict()
-
-const retiredConnectionRecordSchema = z.object({
-  principal: storedPrincipalSchema,
-  providerInstanceRef: legacyProviderInstanceRefSchema,
-  credentialIds: z.array(connectionIdSchema).min(1).max(257)
-}).strict()
-
-type RetiredConnectionRecord = z.infer<typeof retiredConnectionRecordSchema>
-
 const connectionSettingsSchema = z.object({
   version: z.literal(2),
-  connections: z.array(connectionRecordSchema).max(256),
-  retiredConnections: z.array(retiredConnectionRecordSchema).max(256)
+  connections: z.array(connectionRecordSchema).max(256)
 }).strict()
 
 type ConnectionSettingsSnapshot = Readonly<{
   revision: number
   connections: readonly ConnectionRecord[]
-  retiredConnections: readonly RetiredConnectionRecord[]
-  needsMigration: boolean
 }>
 
 export type OpenContentConnectionService = Readonly<{
@@ -190,8 +173,7 @@ export function createOpenContentConnectionService(options: Readonly<{
     await assertOpenContentPrincipalCurrent(assertPrincipalCurrent)
     const connection = findConnection(snapshot.connections, principal, providerInstanceRef)
     let connections = snapshot.connections
-    let retiredConnections = snapshot.retiredConnections
-    let changed = snapshot.needsMigration
+    let changed = false
 
     if (connection?.retiredCredentialIds?.length) {
       const remaining = await removeRetiredCredentials(
@@ -208,33 +190,10 @@ export function createOpenContentConnectionService(options: Readonly<{
       }
     }
 
-    const nextRetiredConnections: RetiredConnectionRecord[] = []
-    for (const retired of retiredConnections) {
-      if (!samePrincipalOwner(retired.principal, principal)) {
-        nextRetiredConnections.push(retired)
-        continue
-      }
-      const remaining = await removeRetiredCredentials(
-        principal,
-        retired.providerInstanceRef,
-        retired.credentialIds,
-        assertPrincipalCurrent
-      )
-      if (remaining.length !== retired.credentialIds.length) changed = true
-      if (remaining.length > 0) {
-        nextRetiredConnections.push(retiredConnectionRecordSchema.parse({
-          ...retired,
-          credentialIds: remaining
-        }))
-      }
-    }
-    retiredConnections = Object.freeze(nextRetiredConnections)
-
     if (!changed) return
     const next = connectionSettingsSchema.parse({
       version: 2,
-      connections,
-      retiredConnections
+      connections
     })
     await assertOpenContentPrincipalCurrent(assertPrincipalCurrent)
     try {
@@ -327,8 +286,7 @@ export function createOpenContentConnectionService(options: Readonly<{
       version: 2,
       connections: snapshot.connections.map((candidate) => candidate === connection
         ? { ...candidate, state: 'reauthentication_required', updatedAt: now().toISOString() }
-        : candidate),
-      retiredConnections: snapshot.retiredConnections
+        : candidate)
     }), snapshot.revision)
     await assertOpenContentPrincipalCurrent(assertPrincipalCurrent)
   })
@@ -430,16 +388,13 @@ export function createOpenContentConnectionService(options: Readonly<{
           input.principal,
           providerInstanceRef
         )
-        const retiredConnectionPending = snapshot.retiredConnections.some((retired) =>
-          samePrincipalOwner(retired.principal, input.principal))
         if (!connection) {
-          if (retiredConnectionPending) throw retiredCredentialCleanupFailed()
           return Object.freeze({
             state: 'disconnected' as const,
             remoteRevocation: 'unsupported' as const
           })
         }
-        if (connection.retiredCredentialIds?.length || retiredConnectionPending) {
+        if (connection.retiredCredentialIds?.length) {
           throw retiredCredentialCleanupFailed()
         }
         await options.accounts.remove(accountBinding(
@@ -450,8 +405,7 @@ export function createOpenContentConnectionService(options: Readonly<{
         await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
         const next = connectionSettingsSchema.parse({
           version: 2,
-          connections: snapshot.connections.filter((candidate) => candidate !== connection),
-          retiredConnections: snapshot.retiredConnections
+          connections: snapshot.connections.filter((candidate) => candidate !== connection)
         })
         await options.settings.write(next, snapshot.revision)
         await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
@@ -518,8 +472,7 @@ export function createOpenContentConnectionService(options: Readonly<{
                 providerInstanceRef
               )),
               nextConnection
-            ],
-            retiredConnections: snapshot.retiredConnections
+            ]
           })
           await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
           await options.settings.write(next, snapshot.revision)
@@ -542,51 +495,17 @@ async function readSettings(
   if (snapshot.value === null) {
     return Object.freeze({
       revision: snapshot.revision,
-      connections: Object.freeze([]),
-      retiredConnections: Object.freeze([]),
-      needsMigration: false
+      connections: Object.freeze([])
     })
   }
-  const current = connectionSettingsSchema.safeParse(snapshot.value)
-  if (current.success) {
-    if (current.data.connections.some((connection) =>
-      connection.providerInstanceRef !== providerInstanceRef)) {
-      throw invalidStoredProviderInstance()
-    }
-    return Object.freeze({
-      revision: snapshot.revision,
-      connections: Object.freeze(current.data.connections),
-      retiredConnections: Object.freeze(current.data.retiredConnections),
-      needsMigration: false
-    })
-  }
-
-  const legacy = legacyConnectionSettingsSchema.parse(snapshot.value)
-  const connections: ConnectionRecord[] = []
-  const retiredConnections: RetiredConnectionRecord[] = []
-  for (const connection of legacy.connections) {
-    if (connection.providerInstanceRef === providerInstanceRef) {
-      connections.push(connection)
-      continue
-    }
-    const retiredProvider = legacyProviderInstanceRefSchema.safeParse(
-      connection.providerInstanceRef
-    )
-    if (!retiredProvider.success) throw invalidStoredProviderInstance()
-    mergeRetiredConnection(retiredConnections, {
-      principal: connection.principal,
-      providerInstanceRef: retiredProvider.data,
-      credentialIds: uniqueCredentialIds([
-        connection.connectionId,
-        ...(connection.retiredCredentialIds ?? [])
-      ])
-    })
+  const current = connectionSettingsSchema.parse(snapshot.value)
+  if (current.connections.some((connection) =>
+    connection.providerInstanceRef !== providerInstanceRef)) {
+    throw invalidStoredProviderInstance()
   }
   return Object.freeze({
     revision: snapshot.revision,
-    connections: Object.freeze(connections),
-    retiredConnections: Object.freeze(retiredConnections),
-    needsMigration: true
+    connections: Object.freeze(current.connections)
   })
 }
 
@@ -619,29 +538,6 @@ function samePrincipalOwner(
     stored.subject === principal.subject &&
     stored.assurance === principal.assurance &&
     stored.deviceId === principal.deviceId
-}
-
-function mergeRetiredConnection(
-  retiredConnections: RetiredConnectionRecord[],
-  rawNext: RetiredConnectionRecord
-): void {
-  const next = retiredConnectionRecordSchema.parse(rawNext)
-  const existingIndex = retiredConnections.findIndex((candidate) =>
-    candidate.providerInstanceRef === next.providerInstanceRef &&
-    samePrincipalOwner(candidate.principal, next.principal))
-  if (existingIndex < 0) {
-    retiredConnections.push(next)
-    return
-  }
-  const existing = retiredConnections[existingIndex]!
-  retiredConnections[existingIndex] = retiredConnectionRecordSchema.parse({
-    ...existing,
-    credentialIds: uniqueCredentialIds([...existing.credentialIds, ...next.credentialIds])
-  })
-}
-
-function uniqueCredentialIds(ids: readonly string[]): string[] {
-  return [...new Set(ids)]
 }
 
 function appendRetiredCredentialId(pending: readonly string[], next: string): readonly string[] {

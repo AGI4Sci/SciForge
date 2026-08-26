@@ -111,7 +111,7 @@ describe('OpenContent connection service', () => {
 
     expect(credentials.values).toEqual(new Map())
     await expect(settings.read()).resolves.toMatchObject({
-      value: { version: 2, connections: [], retiredConnections: [] }
+      value: { version: 2, connections: [] }
     })
   })
 
@@ -138,117 +138,6 @@ describe('OpenContent connection service', () => {
     expect(isTokenValid).not.toHaveBeenCalled()
   })
 
-  it('retires a legacy Provider Instance binding without reusing its Token', async () => {
-    const settings = inMemorySettings(legacyConnectionSettings(principal))
-    const credentials = inMemoryCredentials()
-    credentials.values.set('opencontent-default:legacy-connection', 'legacy-opaque-token')
-    const isTokenValid = vi.fn<OpenContentClient['isTokenValid']>()
-    const service = createOpenContentConnectionService({
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      settings,
-      accounts: credentials,
-      getRuntime: configuredRuntime(stubClient({ isTokenValid }))
-    })
-
-    await expect(service.status({
-      principal,
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      assertPrincipalCurrent: () => undefined
-    })).resolves.toEqual({ state: 'disconnected' })
-
-    expect(credentials.values.has('opencontent-default:legacy-connection')).toBe(false)
-    expect(isTokenValid).not.toHaveBeenCalled()
-    await expect(settings.read()).resolves.toMatchObject({
-      value: {
-        version: 2,
-        connections: [],
-        retiredConnections: []
-      }
-    })
-  })
-
-  it('retains legacy cleanup metadata until secure deletion succeeds', async () => {
-    const settings = inMemorySettings(legacyConnectionSettings(principal))
-    const credentials = inMemoryCredentials()
-    credentials.values.set('opencontent-default:legacy-connection', 'legacy-opaque-token')
-    credentials.failRemove('legacy-connection')
-    const service = createOpenContentConnectionService({
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      settings,
-      accounts: credentials,
-      getRuntime: configuredRuntime(stubClient())
-    })
-
-    await expect(service.status({
-      principal,
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      assertPrincipalCurrent: () => undefined
-    })).resolves.toEqual({ state: 'disconnected' })
-    await expect(settings.read()).resolves.toMatchObject({
-      value: {
-        version: 2,
-        connections: [],
-        retiredConnections: [{
-          providerInstanceRef: 'opencontent-default',
-          credentialIds: ['legacy-connection']
-        }]
-      }
-    })
-    expect(credentials.values.has('opencontent-default:legacy-connection')).toBe(true)
-    await expect(service.unbind({
-      principal,
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      assertPrincipalCurrent: () => undefined
-    })).rejects.toMatchObject({ code: 'secure_storage_unavailable' })
-
-    credentials.failRemove(undefined)
-    await expect(service.status({
-      principal,
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      assertPrincipalCurrent: () => undefined
-    })).resolves.toEqual({ state: 'disconnected' })
-    expect(credentials.values.has('opencontent-default:legacy-connection')).toBe(false)
-    await expect(settings.read()).resolves.toMatchObject({
-      value: { version: 2, connections: [], retiredConnections: [] }
-    })
-  })
-
-  it('defers legacy credential deletion until its owning Principal is current', async () => {
-    const settings = inMemorySettings(legacyConnectionSettings(principal))
-    const credentials = inMemoryCredentials()
-    credentials.values.set('opencontent-default:legacy-connection', 'legacy-opaque-token')
-    const service = createOpenContentConnectionService({
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      settings,
-      accounts: credentials,
-      getRuntime: configuredRuntime(stubClient())
-    })
-    const otherPrincipal = Object.freeze({ ...principal, subject: 'local-account-b' })
-
-    await expect(service.status({
-      principal: otherPrincipal,
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      assertPrincipalCurrent: () => undefined
-    })).resolves.toEqual({ state: 'disconnected' })
-    expect(credentials.values.has('opencontent-default:legacy-connection')).toBe(true)
-    await expect(settings.read()).resolves.toMatchObject({
-      value: {
-        version: 2,
-        retiredConnections: [expect.objectContaining({
-          providerInstanceRef: 'opencontent-default',
-          credentialIds: ['legacy-connection']
-        })]
-      }
-    })
-
-    await expect(service.status({
-      principal,
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      assertPrincipalCurrent: () => undefined
-    })).resolves.toEqual({ state: 'disconnected' })
-    expect(credentials.values.has('opencontent-default:legacy-connection')).toBe(false)
-  })
-
   it('keeps cleanup metadata when the Principal switches during credential removal', async () => {
     const settings = inMemorySettings({
       version: 2,
@@ -265,8 +154,7 @@ describe('OpenContent connection service', () => {
         },
         state: 'connected',
         updatedAt: '2026-08-17T06:00:00.000Z'
-      }],
-      retiredConnections: []
+      }]
     })
     let currentSubject: string = principal.subject
     const values = new Map([
@@ -332,8 +220,7 @@ describe('OpenContent connection service', () => {
     }
     const settings = inMemorySettings({
       version: 2,
-      connections: [existing],
-      retiredConnections: []
+      connections: [existing]
     })
     const credentials = inMemoryCredentials()
     const vaultKey = `${OPENCONTENT_PROVIDER_INSTANCE_REF}:connection-current`
@@ -1212,25 +1099,6 @@ function inMemorySettings(
       revision += 1
       return { revision, value }
     }
-  }
-}
-
-function legacyConnectionSettings(owner: typeof principal) {
-  return {
-    version: 1,
-    connections: [{
-      principal: stableStoredPrincipal(owner),
-      providerInstanceRef: 'opencontent-default',
-      connectionId: 'legacy-connection',
-      externalAccount: {
-        id: 'legacy-external-user',
-        identityId: 40,
-        account: 'legacy-fixture-user',
-        name: 'Legacy Fixture User'
-      },
-      state: 'connected',
-      updatedAt: '2026-08-16T06:00:00.000Z'
-    }]
   }
 }
 
