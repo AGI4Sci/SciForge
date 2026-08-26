@@ -1501,7 +1501,6 @@ export function ParticipantSection({
                 className={PRIMARY_BUTTON}
                 disabled={
                   !agentDisplayName.trim() ||
-                  !participant?.endpoints.some(({ status }) => status === 'active') ||
                   busyKey !== null
                 }
                 onClick={onRegisterAgent}

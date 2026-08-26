@@ -143,6 +143,48 @@ test('allows Agent registration after phone verification without any Project', (
   assert.doesNotMatch(html, /projectId/u)
 })
 
+test('allows Agent registration without a verified phone endpoint', () => {
+  const fixture = statusFixture()
+  const snapshot = collaborationStatusSnapshotSchema.parse({
+    ...fixture,
+    participant: {
+      ...fixture.participant,
+      complete: false,
+      primaryHumanEndpointId: undefined,
+      primaryAgentId: undefined,
+      endpoints: [],
+      agents: []
+    },
+    projects: []
+  })
+  const html = renderToStaticMarkup(
+    <ParticipantSection
+      participant={snapshot.participant}
+      providerOptions={snapshot.providerOptions}
+      selectedProviderKey="provider.fixture"
+      locator={{}}
+      agentDisplayName="Laptop A"
+      pairing={null}
+      busyKey={null}
+      onProviderChange={NOOP}
+      onLocatorChange={NOOP}
+      onAgentDisplayNameChange={NOOP}
+      onStartPairing={NOOP}
+      onRegisterAgent={NOOP}
+      authorityRecoveryAgent={undefined}
+      onRecoverAgentAuthority={NOOP}
+      onSelectPrimary={NOOP}
+      onWorkerAcceptanceModeChange={NOOP}
+    />
+  )
+
+  assert.match(html, /collaborationRegisterAgent/u)
+  const registerButton = html.match(/<button[^>]*>[\s\S]*?<\/button>/gu)
+    ?.find((button) => button.includes('collaborationRegisterAgent'))
+  assert.ok(registerButton)
+  assert.doesNotMatch(registerButton, /disabled=""/u)
+})
+
 test('offers authority recovery only for the identified local Agent', () => {
   const fixture = statusFixture()
   const snapshot = collaborationStatusSnapshotSchema.parse({
