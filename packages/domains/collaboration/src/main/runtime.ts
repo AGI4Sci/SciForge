@@ -111,8 +111,8 @@ export class CollaborationRuntime {
 
   async activate(context: DomainMainRuntimeLifecycleContext): Promise<DomainMainRuntimeDisposer> {
     if (this.active) throw new Error('Collaboration runtime is already active.')
-    if (!context.agentExecution) {
-      throw new Error('Collaboration requires the canonical Agent execution Host.')
+    if (!context.agentExecution?.prepareSession) {
+      throw new Error('Collaboration requires the canonical durable Agent execution Host.')
     }
     if (!context.turnEvents) {
       throw new Error('Collaboration requires canonical Agent turn lifecycle events.')
@@ -121,6 +121,10 @@ export class CollaborationRuntime {
     this.context = context
     this.active = true
     let connection!: CollaborationConnection
+    const durableAgentExecution = {
+      ...context.agentExecution,
+      prepareSession: context.agentExecution.prepareSession
+    }
     const outbox = new DurableCloudOutbox({
       store: this.store,
       agentCloudRuntime: this.options.agentCloudRuntime,
@@ -130,7 +134,7 @@ export class CollaborationRuntime {
     })
     const projections = new ProjectionCoordinator({
       store: this.store,
-      agentExecution: context.agentExecution,
+      agentExecution: durableAgentExecution,
       agentThreads: context.agentThreads,
       cloudOutbox: outbox,
       localAgentId: () => this.localAgentIdentity,
@@ -215,7 +219,7 @@ export class CollaborationRuntime {
       store: this.store,
       connection,
       outbox,
-      agentExecution: context.agentExecution,
+      agentExecution: durableAgentExecution,
       capabilities: context.capabilities,
       localAgentId: () => this.localAgentIdentity,
       workspaceRootForExecution: (executionId) => join(

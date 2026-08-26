@@ -3,7 +3,12 @@ import type {
   DomainMainAgentExecutionRequest,
   DomainMainAgentRuntimeReadiness
 } from '@sciforge/domain-sdk/agent-execution'
-import { domainMainAgentRuntimeReadinessSchema } from '@sciforge/domain-sdk/agent-execution'
+import {
+  domainMainAgentExecutionRequestSchema,
+  domainMainAgentExecutionSessionRequestSchema,
+  domainMainAgentExecutionSessionSchema,
+  domainMainAgentRuntimeReadinessSchema
+} from '@sciforge/domain-sdk/agent-execution'
 import type { DomainPackageJsonValue } from '@sciforge/domain-sdk/contract'
 
 import {
@@ -64,35 +69,60 @@ export function createDomainAgentExecutionHost(input: Readonly<{
   pollIntervalMs?: number
 }>): DomainMainAgentExecutionHost {
   const pollIntervalMs = Math.max(10, input.pollIntervalMs ?? 1_000)
+  const prepareRuntimeSession = async (
+    rawRequest: Parameters<NonNullable<DomainMainAgentExecutionHost['prepareSession']>>[0]
+  ) => {
+    const request = domainMainAgentExecutionSessionRequestSchema.parse(rawRequest)
+    const runtimeId = requireSupportedRuntimeId(
+      request.runtimeId?.trim() || await input.defaultRuntimeId()
+    )
+    const thread = await input.runtime.startThread({
+      runtimeId,
+      ...(request.workspaceRoot ? { workspace: request.workspaceRoot } : {}),
+      mode: request.mode,
+      ...(request.model ? { model: request.model } : {}),
+      relation: 'side',
+      threadSource: 'domain-runtime',
+      sidebarVisibility: request.interaction === 'reviewable' ? 'main' : 'hidden',
+      ...(request.allowedTools ? { allowedTools: request.allowedTools } : {})
+    })
+    return { runtimeId, thread }
+  }
   return Object.freeze({
     runtimeReadiness: async () => domainMainAgentRuntimeReadinessSchema.parse(
       await input.runtimeReadiness()
     ),
-    run: async (request) => {
+    prepareSession: async (request) => {
+      const prepared = await prepareRuntimeSession(request)
+      return domainMainAgentExecutionSessionSchema.parse({
+        runtimeId: prepared.runtimeId,
+        threadId: prepared.thread.id
+      })
+    },
+    run: async (rawRequest) => {
+      const request = domainMainAgentExecutionRequestSchema.parse(rawRequest)
       if (request.signal?.aborted) {
         throw request.signal.reason ?? new Error('Agent execution aborted.')
       }
       if (request.threadId && !request.runtimeId?.trim()) {
         throw new Error('An existing Agent Session requires an explicit runtime ID.')
       }
-      const runtimeId = requireSupportedRuntimeId(
-        request.runtimeId?.trim() || await input.defaultRuntimeId()
-      )
-      const thread = request.threadId
-        ? await input.runtime.readThreadSnapshot({
-            runtimeId,
-            threadId: request.threadId.trim()
-          })
-        : await input.runtime.startThread({
-            runtimeId,
-            ...(request.workspaceRoot ? { workspace: request.workspaceRoot } : {}),
-            mode: request.mode,
+      const prepared = request.threadId
+        ? null
+        : await prepareRuntimeSession({
+            ...(request.runtimeId ? { runtimeId: request.runtimeId } : {}),
+            ...(request.workspaceRoot ? { workspaceRoot: request.workspaceRoot } : {}),
             ...(request.model ? { model: request.model } : {}),
-            relation: 'side',
-            threadSource: 'domain-runtime',
-            sidebarVisibility: request.interaction === 'reviewable' ? 'main' : 'hidden',
-            ...(request.allowedTools ? { allowedTools: request.allowedTools } : {})
+            ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+            ...(request.allowedTools ? { allowedTools: request.allowedTools } : {}),
+            interaction: request.interaction,
+            mode: request.mode
           })
+      const runtimeId = prepared?.runtimeId ?? requireSupportedRuntimeId(request.runtimeId!)
+      const thread = prepared?.thread ?? await input.runtime.readThreadSnapshot({
+        runtimeId,
+        threadId: request.threadId!.trim()
+      })
       if (
         request.threadId &&
         request.workspaceRoot &&

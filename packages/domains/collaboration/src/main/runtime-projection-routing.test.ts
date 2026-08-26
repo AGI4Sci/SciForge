@@ -100,6 +100,7 @@ test('the active runtime mirrors completed assistant progress before after-turn 
   const abortController = new AbortController()
   const context = {
     agentExecution: {
+      prepareSession: async () => ({ runtimeId: 'codex', threadId: 'unused-worker-thread' }),
       run: async () => { throw new Error('Transcript mirroring must not execute an Agent turn.') }
     },
     agentThreads: {
@@ -241,6 +242,7 @@ test('startup reconciles only completed remote turns without an existing final r
   const abortController = new AbortController()
   const context = {
     agentExecution: {
+      prepareSession: async () => ({ runtimeId: 'codex', threadId: 'unused-worker-thread' }),
       run: async () => { throw new Error('Startup reconciliation must not execute an Agent turn.') }
     },
     agentThreads: {

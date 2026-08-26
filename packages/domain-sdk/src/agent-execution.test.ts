@@ -5,11 +5,42 @@ import { z } from 'zod'
 import {
   domainMainAgentExecutionRequestSchema,
   domainMainAgentExecutionResultSchema,
+  domainMainAgentExecutionSessionRequestSchema,
+  domainMainAgentExecutionSessionSchema,
   domainMainAgentRuntimeReadinessSchema,
   type DomainMainAgentExecutionHost
 } from './agent-execution.js'
 
 describe('agent execution host contract', () => {
+  it('can prepare a stable Session before a retryable directive reaches Runtime dispatch', async () => {
+    const host: DomainMainAgentExecutionHost = {
+      prepareSession: async () => ({ runtimeId: 'codex', threadId: 'thread-worker-stable' }),
+      run: async () => ({
+        runtimeId: 'codex', threadId: 'thread-worker-stable', turnId: 'turn-worker-stable',
+        state: 'completed', text: 'done'
+      })
+    }
+
+    assert.deepEqual(await host.prepareSession!({
+      workspaceRoot: '/workspace/execution', interaction: 'reviewable', mode: 'agent'
+    }), { runtimeId: 'codex', threadId: 'thread-worker-stable' })
+    assert.deepEqual(domainMainAgentExecutionSessionRequestSchema.parse({
+      runtimeId: 'codex', workspaceRoot: '/workspace/execution'
+    }), {
+      runtimeId: 'codex', workspaceRoot: '/workspace/execution',
+      interaction: 'background', mode: 'agent'
+    })
+    assert.deepEqual(domainMainAgentExecutionSessionSchema.parse({
+      runtimeId: 'codex', threadId: 'thread-worker-stable'
+    }), { runtimeId: 'codex', threadId: 'thread-worker-stable' })
+    assert.throws(() => domainMainAgentExecutionSessionRequestSchema.parse({
+      workspaceRoot: '/workspace/execution', clientDirectiveId: 'caller-smuggled-dispatch'
+    }), z.ZodError)
+    assert.throws(() => domainMainAgentExecutionSessionRequestSchema.parse({
+      workspaceRoot: '/workspace/execution', providerCredential: 'must-not-cross-host-contract'
+    }), z.ZodError)
+  })
+
   it('accepts bounded process-neutral execution options and cancellation', async () => {
     const controller = new AbortController()
     const host: DomainMainAgentExecutionHost = {

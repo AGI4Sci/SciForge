@@ -12,6 +12,45 @@ type ExecutionRuntime = Parameters<typeof createDomainAgentExecutionHost>[0]['ru
 type LifecycleListener = Parameters<AgentRuntimeHost['subscribeTurnLifecycle']>[0]
 
 describe('domain Agent execution Host', () => {
+  it('prepares one exact Session before a durable caller dispatches its stable directive', async () => {
+    let listener: LifecycleListener | undefined
+    const runtime = fakeRuntime({
+      subscribeTurnLifecycle: (next) => {
+        listener = next
+        return () => undefined
+      },
+      startTurn: vi.fn(async (request) => {
+        await listener?.(terminalEvent(request.runtimeId, request.threadId, 'turn-prepared', 'completed'))
+        return { threadId: request.threadId, turnId: 'turn-prepared' }
+      })
+    })
+    const execution = createDomainAgentExecutionHost({
+      runtime,
+      defaultRuntimeId: () => 'codex',
+      runtimeReadiness: () => ({
+        state: 'ready', runtimeId: 'codex', capabilityTags: ['agent-runtime.codex']
+      })
+    })
+
+    const session = await execution.prepareSession!({
+      workspaceRoot: '/workspace/project', interaction: 'reviewable', mode: 'agent'
+    })
+    expect(session).toEqual({ runtimeId: 'codex', threadId: 'thread-fixed' })
+    await expect(execution.run({
+      ...session,
+      workspaceRoot: '/workspace/project',
+      clientDirectiveId: 'collab-worker-stable-directive',
+      prompt: 'Execute the durable Worker task.'
+    })).resolves.toMatchObject({
+      runtimeId: 'codex', threadId: 'thread-fixed', turnId: 'turn-prepared'
+    })
+    expect(runtime.startThread).toHaveBeenCalledTimes(1)
+    expect(runtime.startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      runtimeId: 'codex', threadId: 'thread-fixed',
+      clientDirectiveId: 'collab-worker-stable-directive'
+    }))
+  })
+
   it('continues the exact Session and preserves the stable directive identity', async () => {
     let listener: LifecycleListener | undefined
     const runtime = fakeRuntime({

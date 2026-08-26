@@ -59,7 +59,9 @@ export type CollaborationTaskAdapterOptions = Readonly<{
   store: CollaborationLocalStore
   connection: CollaborationConnection
   outbox: DurableCloudOutbox
-  agentExecution: DomainMainAgentExecutionHost
+  agentExecution: DomainMainAgentExecutionHost & Readonly<{
+    prepareSession: NonNullable<DomainMainAgentExecutionHost['prepareSession']>
+  }>
   capabilities: DomainMainSystemCapabilityInvoker
   localAgentId: () => string | undefined
   workspaceRootForExecution: (executionId: string) => string
@@ -750,10 +752,58 @@ export class CollaborationTaskAdapter {
         current.updatedAt = preparedAt
       })
     }
-    const dispatchedAt = existing?.dispatchedAt ?? this.now().toISOString()
-    await this.updateAgentJournal(run.offer.executionId, logicalInvocationId, {
-      state: 'dispatched', dispatchedAt
-    })
+    run = this.requireRun(run.offer.executionId)
+    let journal = requireAgentJournal(run, logicalInvocationId)
+    const partialRunSession = Boolean(run.runtimeId) !== Boolean(run.threadId)
+    const partialJournalSession = Boolean(journal.runtimeId) !== Boolean(journal.threadId)
+    if (partialRunSession || partialJournalSession) {
+      throw new Error('The durable Runtime Session binding is incomplete; refusing turn dispatch.')
+    }
+    const runSession = run.runtimeId && run.threadId
+      ? { runtimeId: run.runtimeId, threadId: run.threadId }
+      : null
+    const journalSession = journal.runtimeId && journal.threadId
+      ? { runtimeId: journal.runtimeId, threadId: journal.threadId }
+      : null
+    if (runSession && journalSession && (
+      runSession.runtimeId !== journalSession.runtimeId ||
+      runSession.threadId !== journalSession.threadId
+    )) {
+      throw new Error('The Worker Runtime Session binding changed within one execution.')
+    }
+    let session = runSession ?? journalSession
+    if (!session) {
+      if (journal.state === 'dispatched') {
+        throw new Error('A dispatched Runtime turn has no durable Session binding; blind redispatch is forbidden.')
+      }
+      session = await this.options.agentExecution.prepareSession({
+        workspaceRoot: run.workspaceRoot,
+        interaction: 'reviewable',
+        mode: 'agent'
+      })
+    }
+    if (!runSession || !journalSession) {
+      const preparedSession = session
+      await this.options.store.transact((draft) => {
+        const current = requireDraftRun(draft.taskRuns, run.offer.executionId)
+        const currentJournal = requireAgentJournal(current, logicalInvocationId)
+        if (currentJournal.state !== 'prepared' && currentJournal.state !== 'dispatched') {
+          throw new Error('Runtime Session can only bind a prepared or dispatched invocation.')
+        }
+        current.runtimeId = preparedSession.runtimeId
+        current.threadId = preparedSession.threadId
+        currentJournal.runtimeId = preparedSession.runtimeId
+        currentJournal.threadId = preparedSession.threadId
+        current.updatedAt = this.now().toISOString()
+      })
+    }
+    run = this.requireRun(run.offer.executionId)
+    journal = requireAgentJournal(run, logicalInvocationId)
+    if (journal.state === 'prepared') {
+      await this.updateAgentJournal(run.offer.executionId, logicalInvocationId, {
+        state: 'dispatched', dispatchedAt: this.now().toISOString()
+      })
+    }
     run = this.requireRun(run.offer.executionId)
     const execution = requireExecution(run)
     const task = requireTask(run)
@@ -770,8 +820,8 @@ export class CollaborationTaskAdapter {
     let result
     try {
       result = await this.options.agentExecution.run({
-        ...(run.runtimeId ? { runtimeId: run.runtimeId } : {}),
-        ...(run.threadId ? { threadId: run.threadId } : {}),
+        runtimeId: run.runtimeId!,
+        threadId: run.threadId!,
         workspaceRoot: run.workspaceRoot,
         clientDirectiveId,
         prompt,
@@ -1934,6 +1984,15 @@ function requireTask(run: CollaborationTaskRun): Task {
 function requireExecution(run: CollaborationTaskRun): TaskExecution {
   if (!run.execution) throw new Error('Worker run is missing its canonical execution snapshot.')
   return run.execution
+}
+
+function requireAgentJournal(
+  run: CollaborationTaskRun,
+  logicalInvocationId: string
+): CollaborationTaskRun['agentJournal'][number] {
+  const journal = run.agentJournal.find((item) => item.logicalInvocationId === logicalInvocationId)
+  if (!journal) throw new Error('Agent invocation journal entry was not found.')
+  return journal
 }
 
 function requireTransferJournal(

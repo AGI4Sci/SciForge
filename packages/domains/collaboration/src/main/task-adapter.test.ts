@@ -113,6 +113,17 @@ test('automatic text execution journals before Agent and uses explicit vNext com
       directives.push(request.clientDirectiveId ?? '')
       const run = store.snapshot().taskRuns[0]
       assert.equal(run?.agentJournal[0]?.state, 'dispatched', 'Agent effect must follow durable dispatch journal')
+      assert.deepEqual({
+        runtimeId: run?.runtimeId,
+        threadId: run?.threadId,
+        journalRuntimeId: run?.agentJournal[0]?.runtimeId,
+        journalThreadId: run?.agentJournal[0]?.threadId
+      }, {
+        runtimeId: request.runtimeId,
+        threadId: request.threadId,
+        journalRuntimeId: request.runtimeId,
+        journalThreadId: request.threadId
+      }, 'Runtime Session binding must be durable before turn dispatch')
       return {
         runtimeId: 'codex',
         threadId: 'worker-thread-stable',
@@ -551,8 +562,8 @@ test('file execution journals Cloud and local dispatch before one real generic d
       assert.match(request.clientDirectiveId ?? '', /^collab-worker-[a-f0-9]{48}$/u)
       assert.equal(request.interaction, 'reviewable')
       assert.equal(request.mode, 'agent')
-      assert.equal(request.runtimeId, undefined)
-      assert.equal(request.threadId, undefined)
+      assert.equal(request.runtimeId, 'codex')
+      assert.equal(request.threadId, 'worker-thread-stable')
       assert.deepEqual(request.metadata, {
         source: 'collaboration.worker-task',
         projectId: TEST_IDS.projectId,
@@ -564,8 +575,8 @@ test('file execution journals Cloud and local dispatch before one real generic d
       assert.match(request.prompt, /input\.csv/u)
       assert.match(request.prompt, /analysis\.md/u)
       return {
-        runtimeId: 'codex',
-        threadId: 'worker-file-thread',
+        runtimeId: request.runtimeId!,
+        threadId: request.threadId!,
         turnId: 'worker-file-turn',
         state: 'completed',
         text: JSON.stringify({
@@ -609,7 +620,7 @@ test('file execution journals Cloud and local dispatch before one real generic d
   assert.equal(run?.agentJournal.length, 1)
   assert.equal(run?.agentJournal[0]?.state, 'observed_success')
   assert.equal(run?.agentJournal[0]?.runtimeId, 'codex')
-  assert.equal(run?.agentJournal[0]?.threadId, 'worker-file-thread')
+  assert.equal(run?.agentJournal[0]?.threadId, 'worker-thread-stable')
   assert.equal(run?.agentJournal[0]?.turnId, 'worker-file-turn')
   assert.equal(run?.agentJournal[0]?.runtimeState, 'completed')
   assert.deepEqual(run?.externalJournal.map(({ state }) => state), [
@@ -1123,8 +1134,8 @@ test('restart resumes the same dispatched Agent directive instead of creating an
     expectedExecutionRevision: cloud.execution.revision,
     state: 'running',
     workspaceRoot: '/tmp/sciforge-worker-restart',
-    runtimeId: null,
-    threadId: null,
+    runtimeId: 'codex',
+    threadId: 'worker-thread-stable',
     humanRequestId: null,
     humanAnswer: null,
     resources: [],
@@ -1135,8 +1146,8 @@ test('restart resumes the same dispatched Agent directive instead of creating an
       preparedAt: TEST_TIMESTAMP,
       dispatchedAt: TEST_TIMESTAMP,
       observedAt: null,
-      runtimeId: null,
-      threadId: null,
+      runtimeId: 'codex',
+      threadId: 'worker-thread-stable',
       turnId: null,
       runtimeState: null,
       safeResultText: null,
@@ -1174,7 +1185,7 @@ test('restart resumes the same dispatched Agent directive instead of creating an
   assert.equal(created.store.snapshot().taskRuns[0]?.state, 'completed')
 })
 
-test('Desktop shutdown preserves the dispatched Agent directive for restart reconciliation', async () => {
+test('Desktop restart reconciles one persisted Session/directive without a second Runtime turn', async () => {
   const cloud = new FakeWorkerCloud()
   const initial = emptyState()
   initial.workerAcceptancePolicies = [{
@@ -1184,10 +1195,38 @@ test('Desktop shutdown preserves the dispatched Agent directive for restart reco
   }]
   const firstRunStarted = deferred<void>()
   const directives: string[] = []
+  const sessions: string[] = []
+  let hostRunAttempts = 0
+  let providerTurns = 0
+  const delivered = new Map<string, Readonly<{
+    runtimeId: string
+    threadId: string
+    turnId: string
+    state: 'completed'
+    text: string
+  }>>()
+  const result = {
+    runtimeId: 'codex',
+    threadId: 'worker-shutdown-recovery-thread',
+    turnId: 'worker-shutdown-recovery-turn',
+    state: 'completed' as const,
+    text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Reconciled.' })
+  }
   const first = await createRunner(cloud, {
     runtimeReadiness: readyRuntimeReadiness,
+    prepareSession: async () => ({
+      runtimeId: result.runtimeId,
+      threadId: result.threadId
+    }),
     run: async (request) => {
+      hostRunAttempts += 1
       directives.push(request.clientDirectiveId ?? '')
+      sessions.push(`${request.runtimeId}:${request.threadId}`)
+      const key = `${request.runtimeId}:${request.threadId}:${request.clientDirectiveId}`
+      const reconciled = delivered.get(key)
+      if (reconciled) return reconciled
+      providerTurns += 1
+      delivered.set(key, result)
       firstRunStarted.resolve()
       await new Promise<void>((resolve) => {
         if (request.signal?.aborted) resolve()
@@ -1204,25 +1243,40 @@ test('Desktop shutdown preserves the dispatched Agent directive for restart reco
 
   const stoppedState = first.store.snapshot()
   assert.equal(stoppedState.taskRuns[0]?.agentJournal[0]?.state, 'dispatched')
+  assert.deepEqual({
+    runtimeId: stoppedState.taskRuns[0]?.runtimeId,
+    threadId: stoppedState.taskRuns[0]?.threadId,
+    journalRuntimeId: stoppedState.taskRuns[0]?.agentJournal[0]?.runtimeId,
+    journalThreadId: stoppedState.taskRuns[0]?.agentJournal[0]?.threadId
+  }, {
+    runtimeId: result.runtimeId,
+    threadId: result.threadId,
+    journalRuntimeId: result.runtimeId,
+    journalThreadId: result.threadId
+  })
   const second = await createRunner(cloud, {
     runtimeReadiness: readyRuntimeReadiness,
     run: async (request) => {
+      hostRunAttempts += 1
       directives.push(request.clientDirectiveId ?? '')
-      return {
-        runtimeId: 'codex',
-        threadId: 'worker-shutdown-recovery-thread',
-        turnId: 'worker-shutdown-recovery-turn',
-        state: 'completed',
-        text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Reconciled.' })
-      }
+      sessions.push(`${request.runtimeId}:${request.threadId}`)
+      const key = `${request.runtimeId}:${request.threadId}:${request.clientDirectiveId}`
+      const reconciled = delivered.get(key)
+      if (!reconciled) throw new Error('Restart attempted a second Runtime turn.')
+      return reconciled
     }
   }, stoppedState)
 
   await second.adapter.recover()
   await second.adapter.waitForIdle(TEST_IDS.executionId)
 
-  assert.equal(directives.length, 2)
+  assert.equal(hostRunAttempts, 2)
+  assert.equal(providerTurns, 1)
   assert.equal(directives[0], directives[1])
+  assert.deepEqual(sessions, [
+    `${result.runtimeId}:${result.threadId}`,
+    `${result.runtimeId}:${result.threadId}`
+  ])
   assert.equal(second.store.snapshot().taskRuns[0]?.agentJournal.length, 1)
   assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
     'task.offer.accept',
@@ -1244,7 +1298,13 @@ async function createRunner(
     store,
     connection: cloud.connection(),
     outbox: cloud.outbox(),
-    agentExecution,
+    agentExecution: {
+      ...agentExecution,
+      prepareSession: agentExecution.prepareSession ?? (async (request) => ({
+        runtimeId: request.runtimeId ?? 'codex',
+        threadId: 'worker-thread-stable'
+      }))
+    },
     capabilities,
     localAgentId: () => TEST_IDS.agentId,
     workspaceRootForExecution: (executionId) => `/tmp/sciforge-worker-${executionId}`,
