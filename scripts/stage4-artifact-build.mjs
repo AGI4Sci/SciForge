@@ -110,6 +110,12 @@ async function main(argv) {
         installEnvironment,
         stagingProjectRoot
       )
+      await run(
+        'npm',
+        ['run', 'build:agent-support'],
+        installEnvironment,
+        stagingProjectRoot
+      )
 
       const internalRuntimeComposition =
         createInternalRuntimeComposition(stagingProjectRoot)

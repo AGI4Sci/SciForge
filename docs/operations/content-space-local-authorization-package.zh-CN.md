@@ -123,6 +123,9 @@ workspace installer 完成后，builder 只清除该临时 package 副本下明�
 `node_modules` installer state（该路径若为 symlink 则拒绝而不跟随），再把已知 staging 路径
 重新封为目录 `0700`、文件 `0600`，然后再次执行完整 package verifier；原始外部 package 不会
 被 chmod 或修改，除此之外的新增文件、链接或 byte drift 仍然 fail closed。
+隔离 checkout 不继承当前工作树的 ignored workspace build outputs；builder 会先在临时 workspace
+调用既有 `build:agent-support` 公共脚本，再进入 canonical `npm run build`，因此 source composition
+不依赖调用者机器上残留的 `dist` 或测试状态。
 它不会修改受 Git 管理的生成文件，不会安装或激活原始 package，也不增加运行时 JSON、环境变量、
 Renderer 设置或第二套 composition。结束时只删除本次明确创建的临时 workspace；原始私有 package
 和任何用户目录都不删除。
