@@ -197,7 +197,7 @@ describe('OpenContent deployment runtime availability', () => {
     expect(read).not.toHaveBeenCalled()
   })
 
-  it('fails closed when the native account vault has no packaged session', async () => {
+  it('fails closed without native account support and never reads legacy Host credentials', async () => {
     const resourcesRoot = mkdtempSync(join(tmpdir(), 'sciforge-opencontent-packaged-'))
     tempRoots.push(resourcesRoot)
     const appRoot = join(resourcesRoot, 'app.asar')
@@ -302,14 +302,24 @@ describe('OpenContent deployment runtime availability', () => {
       })
     })
 
-    expect(() => createDomainMainEntry(host)).not.toThrow()
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    if (!platformDescriptor) throw new Error('Node.js process.platform is unavailable.')
+    Object.defineProperty(process, 'platform', {
+      ...platformDescriptor,
+      value: 'linux'
+    })
+    try {
+      expect(() => createDomainMainEntry(host)).not.toThrow()
+    } finally {
+      Object.defineProperty(process, 'platform', platformDescriptor)
+    }
     expect(facade?.useSupplierTransport).toBeUndefined()
     await expect(facade!.useTeamAdministration({
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent: () => undefined
     }, ({ administration }) => typeof administration.listTeams)).rejects.toMatchObject({
-      code: 'reauthentication_required'
+      code: 'native_enrollment_unavailable'
     })
     expect(fetch).not.toHaveBeenCalled()
     expect(getExecutablePath).not.toHaveBeenCalled()
