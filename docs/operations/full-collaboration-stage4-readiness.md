@@ -37,8 +37,8 @@ No pending OpenSpec checkbox is satisfied merely by this matrix.
 | 8.7 | R1-R10 on real packaged/Cloud/OIDC/Runtime/OpenContent; no duplicate Runtime turn or Provider write; permanent old-execution fencing | Durable Cloud/Desktop/Runtime/provider recovery implementation exists | Stage 3 focused tests cover recovery semantics only | No packaged-live recovery run | Candidate/cutover and live Cloud observability are missing | U0-U4 plus revoke/provider administration slots as explicitly assigned | Same five-profile/three-machine matrix as 8.6 | Per-recovery actor/entity/revision/epoch/sequence/idempotency/journal/runtime/provider/time expected-vs-actual receipt | `awaiting_real_devices` |
 | 8.8 | Authorized final download, Human inspection and redacted receipt; missing live gates remain explicitly blocked | Receipt schema exists in the Run-0 runbook | Schema and secret audit exist | No final packaged artifact or downloaded outputs | No candidate/cutover/live outputs | U0 authorization and relevant Provider account | Authorized Desktop in the live matrix | Three final downloads, manual inspection, redacted sealed receipt, exact blocked/not-run rows | `awaiting_real_devices` |
 | 9.1 | Remove changed-path anonymous pairing, Token duplication, 0.2/parallel contracts, production mock/fallback, private imports, hard-coding and dead paths | Stage 1-3 removed the known canonical conflicts; Stage 4 removed the OpenContent legacy Provider compatibility/migration path | Secret audit passed across 415 public candidates; tracked production scans found no retired compatibility/mock package marker or Host-private domain import; full regression passed | Packaged reachability remains part of the formal exact-artifact gate | Live deployment resources still require the 7.1 read-only topology audit | None for local audit | None | Post-commit changed-path architecture report; packaged reachability follows once a reviewed private profile permits artifact issuance | `ready_local` |
-| 9.2 | Logical commits by responsibility; checkboxes follow evidence | Stage 1-3 history is already logically separated | Git history and clean opening baseline | Stage 4 changes are uncommitted by definition | Live receipts cannot be committed before they exist | None | None | Commit hashes for readiness/gates, packaging, deployment/E2E and evidence updates | `ready_local` |
-| 9.3 | Push only `codex/full-collaboration-loop-recovery` to the personal Fork; no upstream PR without all gates and later confirmation | Branch and origin are correct and equal at opening | Opening remote-tracking ref equals `cd49aba883aff2829de321d8b740cfb8384a7085` | Artifact publication is separate and not implied by Git push | No deployment or cutover is implied by push | Git remote write authority when push occurs | None | Successful push and independently read remote HEAD; explicit statement that no upstream PR was created | `ready_local` |
+| 9.2 | Logical commits by responsibility; checkboxes follow evidence | Stage 1-3 history is already logically separated | Stage 4 implementation is separated into compatibility cleanup `ea4903c9`, immutable team delivery `ff80c4a5`, packaged acceptance gates `c52b7d1b`, and readiness/deployment docs `d86b8e15` | No packaged or live receipt was committed without its evidence | Live receipts remain absent and explicitly unchecked | None | None | Preserve the logical series and use status-only evidence updates for later live gates | `passed_local` |
+| 9.3 | Push only `codex/full-collaboration-loop-recovery` to the personal Fork; no upstream PR without all gates and later confirmation | Branch and origin are correct | At `2026-08-26T06:49:29Z`, independent `ls-remote` returned pushed HEAD `d86b8e15dc4305c3eb26899d2bdc833d06a008e0` on the only integration branch | Artifact publication is separate and did not occur | No A deployment/cutover occurred and no upstream PR was created | Git push completed | None | Re-verify remote HEAD after each later evidence-only update | `passed_local` |
 
 ## Current credential-free evidence
 
@@ -101,6 +101,18 @@ against the frozen contract:
 These observations prove the current public edge contract only. They do not
 reveal the current Caddy upstream, image, database, schema or restore state and
 therefore do not satisfy OpenSpec 7.1–7.4.
+
+At pushed source commit `d86b8e15dc4305c3eb26899d2bdc833d06a008e0`,
+the canonical production build completed with 292 governed actions, 27 fresh
+domain packages, one statically verified private runtime, and both Identity and
+OpenContent native addons. A real Electron `source/out` smoke then exercised 256
+composed capabilities against the exact frozen Cloud/OIDC environment. Cloud
+Identity and Device were both `signed-out` with no configuration error, the
+installed OpenContent Provider Instance was discovered through Content Space,
+Collaboration remained unconfigured, and Project Coordinator stopped at
+`identity_required`. At the same clean, pushed source state, the formal arm64
+artifact command stopped before Electron Builder with the expected reviewed
+private-contribution requirement. No DMG/ZIP or receipt was emitted.
 
 ## Execution order
 
