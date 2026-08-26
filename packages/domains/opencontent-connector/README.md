@@ -32,6 +32,14 @@ releases reject every active deployment configuration marked `forbidden`. The
 sidecar is outside the package's npm `files` allowlist and its isolated packaged
 namespace does not create a supplier overlay.
 
+For the immutable team-delivery ZIP, the package also owns the outer-delivery,
+deployment-sidecar, and overlay trust anchors. Team members use the current
+checkout's `opencontent:delivery:verify` and `opencontent:delivery:install`
+entrypoints; archived README instructions cannot select an older branch or
+weaken current package trust. Installation is idempotent and refuses to
+overwrite a different private deployment or overlay. See the
+[team deployment runbook](../../../docs/operations/opencontent-private-attachment-team-deployment.zh-CN.md).
+
 The Connector owns the SciForge-authored supplier wire contract, asset
 verification, isolated process transport, and runtime snapshot mechanism. Its
 public `./main-contract` exposes only the token-free Provider facade and typed

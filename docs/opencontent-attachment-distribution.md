@@ -2,6 +2,9 @@
 
 团队成员的中文安装、启动和故障处理流程见
 [《SciForge OpenContent 私有附件技能安装与运行手册》](./opencontent-private-attachment-runbook.zh-CN.md)。
+持有固定团队交付 ZIP 的成员应直接使用
+[《OpenContent 团队交付包部署手册》](./operations/opencontent-private-attachment-team-deployment.zh-CN.md)
+中的 package-owned 单入口验证与安装流程；ZIP 内的旧分支或提交说明没有控制当前 checkout 的权限。
 
 SciForge's OpenContent integration is public source. The non-public deployment inputs are the
 Connector deployment sidecar and the supplier attachment delivered separately to the team. This boundary applies to source archives, npm
@@ -129,11 +132,14 @@ The complete module boundary and canonical call chain are in the
 ## Installation and resolution contract
 
 The public root workspace and `package-lock.json` exclude `internal/**`. Install public
-dependencies from the repository root, then verify and install the approved archive with the
-SciForge-owned installer documented in the Chinese runbook. Installation writes only:
+dependencies from the repository root, then verify and install an approved immutable team delivery
+with the current checkout's `opencontent:delivery:verify` and `opencontent:delivery:install`
+entrypoints. The Connector package owns the outer-delivery, overlay, deployment, and Provider
+trust contract; instructions embedded in a delivery cannot override it. Installation writes only:
 
 - the overlay under `internal/opencontent/**`; and
-- its trusted complete-inventory receipt under `.sciforge/internal-overlays/**`.
+- its trusted complete-inventory receipt under `.sciforge/internal-overlays/**`; and
+- the exact private deployment sidecar under `.sciforge/private/deployments/**`.
 
 Do not run a root `npm install` to create a private workspace link, and do not copy the private
 package into `node_modules`. The source application resolves assets only below the absolute

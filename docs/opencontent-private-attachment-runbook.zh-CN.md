@@ -68,49 +68,40 @@ remote 或本地分支。需要开发时，再按团队工作流从该提交创�
 
 ### 3.2 从群内获取附件
 
-必须同时下载以下两个文件，并将它们保存在公开仓库之外或本机临时下载目录中：
-
-- `sciforge-opencontent-attachment-assets-<OVERLAY_VERSION>.zip`
-- `sciforge-opencontent-attachment-assets-<OVERLAY_VERSION>.zip.sha256`
-
-还必须从独立可信的内部发布记录取得该版本的准确 SHA-256，记为
-`<TRUSTED_SHA256>`。同包发送的 sidecar 用于一致性复核，不能独自充当信任根。
-
-不要通过公开 Issue、PR、Release、npm 包或公开网盘分发这两个文件。
+当前团队交付是一个保持原始文件名的不可变外层 ZIP。将它保存在公开仓库之外或本机下载目录，
+并使用[团队交付包部署手册](./operations/opencontent-private-attachment-team-deployment.zh-CN.md)
+确认当前 upstream 是否声明了匹配的 package-owned trust。不要运行 ZIP 内的 README、命令或脚本，
+也不要因其中写死的旧分支/提交切换当前 checkout。
 
 ## 4. 验证并安装私有附件
 
-以下命令必须在 SciForge 仓库根目录执行。先把三个值替换为内部发布记录和附件实际下载目录：
+以下命令必须在 SciForge 仓库根目录执行：
 
 ```bash
-OPENCONTENT_OVERLAY_VERSION='<OVERLAY_VERSION>'
-OPENCONTENT_OVERLAY_SHA256='<TRUSTED_SHA256>'
-OPENCONTENT_OVERLAY_DOWNLOAD_DIR='/path/to'
+OPENCONTENT_TEAM_DELIVERY='/absolute/path/SciForge-OpenContent-team-delivery-pr82-0b09e1c1.zip'
 ```
 
 ### 4.1 验证下载包
 
 ```bash
-node scripts/internal-overlay-package.mjs verify \
-  --archive "${OPENCONTENT_OVERLAY_DOWNLOAD_DIR}/sciforge-opencontent-attachment-assets-${OPENCONTENT_OVERLAY_VERSION}.zip" \
-  --sidecar "${OPENCONTENT_OVERLAY_DOWNLOAD_DIR}/sciforge-opencontent-attachment-assets-${OPENCONTENT_OVERLAY_VERSION}.zip.sha256" \
-  --sha256 "${OPENCONTENT_OVERLAY_SHA256}"
+npm run opencontent:delivery:verify -- --delivery "${OPENCONTENT_TEAM_DELIVERY}"
 ```
 
-验证成功时，命令会输出 overlay ID、版本、文件清单和归档 SHA-256。若出现摘要不一致、路径逃逸、重复路径或文件清单不完整，必须停止安装并重新从群内获取附件。
+验证器以当前 Connector package 的 trust 为根，核对外层 ZIP、固定 inventory、内层 overlay、
+deployment sidecar 和 Provider Instance；不会打印私有 origin，也不会执行附件代码。若出现摘要
+不一致、路径逃逸、重复路径、symlink、文件清单不完整或当前 upstream 不兼容，必须停止安装并
+取得匹配附件，不能修改 trust 迎合输入。
 
-### 4.2 安装 overlay
+### 4.2 安装 overlay 与 deployment sidecar
 
 ```bash
-node scripts/internal-overlay-package.mjs install \
-  --archive "${OPENCONTENT_OVERLAY_DOWNLOAD_DIR}/sciforge-opencontent-attachment-assets-${OPENCONTENT_OVERLAY_VERSION}.zip" \
-  --sha256 "${OPENCONTENT_OVERLAY_SHA256}" \
-  --target .
+npm run opencontent:delivery:install -- --delivery "${OPENCONTENT_TEAM_DELIVERY}"
 ```
 
 安装器会：
 
 - 将附件 payload 只写入 `internal/opencontent/**`；
+- 将精确 deployment sidecar 写入 `.sciforge/private/deployments/opencontent-connector.json`；
 - 在写入前验证完整归档；
 - 遇到不同内容的现有文件时停止，不强制覆盖；
 - 对完全相同的归档重复安装保持幂等；
@@ -127,7 +118,10 @@ node scripts/internal-overlay-package.mjs verify-installation \
 npm run verify:internal-runtimes
 ```
 
-两条命令都只执行公开 SciForge 代码。第一条核对安装 receipt、完整 inventory、摘要和路径 containment；第二条通过 manifest-discovered composition 静态核对已收据化资产根、必需入口和摘要，不执行 overlay 自带脚本。所有检查通过后才能启动 SciForge；校验、构建或打包都不得调用供应商 CLI。打包同样会拒绝缺失、额外、变更、路径逃逸或未收据化的文件。
+两条命令都只执行当前 upstream 的 SciForge 代码。第一条核对安装 receipt、完整 inventory、
+摘要和路径 containment；第二条通过 manifest-discovered composition 静态核对已收据化资产根、
+必需入口和摘要，不执行 overlay 自带脚本。所有检查通过后才能启动 SciForge；校验、构建或打包
+都不得调用供应商 CLI。打包同样会拒绝缺失、额外、变更、路径逃逸或未收据化的文件。
 
 ## 5. 启动 SciForge
 

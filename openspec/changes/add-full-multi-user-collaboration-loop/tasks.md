@@ -68,8 +68,8 @@
 
 - [x] 8.1 完成 contracts、server、identity、collaboration、coordinator、Content Space/OpenContent focused tests 和 changed-file lint/typecheck。
 - [ ] 8.2 对本变更新增/修改的生产路径执行 `Repository architecture principles gate`：不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证；全仓历史发现只报告，不扩展本任务。
-- [ ] 8.3 运行与 changed collaboration path 相关的 package boundary、private-import、generated composition freshness、capability governance、secret audit 和 full regression tests；只有直接阻断该路径的既有问题才允许最小通用适配。
-  - changed-path、架构、capability、secret 与 root aggregate typecheck 门禁已通过；后者通过四个明确授权的 test-only commits 为 15 个 baseline capability-invoker mock/harness 补齐既有 `createApprovedBatch` 合同，未修改生产实现或弱化 SDK。完整根 Vitest 仍为 3387/3389：当前 Node 23 内置 SQLite 缺少 FTS5，且 session 的 packaged DAG Python 为 x86_64、Darwin Node 期望 arm64。因此 8.3 保持 unchecked，且不得把排除后的结果冒充完整通过。
+- [x] 8.3 运行与 changed collaboration path 相关的 package boundary、private-import、generated composition freshness、capability governance、secret audit 和 full regression tests；只有直接阻断该路径的既有问题才允许最小通用适配。
+  - Stage 4 使用 arm64 Node `22.22.1`、FTS5-capable SQLite、arm64 Python `3.13` 和两个隔离的 loopback PostgreSQL 17 数据库完成最终回归：root Vitest `366/366` files、`3389/3389` tests 通过且 root aggregate 无 skip；全部 domain/package/tarball/internal-overlay/public-release 前置门禁、root typecheck 和全量 lint 也通过。Computer Use 4 项和 Scientific Plotting 2 项既有硬件/可选依赖 package-level skip 被单独保留，没有冒充真机证据或计入 root aggregate。
 - [ ] 8.4 验证 source app 的真实生产 composition，并构建同一 exact commit 的 packaged artifact；验证 packaged app 无 mock/fallback，且只指向冻结的 A-upgrade PoC origin/issuer。
   - Source 半程已由 `npm run build` 与 `npm run smoke:electron:source` 验证：Collaboration/Project Coordinator 生产 capabilities 已组合，并在未配置 Cloud 时 fail closed；packaged 半程未运行，因此 8.4 保持 unchecked。
 - [x] 8.5 准备 U0-U4 合成账号/议程/需求、三文件 Task、HumanNeeded、reject/reassign、review/revision 和 completion 验收脚本。
@@ -79,6 +79,7 @@
 
 ## 9. 清理与交付
 
-- [ ] 9.1 审计并删除旧 anonymous pairing、Token duplication、0.2 parallel contract、mock/fallback、private cross-boundary import、domain/provider hard-code、dead file/export/dependency。
+- [x] 9.1 审计并删除旧 anonymous pairing、Token duplication、0.2 parallel contract、mock/fallback、private cross-boundary import、domain/provider hard-code、dead file/export/dependency。
+  - Stage 4 changed-path gate 从基线 `e0038b8c7109390445dccb691052fec74a153c09` 审计 394 个变更路径、143 个生产源码和 27 个 domain package，零 finding；415 个公开候选文件 secret audit 通过，OpenContent 旧 Provider migration/compatibility 路径已删除。packaged reachability 仍由未完成的 8.2 exact-artifact formal gate 独立约束，未被本项冒充为已完成。
 - [ ] 9.2 按 docs、identity、cloud、content-space、collaboration/coordinator、deployment/E2E 的逻辑系列提交 commits，并在每次提交后保持 OpenSpec checkbox 与真实进度一致。
 - [ ] 9.3 持续推送唯一集成主线 `codex/full-collaboration-loop-recovery` 到个人 Fork；只在所有必需门禁通过并经 User 确认后准备 upstream PR。
