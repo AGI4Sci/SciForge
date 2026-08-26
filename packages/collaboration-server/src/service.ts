@@ -97,6 +97,8 @@ export type CollaborationServiceOptions = {
   notifier?: CollaborationServiceNotifier
   now?: () => Date
   endpointChallengeTtlMs?: number
+  endpointChallengeRateWindowMs?: number
+  endpointChallengeRateMaxAttempts?: number
   inboxRetentionMs?: number
   receiptRetentionMs?: number
   remoteApprovalReference?: () => string
@@ -120,6 +122,8 @@ export class CollaborationService {
   private readonly notifier?: CollaborationServiceNotifier
   private readonly now: () => Date
   private readonly endpointChallengeTtlMs: number
+  private readonly endpointChallengeRateWindowMs: number
+  private readonly endpointChallengeRateMaxAttempts: number
   private readonly inboxRetentionMs: number
   private readonly receiptRetentionMs: number
   private readonly remoteApprovalReference: () => string
@@ -129,6 +133,16 @@ export class CollaborationService {
     this.notifier = options.notifier
     this.now = options.now ?? (() => new Date())
     this.endpointChallengeTtlMs = bounded(options.endpointChallengeTtlMs ?? 10 * 60_000, 60_000, 30 * 60_000)
+    this.endpointChallengeRateWindowMs = bounded(
+      options.endpointChallengeRateWindowMs ?? 5 * 60_000,
+      60_000,
+      60 * 60_000
+    )
+    this.endpointChallengeRateMaxAttempts = bounded(
+      options.endpointChallengeRateMaxAttempts ?? 5,
+      1,
+      100
+    )
     this.inboxRetentionMs = bounded(options.inboxRetentionMs ?? 30 * 86_400_000, 86_400_000, 90 * 86_400_000)
     this.receiptRetentionMs = bounded(options.receiptRetentionMs ?? 30 * 86_400_000, 86_400_000, 90 * 86_400_000)
     this.remoteApprovalReference = options.remoteApprovalReference ?? issueRemoteApprovalReference
@@ -507,6 +521,23 @@ export class CollaborationService {
     }, async (tx, at) => {
       const user = required(await tx.getUser(actor.userId), 'User')
       if (user.status !== 'active') fail('credential_revoked', 'The requesting OIDC User is not active.')
+      const atMs = new Date(at).getTime()
+      const windowStartedAtMs = Math.floor(atMs / this.endpointChallengeRateWindowMs) *
+        this.endpointChallengeRateWindowMs
+      const rateWindow = await tx.consumeEndpointChallengeRateWindow({
+        userId: actor.userId,
+        provider: input.provider,
+        realmId: input.realmId,
+        windowStartedAt: new Date(windowStartedAtMs).toISOString(),
+        expiresAt: new Date(windowStartedAtMs + this.endpointChallengeRateWindowMs).toISOString(),
+        maxAttempts: this.endpointChallengeRateMaxAttempts,
+        updatedAt: at
+      })
+      if (!rateWindow.allowed) {
+        fail('rate_limited', 'Endpoint challenge creation is temporarily rate limited.', {
+          retryable: true
+        })
+      }
       const challengeId = newId('chl')
       const expiresAt = new Date(new Date(at).getTime() + this.endpointChallengeTtlMs).toISOString()
       await tx.insertChallenge({
@@ -5140,28 +5171,49 @@ export class CollaborationService {
   async ackInbox(actor: AuthContext, input: { throughSequence: number; idempotencyKey: string }): Promise<{
     ackedSequence: number
     nextSequence: number
+    acknowledgedAt: string
   }> {
     const recipient = actorInboxRecipient(actor)
     integer(input.throughSequence, 'throughSequence', 0, Number.MAX_SAFE_INTEGER)
     return this.commit(actor, 'inbox.ack', input.idempotencyKey, input, async (tx, at) => {
       const cursor = await tx.ackInbox(recipient, input.throughSequence, at)
       return { response: { protocolVersion: '1.0', type: 'inbox.acked', ackedSequence: cursor.ackedSequence,
-        nextSequence: cursor.nextSequence }, resourceKind: 'inbox', resourceId: recipient.id }
-    }).then((response) => ({ ackedSequence: Number(response.ackedSequence), nextSequence: Number(response.nextSequence) }))
+        nextSequence: cursor.nextSequence, acknowledgedAt: at }, resourceKind: 'inbox', resourceId: recipient.id }
+    }).then((response) => ({ ackedSequence: Number(response.ackedSequence), nextSequence: Number(response.nextSequence),
+      acknowledgedAt: String(response.acknowledgedAt) }))
   }
 
   async ackInboxMessage(actor: AuthContext, input: {
     inboxMessageId: string
     sequence: number
     idempotencyKey: string
-  }): Promise<{ ackedSequence: number; nextSequence: number }> {
+  }): Promise<{ ackedSequence: number; nextSequence: number; inboxMessageId: string; acknowledgedAt: string }> {
     const recipient = actorInboxRecipient(actor)
     integer(input.sequence, 'sequence', 1, Number.MAX_SAFE_INTEGER)
-    const [message] = await this.repository.pullInbox(recipient, input.sequence - 1, 1, this.timestamp())
-    if (!message || message.sequence !== input.sequence || message.messageId !== input.inboxMessageId) {
-      fail('not_found', 'The inbox message does not match this authenticated recipient and sequence.')
-    }
-    return this.ackInbox(actor, { throughSequence: input.sequence, idempotencyKey: input.idempotencyKey })
+    return this.commit(actor, 'inbox.ack', input.idempotencyKey, input, async (tx, at) => {
+      const [message] = await tx.pullInbox(recipient, input.sequence - 1, 1, at)
+      if (!message || message.sequence !== input.sequence || message.messageId !== input.inboxMessageId) {
+        fail('not_found', 'The inbox message does not match this authenticated recipient and sequence.')
+      }
+      const cursor = await tx.ackInbox(recipient, input.sequence, at)
+      return {
+        response: {
+          protocolVersion: '1.0',
+          type: 'inbox.acked',
+          inboxMessageId: message.messageId,
+          ackedSequence: cursor.ackedSequence,
+          nextSequence: cursor.nextSequence,
+          acknowledgedAt: at
+        },
+        resourceKind: 'inbox_message',
+        resourceId: message.messageId
+      }
+    }).then((response) => ({
+      ackedSequence: Number(response.ackedSequence),
+      nextSequence: Number(response.nextSequence),
+      inboxMessageId: String(response.inboxMessageId),
+      acknowledgedAt: String(response.acknowledgedAt)
+    }))
   }
 
   async reconcileReceipt(actor: AuthContext, idempotencyKey: string): Promise<StoredReceipt | null> {

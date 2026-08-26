@@ -558,18 +558,20 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     case 'resource.get': return entityResponse(command,
       toCloudResourceRef(await service.getCloudResourceRef(requiredActor(actor), command.resourceRefId)))
     case 'inbox.pull': {
-      const page = await service.pullInbox(requiredActor(actor), command)
+      const inboxActor = requiredInboxActor(actor, command.recipientType)
+      const page = await service.pullInbox(inboxActor, command)
       return response(command, { type: 'rest.inbox_page', messages: page.messages.map(toInboxMessage),
         nextSequence: page.messages.at(-1)?.sequence ?? command.afterSequence })
     }
     case 'inbox.ack': {
-      await service.ackInboxMessage(requiredActor(actor), { inboxMessageId: command.inboxMessageId,
+      const inboxActor = requiredInboxActor(actor)
+      const acknowledgement = await service.ackInboxMessage(inboxActor, { inboxMessageId: command.inboxMessageId,
         sequence: command.sequence, idempotencyKey: command.idempotencyKey })
       return response(command, { type: 'rest.receipt', receipt: { schemaVersion: 1, type: 'inbox.receipt',
-        receiptId: `rcp_${stableDigest({ actorKey: requiredActor(actor).actorKey,
-          idempotencyKey: command.idempotencyKey }).slice(0, 24)}`, inboxMessageId: command.inboxMessageId,
-        recipientType: actor?.kind === 'agent_device' ? 'agent' : 'user', sequence: command.sequence,
-        acknowledgedAt: new Date().toISOString(), createdAt: new Date().toISOString() } })
+        receiptId: `rcp_${stableDigest({ actorKey: inboxActor.actorKey,
+          idempotencyKey: command.idempotencyKey }).slice(0, 24)}`, inboxMessageId: acknowledgement.inboxMessageId,
+        recipientType: inboxActor.kind === 'agent_device' ? 'agent' : 'user', sequence: command.sequence,
+        acknowledgedAt: acknowledgement.acknowledgedAt, createdAt: acknowledgement.acknowledgedAt } })
     }
     case 'human.answer': {
       return entityResponse(
@@ -624,6 +626,20 @@ function contractActor(actor: AuthContext): Record<string, unknown> {
 function requiredActor(actor: AuthContext | null): AuthContext {
   if (!actor) throw new CollaborationServiceError('authentication_required', 'Authentication is required.')
   return actor
+}
+function requiredInboxActor(
+  actor: AuthContext | null,
+  recipientType?: 'user' | 'agent'
+): UserActor | AgentActor {
+  const authenticated = requiredActor(actor)
+  if (authenticated.kind !== 'user' && authenticated.kind !== 'agent_device') {
+    throw new CollaborationServiceError('permission_denied', 'A User or Agent inbox principal is required.')
+  }
+  const actualType = authenticated.kind === 'agent_device' ? 'agent' : 'user'
+  if (recipientType !== undefined && recipientType !== actualType) {
+    throw new CollaborationServiceError('permission_denied', 'Inbox recipient type does not match the authenticated principal.')
+  }
+  return authenticated
 }
 function requiredUser(actor: AuthContext | null): UserActor {
   if (actor?.kind !== 'user') {

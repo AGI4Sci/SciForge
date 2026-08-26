@@ -91,6 +91,32 @@ describe('production HTTP OIDC-only boundary', () => {
     expect(created).toMatchObject({ type: 'endpoint.challenge.created' })
     expect(JSON.stringify(created)).not.toMatch(/pollSecret|userCredential/u)
 
+    const replayedChallenge = await postCommand(baseUrl, createBody, token)
+    expect(replayedChallenge.status).toBe(409)
+    await expect(replayedChallenge.json()).resolves.toMatchObject({
+      type: 'rest.error', error: { code: 'idempotency_conflict' }
+    })
+
+    for (let attempt = 2; attempt <= 5; attempt += 1) {
+      const withinWindow = await postCommand(baseUrl, {
+        ...createBody,
+        requestId: `req_EndpointRate000${attempt}`,
+        idempotencyKey: `idem_endpoint_rate_000${attempt}`
+      }, token)
+      expect(withinWindow.status).toBe(200)
+    }
+    const rateLimited = await postCommand(baseUrl, {
+      ...createBody,
+      requestId: 'req_EndpointRate0006',
+      idempotencyKey: 'idem_endpoint_rate_0006'
+    }, token)
+    expect(rateLimited.status).toBe(429)
+    await expect(rateLimited.json()).resolves.toMatchObject({
+      type: 'rest.error',
+      requestId: 'req_EndpointRate0006',
+      error: { code: 'rate_limited', retryable: true }
+    })
+
     const pending = await postCommand(baseUrl, { protocolVersion: '1.0', requestId: 'req_EndpointChallenge02',
       type: 'endpoint.challenge.get', challengeId: created.challengeId }, token)
     expect(pending.status).toBe(200)
@@ -110,6 +136,108 @@ describe('production HTTP OIDC-only boundary', () => {
     expect(oversized.status).toBe(413)
     const oversizedText = await oversized.text()
     expect(oversizedText).not.toContain('x'.repeat(64))
+  })
+
+  it('binds Inbox pages and durable idempotent ACKs to the authenticated recipient', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const owner = await seedOidcUserDevice(repository, 'http-inbox-owner', now())
+    const outsider = await seedOidcUserDevice(repository, 'http-inbox-outsider', now())
+    const ownerToken = 'ownerInboxHeader.ownerInboxPayload.ownerInboxSignature'
+    const outsiderToken = 'otherInboxHeader.otherInboxPayload.otherInboxSignature'
+    const authentication = new AuthenticationService(repository, now, {
+      isCandidate: (candidate) => candidate === ownerToken || candidate === outsiderToken,
+      resolve: async (candidate) => candidate === ownerToken ? owner.user : outsider.user
+    })
+    await repository.transaction(async (tx) => {
+      await tx.appendInbox({
+        recipient: { kind: 'user', id: owner.userId },
+        messageId: 'ibx_OwnerInbox0001',
+        messageType: 'collaboration.important_failure',
+        payload: { protocolVersion: '1.0', safeMessage: 'Coordinator recovery needs an explicit owner decision.' },
+        createdAt: now().toISOString(),
+        expiresAt: new Date(now().getTime() + 60_000).toISOString()
+      })
+      await tx.appendInbox({
+        recipient: { kind: 'user', id: outsider.userId },
+        messageId: 'ibx_OtherInbox0001',
+        messageType: 'collaboration.important_failure',
+        payload: { protocolVersion: '1.0', safeMessage: 'This fact belongs only to the other principal.' },
+        createdAt: now().toISOString(),
+        expiresAt: new Date(now().getTime() + 60_000).toISOString()
+      })
+    })
+    const server = createCollaborationHttpServer({ service, authentication, readiness: async () => true })
+    servers.push(server)
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const address = server.address() as AddressInfo
+    const baseUrl = `http://127.0.0.1:${address.port}`
+    const pull = {
+      protocolVersion: '1.0', requestId: 'req_InboxPullOwner001', type: 'inbox.pull',
+      recipientType: 'user', afterSequence: 0, limit: 200
+    }
+
+    expect((await postCommand(baseUrl, pull)).status).toBe(401)
+    expect((await postCommand(baseUrl, { ...pull, recipientType: 'agent' }, ownerToken)).status).toBe(403)
+    expect((await postCommand(baseUrl, { ...pull, limit: 201 }, ownerToken)).status).toBe(400)
+
+    const firstPageResponse = await postCommand(baseUrl, pull, ownerToken)
+    expect(firstPageResponse.status).toBe(200)
+    const firstPage = await firstPageResponse.json() as {
+      messages: Array<{ inboxMessageId: string; recipientUserId: string; payload: { safeMessage: string } }>
+      nextSequence: number
+    }
+    expect(firstPage).toMatchObject({
+      type: 'rest.inbox_page',
+      nextSequence: 1,
+      messages: [{ inboxMessageId: 'ibx_OwnerInbox0001', recipientUserId: owner.userId }]
+    })
+    expect(JSON.stringify(firstPage)).not.toContain('This fact belongs only to the other principal.')
+    const duplicatePage = await (await postCommand(baseUrl, pull, ownerToken)).json()
+    expect(duplicatePage).toEqual(firstPage)
+    const emptyPage = await (await postCommand(baseUrl, {
+      ...pull, requestId: 'req_InboxPullOwner002', afterSequence: 1
+    }, ownerToken)).json()
+    expect(emptyPage).toMatchObject({ type: 'rest.inbox_page', messages: [], nextSequence: 1 })
+
+    const ack = {
+      protocolVersion: '1.0', requestId: 'req_InboxAckOwner0001', type: 'inbox.ack',
+      idempotencyKey: 'idem_inbox_ack_owner_0001', inboxMessageId: 'ibx_OwnerInbox0001', sequence: 1
+    }
+    expect((await postCommand(baseUrl, ack, outsiderToken)).status).toBe(404)
+    expect((await postCommand(baseUrl, { ...ack, inboxMessageId: 'ibx_OtherInbox0001' }, ownerToken)).status).toBe(404)
+
+    const firstAckResponse = await postCommand(baseUrl, ack, ownerToken)
+    expect(firstAckResponse.status).toBe(200)
+    const firstAck = await firstAckResponse.json()
+    expect(firstAck).toMatchObject({
+      type: 'rest.receipt',
+      receipt: {
+        type: 'inbox.receipt',
+        inboxMessageId: 'ibx_OwnerInbox0001',
+        recipientType: 'user',
+        sequence: 1,
+        acknowledgedAt: now().toISOString(),
+        createdAt: now().toISOString()
+      }
+    })
+    const duplicateAck = await (await postCommand(baseUrl, ack, ownerToken)).json()
+    expect(duplicateAck).toEqual(firstAck)
+    expect((await postCommand(baseUrl, { ...ack, sequence: 2 }, ownerToken)).status).toBe(409)
+
+    await expect(service.pullInbox(owner.user, { afterSequence: 0, limit: 200 })).resolves.toMatchObject({
+      ackedSequence: 1,
+      nextSequence: 2
+    })
+    await expect(repository.getReceipt(owner.user.actorKey, ack.idempotencyKey)).resolves.toMatchObject({
+      operation: 'inbox.ack',
+      resourceKind: 'inbox_message',
+      resourceId: 'ibx_OwnerInbox0001',
+      response: { inboxMessageId: 'ibx_OwnerInbox0001', acknowledgedAt: now().toISOString() }
+    })
   })
 
   it('preserves parsed command request IDs across validation, actor, and service errors only', async () => {

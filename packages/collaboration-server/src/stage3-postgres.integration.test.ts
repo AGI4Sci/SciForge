@@ -129,6 +129,16 @@ describe.skipIf(connectionString === undefined).sequential(
         credentialGeneration: 1,
         assurance: 'device'
       }
+      const coordinator: AgentActor = {
+        kind: 'agent_device',
+        actorKey: `agent-device:${IDS.coordinator}:${IDS.ownerDevice}`,
+        userId: IDS.ownerUser,
+        agentId: IDS.coordinator,
+        deviceId: IDS.ownerDevice,
+        credentialId: 'cred_stage3_pg_coordinator',
+        credentialGeneration: 1,
+        assurance: 'device'
+      }
 
       const failing = new CollaborationService({
         repository: failAtReceipt(repository),
@@ -153,6 +163,20 @@ describe.skipIf(connectionString === undefined).sequential(
       const committedReceipt = await repository.getReceipt(worker.actorKey, command.idempotencyKey)
       expect(committedInbox).toHaveLength(1)
       expect(committedReceipt?.operation).toBe('task.offer.reject')
+      const ackCommand = {
+        inboxMessageId: committedInbox[0]!.messageId,
+        sequence: committedInbox[0]!.sequence,
+        idempotencyKey: 'idem_stage3_pg_coordinator_ack'
+      }
+      const committedAck = await service.ackInboxMessage(coordinator, ackCommand)
+      expect(await service.ackInboxMessage(coordinator, ackCommand)).toEqual(committedAck)
+      const committedAckReceipt = await repository.getReceipt(coordinator.actorKey, ackCommand.idempotencyKey)
+      expect(committedAckReceipt).toMatchObject({
+        operation: 'inbox.ack',
+        resourceKind: 'inbox_message',
+        resourceId: committedInbox[0]!.messageId,
+        response: { inboxMessageId: committedInbox[0]!.messageId, acknowledgedAt: at }
+      })
       await repository.close()
 
       const restartPool = createPostgresPool({ connectionString: connectionString!, maxConnections: 2 })
@@ -167,6 +191,7 @@ describe.skipIf(connectionString === undefined).sequential(
       await runtime.start()
       const replayed = await runtime.service.rejectTaskOffer(worker, command)
       expect(replayed).toEqual(committed)
+      expect(await runtime.service.ackInboxMessage(coordinator, ackCommand)).toEqual(committedAck)
       await runtime.stop()
 
       const verificationPool = createPostgresPool({ connectionString: connectionString!, maxConnections: 2 })
@@ -184,6 +209,12 @@ describe.skipIf(connectionString === undefined).sequential(
         expect(recoveredInbox).toEqual(committedInbox)
         expect(await recovered.getReceipt(worker.actorKey, command.idempotencyKey))
           .toEqual(committedReceipt)
+        expect(await recovered.getReceipt(coordinator.actorKey, ackCommand.idempotencyKey))
+          .toEqual(committedAckReceipt)
+        expect(await recovered.getInboxCursor({ kind: 'agent', id: IDS.coordinator })).toMatchObject({
+          ackedSequence: committedInbox[0]!.sequence,
+          nextSequence: committedInbox[0]!.sequence + 1
+        })
         expect(await recovered.getExternalOperationJournalById(IDS.journal)).toMatchObject({
           logicalInvocationId: 'stage3-provider-write-001',
           state: 'outcome_unknown',
@@ -192,6 +223,7 @@ describe.skipIf(connectionString === undefined).sequential(
         const counts = await verificationPool.query<{
           inbox_count: unknown
           receipt_count: unknown
+          ack_receipt_count: unknown
           journal_count: unknown
         }>(
           `SELECT
@@ -199,11 +231,16 @@ describe.skipIf(connectionString === undefined).sequential(
                WHERE recipient_kind='agent' AND recipient_id=$1) AS inbox_count,
              (SELECT count(*) FROM sciforge_collaboration.receipts
                WHERE actor_key=$2 AND idempotency_key=$3) AS receipt_count,
+             (SELECT count(*) FROM sciforge_collaboration.receipts
+               WHERE actor_key=$5 AND idempotency_key=$6) AS ack_receipt_count,
              (SELECT count(*) FROM sciforge_collaboration.external_operation_journal
                WHERE content_recovery_journal_entry_id=$4) AS journal_count`,
-          [IDS.coordinator, worker.actorKey, command.idempotencyKey, IDS.journal]
+          [IDS.coordinator, worker.actorKey, command.idempotencyKey, IDS.journal,
+            coordinator.actorKey, ackCommand.idempotencyKey]
         )
-        expect(counts.rows[0]).toEqual({ inbox_count: '1', receipt_count: '1', journal_count: '1' })
+        expect(counts.rows[0]).toEqual({
+          inbox_count: '1', receipt_count: '1', ack_receipt_count: '1', journal_count: '1'
+        })
       } finally {
         await recovered.close()
       }

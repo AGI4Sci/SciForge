@@ -90,6 +90,13 @@ describe('PostgreSQL production transaction path', () => {
             created_at: new Date('2026-08-15T02:00:00.000Z'), updated_at: new Date('2026-08-15T02:00:00.000Z'),
             revoked_at: null }], rowCount: 1 }
         }
+        if (text.includes('INSERT INTO sciforge_collaboration.endpoint_challenge_rate_windows')) {
+          return { rows: [{
+            user_id: values[0], provider: values[1], realm_id: values[2],
+            window_started_at: new Date(String(values[3])), expires_at: new Date(String(values[4])),
+            attempt_count: 1, revision: 1, updated_at: new Date(String(values[6]))
+          }], rowCount: 1 }
+        }
         return { rows: [], rowCount: text.startsWith('SELECT * FROM sciforge_collaboration.receipts') ? 0 : 1 }
       },
       release: () => undefined
