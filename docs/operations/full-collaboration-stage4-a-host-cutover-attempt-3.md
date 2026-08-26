@@ -83,12 +83,33 @@ production behavior.
 Validation after the repair passed:
 
 - the red/green renderer/main approval matrix: 1/1;
-- Project Coordinator package tests: 62/62;
+- a fresh personal-fork clone at exact pushed commit `c5cbf4ab` completed
+  `npm ci` and the full source production build with standard Node `22.22.1`;
+- exact-clone Project Coordinator package tests: 60/60;
 - Project Coordinator typecheck and changed-file lint;
 - Host renderer approval and IPC tests through the repository Vitest entry:
   19/19;
 - capability governance: 292 actions, fresh generated composition, no bypass;
-- domain package/tarball boundary tests: 17/17.
+- architecture/package/artifact boundary tests: 25/25;
+- generic private Skill installer tests: 3/3; and
+- the changed-path architecture audit checked 430 paths, 144 production source
+  files and 27 domain packages with zero findings.
+
+## Dependency advisory observation
+
+The same clean clone's read-only `npm audit --omit=dev` reported 12 current
+production dependency advisories: 8 high, 4 moderate and 0 critical. They span
+existing direct/transitive document rendering, build/render, MCP HTTP,
+diagram-sanitization, Electron HTTP and URI/IP/YAML dependency paths. An
+`npm audit fix --package-lock-only --dry-run` proposed zero lock changes, so no
+automatic or breaking dependency rewrite was applied during this narrow live
+gate repair.
+
+These advisories were not introduced by `bc702433` and do not invalidate the
+functional closed-test result above. They do mean this source snapshot must not
+be described as dependency-security-clean. A separately scoped dependency
+upgrade, regression run and affected Cloud/Desktop rebuild remain required
+before a formal production security claim or release.
 
 ## Verified rollback
 
