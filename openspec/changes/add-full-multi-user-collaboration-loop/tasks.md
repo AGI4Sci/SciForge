@@ -69,7 +69,7 @@
 - [x] 8.1 完成 contracts、server、identity、collaboration、coordinator、Content Space/OpenContent focused tests 和 changed-file lint/typecheck。
 - [ ] 8.2 对本变更新增/修改的生产路径执行 `Repository architecture principles gate`：不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，以及 source/packaged 两条 composition 都必须验证；全仓历史发现只报告，不扩展本任务。
 - [ ] 8.3 运行与 changed collaboration path 相关的 package boundary、private-import、generated composition freshness、capability governance、secret audit 和 full regression tests；只有直接阻断该路径的既有问题才允许最小通用适配。
-  - changed-path、架构、capability 与 secret 门禁已通过。完整根 Vitest 为 3387/3389：当前 Node 23 内置 SQLite 缺少 FTS5，且 session 的 packaged DAG Python 为 x86_64、Darwin Node 期望 arm64；root aggregate typecheck 还被 baseline 中三个未实现既有 `createApprovedBatch` 的 Create Loop test mock 阻断。上述路径不在 Stage 3 授权修改范围，因此 8.3 保持 unchecked，且不得把排除后的结果冒充完整通过。
+  - changed-path、架构、capability、secret 与 root aggregate typecheck 门禁已通过；后者通过四个明确授权的 test-only commits 为 15 个 baseline capability-invoker mock/harness 补齐既有 `createApprovedBatch` 合同，未修改生产实现或弱化 SDK。完整根 Vitest 仍为 3387/3389：当前 Node 23 内置 SQLite 缺少 FTS5，且 session 的 packaged DAG Python 为 x86_64、Darwin Node 期望 arm64。因此 8.3 保持 unchecked，且不得把排除后的结果冒充完整通过。
 - [ ] 8.4 验证 source app 的真实生产 composition，并构建同一 exact commit 的 packaged artifact；验证 packaged app 无 mock/fallback，且只指向冻结的 A-upgrade PoC origin/issuer。
   - Source 半程已由 `npm run build` 与 `npm run smoke:electron:source` 验证：Collaboration/Project Coordinator 生产 capabilities 已组合，并在未配置 Cloud 时 fail closed；packaged 半程未运行，因此 8.4 保持 unchecked。
 - [x] 8.5 准备 U0-U4 合成账号/议程/需求、三文件 Task、HumanNeeded、reject/reassign、review/revision 和 completion 验收脚本。
