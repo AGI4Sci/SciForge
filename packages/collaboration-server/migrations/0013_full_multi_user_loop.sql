@@ -68,9 +68,23 @@ BEGIN
 END
 $$;
 
+-- These public-v5/staging-v9 tables predate the frozen v14 contracts. Their
+-- replacement facts already live in the canonical Device/Agent authority,
+-- task_resource_refs, HumanAnswer, and Provider binding models created by the
+-- admitted forward path. No legacy facade or parallel write path survives v14.
+DROP TABLE IF EXISTS sciforge_collaboration.action_confirmations;
+DROP TABLE IF EXISTS sciforge_collaboration.agent_capability_profiles;
+DROP TABLE IF EXISTS sciforge_collaboration.resource_refs;
+DROP TABLE IF EXISTS sciforge_collaboration.zulip_binding_requests;
+
 ALTER TABLE sciforge_collaboration.project_records
   ADD COLUMN source_result_submission_id text,
   ADD COLUMN source_human_answer_id text REFERENCES sciforge_collaboration.human_answers(human_answer_id),
+  ALTER COLUMN author_user_id DROP NOT NULL,
+  DROP COLUMN IF EXISTS source_execution_id,
+  DROP COLUMN IF EXISTS criterion_evidence,
+  DROP COLUMN IF EXISTS resource_ref_ids,
+  DROP COLUMN IF EXISTS log_summary,
   ADD CONSTRAINT project_records_canonical_kind_check
     CHECK (kind IN ('observation', 'decision', 'summary')) NOT VALID,
   ADD CONSTRAINT project_records_canonical_status_check
@@ -584,7 +598,7 @@ WITH migrated_execution AS (
   SELECT
     task.*,
     project.execution_authority_epoch,
-    agent.owner_user_id AS assignee_user_id,
+    agent.owner_user_id AS migrated_assignee_user_id,
     agent.device_id AS assignee_device_id,
     authority.authority_epoch AS user_task_authority_epoch,
     CASE
@@ -625,7 +639,7 @@ SELECT
   project_id,
   retry_count + 1,
   created_by_agent_id,
-  assignee_user_id,
+  migrated_assignee_user_id,
   execution_assignee_agent_id,
   assignee_device_id,
   migrated_state,
@@ -633,7 +647,7 @@ SELECT
   jsonb_build_object(
     'schemaVersion', 1,
     'executionId', execution_id,
-    'assigneeUserId', assignee_user_id,
+    'assigneeUserId', migrated_assignee_user_id,
     'assigneeAgentId', execution_assignee_agent_id,
     'assigneeDeviceId', assignee_device_id,
     'assignmentTaskRevision', revision + 1,
@@ -781,6 +795,12 @@ ALTER TABLE sciforge_collaboration.tasks
   DROP COLUMN IF EXISTS assignee_user_id,
   DROP COLUMN IF EXISTS result_record_id,
   DROP COLUMN IF EXISTS safe_failure_code,
+  DROP COLUMN IF EXISTS required_capabilities,
+  DROP COLUMN IF EXISTS authorization_requirements,
+  DROP COLUMN IF EXISTS progress_percent,
+  DROP COLUMN IF EXISTS progress_summary,
+  DROP COLUMN IF EXISTS progress_reported_at,
+  DROP COLUMN IF EXISTS safe_failure_summary,
   ADD CONSTRAINT tasks_created_by_coordinator_fk FOREIGN KEY (created_by_coordinator_agent_id)
     REFERENCES sciforge_collaboration.agent_nodes(agent_id),
   ADD CONSTRAINT tasks_current_execution_fk FOREIGN KEY (current_execution_id)

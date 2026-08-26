@@ -1,0 +1,625 @@
+import { readFile } from 'node:fs/promises'
+
+import { describe, expect, it } from 'vitest'
+
+import type { AgentActor } from './actor.js'
+import { createCollaborationServerRuntime } from './bootstrap.js'
+import {
+  COLLABORATION_CURRENT_CATALOG_FINGERPRINTS,
+  COLLABORATION_SCHEMA_FINGERPRINT,
+  COLLABORATION_SOURCE_CATALOG_FINGERPRINTS,
+  type CollaborationSchemaRoute,
+  collaborationCatalogFingerprint,
+  collaborationSchemaFingerprint,
+  isCollaborationDatabaseReady,
+  runCollaborationMigrations
+} from './migrations.js'
+import { createPostgresPool, PostgresCollaborationRepository } from './postgres.js'
+import type { SqlPool } from './postgres.js'
+import type { CollaborationRepository, CollaborationTransaction } from './repository.js'
+import { CollaborationService } from './service.js'
+
+const connectionString = process.env.SCIFORGE_STAGE3_POSTGRES_TEST_URL
+
+describe.skipIf(connectionString === undefined).sequential(
+  'Stage 3 real PostgreSQL migration, transaction, and restart recovery',
+  () => {
+    it('admits every frozen route, verifies its full catalog, and restarts as a no-op', async () => {
+      assertSafeStage3Database(connectionString!)
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
+      try {
+        const version = await pool.query<{ server_version: unknown }>('SHOW server_version')
+        expect(String(version.rows[0]?.server_version)).toMatch(/^17\./u)
+
+        for (const route of ROUTES) {
+          await installRoute(pool, route)
+          if (route !== 'fresh-v4') {
+            expect(await collaborationCatalogFingerprint(pool), route)
+              .toBe(COLLABORATION_SOURCE_CATALOG_FINGERPRINTS[route])
+          }
+
+          await runCollaborationMigrations(pool)
+          expect(await collaborationSchemaFingerprint(pool), route)
+            .toBe(COLLABORATION_SCHEMA_FINGERPRINT)
+          expect(await collaborationCatalogFingerprint(pool), route)
+            .toBe(expectedCurrentCatalog(route))
+          await expect(isCollaborationDatabaseReady(pool), route).resolves.toBe(true)
+
+          const beforeRestart = await migrationRestartSnapshot(pool)
+          await runCollaborationMigrations(pool)
+          expect(await migrationRestartSnapshot(pool), route).toEqual(beforeRestart)
+        }
+      } finally {
+        await pool.end()
+      }
+    })
+
+    it('rejects unknown source drift before applying any forward migration', async () => {
+      assertSafeStage3Database(connectionString!)
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
+      try {
+        await installRoute(pool, 'upstream-v4')
+        await pool.query('ALTER TABLE sciforge_collaboration.tasks ADD COLUMN stage3_unknown_drift text')
+        const before = await migrationRestartSnapshot(pool)
+
+        await expect(runCollaborationMigrations(pool))
+          .rejects.toThrow(/source_fingerprint_mismatch:upstream-v4/u)
+
+        expect(await migrationRestartSnapshot(pool)).toEqual(before)
+        expect(await currentSchemaVersion(pool)).toBe(4)
+        const executionTable = await pool.query<{ table_name: unknown }>(
+          `SELECT to_regclass('sciforge_collaboration.task_executions') AS table_name`
+        )
+        expect(executionTable.rows[0]?.table_name).toBeNull()
+      } finally {
+        await pool.end()
+      }
+    })
+
+    it('rolls a failed v12 migration back on the same connection and leaves data unchanged', async () => {
+      assertSafeStage3Database(connectionString!)
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
+      try {
+        await installRoute(pool, 'current-v12')
+        await seedLegacyContentBinding(pool)
+        const before = await persistentDatabaseSnapshot(pool)
+
+        await expect(runCollaborationMigrations(pool))
+          .rejects.toThrow(/migration_0013_legacy_content_binding_requires_reprovision/u)
+
+        await expect(pool.query('SELECT 1 AS connection_reusable')).resolves.toMatchObject({ rowCount: 1 })
+        expect(await persistentDatabaseSnapshot(pool)).toEqual(before)
+        expect(await currentSchemaVersion(pool)).toBe(12)
+      } finally {
+        await pool.end()
+      }
+    })
+
+    it('atomically commits Task/Execution/Offer, Inbox, receipt, and journal across Server restart', async () => {
+      assertSafeStage3Database(connectionString!)
+      const at = '2026-08-26T04:00:00.000Z'
+      const expiresAt = '2026-08-26T05:00:00.000Z'
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 2 })
+      await installRoute(pool, 'fresh-v4')
+      await runCollaborationMigrations(pool)
+      const repository = new PostgresCollaborationRepository(pool)
+      await seedRecoveryOffer(pool, repository, at, expiresAt)
+
+      const command = {
+        protocolVersion: '1.0' as const,
+        type: 'task.offer.reject' as const,
+        requestId: 'req_stage3_pg_reject',
+        idempotencyKey: 'idem_stage3_pg_reject',
+        taskOfferId: IDS.offer,
+        taskId: IDS.task,
+        executionId: IDS.execution,
+        expectedTaskRevision: 2,
+        expectedExecutionRevision: 1,
+        expectedOfferRevision: 1,
+        reason: 'human_rejected' as const,
+        safeReasonDetail: null
+      }
+      const worker: AgentActor = {
+        kind: 'agent_device',
+        actorKey: `agent-device:${IDS.workerAgent}:${IDS.workerDevice}`,
+        userId: IDS.workerUser,
+        agentId: IDS.workerAgent,
+        deviceId: IDS.workerDevice,
+        credentialId: 'cred_stage3_pg_worker',
+        credentialGeneration: 1,
+        assurance: 'device'
+      }
+
+      const failing = new CollaborationService({
+        repository: failAtReceipt(repository),
+        now: () => new Date(at)
+      })
+      await expect(failing.rejectTaskOffer(worker, command))
+        .rejects.toThrow(/stage3_injected_before_receipt/u)
+
+      expect(await offerState(repository)).toEqual({
+        task: ['offered', 2], execution: ['offered', 1], offer: ['pending', 1]
+      })
+      expect(await repository.pullInbox({ kind: 'agent', id: IDS.coordinator }, 0, 20, at)).toEqual([])
+      expect(await repository.getReceipt(worker.actorKey, command.idempotencyKey)).toBeNull()
+      expect((await repository.getExternalOperationJournalById(IDS.journal))?.state)
+        .toBe('outcome_unknown')
+
+      const service = new CollaborationService({ repository, now: () => new Date(at) })
+      const committed = await service.rejectTaskOffer(worker, command)
+      const committedInbox = await repository.pullInbox(
+        { kind: 'agent', id: IDS.coordinator }, 0, 20, at
+      )
+      const committedReceipt = await repository.getReceipt(worker.actorKey, command.idempotencyKey)
+      expect(committedInbox).toHaveLength(1)
+      expect(committedReceipt?.operation).toBe('task.offer.reject')
+      await repository.close()
+
+      const restartPool = createPostgresPool({ connectionString: connectionString!, maxConnections: 2 })
+      await runCollaborationMigrations(restartPool)
+      const runtime = createCollaborationServerRuntime({
+        pool: restartPool,
+        host: '127.0.0.1',
+        port: 0,
+        now: () => new Date(at),
+        taskOfferExpiryIntervalMs: 300_000
+      })
+      await runtime.start()
+      const replayed = await runtime.service.rejectTaskOffer(worker, command)
+      expect(replayed).toEqual(committed)
+      await runtime.stop()
+
+      const verificationPool = createPostgresPool({ connectionString: connectionString!, maxConnections: 2 })
+      const recovered = new PostgresCollaborationRepository(verificationPool)
+      try {
+        expect(await offerState(recovered)).toEqual({
+          task: ['revision_requested', 3], execution: ['rejected', 2], offer: ['rejected', 2]
+        })
+        expect((await recovered.getTaskExecution(IDS.execution))?.fence).toMatchObject({
+          status: 'fenced', reason: 'offer_rejected'
+        })
+        const recoveredInbox = await recovered.pullInbox(
+          { kind: 'agent', id: IDS.coordinator }, 0, 20, at
+        )
+        expect(recoveredInbox).toEqual(committedInbox)
+        expect(await recovered.getReceipt(worker.actorKey, command.idempotencyKey))
+          .toEqual(committedReceipt)
+        expect(await recovered.getExternalOperationJournalById(IDS.journal)).toMatchObject({
+          logicalInvocationId: 'stage3-provider-write-001',
+          state: 'outcome_unknown',
+          revision: 1
+        })
+        const counts = await verificationPool.query<{
+          inbox_count: unknown
+          receipt_count: unknown
+          journal_count: unknown
+        }>(
+          `SELECT
+             (SELECT count(*) FROM sciforge_collaboration.inbox_messages
+               WHERE recipient_kind='agent' AND recipient_id=$1) AS inbox_count,
+             (SELECT count(*) FROM sciforge_collaboration.receipts
+               WHERE actor_key=$2 AND idempotency_key=$3) AS receipt_count,
+             (SELECT count(*) FROM sciforge_collaboration.external_operation_journal
+               WHERE content_recovery_journal_entry_id=$4) AS journal_count`,
+          [IDS.coordinator, worker.actorKey, command.idempotencyKey, IDS.journal]
+        )
+        expect(counts.rows[0]).toEqual({ inbox_count: '1', receipt_count: '1', journal_count: '1' })
+      } finally {
+        await recovered.close()
+      }
+    })
+  }
+)
+
+const ROUTES: readonly CollaborationSchemaRoute[] = [
+  'fresh-v4',
+  'upstream-v4',
+  'public-v5',
+  'staging-v9',
+  'a-v11',
+  'current-v12',
+  'current-v13',
+  'current-v14'
+]
+
+const BASELINE_MIGRATIONS = [
+  '0001_collaboration_schema.sql',
+  '0002_provider_identity_inbox.sql',
+  '0003_managed_provider_containers.sql',
+  '0004_remote_capability_approvals.sql'
+] as const
+
+const FORWARD_MIGRATIONS = [
+  '0011_a_content_space_execution_identity.sql',
+  '0012_oidc_only_endpoint_agent_authority.sql',
+  '0013_full_multi_user_loop.sql',
+  '0014_pre_provider_provisioning_binding.sql'
+] as const
+
+const HISTORICAL_MIGRATIONS = [
+  '0001_collaboration_schema.sql',
+  '0002_resource_refs.sql',
+  '0003_task_progress.sql',
+  '0004_coordination_contract.sql',
+  '0005_unified_identity_device_bindings.sql',
+  '0006_provider_identity_inbox.sql',
+  '0007_portable_resource_refs.sql',
+  '0008_managed_provider_containers.sql',
+  '0009_portal_bounded_reads.sql'
+] as const
+
+const IDS = {
+  ownerUser: 'usr_Stage3PgOwner01',
+  workerUser: 'usr_Stage3PgWorker1',
+  ownerDevice: 'dev_Stage3PgOwner01',
+  workerDevice: 'dev_Stage3PgWorker1',
+  coordinator: 'agn_Stage3PgCoord01',
+  workerAgent: 'agn_Stage3PgWorker1',
+  project: 'prj_Stage3PgProject1',
+  task: 'tsk_Stage3PgTask001',
+  execution: 'exe_Stage3PgExec001',
+  offer: 'tof_Stage3PgOffer01',
+  journal: 'crj_Stage3PgJournal1'
+} as const
+
+async function installRoute(pool: SqlPool, route: CollaborationSchemaRoute): Promise<void> {
+  await pool.query('DROP SCHEMA IF EXISTS sciforge_collaboration CASCADE')
+  if (route === 'fresh-v4') return
+  if (route === 'public-v5' || route === 'staging-v9') {
+    const count = route === 'public-v5' ? 5 : 9
+    for (const name of HISTORICAL_MIGRATIONS.slice(0, count)) {
+      await pool.query(await historicalMigrationSource(name))
+    }
+    return
+  }
+  for (const name of BASELINE_MIGRATIONS) await pool.query(await migrationSource(name))
+  const forwardCount = {
+    'upstream-v4': 0,
+    'a-v11': 1,
+    'current-v12': 2,
+    'current-v13': 3,
+    'current-v14': 4
+  }[route]
+  for (const name of FORWARD_MIGRATIONS.slice(0, forwardCount)) {
+    await pool.query(await migrationSource(name))
+  }
+}
+
+function expectedCurrentCatalog(route: CollaborationSchemaRoute): string {
+  if (route === 'public-v5') return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['public-v5']
+  if (route === 'staging-v9') return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['staging-v9']
+  return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['base-v4']
+}
+
+async function migrationSource(name: string): Promise<string> {
+  return await readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8')
+}
+
+async function historicalMigrationSource(name: string): Promise<string> {
+  return await readFile(new URL(`./test-fixtures/postgres-a-history/${name}`, import.meta.url), 'utf8')
+}
+
+function assertSafeStage3Database(value: string): void {
+  const url = new URL(value)
+  if (!['127.0.0.1', 'localhost'].includes(url.hostname) ||
+      !url.pathname.slice(1).startsWith('sf_stage3_')) {
+    throw new Error(
+      'SCIFORGE_STAGE3_POSTGRES_TEST_URL must identify an isolated loopback sf_stage3_* database'
+    )
+  }
+}
+
+async function currentSchemaVersion(pool: SqlPool): Promise<number> {
+  const result = await pool.query<{ version: unknown }>(
+    'SELECT max(version) AS version FROM sciforge_collaboration.schema_migrations'
+  )
+  return Number(result.rows[0]?.version)
+}
+
+async function migrationRestartSnapshot(pool: SqlPool): Promise<Readonly<{
+  catalogFingerprint: string
+  migrations: readonly Readonly<{ version: unknown; applied_at: unknown }>[]
+}>> {
+  const migrations = await pool.query<{ version: unknown; applied_at: unknown }>(
+    `SELECT version,applied_at::text AS applied_at
+     FROM sciforge_collaboration.schema_migrations ORDER BY version`
+  )
+  return { catalogFingerprint: await collaborationCatalogFingerprint(pool), migrations: migrations.rows }
+}
+
+async function persistentDatabaseSnapshot(pool: SqlPool): Promise<Readonly<{
+  catalogFingerprint: string
+  tableData: readonly (readonly [string, readonly string[]])[]
+}>> {
+  const tables = await pool.query<{ table_name: unknown }>(
+    `SELECT table_name FROM information_schema.tables
+     WHERE table_schema='sciforge_collaboration' AND table_type='BASE TABLE'
+     ORDER BY table_name`
+  )
+  const tableData: Array<readonly [string, readonly string[]]> = []
+  for (const row of tables.rows) {
+    const tableName = String(row.table_name)
+    if (!/^[a-z_]+$/u.test(tableName)) throw new Error('stage3_snapshot_invalid_table_name')
+    const values = await pool.query<{ value: unknown }>(
+      `SELECT to_jsonb(row_value)::text AS value
+       FROM sciforge_collaboration.${tableName} AS row_value
+       ORDER BY to_jsonb(row_value)::text`
+    )
+    tableData.push([tableName, values.rows.map(({ value }) => String(value))])
+  }
+  return { catalogFingerprint: await collaborationCatalogFingerprint(pool), tableData }
+}
+
+async function seedLegacyContentBinding(pool: SqlPool): Promise<void> {
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.user_principals
+       (user_id,display_name,status,revision,created_at,updated_at)
+     VALUES ('usr_stage3_rollback','Rollback owner','active',1,
+       '2026-08-26T00:00:00Z','2026-08-26T00:00:00Z');
+     INSERT INTO sciforge_collaboration.devices
+       (device_id,user_id,installation_id,display_name,platform,public_key_jwk,capability_summary,
+        status,revision,created_at,updated_at)
+     VALUES ('dev_stage3_rollback','usr_stage3_rollback','ins_stage3_rollback','Rollback device',
+       '{"os":"linux"}'::jsonb,'{"kty":"OKP"}'::jsonb,'[]'::jsonb,
+       'active',1,'2026-08-26T00:00:00Z','2026-08-26T00:00:00Z');
+     INSERT INTO sciforge_collaboration.agent_nodes
+       (agent_id,device_id,owner_user_id,display_name,node_type,capabilities,status,
+        connection_status,credential_generation,revision,updated_at)
+     VALUES ('agn_stage3_rollback','dev_stage3_rollback','usr_stage3_rollback','Rollback agent',
+       'desktop','[]'::jsonb,'active','online',1,1,'2026-08-26T00:00:00Z');
+     INSERT INTO sciforge_collaboration.projects
+       (project_id,owner_user_id,display_name,goal,status,coordinator_agent_id,max_tasks,
+        max_tasks_per_round,max_task_retries,max_coordination_rounds,coordination_round,
+        revision,created_at,updated_at)
+     VALUES ('prj_stage3_rollback','usr_stage3_rollback','Rollback project','Atomic failure','active',
+       'agn_stage3_rollback',10,5,2,4,1,1,'2026-08-26T00:00:00Z','2026-08-26T00:00:00Z');
+     INSERT INTO sciforge_collaboration.project_content_space_bindings
+       (project_id,root_locator,root_locator_digest,authorization_proof_id,authorization_issuer,
+        authorization_proof_digest,authorization_actor_principal_digest,principal_authority,
+        principal_subject,principal_device_id,principal_identity_version,authorization_scopes,
+        authorization_issued_at,authorization_expires_at,status,revision,created_at,updated_at)
+     VALUES ('prj_stage3_rollback','{"provider":"legacy","containerId":"root"}'::jsonb,
+       repeat('a',64),'proof-legacy','legacy-issuer',repeat('b',64),repeat('c',64),
+       'legacy-authority','legacy-subject','dev_stage3_rollback',1,
+       '["content-space.read","content-space.upload-new"]'::jsonb,
+       '2026-08-26T00:00:00Z','2026-08-27T00:00:00Z','active',1,
+       '2026-08-26T00:00:00Z','2026-08-26T00:00:00Z')`
+  )
+}
+
+async function seedRecoveryOffer(
+  pool: SqlPool,
+  repository: PostgresCollaborationRepository,
+  at: string,
+  expiresAt: string
+): Promise<void> {
+  for (const [userId, displayName] of [
+    [IDS.ownerUser, 'Stage 3 owner'],
+    [IDS.workerUser, 'Stage 3 worker']
+  ] as const) {
+    await pool.query(
+      `INSERT INTO sciforge_collaboration.user_principals
+       (user_id,display_name,status,revision,created_at,updated_at)
+       VALUES ($1,$2,'active',1,$3,$3)`,
+      [userId, displayName, at]
+    )
+  }
+  for (const [deviceId, userId, installationId] of [
+    [IDS.ownerDevice, IDS.ownerUser, 'ins_Stage3PgOwner01'],
+    [IDS.workerDevice, IDS.workerUser, 'ins_Stage3PgWorker1']
+  ] as const) {
+    await pool.query(
+      `INSERT INTO sciforge_collaboration.devices
+       (device_id,user_id,installation_id,display_name,platform,public_key_jwk,capability_summary,
+        status,revision,created_at,updated_at)
+       VALUES ($1,$2,$3,'Stage 3 device','{"os":"linux"}'::jsonb,'{"kty":"OKP"}'::jsonb,
+        '[]'::jsonb,'active',1,$4,$4)`,
+      [deviceId, userId, installationId, at]
+    )
+  }
+  for (const [agentId, deviceId, userId, displayName] of [
+    [IDS.coordinator, IDS.ownerDevice, IDS.ownerUser, 'Stage 3 Coordinator'],
+    [IDS.workerAgent, IDS.workerDevice, IDS.workerUser, 'Stage 3 Worker']
+  ] as const) {
+    await pool.query(
+      `INSERT INTO sciforge_collaboration.agent_nodes
+       (agent_id,device_id,owner_user_id,display_name,node_type,capabilities,status,
+        connection_status,credential_generation,revision,updated_at)
+       VALUES ($1,$2,$3,$4,'desktop','["task.execute"]'::jsonb,'active','online',1,1,$5)`,
+      [agentId, deviceId, userId, displayName, at]
+    )
+  }
+
+  await repository.transaction(async (tx) => {
+    await tx.insertProject({
+      projectId: IDS.project,
+      ownerUserId: IDS.ownerUser,
+      displayName: 'Stage 3 recovery project',
+      goal: 'Prove atomic durable recovery',
+      contentMode: 'none',
+      status: 'active',
+      coordinatorAgentId: IDS.coordinator,
+      coordinatorAuthorityEpoch: 1,
+      executionAuthorityEpoch: 1,
+      contentOwnerUserId: null,
+      budget: { maxTasks: 10, maxTasksPerRound: 5, maxTaskRetries: 2, maxCoordinationRounds: 4 },
+      coordinationRound: 1,
+      revision: 1,
+      createdAt: at,
+      updatedAt: at
+    }, [
+      membership('pmr_Stage3PgOwner01', IDS.ownerUser, at),
+      membership('pmr_Stage3PgWorker1', IDS.workerUser, at)
+    ])
+    await tx.insertTask({
+      taskId: IDS.task,
+      projectId: IDS.project,
+      createdByCoordinatorAgentId: IDS.coordinator,
+      title: 'Stage 3 durable offer',
+      objective: 'Reject atomically and recover after restart',
+      completionCriteria: ['Coordinator observes one durable fact'],
+      dependencyTaskIds: [],
+      fileIntent: null,
+      currentExecutionId: null,
+      currentExecutionState: null,
+      status: 'planned',
+      executionCount: 0,
+      maxRetries: 2,
+      coordinationRound: 1,
+      revision: 1,
+      createdAt: at,
+      updatedAt: at,
+      completedAt: null
+    })
+    await tx.insertTaskExecution({
+      executionId: IDS.execution,
+      taskId: IDS.task,
+      projectId: IDS.project,
+      attempt: 1,
+      offeredByCoordinatorAgentId: IDS.coordinator,
+      assigneeUserId: IDS.workerUser,
+      assigneeAgentId: IDS.workerAgent,
+      assigneeDeviceId: IDS.workerDevice,
+      state: 'offered',
+      stateRevision: 1,
+      fence: {
+        schemaVersion: 1,
+        executionId: IDS.execution,
+        assigneeUserId: IDS.workerUser,
+        assigneeAgentId: IDS.workerAgent,
+        assigneeDeviceId: IDS.workerDevice,
+        assignmentTaskRevision: 2,
+        projectExecutionAuthorityEpoch: 1,
+        userTaskAuthorityEpoch: 1,
+        bindingRevision: null,
+        status: 'open',
+        reason: null,
+        fencedAt: null
+      },
+      fileIntent: null,
+      currentResultSubmissionId: null,
+      offeredAt: at,
+      acceptedAt: null,
+      startedAt: null,
+      terminalAt: null,
+      revision: 1,
+      createdAt: at,
+      updatedAt: at
+    })
+    await tx.insertTaskOffer({
+      taskOfferId: IDS.offer,
+      executionId: IDS.execution,
+      taskId: IDS.task,
+      projectId: IDS.project,
+      assigneeUserId: IDS.workerUser,
+      assigneeAgentId: IDS.workerAgent,
+      assigneeDeviceId: IDS.workerDevice,
+      state: 'pending',
+      offeredAt: at,
+      expiresAt,
+      respondedAt: null,
+      rejectionReason: null,
+      safeReasonDetail: null,
+      revision: 1,
+      createdAt: at,
+      updatedAt: at
+    })
+    await tx.updateTask({
+      taskId: IDS.task,
+      projectId: IDS.project,
+      createdByCoordinatorAgentId: IDS.coordinator,
+      title: 'Stage 3 durable offer',
+      objective: 'Reject atomically and recover after restart',
+      completionCriteria: ['Coordinator observes one durable fact'],
+      dependencyTaskIds: [],
+      fileIntent: null,
+      currentExecutionId: IDS.execution,
+      currentExecutionState: 'offered',
+      status: 'offered',
+      executionCount: 1,
+      maxRetries: 2,
+      coordinationRound: 1,
+      revision: 2,
+      createdAt: at,
+      updatedAt: at,
+      completedAt: null
+    }, 1)
+    await tx.insertExternalOperationJournal({
+      contentRecoveryJournalEntryId: IDS.journal,
+      scope: 'task_content_transfer',
+      logicalInvocationId: 'stage3-provider-write-001',
+      projectId: IDS.project,
+      taskId: IDS.task,
+      preparedTaskRevision: 2,
+      provisioningIntentId: null,
+      provisioningRevision: null,
+      executionId: IDS.execution,
+      preparedExecutionRevision: 1,
+      operation: 'upload_new',
+      requestDigest: '5'.repeat(64),
+      state: 'outcome_unknown',
+      observationDigest: null,
+      receiptDigest: null,
+      safeFailureCode: 'provider_outcome_unknown',
+      preparedAt: at,
+      dispatchedAt: at,
+      resolvedAt: null,
+      revision: 1,
+      createdAt: at,
+      updatedAt: at
+    })
+  })
+}
+
+function membership(projectMembershipId: string, userId: string, at: string) {
+  return {
+    projectMembershipId,
+    projectId: IDS.project,
+    userId,
+    state: 'active' as const,
+    authorityEpoch: 1,
+    activatedAt: at,
+    removalRequestedAt: null,
+    removalRequestedByUserId: null,
+    removedAt: null,
+    revision: 1,
+    createdAt: at,
+    updatedAt: at
+  }
+}
+
+function failAtReceipt(repository: CollaborationRepository): CollaborationRepository {
+  const transaction = async <T>(
+    work: (tx: CollaborationTransaction) => Promise<T>
+  ): Promise<T> => repository.transaction((tx) => work(new Proxy(tx, {
+    get(target, property) {
+      if (property === 'insertReceipt') {
+        return async () => { throw new Error('stage3_injected_before_receipt') }
+      }
+      const value = Reflect.get(target, property)
+      return typeof value === 'function' ? value.bind(target) : value
+    }
+  })))
+  return new Proxy(repository, {
+    get(target, property) {
+      if (property === 'transaction') return transaction
+      const value = Reflect.get(target, property)
+      return typeof value === 'function' ? value.bind(target) : value
+    }
+  })
+}
+
+async function offerState(repository: CollaborationRepository): Promise<Readonly<{
+  task: readonly [string | undefined, number | undefined]
+  execution: readonly [string | undefined, number | undefined]
+  offer: readonly [string | undefined, number | undefined]
+}>> {
+  const task = await repository.getTask(IDS.task)
+  const execution = await repository.getTaskExecution(IDS.execution)
+  const offer = await repository.getTaskOffer(IDS.offer)
+  return {
+    task: [task?.status, task?.revision],
+    execution: [execution?.state, execution?.revision],
+    offer: [offer?.state, offer?.revision]
+  }
+}

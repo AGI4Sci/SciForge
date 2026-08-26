@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { visibleRecoveryActionKindSchema } from '@sciforge/collaboration-contracts'
 
 import {
+  COLLABORATION_CATALOG_FINGERPRINT,
   COLLABORATION_SOURCE_CATALOG_FINGERPRINTS,
   COLLABORATION_SCHEMA_DESCRIPTOR,
   COLLABORATION_SCHEMA_FINGERPRINT,
@@ -66,7 +67,7 @@ describe('collaboration forward-only migration lineage', () => {
 
   it('installs fresh v4 then the 0011-0014 forward migrations', async () => {
     const harness = migrationHarness(facts(null))
-    await runCollaborationMigrations(harness.pool, { sourceCatalogFingerprint: harness.sourceCatalogFingerprint })
+    await runCollaborationMigrations(harness.pool, migrationRuntime(harness))
     expect(COLLABORATION_SCHEMA_VERSION).toBe(14)
     expect(harness.migrations).toHaveLength(8)
     expect(harness.migrations[0]).toContain('VALUES (1)')
@@ -96,7 +97,9 @@ describe('collaboration forward-only migration lineage', () => {
     expect(harness.migrations[7]).not.toMatch(
       /status = 'provisioning'[\s\S]{0,180}root_locator IS NOT NULL/u
     )
-    await expect(isCollaborationDatabaseReady(harness.pool)).resolves.toBe(true)
+    await expect(isCollaborationDatabaseReady(harness.pool, {
+      currentCatalogFingerprint: harness.currentCatalogFingerprint
+    })).resolves.toBe(true)
   })
 
   it.each([
@@ -106,7 +109,7 @@ describe('collaboration forward-only migration lineage', () => {
     })]
   ] as const)('upgrades %s without replaying colliding historical migration numbers', async (_route, initial) => {
     const harness = migrationHarness(initial)
-    await runCollaborationMigrations(harness.pool, { sourceCatalogFingerprint: harness.sourceCatalogFingerprint })
+    await runCollaborationMigrations(harness.pool, migrationRuntime(harness))
     expect(harness.migrations).toHaveLength(4)
     expect(harness.migrations[0]).toContain('VALUES (11)')
     expect(harness.migrations[0]).not.toContain('VALUES (10)')
@@ -120,7 +123,7 @@ describe('collaboration forward-only migration lineage', () => {
       managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
       taskResourceRefs: true, projectContentSpaceBindings: true
     }))
-    await runCollaborationMigrations(harness.pool)
+    await runCollaborationMigrations(harness.pool, migrationRuntime(harness))
     expect(harness.migrations).toHaveLength(2)
     expect(harness.migrations[0]).toContain('VALUES (13)')
     expect(harness.migrations[0]).toContain('CREATE TABLE sciforge_collaboration.visible_recovery_actions')
@@ -135,7 +138,7 @@ describe('collaboration forward-only migration lineage', () => {
       managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
       taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: true
     }))
-    await runCollaborationMigrations(harness.pool)
+    await runCollaborationMigrations(harness.pool, migrationRuntime(harness))
     expect(harness.migrations).toHaveLength(1)
     expect(harness.migrations[0]).toContain('migration_0014_requires_v13')
     expect(harness.migrations[0]).toContain('VALUES (14)')
@@ -330,7 +333,7 @@ describe('collaboration forward-only migration lineage', () => {
       managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
       taskResourceRefs: true, projectContentSpaceBindings: true
     }))
-    await runCollaborationMigrations(harness.pool)
+    await runCollaborationMigrations(harness.pool, migrationRuntime(harness))
     const migration = harness.migrations[0]!
     const precondition = migration.indexOf('migration_0013_legacy_content_binding_requires_reprovision')
     const firstSchemaMutation = migration.indexOf('ALTER TABLE sciforge_collaboration.projects')
@@ -507,6 +510,7 @@ function migrationHarness(initial: Facts): {
   pool: SqlPool
   migrations: string[]
   sourceCatalogFingerprint: () => Promise<string>
+  currentCatalogFingerprint: () => Promise<string>
 } {
   let current = { ...initial }
   const migrations: string[] = []
@@ -558,14 +562,25 @@ function migrationHarness(initial: Facts): {
       }
       return { rows: [], rowCount: 0 }
     },
-    connect: async () => { throw new Error('migration unit harness does not acquire clients') },
+    connect: async () => ({ query: pool.query, release: () => undefined }),
     end: async () => undefined
   }
-  return { pool, migrations, sourceCatalogFingerprint: async () => {
-    const route = detectCollaborationSchemaRoute(current)
-    if (route === 'upstream-v4' || route === 'public-v5' || route === 'staging-v9') {
-      return COLLABORATION_SOURCE_CATALOG_FINGERPRINTS[route]
-    }
-    throw new Error(`unexpected source route in migration harness: ${route}`)
-  } }
+  return { pool, migrations, currentCatalogFingerprint: async () => COLLABORATION_CATALOG_FINGERPRINT,
+    sourceCatalogFingerprint: async () => {
+      const route = detectCollaborationSchemaRoute(current)
+      if (route !== 'fresh-v4') {
+        return COLLABORATION_SOURCE_CATALOG_FINGERPRINTS[route]
+      }
+      throw new Error(`unexpected source route in migration harness: ${route}`)
+    } }
+}
+
+function migrationRuntime(harness: ReturnType<typeof migrationHarness>): Readonly<{
+  sourceCatalogFingerprint: () => Promise<string>
+  currentCatalogFingerprint: () => Promise<string>
+}> {
+  return {
+    sourceCatalogFingerprint: harness.sourceCatalogFingerprint,
+    currentCatalogFingerprint: harness.currentCatalogFingerprint
+  }
 }

@@ -18,8 +18,32 @@ export type CollaborationSchemaRoute =
 export const COLLABORATION_SOURCE_CATALOG_FINGERPRINTS = {
   'upstream-v4': '0577af72da028cee0f45daf6bbf8dad873f9ff2fde578662ffb30d50629b9843',
   'public-v5': '238d1ae31083f9bba86539e1be20630e89614ebf5df304ff7407bc3e40cfbc54',
-  'staging-v9': 'd6f1098f4b1fcdaa3524c4d9924068e1073701ea8db6c668a425ee16dc2fcb0f'
+  'staging-v9': 'd6f1098f4b1fcdaa3524c4d9924068e1073701ea8db6c668a425ee16dc2fcb0f',
+  'a-v11': 'cbbdf62f0a71dfae30a55f82aac8c1ad9e660dd47e7caa6480248eee41b8e549',
+  'current-v12': '19db1ebc685321ae5c425244d99ff6d41790f22b4e2ca6318a90d7b2bc503cca',
+  'current-v13': '98432384bdf366300d45230a2d68c7364e21bcb35d70ea5ee37ba49de9827011',
+  'current-v14': 'f7bb26001468ca3761e2f7e509ada2e7dd22f5869a4932aa034d5f8f940b7214'
 } as const
+
+/**
+ * Full admitted v14 catalogs. PostgreSQL retains the immutable migration
+ * ledger and historical column ordinals, so public-v5 and staging-v9 remain
+ * distinguishable audit lineages after converging on the same frozen v14
+ * collaboration schema.
+ */
+export const COLLABORATION_CURRENT_CATALOG_FINGERPRINTS = {
+  'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v14'],
+  'public-v5': '7413f6ac9d926784b10a84a83cbb80cfbff25be6e7f04ae1efdda2bf6763cf0d',
+  'staging-v9': '398324e912831ec272e33be7af45b97cee186e95f43ed877c40a6ea47988d875'
+} as const
+
+/** Canonical fresh/upstream v14 catalog retained for existing consumers. */
+export const COLLABORATION_CATALOG_FINGERPRINT =
+  COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['base-v4']
+
+const admittedCurrentCatalogFingerprints = new Set<string>(
+  Object.values(COLLABORATION_CURRENT_CATALOG_FINGERPRINTS)
+)
 
 type LineageFacts = Readonly<{
   version: number | null
@@ -277,6 +301,7 @@ export async function runCollaborationMigrations(
   pool: SqlPool,
   runtime: Readonly<{
     sourceCatalogFingerprint?: (candidate: SqlPool) => Promise<string>
+    currentCatalogFingerprint?: (candidate: SqlPool) => Promise<string>
   }> = {}
 ): Promise<void> {
   let facts = await readLineageFacts(pool)
@@ -287,11 +312,14 @@ export async function runCollaborationMigrations(
   }
   const route = detectCollaborationSchemaRoute(facts)
   if (route === 'fresh-v4') throw new Error('collaboration_schema_fresh_route_not_materialized')
-  if (route === 'upstream-v4' || route === 'public-v5' || route === 'staging-v9') {
-    const actualSourceFingerprint = await (runtime.sourceCatalogFingerprint ?? collaborationCatalogFingerprint)(pool)
-    if (actualSourceFingerprint !== COLLABORATION_SOURCE_CATALOG_FINGERPRINTS[route]) {
-      throw new Error(`collaboration_schema_source_fingerprint_mismatch:${route}`)
-    }
+  const actualSourceFingerprint = await (
+    runtime.sourceCatalogFingerprint ?? collaborationCatalogFingerprint
+  )(pool)
+  const sourceFingerprintMatches = route === 'current-v14'
+    ? admittedCurrentCatalogFingerprints.has(actualSourceFingerprint)
+    : actualSourceFingerprint === COLLABORATION_SOURCE_CATALOG_FINGERPRINTS[route]
+  if (!sourceFingerprintMatches) {
+    throw new Error(`collaboration_schema_source_fingerprint_mismatch:${route}`)
   }
   if (![11, 12, 13, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[0])
@@ -314,17 +342,39 @@ export async function runCollaborationMigrations(
   if (fingerprint !== COLLABORATION_SCHEMA_FINGERPRINT) {
     throw new Error('collaboration_schema_fingerprint_mismatch')
   }
+  const catalogFingerprint = await (
+    runtime.currentCatalogFingerprint ?? collaborationCatalogFingerprint
+  )(pool)
+  if (!admittedCurrentCatalogFingerprints.has(catalogFingerprint)) {
+    throw new Error('collaboration_catalog_fingerprint_mismatch')
+  }
 }
 
 async function applyMigration(pool: SqlPool, name: string): Promise<void> {
   const sql = await readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8')
-  await pool.query(sql)
+  const connection = await pool.connect()
+  try {
+    await connection.query(sql)
+  } catch (error) {
+    await connection.query('ROLLBACK').catch(() => undefined)
+    throw error
+  } finally {
+    connection.release()
+  }
 }
 
-export async function isCollaborationDatabaseReady(pool: SqlPool): Promise<boolean> {
+export async function isCollaborationDatabaseReady(
+  pool: SqlPool,
+  runtime: Readonly<{
+    currentCatalogFingerprint?: (candidate: SqlPool) => Promise<string>
+  }> = {}
+): Promise<boolean> {
   try {
     assertRoute(await readLineageFacts(pool), 'current-v14')
-    return await collaborationSchemaFingerprint(pool) === COLLABORATION_SCHEMA_FINGERPRINT
+    return await collaborationSchemaFingerprint(pool) === COLLABORATION_SCHEMA_FINGERPRINT &&
+      admittedCurrentCatalogFingerprints.has(
+        await (runtime.currentCatalogFingerprint ?? collaborationCatalogFingerprint)(pool)
+      )
   } catch {
     return false
   }

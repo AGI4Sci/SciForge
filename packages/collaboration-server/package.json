@@ -55,6 +55,7 @@
     "migrate": "node dist/cli.js migrate",
     "test": "vitest run",
     "test:postgres17": "tsx src/postgres17-contract.integration.ts",
+    "test:stage3-postgres": "vitest run src/stage3-postgres.integration.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
