@@ -78,6 +78,9 @@ export async function createArtifactVersionsCapabilityTestHarness(
         input,
         workspaceId
       ))
+    },
+    createApprovedBatch: () => {
+      throw new Error('Artifact Versions test harness does not create approved capability batches.')
     }
   })
   return Object.freeze({

@@ -749,7 +749,10 @@ function context(
     },
     capabilities: {
       invoke: ((contract: { actionId: string }, input: unknown) =>
-        harness.invoke(contract.actionId, input)) as never
+        harness.invoke(contract.actionId, input)) as never,
+      createApprovedBatch: () => {
+        throw new Error('Unexpected approved capability batch.')
+      }
     },
     modelAccess: { textReasoner: async () => null },
     executionEvents: { publish: async () => { throw new Error('unexpected execution event') } },
@@ -801,6 +804,9 @@ function realArtifactContext(
           ...options,
           workspaceId: options?.workspaceId ?? workspaceRoot
         })
+      },
+      createApprovedBatch: () => {
+        throw new Error('Unexpected approved capability batch.')
       }
     }
   }
