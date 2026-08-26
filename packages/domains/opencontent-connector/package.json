@@ -60,6 +60,21 @@
       }
     ]
   },
+  "sciforgeTeamDeliveryTrust": {
+    "contractVersion": 1,
+    "deliveries": [
+      {
+        "deliveryId": "opencontent-team-delivery-pr82-0b09e1c1",
+        "deliveryFileName": "SciForge-OpenContent-team-delivery-pr82-0b09e1c1.zip",
+        "deliverySha256": "82f874e5e346e3b66bc76be9f51ba70c4aefea47beea5424be04555217fcef79",
+        "overlayId": "opencontent-attachment-assets",
+        "overlayVersion": "1.0.1",
+        "overlayArchiveSha256": "5838c94033e467d7a9e3be6669c7e72390cd9cecfa4b2a7466690734e718b598",
+        "deploymentConfigurationFileName": "opencontent-connector.json",
+        "deploymentConfigurationSha256": "163d8e7a2e72eb4a2dbd492d84ea78b647e909776225fad6d50e28c94cd891f5"
+      }
+    ]
+  },
   "exports": {
     "./contract": "./src/contract.ts",
     "./definition": "./src/definition.ts",

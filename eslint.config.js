@@ -12,6 +12,7 @@ export default tseslint.config(
       'coverage/**',
       '**/dist/**',
       'docs/research-agent-needs-site/**',
+      'internal/**',
       'node_modules/**',
       'out/**'
     ]
