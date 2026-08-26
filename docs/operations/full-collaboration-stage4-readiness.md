@@ -161,3 +161,13 @@ private-contribution requirement. No DMG/ZIP or receipt was emitted.
    every Human enters only their own OIDC, Runtime and OpenContent credentials.
 5. Run the five-profile happy path and R1-R10 only through the packaged product;
    source tests, direct SQL and fixture responses never satisfy those rows.
+
+The exact non-executed 7.4 selection diff, compose render, forward gates and
+mandatory rollback are now frozen in
+[`full-collaboration-stage4-a-host-cutover-plan.md`](./full-collaboration-stage4-a-host-cutover-plan.md).
+The first retained packaged profile, U0, has a real OIDC User and active Device,
+a configured local Runtime, and a live-attested OpenContent connection. Its
+Agent count remains zero because the product correctly rejects an HTTP
+Collaboration URL; registering that Agent over the existing public HTTPS origin
+is the immediate post-cutover smoke. This evidence prepares but does not approve
+or complete 7.4, 8.4, 8.6, 8.7 or 8.8.
