@@ -314,8 +314,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
     },
     content: { mode: 'none', members: [{ userId: 'usr_Owner0000001' }] }
   }, { invocationId: 'invocation-project-create-1' } as never), {
-    output: created,
-    changed: true
+    output: created
   })
 })
 

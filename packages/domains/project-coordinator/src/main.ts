@@ -94,10 +94,14 @@ export type ProjectCoordinatorCapabilityOptions = Readonly<{
   producedResourceKinds?: readonly string[]
   inputSchema: z.ZodType
   outputSchema: z.ZodType
+  /**
+   * Coordinator capabilities are global commands. Their effect describes the
+   * side effect; Broker `changed` is reserved for an invoked resource handle.
+   */
   handler(
     input: unknown,
     context: Readonly<{ invocationId?: string }>
-  ): Promise<Readonly<{ output: unknown; changed?: boolean }>>
+  ): Promise<Readonly<{ output: unknown; changed?: never }>>
 }>
 
 export type ProjectCoordinatorCapabilityFactory<CapabilityDefinition = unknown> = Readonly<{
@@ -160,8 +164,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
           output: await options.ports.workspace.createProject(
             projectCoordinatorProjectCreateInputSchema.parse(raw),
             capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate, context)
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -199,8 +202,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         handler: async (raw) => ({
           output: await options.ports.plan.generateDraft(
             projectCoordinatorPlanDraftGenerateInputSchema.parse(raw)
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -219,8 +221,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         handler: async (raw) => ({
           output: await options.ports.plan.editDraft(
             projectCoordinatorPlanDraftEditInputSchema.parse(raw)
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -240,8 +241,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
           output: await options.ports.plan.submitDraft(
             projectCoordinatorPlanDraftSubmitInputSchema.parse(raw),
             capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.planSubmit, context)
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -261,8 +261,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
           output: await options.ports.plan.confirmAndActivate(
             projectCoordinatorPlanConfirmActivateInputSchema.parse(raw),
             capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate, context)
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -304,8 +303,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
               PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
               context
             )
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -328,8 +326,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
               PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
               context
             )
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -352,8 +349,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
               PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
               context
             )
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -376,8 +372,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
               PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
               context
             )
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -397,8 +392,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
           output: await options.ports.provisioning.addMember(
             projectCoordinatorMembershipAddInputSchema.parse(raw),
             capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd, context)
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -418,8 +412,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
           output: await options.ports.provisioning.removeMember(
             projectCoordinatorMembershipRemoveInputSchema.parse(raw),
             capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove, context)
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -439,8 +432,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
           output: await options.ports.actions.createHumanNeeded(
             projectCoordinatorHumanNeededCreateInputSchema.parse(raw),
             capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate, context)
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -460,8 +452,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
           output: await options.ports.actions.answerHumanNeeded(
             projectCoordinatorHumanAnswerInputSchema.parse(raw),
             capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer, context)
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -481,8 +472,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
           output: await options.ports.actions.transferCoordinator(
             projectCoordinatorTransferInputSchema.parse(raw),
             capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer, context)
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -522,8 +512,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
           output: await options.ports.actions.reviewResult(
             projectCoordinatorResultReviewInputSchema.parse(raw),
             capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview, context)
-          ),
-          changed: true
+          )
         })
       }),
       options.defineCapability({
@@ -543,8 +532,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
           output: await options.ports.actions.completeProject(
             projectCoordinatorCompleteInputSchema.parse(raw),
             capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete, context)
-          ),
-          changed: true
+          )
         })
       })
     ]
