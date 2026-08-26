@@ -315,6 +315,7 @@ describe('collaboration forward-only migration lineage', () => {
     expect(migration13).toContain('SET request_scope = request.request_scope')
     expect(migration13).toContain("project.status IN ('active', 'paused')")
     expect(migration13).toContain('coordinator.owner_user_id <> project.owner_user_id')
+    expect(migration13).toContain('DROP CONSTRAINT IF EXISTS tasks_result_summary_state')
   })
 
   it('indexes every canonical stable-ID coordination page without a nested collection scan', async () => {

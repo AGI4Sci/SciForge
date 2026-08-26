@@ -789,6 +789,7 @@ ALTER TABLE sciforge_collaboration.tasks
   DROP CONSTRAINT IF EXISTS tasks_execution_fence_shape,
   DROP CONSTRAINT IF EXISTS tasks_file_intent_shape,
   DROP CONSTRAINT IF EXISTS tasks_resource_ref_ids_shape,
+  DROP CONSTRAINT IF EXISTS tasks_result_summary_state,
   ADD COLUMN created_by_coordinator_agent_id text,
   ADD COLUMN current_execution_id text,
   ADD COLUMN current_execution_state text,

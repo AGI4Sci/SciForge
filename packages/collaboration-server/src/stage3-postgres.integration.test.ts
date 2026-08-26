@@ -105,6 +105,15 @@ describe.skipIf(connectionString === undefined).sequential(
           human_answer_id: 'han_stage3_scope_safe', request_scope: 'coordinator_project',
           task_id: null, execution_id: null, coordinator_authority_epoch: '1'
         }])
+        const tasks = await pool.query(
+          `SELECT status,current_execution_state,execution_count
+           FROM sciforge_collaboration.tasks
+           WHERE task_id = 'tsk_stage3_scope_complete'`
+        )
+        expect(tasks.rows).toEqual([{
+          status: 'manual_recovery_required', current_execution_state: 'superseded',
+          execution_count: 1
+        }])
         await expect(isCollaborationDatabaseReady(pool)).resolves.toBe(true)
 
         const beforeRestart = await migrationRestartSnapshot(pool)
@@ -447,6 +456,30 @@ async function seedHistoricalProjectScopedRequests(pool: SqlPool): Promise<void>
         '2026-08-26T00:00:00Z'),
        ('prj_stage3_scope_unsafe','usr_stage3_scope_other','member',true,
         '2026-08-26T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.tasks
+       (task_id,project_id,assignee_agent_id,created_by_agent_id,title,objective,
+        completion_criteria,dependency_task_ids,status,retry_count,max_retries,coordination_round,
+        revision,created_at,updated_at,execution_id,assignee_user_id)
+     VALUES ('tsk_stage3_scope_complete','prj_stage3_scope_safe','agn_stage3_scope_owner',
+       'agn_stage3_scope_owner','Historical completed Task','Exercise the v5 result constraint.',
+       '[]'::jsonb,'[]'::jsonb,'in_progress',0,2,1,1,'2026-08-26T00:00:00Z',
+       '2026-08-26T00:00:00Z','exe_Stage3ScopeComplete01','usr_stage3_scope_owner');
+
+     INSERT INTO sciforge_collaboration.project_records
+       (project_record_id,project_id,kind,status,summary,author_agent_id,source_task_id,
+        source_revision,revision,created_at,updated_at,source_execution_id,criterion_evidence,
+        resource_ref_ids)
+     VALUES ('rec_stage3_scope_complete','prj_stage3_scope_safe','task_result','candidate',
+       'Historical result','agn_stage3_scope_owner','tsk_stage3_scope_complete',1,1,
+       '2026-08-26T00:00:00Z','2026-08-26T00:00:00Z','exe_Stage3ScopeComplete01',
+       '[]'::jsonb,'[]'::jsonb);
+
+     UPDATE sciforge_collaboration.tasks
+     SET status='completed',result_summary='Historical result',
+         result_record_id='rec_stage3_scope_complete',completed_at='2026-08-26T00:05:00Z',
+         updated_at='2026-08-26T00:05:00Z',revision=2
+     WHERE task_id='tsk_stage3_scope_complete';
 
      INSERT INTO sciforge_collaboration.human_requests
        (human_request_id,project_id,task_id,target_user_id,requested_by_agent_id,
