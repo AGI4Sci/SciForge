@@ -159,6 +159,14 @@ describe('production HTTP OIDC-only boundary', () => {
         expiresAt: new Date(now().getTime() + 60_000).toISOString()
       })
       await tx.appendInbox({
+        recipient: { kind: 'user', id: owner.userId },
+        messageId: 'ibx_OwnerInbox0002',
+        messageType: 'collaboration.important_failure',
+        payload: { protocolVersion: '1.0', safeMessage: 'A later fact advances the durable cursor.' },
+        createdAt: now().toISOString(),
+        expiresAt: new Date(now().getTime() + 60_000).toISOString()
+      })
+      await tx.appendInbox({
         recipient: { kind: 'user', id: outsider.userId },
         messageId: 'ibx_OtherInbox0001',
         messageType: 'collaboration.important_failure',
@@ -192,16 +200,19 @@ describe('production HTTP OIDC-only boundary', () => {
     }
     expect(firstPage).toMatchObject({
       type: 'rest.inbox_page',
-      nextSequence: 1,
-      messages: [{ inboxMessageId: 'ibx_OwnerInbox0001', recipientUserId: owner.userId }]
+      nextSequence: 2,
+      messages: [
+        { inboxMessageId: 'ibx_OwnerInbox0001', recipientUserId: owner.userId },
+        { inboxMessageId: 'ibx_OwnerInbox0002', recipientUserId: owner.userId }
+      ]
     })
     expect(JSON.stringify(firstPage)).not.toContain('This fact belongs only to the other principal.')
     const duplicatePage = await (await postCommand(baseUrl, pull, ownerToken)).json()
     expect(duplicatePage).toEqual(firstPage)
     const emptyPage = await (await postCommand(baseUrl, {
-      ...pull, requestId: 'req_InboxPullOwner002', afterSequence: 1
+      ...pull, requestId: 'req_InboxPullOwner002', afterSequence: 2
     }, ownerToken)).json()
-    expect(emptyPage).toMatchObject({ type: 'rest.inbox_page', messages: [], nextSequence: 1 })
+    expect(emptyPage).toMatchObject({ type: 'rest.inbox_page', messages: [], nextSequence: 2 })
 
     const ack = {
       protocolVersion: '1.0', requestId: 'req_InboxAckOwner0001', type: 'inbox.ack',
@@ -228,9 +239,24 @@ describe('production HTTP OIDC-only boundary', () => {
     expect(duplicateAck).toEqual(firstAck)
     expect((await postCommand(baseUrl, { ...ack, sequence: 2 }, ownerToken)).status).toBe(409)
 
+    const secondAck = {
+      ...ack,
+      requestId: 'req_InboxAckOwner0002',
+      idempotencyKey: 'idem_inbox_ack_owner_0002',
+      inboxMessageId: 'ibx_OwnerInbox0002',
+      sequence: 2
+    }
+    expect((await postCommand(baseUrl, secondAck, ownerToken)).status).toBe(200)
+    const staleAck = {
+      ...ack,
+      requestId: 'req_InboxAckOwnerStale1',
+      idempotencyKey: 'idem_inbox_ack_owner_stale_0001'
+    }
+    expect((await postCommand(baseUrl, staleAck, ownerToken)).status).toBe(200)
+
     await expect(service.pullInbox(owner.user, { afterSequence: 0, limit: 200 })).resolves.toMatchObject({
-      ackedSequence: 1,
-      nextSequence: 2
+      ackedSequence: 2,
+      nextSequence: 3
     })
     await expect(repository.getReceipt(owner.user.actorKey, ack.idempotencyKey)).resolves.toMatchObject({
       operation: 'inbox.ack',
