@@ -144,11 +144,34 @@ test('reseals only the staged package copy after a workspace installer changes m
     )
     await chmod(stagedPackageRoot, 0o755)
     await chmod(join(stagedPackageRoot, 'src'), 0o755)
+    const outsideInstallerState = join(root, 'outside-installer-state')
+    const outsideMarker = join(outsideInstallerState, 'must-remain.txt')
+    await mkdir(outsideInstallerState, { mode: 0o700 })
+    await writeFile(outsideMarker, 'preserved\n', { mode: 0o600 })
+    const stagedNodeModules = join(stagedPackageRoot, 'node_modules')
+    await symlink(outsideInstallerState, stagedNodeModules, 'dir')
+    await assert.rejects(
+      resealStage4PrivateDomainPackageStaging({
+        stagingProjectRoot,
+        privateDomainPackages: composition.privateDomainPackages
+      }),
+      /Staged installer state is unsafe/u
+    )
+    assert.equal(await readFile(outsideMarker, 'utf8'), 'preserved\n')
+    await unlink(stagedNodeModules)
+    const installerState = join(
+      stagedNodeModules,
+      'installer-only-dependency',
+      'package.json'
+    )
+    await mkdir(dirname(installerState), { recursive: true, mode: 0o755 })
+    await writeFile(installerState, '{"private":true}\n', { mode: 0o644 })
 
     await resealStage4PrivateDomainPackageStaging({
       stagingProjectRoot,
       privateDomainPackages: composition.privateDomainPackages
     })
+    await assert.rejects(readFile(installerState), { code: 'ENOENT' })
     const verified = await verifyStage4PrivateDomainPackage({
       repositoryRoot: REPOSITORY_ROOT,
       packagePath: stagedPackageRoot,

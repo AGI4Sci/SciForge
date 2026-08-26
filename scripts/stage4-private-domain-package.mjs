@@ -6,6 +6,7 @@ import {
   open,
   readdir,
   realpath,
+  rm,
   writeFile
 } from 'node:fs/promises'
 import {
@@ -209,6 +210,7 @@ export async function resealStage4PrivateDomainPackageStaging(options) {
       domainsRoot,
       `private-${candidate.sha256.slice(0, 24)}`
     )
+    await removeStagedInstallerState(packageRoot)
     await resealPrivatePackageTree(packageRoot)
     await readPrivatePackageFiles(packageRoot)
   }
@@ -500,6 +502,22 @@ async function readPrivatePackageFiles(root) {
       }))
     }
   }
+}
+
+async function removeStagedInstallerState(packageRoot) {
+  const installerState = resolveContained(packageRoot, 'node_modules')
+  let stats
+  try {
+    stats = await lstat(installerState)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return
+    throw new Error('[stage4-private-domain] Staged installer state is unavailable.')
+  }
+  if (!stats.isDirectory() || stats.isSymbolicLink() ||
+    await realpath(installerState) !== installerState) {
+    throw new Error('[stage4-private-domain] Staged installer state is unsafe.')
+  }
+  await rm(installerState, { recursive: true, force: false })
 }
 
 async function resealPrivatePackageTree(root) {

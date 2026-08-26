@@ -119,9 +119,10 @@ commit 的 Domain SDK manifest schema 与 Content Space verification-profile sch
 验证通过的 bytes 只复制到本次创建、权限为 `0700` 的系统临时 build workspace 中，成为该
 workspace 的 `packages/domains/*` 子包。之后调用唯一的 `scripts/domain-packages.mjs` discovery/
 generated-composition 路径，再在同一隔离 workspace 中完成 source build 与 Electron packaging。
-若 workspace installer 改写了 staging 副本的 mode，builder 只把这些已知 staging 路径重新封为
-目录 `0700`、文件 `0600`，然后再次执行完整 package verifier；原始外部 package 不会被 chmod
-或修改，新增文件、链接或 byte drift 仍然 fail closed。
+workspace installer 完成后，builder 只清除该临时 package 副本下明确的 package-local
+`node_modules` installer state（该路径若为 symlink 则拒绝而不跟随），再把已知 staging 路径
+重新封为目录 `0700`、文件 `0600`，然后再次执行完整 package verifier；原始外部 package 不会
+被 chmod 或修改，除此之外的新增文件、链接或 byte drift 仍然 fail closed。
 它不会修改受 Git 管理的生成文件，不会安装或激活原始 package，也不增加运行时 JSON、环境变量、
 Renderer 设置或第二套 composition。结束时只删除本次明确创建的临时 workspace；原始私有 package
 和任何用户目录都不删除。
