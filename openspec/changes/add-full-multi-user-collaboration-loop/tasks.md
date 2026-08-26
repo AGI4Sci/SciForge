@@ -59,7 +59,8 @@
 
 ## 7. 既有 A 测试环境蓝绿升级
 
-- [ ] 7.1 只读重验 `47.76.230.118` 上现有 A 的 exact image、schema、`cloud-test` origin、`login-test/realms/SciForge` issuer、Keycloak/Cloud 数据库和 Caddy upstream，并记录不含秘密的基线回执。
+- [x] 7.1 只读重验 `47.76.230.118` 上现有 A 的 exact image、schema、`cloud-test` origin、`login-test/realms/SciForge` issuer、Keycloak/Cloud 数据库和 Caddy upstream，并记录不含秘密的基线回执。
+  - 2026-08-26 用户授权的两阶段只读审计确认 DNS/443 当前栈、精确 image ID/manifest、Cloud `public-v5` catalog fingerprint、Keycloak realm/client、Caddyfile SHA-256/动态 upstream 和完整 rollback identity；数据库会话强制 read-only，未执行容器、数据库、Caddy 或文件写入。脱敏证据见 `docs/operations/full-collaboration-stage4-a-host-baseline.md`。
 - [ ] 7.2 对 Cloud DB、Keycloak DB/realm、edge 配置和当前 image metadata 完成备份与隔离 restore rehearsal；任何 migration/cutover 前必须证明旧栈可恢复。
 - [ ] 7.3 从旧 Cloud DB 复制独立 candidate database/volume/container/network，candidate-only 执行 forward migration、目标 image health 和合成账号 smoke；不得直接迁移运行中的旧数据库或新增 issuer fallback。
 - [ ] 7.4 candidate 全部门禁通过后切换现有 Caddy `cloud-test` upstream，保持 `login-test/realms/SciForge` issuer 不变；验证 packaged/live 后再决定退役旧栈，期间必须能精确回滚旧 upstream/app/database。
@@ -80,8 +81,8 @@
 ## 9. 清理与交付
 
 - [x] 9.1 审计并删除旧 anonymous pairing、Token duplication、0.2 parallel contract、mock/fallback、private cross-boundary import、domain/provider hard-code、dead file/export/dependency。
-  - Stage 4 changed-path gate 从基线 `e0038b8c7109390445dccb691052fec74a153c09` 审计 394 个变更路径、143 个生产源码和 27 个 domain package，零 finding；415 个公开候选文件 secret audit 通过，OpenContent 旧 Provider migration/compatibility 路径已删除。packaged reachability 仍由未完成的 8.2 exact-artifact formal gate 独立约束，未被本项冒充为已完成。
+  - Stage 4 changed-path gate 从基线 `e0038b8c7109390445dccb691052fec74a153c09` 审计 399 个变更路径、143 个生产源码和 27 个 domain package，零 finding；416 个公开候选文件 secret audit 通过，OpenContent 旧 Provider migration/compatibility 路径已删除。packaged reachability 仍由未完成的 8.2 exact-artifact formal gate 独立约束，未被本项冒充为已完成。
 - [x] 9.2 按 docs、identity、cloud、content-space、collaboration/coordinator、deployment/E2E 的逻辑系列提交 commits，并在每次提交后保持 OpenSpec checkbox 与真实进度一致。
-  - Stage 4 依次提交 OpenContent compatibility 清理 `ea4903c9`、团队附件信任/安装器 `ff80c4a5`、封闭打包/验收门禁 `c52b7d1b`、团队部署与 readiness 文档 `d86b8e15`；没有把真实环境缺口伪装为完成。
+  - Stage 4 依次提交 OpenContent compatibility 清理 `ea4903c9`、团队附件信任/安装器 `ff80c4a5`、封闭打包/验收门禁 `c52b7d1b`、团队部署与 readiness 文档 `d86b8e15`、通用本地授权包生成器 `aa81f88e`；没有把真实环境缺口伪装为完成。
 - [x] 9.3 持续推送唯一集成主线 `codex/full-collaboration-loop-recovery` 到个人 Fork；只在所有必需门禁通过并经 User 确认后准备 upstream PR。
   - `2026-08-26T06:49:29Z` 前，以上系列已仅推送到 `origin` `https://github.com/SCU-areszhang/SciForge_Loop.git`；独立 `ls-remote` 返回 `d86b8e15dc4305c3eb26899d2bdc833d06a008e0`，与本地 HEAD 相同。未创建 upstream PR，也未执行 A 环境变更、cutover 或 artifact 发布。
