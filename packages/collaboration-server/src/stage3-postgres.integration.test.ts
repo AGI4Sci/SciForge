@@ -125,6 +125,73 @@ describe.skipIf(connectionString === undefined).sequential(
       }
     })
 
+    it('normalizes a retained raw Project creation inbox before the v15 runtime starts', async () => {
+      assertSafeStage3Database(connectionString!)
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
+      try {
+        await installRoute(pool, 'current-v14')
+        await pool.query(
+           `INSERT INTO sciforge_collaboration.inbox_messages
+             (recipient_kind,recipient_id,sequence,message_id,message_type,payload,
+              created_at,expires_at)
+           VALUES
+             ('agent','agt_Stage4RetainedAgent01',1,'ibx_Stage4RetainedProjectCreated01',
+              'project.created',
+              jsonb_build_object(
+                'protocolVersion','1.0',
+                'type','project.created',
+                'projectId','prj_Stage4RetainedProject01',
+                'ownerUserId','usr_Stage4RetainedOwner01',
+                'coordinatorAgentId','agt_Stage4RetainedAgent01',
+                'coordinatorAuthorityEpoch',1,
+                'executionAuthorityEpoch',1,
+                'status','paused',
+                'contentMode','none',
+                'provisioningIntentId',NULL,
+                'revision',1
+              ),
+              '2026-08-26T17:16:31.470Z','2026-09-25T17:16:31.470Z')`
+        )
+
+        await runCollaborationMigrations(pool)
+
+        const normalized = await pool.query<{
+          message_type: unknown
+          payload: unknown
+        }>(
+          `SELECT message_type,payload
+           FROM sciforge_collaboration.inbox_messages
+           WHERE message_id='ibx_Stage4RetainedProjectCreated01'`
+        )
+        expect(normalized.rows).toEqual([{
+          message_type: 'collaboration.state.changed',
+          payload: {
+            protocolVersion: '1.0',
+            type: 'collaboration.state.changed',
+            event: {
+              protocolVersion: '1.0',
+              eventId: 'evt_Stage4RetainedProjectCreated01',
+              causedByRequestId: 'req_Stage4RetainedProjectCreated01',
+              occurredAt: '2026-08-26T17:16:31.470Z',
+              type: 'project.created',
+              projectId: 'prj_Stage4RetainedProject01',
+              ownerUserId: 'usr_Stage4RetainedOwner01',
+              coordinatorAgentId: 'agt_Stage4RetainedAgent01',
+              coordinatorAuthorityEpoch: 1,
+              executionAuthorityEpoch: 1,
+              status: 'paused',
+              contentMode: 'none',
+              provisioningIntentId: null,
+              revision: 1
+            }
+          }
+        }])
+        await expect(isCollaborationDatabaseReady(pool)).resolves.toBe(true)
+      } finally {
+        await pool.end()
+      }
+    })
+
     it('resumes public-v5 and staging-v9 after every committed forward boundary', async () => {
       assertSafeStage3Database(connectionString!)
       const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
@@ -356,7 +423,8 @@ const ROUTES: readonly CollaborationSchemaRoute[] = [
   'a-v11',
   'current-v12',
   'current-v13',
-  'current-v14'
+  'current-v14',
+  'current-v15'
 ]
 
 const BASELINE_MIGRATIONS = [
@@ -370,7 +438,8 @@ const FORWARD_MIGRATIONS = [
   '0011_a_content_space_execution_identity.sql',
   '0012_oidc_only_endpoint_agent_authority.sql',
   '0013_full_multi_user_loop.sql',
-  '0014_pre_provider_provisioning_binding.sql'
+  '0014_pre_provider_provisioning_binding.sql',
+  '0015_canonical_project_created_inbox.sql'
 ] as const
 
 const HISTORICAL_MIGRATIONS = [
@@ -415,7 +484,8 @@ async function installRoute(pool: SqlPool, route: CollaborationSchemaRoute): Pro
     'a-v11': 1,
     'current-v12': 2,
     'current-v13': 3,
-    'current-v14': 4
+    'current-v14': 4,
+    'current-v15': 5
   }[route]
   for (const name of FORWARD_MIGRATIONS.slice(0, forwardCount)) {
     await pool.query(await migrationSource(name))

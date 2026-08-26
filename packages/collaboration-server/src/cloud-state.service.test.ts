@@ -12,6 +12,7 @@ import {
 } from '@sciforge/collaboration-contracts'
 import { FakeCollaborationRepository } from '../../../test-fixtures/collaboration/fake-adapters.mjs'
 import type { AgentActor, HumanEndpointActor, UserActor } from './actor.js'
+import { toInboxMessage } from './contracts.js'
 import { stableDigest } from './crypto.js'
 import { IdentityService } from './identity-service.js'
 import { CollaborationService } from './service.js'
@@ -211,7 +212,7 @@ async function contentRecoveryProjectFixture(suffix: string) {
   const created = await service.createProject(owner.user, {
     protocolVersion: '1.0',
     type: 'project.create',
-    requestId: `req_${suffix}_project`,
+    requestId: `req_${stableDigest(`${suffix}_project`).slice(0, 24)}`,
     idempotencyKey: `idem_${suffix}_project`,
     displayName: `${suffix} Project`,
     goal: 'Exercise exact Project Content recovery semantics.',
@@ -374,7 +375,8 @@ async function activeContentProjectFixture(suffix: string) {
   })
   const activeProject = await service.transitionProject(owner.user, {
     protocolVersion: '1.0', type: 'project.transition',
-    requestId: `req_${suffix}_active_project`, idempotencyKey: `idem_${suffix}_active_project`,
+    requestId: `req_${stableDigest(`${suffix}_active_project`).slice(0, 24)}`,
+    idempotencyKey: `idem_${suffix}_active_project`,
     projectId: created.project.projectId,
     expectedRevision: activatedContent.project.revision + 2,
     expectedCoordinatorAuthorityEpoch: activatedContent.project.coordinatorAuthorityEpoch,
@@ -448,7 +450,7 @@ async function activeTextOfferFixture(suffix: string) {
   const created = await service.createProject(owner.user, {
     protocolVersion: '1.0',
     type: 'project.create',
-    requestId: `req_${suffix}_project`,
+    requestId: `req_${stableDigest(`${suffix}_project`).slice(0, 24)}`,
     idempotencyKey: `idem_${suffix}_project`,
     displayName: `${suffix} workflow`,
     goal: 'Exercise exact workflow authority and execution fencing.',
@@ -867,6 +869,66 @@ async function manualRecoveryFileOfferFixture(
 }
 
 describe('vNext Cloud application service', () => {
+  it('delivers Project creation through the canonical Agent inbox contract', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const owner = await seedOidcUserDevice(repository, 'project-created-inbox-owner', at)
+    const coordinator = await registeredAgent(
+      service,
+      owner.user,
+      owner.deviceId,
+      'project-created-inbox-owner'
+    )
+    const requestId = 'req_ProjectCreatedInbox01'
+    const created = await service.createProject(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.create',
+      requestId,
+      idempotencyKey: 'idem_project_created_inbox_01',
+      displayName: 'Inbox contract Project',
+      goal: 'Deliver a canonical Project creation notification to the Coordinator Agent.',
+      coordinatorAgentId: coordinator.agentId,
+      expectedCoordinatorAgentRevision: 1,
+      budget: {
+        maxTasks: 5,
+        maxTasksPerRound: 5,
+        maxTaskRetries: 1,
+        maxCoordinationRounds: 2
+      },
+      content: {
+        mode: 'none',
+        members: [{ userId: owner.userId }]
+      }
+    })
+
+    const inbox = await service.pullInbox(coordinator, { afterSequence: 0, limit: 10 })
+    expect(inbox.messages).toHaveLength(1)
+    const message = toInboxMessage(inbox.messages[0]!)
+    expect(message).toMatchObject({
+      recipientType: 'agent',
+      recipientAgentId: coordinator.agentId,
+      payload: {
+        protocolVersion: '1.0',
+        type: 'collaboration.state.changed',
+        event: {
+          protocolVersion: '1.0',
+          type: 'project.created',
+          causedByRequestId: requestId,
+          occurredAt: at.toISOString(),
+          projectId: created.project.projectId,
+          ownerUserId: owner.userId,
+          coordinatorAgentId: coordinator.agentId,
+          coordinatorAuthorityEpoch: 1,
+          executionAuthorityEpoch: 1,
+          status: 'paused',
+          contentMode: 'none',
+          provisioningIntentId: null,
+          revision: 1
+        }
+      }
+    })
+  })
+
   it('publishes one global exact User/ACTIVE Device Provider fact with CAS', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })

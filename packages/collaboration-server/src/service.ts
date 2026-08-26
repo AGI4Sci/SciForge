@@ -1,9 +1,11 @@
 import { createHash, createPublicKey, randomBytes, verify as verifySignature } from 'node:crypto'
 import {
+  agentInboxPayloadSchema,
   canonicalProjectContentProvisioningAttestationFactualPayloadBytes,
   canonicalProjectContentProvisioningAttestationSignatureBytes,
   canonicalProvisionedMemberSetBytes,
   canUserReadProjectCoordination,
+  cloudStateEventSchema,
   type CloudStateCommand,
   confirmableHumanActionSchema,
   projectCreateIncludesAuthenticatedOwner,
@@ -2093,20 +2095,27 @@ export class CollaborationService {
       const message = await this.appendInbox(
         tx,
         { kind: 'agent', id: coordinator.agentId },
-        'project.created',
-        {
+        'collaboration.state.changed',
+        agentInboxPayloadSchema.parse({
           protocolVersion: '1.0',
-          type: 'project.created',
-          projectId,
-          ownerUserId: actor.userId,
-          coordinatorAgentId: coordinator.agentId,
-          coordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
-          executionAuthorityEpoch: project.executionAuthorityEpoch,
-          status: 'paused',
-          contentMode: project.contentMode,
-          provisioningIntentId: provisioningIntent?.provisioningIntentId ?? null,
-          revision: project.revision
-        },
+          type: 'collaboration.state.changed',
+          event: cloudStateEventSchema.parse({
+            protocolVersion: '1.0',
+            eventId: newId('evt'),
+            causedByRequestId: input.requestId,
+            occurredAt: at,
+            type: 'project.created',
+            projectId,
+            ownerUserId: actor.userId,
+            coordinatorAgentId: coordinator.agentId,
+            coordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+            executionAuthorityEpoch: project.executionAuthorityEpoch,
+            status: 'paused',
+            contentMode: project.contentMode,
+            provisioningIntentId: provisioningIntent?.provisioningIntentId ?? null,
+            revision: project.revision
+          })
+        }),
         at
       )
       return {
