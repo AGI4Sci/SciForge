@@ -14,28 +14,45 @@ import {
 } from '@sciforge/collaboration-contracts'
 
 import type { OidcUserActor } from './actor.js'
+import { revokeAgentAuthorityInTransaction, type AuthorityNotification } from './authority-revocation.js'
 import { newId, safeAuditMetadata, stableDigest } from './crypto.js'
 import { CollaborationServiceError, fail } from './errors.js'
 import { enrollmentNonceDigest, issueEnrollmentNonce, verifyDeviceEnrollmentProof } from './identity-crypto.js'
-import type { StoredAuditEvent, StoredDevice, StoredOidcIdentity, StoredReceipt, StoredUser } from './model.js'
+import type {
+  InboxRecipient,
+  StoredAuditEvent,
+  StoredDevice,
+  StoredInboxMessage,
+  StoredOidcIdentity,
+  StoredReceipt,
+  StoredUser
+} from './model.js'
 import type { VerifiedOidcIdentity } from './oidc.js'
 import type { CollaborationRepository, CollaborationTransaction } from './repository.js'
+import type { CollaborationServiceNotifier } from './runtime-notifier.js'
 
 const IDENTITY_SCHEMA_VERSION = 1 as const
 const FIVE_MINUTES_MS = 5 * 60_000
 const RECEIPT_TTL_MS = 30 * 86_400_000
+const INBOX_TTL_MS = 30 * 86_400_000
 
 type IdentityCommandResult<T extends Record<string, unknown>> = Readonly<{
   response: T
   receiptResponse?: Record<string, unknown>
   resourceKind?: string
   resourceId?: string
+  notifications?: AuthorityNotification[]
+  revokedAgentIds?: string[]
 }>
 
 export class IdentityService {
   private readonly now: () => Date
 
-  constructor(private readonly repository: CollaborationRepository, now?: () => Date) {
+  constructor(
+    private readonly repository: CollaborationRepository,
+    now?: () => Date,
+    private readonly notifier?: CollaborationServiceNotifier
+  ) {
     this.now = now ?? (() => new Date())
   }
 
@@ -190,7 +207,30 @@ export class IdentityService {
       }
       await tx.updateDevice(revoked, device.revision)
       await tx.revokeAgentCredentialsForDevice(device.deviceId, at)
-      return { response: { device: publicDevice(revoked) }, resourceKind: 'device', resourceId: device.deviceId }
+      const notifications: AuthorityNotification[] = []
+      const revokedAgentIds: string[] = []
+      for (const agent of await tx.listAgentsForDeviceForUpdate(device.deviceId)) {
+        if (agent.status === 'revoked') continue
+        const authority = await revokeAgentAuthorityInTransaction({
+          tx,
+          agent,
+          reason: 'device_revoked',
+          at,
+          revokeCredentials: false,
+          appendInbox: (recipient, messageType, payload, createdAt) => (
+            this.appendInbox(tx, recipient, messageType, payload, createdAt)
+          )
+        })
+        notifications.push(...authority.notifications)
+        revokedAgentIds.push(authority.agent.agentId)
+      }
+      return {
+        response: { device: publicDevice(revoked) },
+        resourceKind: 'device',
+        resourceId: device.deviceId,
+        notifications,
+        revokedAgentIds
+      }
     }, () => this.requireRecentAuthentication(actor))
     return deviceResponseSchema.parse(response)
   }
@@ -221,8 +261,10 @@ export class IdentityService {
     const actorKey = actor.actorKey
     const requestDigest = stableDigest(request)
     const at = this.timestamp()
+    let notifications: AuthorityNotification[] = []
+    let revokedAgentIds: string[] = []
     try {
-      return await this.repository.transaction(async (tx) => {
+      const response = await this.repository.transaction(async (tx) => {
         await tx.lockIdempotency(actorKey, idempotencyKey)
         const existing = await tx.getReceipt(actorKey, idempotencyKey)
         if (existing) {
@@ -233,6 +275,8 @@ export class IdentityService {
         }
         beforeFirstExecution?.()
         const result = await work(tx, at)
+        notifications = result.notifications ?? []
+        revokedAgentIds = result.revokedAgentIds ?? []
         await tx.insertAudit(acceptedAudit(actor, operation, result, idempotencyKey, at))
         const receipt: StoredReceipt = {
           receiptId: `rcp_${stableDigest({ actorKey, idempotencyKey }).slice(0, 24)}`,
@@ -244,6 +288,15 @@ export class IdentityService {
         await tx.insertReceipt(receipt)
         return result.response
       })
+      await Promise.allSettled([
+        ...notifications.map((notification) => Promise.resolve().then(() => (
+          this.notifier?.notifyInboxAvailable(notification.recipient, notification.sequence)
+        ))),
+        ...revokedAgentIds.map((agentId) => Promise.resolve().then(() => (
+          this.notifier?.disconnectAgentAuthority?.(agentId)
+        )))
+      ])
+      return response
     } catch (error) {
       const serviceError = error instanceof CollaborationServiceError ? error : undefined
       const recorded = await this.repository.transaction((tx) => tx.insertAudit(
@@ -252,6 +305,23 @@ export class IdentityService {
       if (serviceError && recorded) serviceError.auditRecorded = true
       throw error
     }
+  }
+
+  private appendInbox(
+    tx: CollaborationTransaction,
+    recipient: InboxRecipient,
+    messageType: string,
+    payload: Record<string, unknown>,
+    at: string
+  ): Promise<StoredInboxMessage> {
+    return tx.appendInbox({
+      recipient,
+      messageId: newId('ibx'),
+      messageType,
+      payload,
+      createdAt: at,
+      expiresAt: new Date(new Date(at).getTime() + INBOX_TTL_MS).toISOString()
+    })
   }
 
   private timestamp(): string {

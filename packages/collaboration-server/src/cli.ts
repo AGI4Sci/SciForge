@@ -47,6 +47,12 @@ const runtime = createCollaborationServerRuntime({
   port: integerEnvironment('SCIFORGE_COLLABORATION_LISTEN_PORT', 8787, 1, 65_535),
   basePath: process.env.SCIFORGE_COLLABORATION_BASE_PATH,
   allowedOrigins: optionalCsvEnvironment('SCIFORGE_COLLABORATION_ALLOWED_ORIGINS'),
+  taskOfferExpiryIntervalMs: integerEnvironment(
+    'SCIFORGE_COLLABORATION_TASK_OFFER_EXPIRY_INTERVAL_MS',
+    1_000,
+    250,
+    300_000
+  ),
   ...(oidcIssuer ? { oidc: {
     issuer: oidcIssuer,
     audience: process.env.SCIFORGE_COLLABORATION_OIDC_AUDIENCE?.trim() || 'sciforge-cloud-api',

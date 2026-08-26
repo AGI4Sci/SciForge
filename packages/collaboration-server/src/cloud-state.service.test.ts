@@ -13,6 +13,7 @@ import {
 import { FakeCollaborationRepository } from '../../../test-fixtures/collaboration/fake-adapters.mjs'
 import type { AgentActor, HumanEndpointActor, UserActor } from './actor.js'
 import { stableDigest } from './crypto.js'
+import { IdentityService } from './identity-service.js'
 import { CollaborationService } from './service.js'
 import {
   createAgentCredentialBootstrap,
@@ -535,6 +536,7 @@ async function activeTextOfferFixture(suffix: string) {
     offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
   })
   return {
+    repository,
     service,
     owner,
     firstWorker,
@@ -2716,8 +2718,9 @@ describe('vNext Cloud application service', () => {
       executionId === rejected.execution.executionId
     ))!
     expect(oldExecution).toMatchObject({
-      state: 'superseded',
-      fence: { status: 'fenced', reason: 'reassigned' }
+      state: 'rejected',
+      revision: rejected.execution.revision,
+      fence: { status: 'fenced', reason: 'offer_rejected' }
     })
     await expect(fixture.service.startTaskExecution(fixture.firstWorkerAgent, {
       protocolVersion: '1.0',
@@ -2730,6 +2733,396 @@ describe('vNext Cloud application service', () => {
       expectedExecutionRevision: oldExecution.revision,
       startedAt: at.toISOString()
     })).rejects.toMatchObject({ code: 'revision_conflict' })
+  })
+
+  it('rejects Coordinator reassignment until the current execution is a retryable immutable terminal fact', async () => {
+    const fixture = await activeTextOfferFixture('reassign-terminal-only')
+    const command = async (label: string) => {
+      const project = (await fixture.repository.getProject(fixture.activeProject.projectId))!
+      const task = (await fixture.repository.getTask(fixture.offered.task.taskId))!
+      const execution = (await fixture.repository.getTaskExecution(fixture.offered.execution.executionId))!
+      return {
+        protocolVersion: '1.0' as const,
+        type: 'task.offer.reassign' as const,
+        requestId: `req_reassign_terminal_${label}`,
+        idempotencyKey: `idem_reassign_terminal_${label}`,
+        taskId: task.taskId,
+        previousExecutionId: execution.executionId,
+        expectedProjectRevision: project.revision,
+        expectedTaskRevision: task.revision,
+        expectedExecutionRevision: execution.revision,
+        expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+        expectedExecutionAuthorityEpoch: project.executionAuthorityEpoch,
+        assigneeAgentId: fixture.nextCoordinatorAgent.agentId,
+        expectedAvailabilityRevision: fixture.nextAvailability.revision,
+        offerExpiresAt: new Date(at.getTime() + 60_000).toISOString(),
+        nextFileIntent: null
+      }
+    }
+
+    await expect(fixture.service.reassignTaskOffer(
+      fixture.coordinator,
+      await command('offered')
+    )).rejects.toMatchObject({ code: 'invalid_state_transition' })
+
+    const accepted = await fixture.service.acceptTaskOffer(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.offer.accept',
+      requestId: 'req_reassign_terminal_accept',
+      idempotencyKey: 'idem_reassign_terminal_accept',
+      taskOfferId: fixture.offered.offer.taskOfferId,
+      taskId: fixture.offered.task.taskId,
+      executionId: fixture.offered.execution.executionId,
+      expectedTaskRevision: fixture.offered.task.revision,
+      expectedExecutionRevision: fixture.offered.execution.revision,
+      expectedOfferRevision: fixture.offered.offer.revision
+    })
+    await expect(fixture.service.reassignTaskOffer(
+      fixture.coordinator,
+      await command('accepted')
+    )).rejects.toMatchObject({ code: 'invalid_state_transition' })
+
+    await fixture.service.startTaskExecution(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.execution.start',
+      requestId: 'req_reassign_terminal_start',
+      idempotencyKey: 'idem_reassign_terminal_start',
+      taskId: accepted.task.taskId,
+      executionId: accepted.execution.executionId,
+      expectedTaskRevision: accepted.task.revision,
+      expectedExecutionRevision: accepted.execution.revision,
+      startedAt: at.toISOString()
+    })
+    await expect(fixture.service.reassignTaskOffer(
+      fixture.coordinator,
+      await command('running')
+    )).rejects.toMatchObject({ code: 'invalid_state_transition' })
+  })
+
+  it('durably times out an expired offer once and reassigns without rewriting the old execution fact', async () => {
+    const fixture = await activeTextOfferFixture('offer-timeout')
+    expect(await fixture.service.expireTaskOffers()).toBe(0)
+
+    const recoveredService = new CollaborationService({
+      repository: fixture.repository,
+      now: () => new Date(at.getTime() + 60_001)
+    })
+    expect(await recoveredService.expireTaskOffers()).toBe(1)
+    expect(await recoveredService.expireTaskOffers()).toBe(0)
+
+    const timedOutTask = (await fixture.repository.getTask(fixture.offered.task.taskId))!
+    const timedOutExecution = (
+      await fixture.repository.getTaskExecution(fixture.offered.execution.executionId)
+    )!
+    const timedOutOffer = (
+      await fixture.repository.getTaskOffer(fixture.offered.offer.taskOfferId)
+    )!
+    expect(timedOutTask).toMatchObject({
+      status: 'revision_requested',
+      currentExecutionId: timedOutExecution.executionId,
+      currentExecutionState: 'timed_out'
+    })
+    expect(timedOutExecution).toMatchObject({
+      state: 'timed_out',
+      fence: { status: 'fenced', reason: 'offer_timed_out' }
+    })
+    expect(timedOutOffer).toMatchObject({ state: 'timed_out' })
+    expect(timedOutOffer.respondedAt).toBe('2026-08-24T08:01:00.001Z')
+
+    const project = (await fixture.repository.getProject(fixture.activeProject.projectId))!
+    const reassigned = await recoveredService.reassignTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.reassign',
+      requestId: 'req_offer_timeout_reassign',
+      idempotencyKey: 'idem_offer_timeout_reassign',
+      taskId: timedOutTask.taskId,
+      previousExecutionId: timedOutExecution.executionId,
+      expectedProjectRevision: project.revision,
+      expectedTaskRevision: timedOutTask.revision,
+      expectedExecutionRevision: timedOutExecution.revision,
+      expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: project.executionAuthorityEpoch,
+      assigneeAgentId: fixture.nextCoordinatorAgent.agentId,
+      expectedAvailabilityRevision: fixture.nextAvailability.revision,
+      offerExpiresAt: new Date(at.getTime() + 120_000).toISOString(),
+      nextFileIntent: null
+    })
+    expect(reassigned.execution.executionId).not.toBe(timedOutExecution.executionId)
+    expect(await fixture.repository.getTaskExecution(timedOutExecution.executionId)).toEqual(timedOutExecution)
+
+    await expect(recoveredService.acceptTaskOffer(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.offer.accept',
+      requestId: 'req_offer_timeout_late_accept',
+      idempotencyKey: 'idem_offer_timeout_late_accept',
+      taskOfferId: timedOutOffer.taskOfferId,
+      taskId: timedOutTask.taskId,
+      executionId: timedOutExecution.executionId,
+      expectedTaskRevision: reassigned.task.revision,
+      expectedExecutionRevision: timedOutExecution.revision,
+      expectedOfferRevision: timedOutOffer.revision
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+  })
+
+  it('atomically revokes Device Agent authority and fences the same running execution before reassignment', async () => {
+    const fixture = await activeTextOfferFixture('device-revoke-execution')
+    const accepted = await fixture.service.acceptTaskOffer(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.offer.accept',
+      requestId: 'req_device_revoke_accept',
+      idempotencyKey: 'idem_device_revoke_accept',
+      taskOfferId: fixture.offered.offer.taskOfferId,
+      taskId: fixture.offered.task.taskId,
+      executionId: fixture.offered.execution.executionId,
+      expectedTaskRevision: fixture.offered.task.revision,
+      expectedExecutionRevision: fixture.offered.execution.revision,
+      expectedOfferRevision: fixture.offered.offer.revision
+    })
+    const running = await fixture.service.startTaskExecution(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.execution.start',
+      requestId: 'req_device_revoke_start',
+      idempotencyKey: 'idem_device_revoke_start',
+      taskId: accepted.task.taskId,
+      executionId: accepted.execution.executionId,
+      expectedTaskRevision: accepted.task.revision,
+      expectedExecutionRevision: accepted.execution.revision,
+      startedAt: at.toISOString()
+    })
+
+    const disconnectedAgentIds: string[] = []
+    const notifiedRecipients: string[] = []
+    const identities = new IdentityService(fixture.repository, now, {
+      notifyInboxAvailable: (recipient) => {
+        notifiedRecipients.push(`${recipient.kind}:${recipient.id}`)
+        throw new Error('WSS hint transport is unavailable after the durable commit.')
+      },
+      disconnectAgentAuthority: (agentId) => { disconnectedAgentIds.push(agentId) }
+    })
+    await identities.revokeDevice(
+      fixture.firstWorker.user,
+      fixture.firstWorker.deviceId,
+      'idem_device_revoke_execution'
+    )
+    expect(await fixture.repository.getAgent(fixture.firstWorkerAgent.agentId)).toMatchObject({
+      status: 'revoked',
+      connectionStatus: 'offline'
+    })
+    expect(await fixture.repository.getWorkerAvailability(fixture.firstWorkerAgent.agentId)).toMatchObject({
+      agentActive: false,
+      deviceActive: false,
+      connectionStatus: 'offline',
+      runtimeReadiness: 'unavailable',
+      acceptsNewOffers: false
+    })
+    expect(disconnectedAgentIds).toEqual([fixture.firstWorkerAgent.agentId])
+    expect(notifiedRecipients).toEqual(expect.arrayContaining([
+      `user:${fixture.firstWorker.userId}`,
+      `agent:${fixture.coordinator.agentId}`
+    ]))
+    const revokedTask = (await fixture.repository.getTask(running.task.taskId))!
+    const revokedExecution = (
+      await fixture.repository.getTaskExecution(running.execution.executionId)
+    )!
+    expect(revokedTask).toMatchObject({
+      status: 'revision_requested',
+      currentExecutionState: 'revoked'
+    })
+    expect(revokedExecution).toMatchObject({
+      state: 'revoked',
+      fence: { status: 'fenced', reason: 'device_revoked' }
+    })
+
+    const preflight = await fixture.service.getTaskExecutionPreflight(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.execution.preflight.get',
+      requestId: 'req_device_revoke_preflight',
+      taskId: revokedTask.taskId,
+      executionId: revokedExecution.executionId,
+      expectedTaskRevision: revokedTask.revision,
+      expectedExecutionRevision: revokedExecution.revision
+    })
+    expect(preflight.decision).toMatchObject({ outcome: 'denied' })
+    expect(preflight.decision.reasons).toEqual(expect.arrayContaining([
+      'device_inactive',
+      'agent_inactive',
+      'execution_fenced'
+    ]))
+    await expect(fixture.service.failTaskExecution(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.execution.fail',
+      requestId: 'req_device_revoke_late_fail',
+      idempotencyKey: 'idem_device_revoke_late_fail',
+      taskId: revokedTask.taskId,
+      executionId: revokedExecution.executionId,
+      expectedTaskRevision: revokedTask.revision,
+      expectedExecutionRevision: revokedExecution.revision,
+      safeFailureCode: 'late_runtime_result',
+      safeMessage: 'A stale Runtime completion arrived after Device revocation.',
+      failedAt: at.toISOString()
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+    await expect(fixture.service.createHumanNeeded(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'human.needed.create',
+      requestId: 'req_device_revoke_late_human_needed',
+      idempotencyKey: 'idem_device_revoke_late_human_needed',
+      projectId: fixture.activeProject.projectId,
+      context: {
+        scope: 'worker_execution',
+        taskId: revokedTask.taskId,
+        executionId: revokedExecution.executionId,
+        expectedTaskRevision: revokedTask.revision,
+        expectedExecutionRevision: revokedExecution.revision
+      },
+      requiredAssurance: 'verified',
+      prompt: 'This stale execution must not ask the Owner for more work.',
+      confirmableAction: null,
+      expiresAt: new Date(at.getTime() + 60_000).toISOString()
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+    const lateResultFacts = {
+      taskId: revokedTask.taskId,
+      executionId: revokedExecution.executionId,
+      expectedTaskRevision: revokedTask.revision,
+      expectedExecutionRevision: revokedExecution.revision,
+      summary: 'This stale execution result must remain rejected.',
+      runtimeProvenance: {
+        runtimeId: 'runtime_device_revoke_late',
+        modelId: null,
+        startedAt: at.toISOString(),
+        completedAt: at.toISOString()
+      },
+      outputs: [],
+      recoveryJournalEntryIds: []
+    }
+    await expect(fixture.service.submitTaskResult(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.result.submit',
+      requestId: 'req_device_revoke_late_result',
+      idempotencyKey: 'idem_device_revoke_late_result',
+      ...lateResultFacts,
+      submissionDigest: stableDigest(lateResultFacts)
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+
+    const project = (await fixture.repository.getProject(fixture.activeProject.projectId))!
+    const successor = await fixture.service.reassignTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.reassign',
+      requestId: 'req_device_revoke_reassign',
+      idempotencyKey: 'idem_device_revoke_reassign',
+      taskId: revokedTask.taskId,
+      previousExecutionId: revokedExecution.executionId,
+      expectedProjectRevision: project.revision,
+      expectedTaskRevision: revokedTask.revision,
+      expectedExecutionRevision: revokedExecution.revision,
+      expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: project.executionAuthorityEpoch,
+      assigneeAgentId: fixture.nextCoordinatorAgent.agentId,
+      expectedAvailabilityRevision: fixture.nextAvailability.revision,
+      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString(),
+      nextFileIntent: null
+    })
+    expect(successor.execution.executionId).not.toBe(revokedExecution.executionId)
+    expect(await fixture.repository.getTaskExecution(revokedExecution.executionId)).toEqual(revokedExecution)
+  })
+
+  it('creates a fresh execution after canonical withdraw while preserving the withdrawn audit fact', async () => {
+    const fixture = await activeTextOfferFixture('offer-withdraw-reassign')
+    const project = (await fixture.repository.getProject(fixture.activeProject.projectId))!
+    const command = {
+      protocolVersion: '1.0' as const,
+      type: 'task.offer.withdraw' as const,
+      requestId: 'req_offer_withdraw_reassign',
+      idempotencyKey: 'idem_offer_withdraw_reassign',
+      taskOfferId: fixture.offered.offer.taskOfferId,
+      taskId: fixture.offered.task.taskId,
+      executionId: fixture.offered.execution.executionId,
+      expectedTaskRevision: fixture.offered.task.revision,
+      expectedExecutionRevision: fixture.offered.execution.revision,
+      expectedOfferRevision: fixture.offered.offer.revision,
+      expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+      reason: 'The Coordinator selected another eligible Agent.'
+    }
+    const withdrawn = await fixture.service.withdrawTaskOffer(fixture.coordinator, command)
+    await expect(fixture.service.withdrawTaskOffer(fixture.coordinator, command)).resolves.toEqual(withdrawn)
+    expect(withdrawn.execution).toMatchObject({
+      state: 'cancelled',
+      fence: { status: 'fenced', reason: 'offer_withdrawn' }
+    })
+
+    const currentProject = (await fixture.repository.getProject(project.projectId))!
+    const successor = await fixture.service.reassignTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.reassign',
+      requestId: 'req_offer_withdraw_successor',
+      idempotencyKey: 'idem_offer_withdraw_successor',
+      taskId: withdrawn.task.taskId,
+      previousExecutionId: withdrawn.execution.executionId,
+      expectedProjectRevision: currentProject.revision,
+      expectedTaskRevision: withdrawn.task.revision,
+      expectedExecutionRevision: withdrawn.execution.revision,
+      expectedCoordinatorAuthorityEpoch: currentProject.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: currentProject.executionAuthorityEpoch,
+      assigneeAgentId: fixture.nextCoordinatorAgent.agentId,
+      expectedAvailabilityRevision: fixture.nextAvailability.revision,
+      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString(),
+      nextFileIntent: null
+    })
+    expect(successor.execution.executionId).not.toBe(withdrawn.execution.executionId)
+    expect(await fixture.repository.getTaskExecution(withdrawn.execution.executionId)).toEqual(withdrawn.execution)
+    await expect(fixture.service.rejectTaskOffer(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.offer.reject',
+      requestId: 'req_offer_withdraw_late_reject',
+      idempotencyKey: 'idem_offer_withdraw_late_reject',
+      taskOfferId: withdrawn.offer.taskOfferId,
+      taskId: withdrawn.task.taskId,
+      executionId: withdrawn.execution.executionId,
+      expectedTaskRevision: successor.task.revision,
+      expectedExecutionRevision: withdrawn.execution.revision,
+      expectedOfferRevision: withdrawn.offer.revision,
+      reason: 'human_rejected',
+      safeReasonDetail: null
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+  })
+
+  it('creates a fresh execution after Agent authority revoke and leaves the revoked execution immutable', async () => {
+    const fixture = await activeTextOfferFixture('agent-revoke-reassign')
+    const currentAgent = (await fixture.repository.getAgent(fixture.firstWorkerAgent.agentId))!
+    const revokedAgent = await fixture.service.revokeAgent(fixture.firstWorker.user, {
+      agentId: currentAgent.agentId,
+      expectedRevision: currentAgent.revision,
+      idempotencyKey: 'idem_agent_revoke_reassign'
+    })
+    expect(revokedAgent.status).toBe('revoked')
+    const revokedTask = (await fixture.repository.getTask(fixture.offered.task.taskId))!
+    const revokedExecution = (
+      await fixture.repository.getTaskExecution(fixture.offered.execution.executionId)
+    )!
+    expect(revokedExecution).toMatchObject({
+      state: 'revoked',
+      fence: { status: 'fenced', reason: 'agent_revoked' }
+    })
+
+    const project = (await fixture.repository.getProject(fixture.activeProject.projectId))!
+    const successor = await fixture.service.reassignTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.reassign',
+      requestId: 'req_agent_revoke_successor',
+      idempotencyKey: 'idem_agent_revoke_successor',
+      taskId: revokedTask.taskId,
+      previousExecutionId: revokedExecution.executionId,
+      expectedProjectRevision: project.revision,
+      expectedTaskRevision: revokedTask.revision,
+      expectedExecutionRevision: revokedExecution.revision,
+      expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: project.executionAuthorityEpoch,
+      assigneeAgentId: fixture.nextCoordinatorAgent.agentId,
+      expectedAvailabilityRevision: fixture.nextAvailability.revision,
+      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString(),
+      nextFileIntent: null
+    })
+    expect(successor.execution.executionId).not.toBe(revokedExecution.executionId)
+    expect(await fixture.repository.getTaskExecution(revokedExecution.executionId)).toEqual(revokedExecution)
   })
 
   it('request_revision creates a fresh offered execution while preserving the reviewed result provenance', async () => {

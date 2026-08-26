@@ -227,6 +227,14 @@ describe('Coordinator authority epoch', () => {
     expect(restRequestSchema.safeParse(withdraw).success).toBe(true)
     const { expectedCoordinatorAuthorityEpoch: _omitted, ...withoutEpoch } = withdraw
     expect(restRequestSchema.safeParse(withoutEpoch).success).toBe(false)
+    expect(restRequestSchema.safeParse({
+      ...withdraw,
+      type: 'task.offer.revoke'
+    }).success).toBe(false)
+    expect(restRequestSchema.safeParse({
+      ...withdraw,
+      type: 'task.offer.timeout'
+    }).success).toBe(false)
 
     expect(restRequestSchema.safeParse({
       protocolVersion: '1.0',

@@ -1482,6 +1482,20 @@ export class FakeCollaborationRepository {
     return this.getTaskOffer(taskOfferId)
   }
 
+  async listExpiredTaskOffers(now, limit) {
+    return copy([...this.state.taskOffers.values()]
+      .filter((offer) => {
+        const execution = this.state.taskExecutions.get(offer.executionId)
+        const task = this.state.tasks.get(offer.taskId)
+        return offer.state === 'pending' && offer.expiresAt <= now &&
+          execution?.state === 'offered' && execution.fence.status === 'open' &&
+          task?.currentExecutionId === execution.executionId
+      })
+      .sort((left, right) => left.expiresAt.localeCompare(right.expiresAt) ||
+        left.taskOfferId.localeCompare(right.taskOfferId))
+      .slice(0, limit))
+  }
+
   async listTaskOffers(executionId) {
     return copy([...this.state.taskOffers.values()].filter((offer) => offer.executionId === executionId))
   }

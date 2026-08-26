@@ -172,6 +172,8 @@ export interface CollaborationReadRepository {
   listCurrentTaskExecutionsForDevice(deviceId: string): Promise<StoredTaskExecution[]>
   listCurrentTaskExecutionsForUser(userId: string): Promise<StoredTaskExecution[]>
   getTaskOffer(taskOfferId: string): Promise<StoredTaskOffer | null>
+  /** Stable Cloud-owned expiry scan. Desktop clients never report offer timeout. */
+  listExpiredTaskOffers(now: string, limit: number): Promise<StoredTaskOffer[]>
   /** Independent stable TaskOffer ID seek page including terminal offers. */
   listTaskOffersByProject(
     projectId: string,

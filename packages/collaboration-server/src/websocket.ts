@@ -7,7 +7,7 @@ import { WebSocket, WebSocketServer } from 'ws'
 import { actorInboxRecipient } from './actor.js'
 import type { InboxRecipient } from './model.js'
 import type { CollaborationRequestActorResolver } from './network-boundary.js'
-import type { InboxAvailabilityNotifier } from './service.js'
+import type { CollaborationRuntimeNotifier } from './runtime-notifier.js'
 
 export type CollaborationWebSocketOptions = {
   authentication: CollaborationRequestActorResolver
@@ -16,7 +16,7 @@ export type CollaborationWebSocketOptions = {
   now?: () => Date
 }
 
-export class CollaborationWebSocketHub implements InboxAvailabilityNotifier {
+export class CollaborationWebSocketHub implements CollaborationRuntimeNotifier {
   private readonly clients = new Map<string, Set<WebSocket>>()
   private server?: WebSocketServer
 
@@ -77,6 +77,14 @@ export class CollaborationWebSocketHub implements InboxAvailabilityNotifier {
     for (const client of this.clients.get(recipientKey(recipient)) ?? []) {
       if (client.readyState === WebSocket.OPEN) client.send(payload)
     }
+  }
+
+  disconnectAgentAuthority(agentId: string): void {
+    const key = recipientKey({ kind: 'agent', id: agentId })
+    const clients = this.clients.get(key)
+    if (!clients) return
+    this.clients.delete(key)
+    for (const client of clients) client.close(4003, 'Agent authority revoked')
   }
 
   async close(): Promise<void> {

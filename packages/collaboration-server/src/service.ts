@@ -22,6 +22,7 @@ import {
 } from '@sciforge/collaboration-contracts'
 
 import { actorInboxRecipient, type AgentActor, type AuthContext, type HumanEndpointActor, type UserActor } from './actor.js'
+import { fenceTaskExecution, revokeAgentAuthorityInTransaction } from './authority-revocation.js'
 import { authorize } from './auth.js'
 import { sealAgentCredential } from './agent-credential-envelope.js'
 import {
@@ -89,14 +90,11 @@ import type {
   StoredProjectFinalSummary
 } from './model.js'
 import type { CollaborationReadRepository, CollaborationRepository, CollaborationTransaction } from './repository.js'
-
-export type InboxAvailabilityNotifier = {
-  notifyInboxAvailable(recipient: InboxRecipient, latestSequence: number): void | Promise<void>
-}
+import type { CollaborationServiceNotifier } from './runtime-notifier.js'
 
 export type CollaborationServiceOptions = {
   repository: CollaborationRepository
-  notifier?: InboxAvailabilityNotifier
+  notifier?: CollaborationServiceNotifier
   now?: () => Date
   endpointChallengeTtlMs?: number
   inboxRetentionMs?: number
@@ -119,7 +117,7 @@ type CoordinationPageRequest = CloudCommand<'project.coordination.read'>['collec
 
 export class CollaborationService {
   private readonly repository: CollaborationRepository
-  private readonly notifier?: InboxAvailabilityNotifier
+  private readonly notifier?: CollaborationServiceNotifier
   private readonly now: () => Date
   private readonly endpointChallengeTtlMs: number
   private readonly inboxRetentionMs: number
@@ -1009,77 +1007,30 @@ export class CollaborationService {
     expectedRevision: number
     idempotencyKey: string
   }): Promise<StoredAgent> {
-    return this.commit(actor, 'agent.revoke', input.idempotencyKey, input, async (tx, at) => {
+    const updated = await this.commit(actor, 'agent.revoke', input.idempotencyKey, input, async (tx, at) => {
       const agent = required(await tx.getAgent(input.agentId), 'Agent')
       if (agent.ownerUserId !== actor.userId) fail('permission_denied', 'The Agent belongs to another user.')
       expectRevision(agent.revision, input.expectedRevision)
-      const updated: StoredAgent = { ...agent, status: 'revoked', connectionStatus: 'offline', revokedAt: at,
-        revision: agent.revision + 1, updatedAt: at }
-      await tx.updateAgent(updated, agent.revision)
-      await tx.revokeAgentCredentials(agent.agentId, at)
-      const availability = await tx.getWorkerAvailabilityForUpdate(agent.agentId)
-      if (availability) {
-        await tx.upsertWorkerAvailability({ ...availability, agentActive: false,
-          connectionStatus: 'offline', runtimeReadiness: 'unavailable', acceptsNewOffers: false,
-          revision: availability.revision + 1, updatedAt: at }, availability.revision)
+      const revoked = await revokeAgentAuthorityInTransaction({
+        tx,
+        agent,
+        reason: 'agent_revoked',
+        at,
+        appendInbox: (recipient, messageType, payload, createdAt) => (
+          this.appendInbox(tx, recipient, messageType, payload, createdAt)
+        )
+      })
+      return {
+        response: entityResponse('agent.revoked', revoked.agent),
+        resourceKind: 'agent',
+        resourceId: agent.agentId,
+        notifications: revoked.notifications
       }
-      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
-      const ownerMessage = await this.appendInbox(tx, { kind: 'user', id: actor.userId }, 'collaboration.important_failure',
-        { protocolVersion: '1.0', type: 'collaboration.important_failure', safeMessage: 'A collaboration Agent was revoked and its pending work requires review.' }, at)
-      notifications.push({ recipient: ownerMessage.recipient, sequence: ownerMessage.sequence })
-      for (const execution of await tx.listCurrentTaskExecutionsForAgentForUpdate(agent.agentId)) {
-        const task = required(await tx.getTaskForUpdate(execution.taskId), 'Assigned Task')
-        const project = required(await tx.getProjectForUpdate(task.projectId), 'Project')
-        if (task.currentExecutionId !== execution.executionId || execution.fence.status === 'fenced') continue
-        const fenced = fenceTaskExecution(execution, 'revoked', 'agent_revoked', at)
-        const updatedTask: StoredTask = { ...task, status: 'revision_requested',
-          currentExecutionState: 'revoked', revision: task.revision + 1, updatedAt: at }
-        await tx.updateTaskExecution(fenced, execution.revision)
-        await tx.updateTask(updatedTask, task.revision)
-        if (execution.fileIntent !== null) await tx.invalidateCloudResourceRefs(task.taskId, execution.executionId, at)
-        const message = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId }, 'task.updated',
-          { protocolVersion: '1.0', type: 'task.updated', projectId: project.projectId, taskId: task.taskId,
-            executionId: execution.executionId, revision: updatedTask.revision,
-            status: 'revision_requested', safeFailureCode: 'assignee_revoked' }, at)
-        notifications.push({ recipient: message.recipient, sequence: message.sequence })
-      }
-      for (const listedProject of await tx.listActiveProjectsForCoordinator(agent.agentId)) {
-        const project = required(await tx.getProjectForUpdate(listedProject.projectId), 'Coordinated Project')
-        if (project.status === 'completed' || project.status === 'cancelled') continue
-        for (const execution of await tx.listCurrentTaskExecutionsForProjectForUpdate(project.projectId)) {
-          if (execution.fence.status === 'fenced') continue
-          const task = required(await tx.getTaskForUpdate(execution.taskId), 'Project Task')
-          if (task.currentExecutionId !== execution.executionId) continue
-          await tx.updateTaskExecution(fenceTaskExecution(execution, 'cancelled', 'project_paused', at), execution.revision)
-          await tx.updateTask({ ...task, status: 'revision_requested', currentExecutionState: 'cancelled',
-            revision: task.revision + 1, updatedAt: at }, task.revision)
-        }
-        for (const member of await tx.listProjectMembers(project.projectId)) {
-          for (const scope of ['text_tasks', 'file_tasks'] as const) {
-            const authority = await tx.getTaskAuthorityForUpdate(project.projectId, member.userId, scope)
-            if (!authority) continue
-            await tx.upsertTaskAuthority({ ...authority, state: 'suspended', reason: 'project_paused',
-              authorityEpoch: authority.authorityEpoch + 1, effectiveAt: at,
-              revision: authority.revision + 1, updatedAt: at }, authority.revision)
-          }
-        }
-        const paused = { ...project, status: 'paused' as const,
-          executionAuthorityEpoch: project.executionAuthorityEpoch + 1,
-          revision: project.revision + 1, updatedAt: at }
-        await tx.updateProject(paused, project.revision)
-        const message = await this.appendInbox(tx, { kind: 'user', id: project.ownerUserId },
-          'collaboration.important_failure', { protocolVersion: '1.0', type: 'collaboration.important_failure',
-            projectId: project.projectId, safeMessage: 'The Coordinator Agent was revoked; the Project was paused and requires explicit transfer.' }, at)
-        notifications.push({ recipient: message.recipient, sequence: message.sequence })
-      }
-      const participant = await tx.getParticipant(actor.userId)
-      if (participant?.primaryAgentId === agent.agentId) {
-        const changed = completeParticipant({ ...participant, primaryAgentId: undefined,
-          revision: participant.revision + 1, updatedAt: at })
-        await tx.upsertParticipant(changed, participant.revision)
-      }
-      return { response: entityResponse('agent.revoked', updated), resourceKind: 'agent', resourceId: agent.agentId, notifications }
     }).then(responseEntity<StoredAgent>)
+    await Promise.resolve()
+      .then(() => this.notifier?.disconnectAgentAuthority?.(updated.agentId))
+      .catch(() => undefined)
+    return updated
   }
 
   async selectPrimary(actor: UserActor, input: {
@@ -4333,6 +4284,93 @@ export class CollaborationService {
     }).then(taskOfferBundleResponse)
   }
 
+  /**
+   * The sole Task-offer timeout path. The Cloud compares its own current time
+   * with the durable Offer expiresAt fact and records the transition through
+   * the same Task/Execution/Offer + Inbox + receipt transaction as commands.
+   */
+  async expireTaskOffers(limit = 100): Promise<number> {
+    const at = this.timestamp()
+    const candidates = await this.repository.listExpiredTaskOffers(at, bounded(limit, 1, 500))
+    const actor: AuthContext = { kind: 'system', actorKey: 'collaboration:task-offer-expiry' }
+    let expiredCount = 0
+    for (const candidate of candidates) {
+      const idempotencyKey = `timeout-${stableDigest({
+        taskOfferId: candidate.taskOfferId,
+        expectedOfferRevision: candidate.revision,
+        expiresAt: candidate.expiresAt
+      })}`
+      const response = await this.commit(actor, 'task.offer.timeout', idempotencyKey, {
+        taskOfferId: candidate.taskOfferId,
+        expectedOfferRevision: candidate.revision,
+        expiresAt: candidate.expiresAt
+      }, async (tx, committedAt) => {
+        const offer = required(await tx.getTaskOfferForUpdate(candidate.taskOfferId), 'Task offer')
+        if (offer.revision !== candidate.revision || offer.state !== 'pending' || offer.expiresAt > committedAt) {
+          return { response: { transitioned: false } }
+        }
+        const task = required(await tx.getTaskForUpdate(offer.taskId), 'Task')
+        const project = required(await tx.getProjectForUpdate(offer.projectId), 'Project')
+        const execution = required(await tx.getTaskExecutionForUpdate(offer.executionId), 'Task execution')
+        if (
+          task.currentExecutionId !== execution.executionId ||
+          execution.taskId !== task.taskId ||
+          execution.projectId !== project.projectId ||
+          execution.state !== 'offered' ||
+          execution.fence.status !== 'open'
+        ) {
+          return { response: { transitioned: false } }
+        }
+        const updatedOffer: StoredTaskOffer = {
+          ...offer,
+          state: 'timed_out',
+          respondedAt: committedAt,
+          revision: offer.revision + 1,
+          updatedAt: committedAt
+        }
+        const updatedExecution = fenceTaskExecution(execution, 'timed_out', 'offer_timed_out', committedAt)
+        const updatedTask: StoredTask = {
+          ...task,
+          status: 'revision_requested',
+          currentExecutionState: 'timed_out',
+          revision: task.revision + 1,
+          updatedAt: committedAt
+        }
+        await tx.updateTaskOffer(updatedOffer, offer.revision)
+        await tx.updateTaskExecution(updatedExecution, execution.revision)
+        await tx.updateTask(updatedTask, task.revision)
+        if (execution.fileIntent !== null) {
+          await tx.invalidateCloudResourceRefs(task.taskId, execution.executionId, committedAt)
+        }
+        const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+        for (const recipient of [
+          { kind: 'agent' as const, id: project.coordinatorAgentId },
+          { kind: 'agent' as const, id: execution.assigneeAgentId }
+        ]) {
+          const message = await this.appendInbox(tx, recipient, 'task.updated', {
+            protocolVersion: '1.0',
+            type: 'task.updated',
+            projectId: project.projectId,
+            taskId: task.taskId,
+            executionId: execution.executionId,
+            revision: updatedTask.revision,
+            status: 'revision_requested',
+            safeFailureCode: 'offer_timed_out'
+          }, committedAt)
+          notifications.push({ recipient: message.recipient, sequence: message.sequence })
+        }
+        return {
+          response: { transitioned: true },
+          resourceKind: 'task_offer',
+          resourceId: offer.taskOfferId,
+          notifications
+        }
+      })
+      if (response.transitioned === true) expiredCount += 1
+    }
+    return expiredCount
+  }
+
   async rejectTaskOffer(
     actor: AgentActor,
     input: CloudCommand<'task.offer.reject'>
@@ -4416,6 +4454,15 @@ export class CollaborationService {
       if (task.currentExecutionId !== previous.executionId || previous.taskId !== task.taskId) {
         fail('revision_conflict', 'Reassignment must name the exact current Task execution.')
       }
+      if (
+        task.status !== 'revision_requested' ||
+        previous.fence.status !== 'fenced' ||
+        !(['rejected', 'failed', 'cancelled', 'timed_out', 'revoked'] as const).includes(
+          previous.state as 'rejected' | 'failed' | 'cancelled' | 'timed_out' | 'revoked'
+        )
+      ) {
+        fail('invalid_state_transition', 'Reassignment requires a retryable terminal Task execution fact.')
+      }
       if (task.executionCount >= task.maxRetries + 1) fail('budget_exhausted', 'The Task retry budget is exhausted.')
       if (Date.parse(input.offerExpiresAt) <= Date.parse(at)) fail('validation_failed', 'The next Task offer expiry must be in the future.')
       const nextFileIntent = await requireNewlyNamedSuccessorFileIntent(
@@ -4433,12 +4480,6 @@ export class CollaborationService {
       const artifacts = deriveAssignmentArtifacts({ project, taskId: task.taskId, executionId,
         assignmentTaskRevision, fileIntent: nextFileIntent, binding: eligibility.binding, at })
       if (previous.fileIntent !== null) await tx.invalidateCloudResourceRefs(task.taskId, previous.executionId, at)
-      const preserveRecoveryAbandon = previous.state === 'cancelled' &&
-        previous.fence.status === 'fenced' &&
-        previous.fence.reason === 'manual_recovery_abandoned'
-      const superseded = preserveRecoveryAbandon
-        ? previous
-        : fenceTaskExecution(previous, 'superseded', 'reassigned', at)
       const execution: StoredTaskExecution = {
         executionId, taskId: task.taskId, projectId: task.projectId, attempt: previous.attempt + 1,
         offeredByCoordinatorAgentId: actor.agentId,
@@ -4463,7 +4504,6 @@ export class CollaborationService {
         status: 'offered', fileIntent: nextFileIntent,
         executionCount: task.executionCount + 1, revision: assignmentTaskRevision,
         completedAt: null, updatedAt: at }
-      if (!preserveRecoveryAbandon) await tx.updateTaskExecution(superseded, previous.revision)
       await tx.insertTaskExecution(execution)
       await tx.insertTaskOffer(offer)
       if (artifacts.resources.length > 0) await tx.insertCloudResourceRefs(artifacts.resources)
@@ -5447,9 +5487,9 @@ export class CollaborationService {
       if (serviceError && auditRecorded) serviceError.auditRecorded = true
       throw error
     }
-    for (const notification of notifications) {
-      await this.notifier?.notifyInboxAvailable(notification.recipient, notification.sequence)
-    }
+    await Promise.allSettled(notifications.map((notification) => Promise.resolve().then(() => (
+      this.notifier?.notifyInboxAvailable(notification.recipient, notification.sequence)
+    ))))
     return response
   }
 
@@ -6573,23 +6613,6 @@ async function requireCurrentExecutionAuthority(
     }
   }
   void at
-}
-
-function fenceTaskExecution(
-  execution: StoredTaskExecution,
-  state: StoredTaskExecution['state'],
-  reason: NonNullable<StoredTaskExecution['fence']['reason']>,
-  at: string
-): StoredTaskExecution {
-  return {
-    ...execution,
-    state,
-    stateRevision: execution.stateRevision + 1,
-    fence: { ...execution.fence, status: 'fenced', reason, fencedAt: at },
-    terminalAt: at,
-    revision: execution.revision + 1,
-    updatedAt: at
-  }
 }
 
 function taskOfferBundleResponse(response: Record<string, unknown>): Readonly<{

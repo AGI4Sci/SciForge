@@ -343,6 +343,9 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
   getTaskOffer(taskOfferId: string): Promise<StoredTaskOffer | null> {
     return this.read().getTaskOffer(taskOfferId)
   }
+  listExpiredTaskOffers(now: string, limit: number): Promise<StoredTaskOffer[]> {
+    return this.read().listExpiredTaskOffers(now, limit)
+  }
   listTaskOffersByProject(
     projectId: string,
     afterTaskOfferId: string | null,
@@ -1172,6 +1175,21 @@ class PostgresReadRepository implements CollaborationReadRepository {
       `SELECT * FROM sciforge_collaboration.task_offers WHERE task_offer_id=$1`, [taskOfferId]
     )
     return result.rows[0] ? mapTaskOffer(result.rows[0]) : null
+  }
+
+  async listExpiredTaskOffers(now: string, limit: number): Promise<StoredTaskOffer[]> {
+    const result = await this.sql.query(
+      `SELECT offer.* FROM sciforge_collaboration.task_offers AS offer
+       JOIN sciforge_collaboration.task_executions AS execution
+         ON execution.execution_id=offer.execution_id
+       JOIN sciforge_collaboration.tasks AS task
+         ON task.task_id=offer.task_id AND task.current_execution_id=execution.execution_id
+       WHERE offer.state='pending' AND offer.expires_at <= $1
+         AND execution.state='offered' AND execution.fence ->> 'status'='open'
+       ORDER BY offer.expires_at,offer.task_offer_id LIMIT $2`,
+      [now, limit]
+    )
+    return result.rows.map(mapTaskOffer)
   }
 
   async listTaskOffersByProject(

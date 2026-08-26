@@ -38,6 +38,7 @@ export type CollaborationServerRuntimeOptions = {
     service: CollaborationService
     providerIdentityResolver: ProviderRuntimeAuthentication
   }>) => Promise<CollaborationProviderRuntime>
+  taskOfferExpiryIntervalMs?: number
   now?: () => Date
 }
 
@@ -56,7 +57,7 @@ export function createCollaborationServerRuntime(options: CollaborationServerRun
   const repository = new PostgresCollaborationRepository(options.pool)
   const webSocketHub = new CollaborationWebSocketHub()
   const service = new CollaborationService({ repository, notifier: webSocketHub, now: options.now })
-  const identities = new IdentityService(repository, options.now)
+  const identities = new IdentityService(repository, options.now, webSocketHub)
   const oidc = options.oidc
     ? new StrictOidcUserResolver(new OidcAccessTokenVerifier({ ...options.oidc, now: options.now }), identities)
     : undefined
@@ -79,6 +80,21 @@ export function createCollaborationServerRuntime(options: CollaborationServerRun
   let started = false
   let stopped = false
   let starting: Promise<{ host: string; port: number }> | undefined
+  let taskOfferExpiryTimer: ReturnType<typeof setInterval> | undefined
+  let taskOfferExpiryRun: Promise<void> | undefined
+  const taskOfferExpiryIntervalMs = Math.max(
+    250,
+    Math.min(options.taskOfferExpiryIntervalMs ?? 1_000, 300_000)
+  )
+  const scheduleTaskOfferExpiry = (): void => {
+    if (stopped || taskOfferExpiryRun) return
+    taskOfferExpiryRun = service.expireTaskOffers()
+      .then(() => undefined)
+      .catch(() => {
+        process.stderr.write('[sciforge-collaboration] Task offer expiry reconciliation failed; the next bounded pass will retry.\n')
+      })
+      .finally(() => { taskOfferExpiryRun = undefined })
+  }
   return {
     service,
     identities,
@@ -94,10 +110,13 @@ export function createCollaborationServerRuntime(options: CollaborationServerRun
           })
           await providerRuntime.start()
         }
+        await service.expireTaskOffers()
         if (!started) {
           httpServer.listen(options.port, options.host)
           await once(httpServer, 'listening')
           started = true
+          taskOfferExpiryTimer = setInterval(scheduleTaskOfferExpiry, taskOfferExpiryIntervalMs)
+          taskOfferExpiryTimer.unref()
         }
         const address = httpServer.address()
         if (!address || typeof address === 'string') throw new Error('Collaboration server did not expose a TCP address.')
@@ -108,6 +127,8 @@ export function createCollaborationServerRuntime(options: CollaborationServerRun
     async stop() {
       if (stopped) return
       stopped = true
+      if (taskOfferExpiryTimer) clearInterval(taskOfferExpiryTimer)
+      await taskOfferExpiryRun
       if (started) {
         const closed = once(httpServer, 'close')
         httpServer.close()
