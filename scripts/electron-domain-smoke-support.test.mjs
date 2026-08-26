@@ -201,6 +201,29 @@ test('Identity smoke account creation receives a fresh bounded invocation identi
   assert.match(first, /^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$/u)
 })
 
+test('smoke CLI requires one strict Cloud/OIDC deployment pair', () => {
+  assert.deepEqual(parseSmokeCliOptions([
+    '--expected-cloud-origin', 'https://cloud-test.sciforge.cn',
+    '--expected-oidc-issuer', 'https://login-test.sciforge.cn/realms/SciForge'
+  ]).expectedDeployment, {
+    cloudOrigin: 'https://cloud-test.sciforge.cn',
+    oidcIssuer: 'https://login-test.sciforge.cn/realms/SciForge'
+  })
+  assert.throws(
+    () => parseSmokeCliOptions([
+      '--expected-cloud-origin', 'https://cloud-test.sciforge.cn'
+    ]),
+    /must be supplied together/u
+  )
+  assert.throws(
+    () => parseSmokeCliOptions([
+      '--expected-cloud-origin', 'https://cloud-test.sciforge.cn/path',
+      '--expected-oidc-issuer', 'https://login-test.sciforge.cn/realms/SciForge'
+    ]),
+    /HTTPS origin/u
+  )
+})
+
 test('smoke result requires the selected Identity and a composed Content Space Provider', () => {
   const valid = validSmokeResult()
   assert.doesNotThrow(() => validateSmokeResult(valid, { expectedRendererUrl: valid.url }))
@@ -226,7 +249,40 @@ test('smoke result requires the selected Identity and a composed Content Space P
     () => validateSmokeResult({ ...valid, projectCoordinatorConnectionState: 'ready' }, {
       expectedRendererUrl: valid.url
     }),
-    /Project Coordinator isolated profile/u
+    /Project Coordinator did not preserve/u
+  )
+})
+
+test('deployment-aware smoke rejects endpoint drift and OIDC configuration failure', () => {
+  const valid = {
+    ...validSmokeResult(),
+    projectCoordinatorConnectionState: 'identity_required',
+    deploymentEnvironment: {
+      cloudOrigin: 'https://cloud-test.sciforge.cn',
+      oidcIssuer: 'https://login-test.sciforge.cn/realms/SciForge'
+    }
+  }
+  const options = {
+    expectedDeployment: valid.deploymentEnvironment,
+    expectedRendererUrl: valid.url
+  }
+  assert.doesNotThrow(() => validateSmokeResult(valid, options))
+  assert.throws(
+    () => validateSmokeResult({
+      ...valid,
+      deploymentEnvironment: {
+        ...valid.deploymentEnvironment,
+        cloudOrigin: 'https://wrong.example.test'
+      }
+    }, options),
+    /frozen Cloud\/OIDC endpoints/u
+  )
+  assert.throws(
+    () => validateSmokeResult({
+      ...valid,
+      cloudIdentityErrorCode: 'OIDC_CONFIGURATION_ERROR'
+    }, options),
+    /not ready/u
   )
 })
 
@@ -248,6 +304,10 @@ function validSmokeResult() {
     visualReviewActionId: 'visual-review.open',
     identityActionId: 'identity.local.create-account',
     identityAccountUsername: 'electron_smoke',
+    cloudIdentityActionId: 'identity.cloud.inspect',
+    cloudIdentityState: 'signed-out',
+    cloudDeviceState: 'signed-out',
+    cloudIdentityErrorCode: null,
     contentSpaceProviderActionId: 'content-space.list-provider-instances',
     contentSpaceProviderInstanceRef: 'installed-provider',
     contentSpaceProviderInstanceCount: 1,

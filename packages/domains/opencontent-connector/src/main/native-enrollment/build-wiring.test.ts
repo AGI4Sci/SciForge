@@ -26,21 +26,23 @@ const stagedBinary = join(
 )
 
 describe('OpenContent native fresh-build wiring', () => {
-  it('keeps compile before electron-vite and stage after it with explicit non-macOS skip', async () => {
+  it('uses the shared domain-addon build path before and after electron-vite', async () => {
     const packageJson = JSON.parse(
       await readFile(join(workspaceRoot, 'package.json'), 'utf8')
     ) as Readonly<{ scripts?: Readonly<Record<string, string>> }>
     const scripts = packageJson.scripts ?? {}
 
-    expect(scripts['build:opencontent-native']).toBe(
-      'node ./packages/domains/opencontent-connector/src/main/native-enrollment/native/build-addon.mjs --skip-unsupported'
+    expect(scripts['build:domain-native-addons']).toContain(
+      'opencontent-connector/src/main/native-enrollment/native/build-addon.mjs --skip-unsupported'
     )
-    expect(scripts['stage:opencontent-native']).toBe(
-      'node ./packages/domains/opencontent-connector/src/main/native-enrollment/native/stage-addon.mjs --skip-unsupported'
+    expect(scripts['stage:domain-native-addons']).toContain(
+      'opencontent-connector/src/main/native-enrollment/native/stage-addon.mjs --skip-unsupported'
     )
     expect(scripts.build).toBe(
-      'npm run build:agent-support && npm run build:opencontent-native && electron-vite build && npm run stage:opencontent-native'
+      'npm run build:agent-support && npm run build:domain-native-addons && electron-vite build && npm run stage:domain-native-addons'
     )
+    expect(scripts['build:opencontent-native']).toBeUndefined()
+    expect(scripts['stage:opencontent-native']).toBeUndefined()
 
     const [buildSource, stageSource] = await Promise.all([
       readFile(buildScript, 'utf8'),

@@ -99,6 +99,30 @@ describe('Identity native private-vault fresh build', () => {
     expect(builder.files).toContain('out/**/*')
     expect(builder.asarUnpack).toContain('**/out/main/**/*')
   })
+
+  it('uses one root build path for the Identity and OpenContent native domain addons', async () => {
+    const rootPackage = JSON.parse(await readFile(
+      join(workspaceRoot, 'package.json'),
+      'utf8'
+    )) as Readonly<{ scripts: Readonly<Record<string, string>> }>
+
+    expect(rootPackage.scripts.build).toContain('npm run build:domain-native-addons')
+    expect(rootPackage.scripts.build).toContain('npm run stage:domain-native-addons')
+    expect(rootPackage.scripts['build:domain-native-addons']).toContain(
+      'identity-access/src/main/private-vault/native/build-addon.mjs'
+    )
+    expect(rootPackage.scripts['build:domain-native-addons']).toContain(
+      'opencontent-connector/src/main/native-enrollment/native/build-addon.mjs'
+    )
+    expect(rootPackage.scripts['stage:domain-native-addons']).toContain(
+      'identity-access/src/main/private-vault/native/stage-addon.mjs'
+    )
+    expect(rootPackage.scripts['stage:domain-native-addons']).toContain(
+      'opencontent-connector/src/main/native-enrollment/native/stage-addon.mjs'
+    )
+    expect(rootPackage.scripts['build:opencontent-native']).toBeUndefined()
+    expect(rootPackage.scripts['stage:opencontent-native']).toBeUndefined()
+  })
 })
 
 function runNodeScript(script: string, args: readonly string[] = []) {
