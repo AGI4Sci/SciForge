@@ -32,7 +32,7 @@ No pending OpenSpec checkbox is satisfied merely by this matrix.
 | 7.1 | ADR-0036; Run-0 frozen origin/issuer; read-only audit before mutation | Keycloak test delivery/runbook and Collaboration deployment metadata | Two-stage user-authorized SSH audit records OS/resources, exact DNS/443 containers and immutable images, Cloud/Keycloak DB identities, admitted `public-v5` catalog fingerprint, exact realm/client, Caddyfile digest/upstreams, capacity and rollback identity in `full-collaboration-stage4-a-host-baseline.md` | Not applicable | None for this read-only row | Required SSH and read-only non-interactive sudo authority were supplied and used without reading secrets | None | Fresh redacted timestamped receipt exists; preserve it as the pre-mutation baseline | `passed_server` |
 | 7.2 | Backup Cloud DB, Keycloak DB/realm, edge config and image/resource metadata; restore into isolated resources before mutation | `packages/collaboration-server/deploy/backup-collaboration-db.sh`; Keycloak `backup-db.sh` and `restore-verify-db.sh` | Fresh session-prefixed Cloud/Keycloak dumps, Realm export/import, edge archive and image/resource metadata are sealed by one SHA-256 ledger; Cloud rows/catalog and both Keycloak restore paths passed in isolated resources | Not applicable | None for this row; the protected backup tree and stopped restore resources are retained under their exact names, while candidate work remains separately gated by 7.3 | Required A-host authority was supplied and used only for the bounded backup/restore rehearsal; no secret value entered the repository | None | Redacted receipt exists in `full-collaboration-stage4-a-host-backup-restore.md`; independently rechecked manifest, permissions, internal networks, zero ports, stopped containers and unchanged live stack | `passed_server` |
 | 7.3 | Clone old Cloud DB; migrate only an independently named loopback/internal candidate; real health/OIDC/synthetic persistence smoke | Formal `migrations.ts`, supported fingerprints, PostgreSQL repository/server restart paths | Stage 3 real PostgreSQL migration/rollback/restart suite plus the exact A-host receipt in `full-collaboration-stage4-a-host-candidate.md` | Not required for current vertical source-app scope; formal packaging remains deferred in 8.4 | Session-prefixed clone migrated from the committed v12 boundary to ready v14, no-op/restart/catalog/health/issuer and aggregate audits passed, and real PKCE JIT identity persisted across candidate restart | Human registered/logged in one new synthetic account only in the system browser; no credential or Token entered evidence | None | Exact resource/image/schema ledger, redacted identity transition and retained failure/success containers are recorded | `passed_server` |
-| 7.4 | Switch only the existing Caddy `cloud-test` upstream after all candidate gates; retain exact rollback target | Existing edge contract is documented; no second issuer/DNS/listener is allowed | Five separately approved operations proved the same Edge revision/mount/public 200/200/401/issuer selection and exact old-stack rollback; attempt 5 proved real U0 OIDC reauthentication and a candidate-accepted revision-46 Agent heartbeat, then exposed stale Worker-availability outbox ordering before current online projection | Formal packaging is deferred and is not a source-app cutover prerequisite | Old Caddy upstream is selected and candidate is again isolated with restart `no`; the attempt-4 Project remains in candidate DB, while attempt 5 stopped before connected state or Coordinator counts | The retained U0 profile has real User/Device/Agent state and reauthenticated successfully; its process is stopped and another public selection requires a new explicit approval | Live U0-U4 profiles remain required after the U0 Coordinator smoke; each machine must also prove its own Runtime path | Use clean personal-fork source containing `f89b8180`, reuse the retained Project, then prove Collaboration connected, current online projection, Project focus and Coordinator online User/Agent counts | `approval_required` |
+| 7.4 | Switch only the existing Caddy `cloud-test` upstream after all candidate gates; retain exact rollback target | Existing edge contract is documented; no second issuer/DNS/listener is allowed | Seven approved operations proved exact Edge selection/rollback. Attempt 7 proved refreshed commit `94f6d89b` accepts the real U0 revision-48 heartbeat and commits the current online availability; its remaining failure was the U0 machine selecting a broken Codex executable before Collaboration Connect completed | Formal packaging is deferred and is not a source-app cutover prerequisite | Public Edge is on the old stable stack. The refreshed candidate is again running on two isolated networks with `restart=no`; image, v14/no-op migration, safety/identity aggregates, public `200/200/401`, strict unauthenticated contract, issuer, Caddy and compose gates passed in both Attempt 7 windows | The retained U0 User/Device/Agent and Project remain; U0 is stopped. The approval marker is retained evidence only. U0 now stores the verified absolute `/usr/local/bin/codex` path; another public selection still requires explicit approval | Live U0-U4 profiles remain required after the U0 Coordinator smoke; each machine must prove its own Runtime path before selection | Reuse exact source/profile and retained Project; prove the corrected Runtime, Collaboration connected, current availability, Project focus and Coordinator online User/Agent counts through the real UI | `approval_required` |
 | 8.2 | Repository architecture principles gate: no central feature map, Host-private/domain switch, compatibility/dual registration or hard-coded acceptance/provider behavior; same-package backend/UI; source composition | Standard manifests/generated composition, generic Domain SDK contracts, package-owned Collaboration/Coordinator/Content Space entrypoints and canonical changed-path architecture gate | Runtime authorization, optional-skill, manifest/tarball, changed-path and exact Cloud/OIDC source smoke pass locally | Not required; 8.4 is separately deferred | None | None | None for automated gate | Preserve the exact source command/result ledger | `passed_local` |
 | 8.3 | Focused gates, boundary/private-import, generated freshness, capability governance, secret audit and complete root regression | Stage 3 paths and aggregate scripts exist | Native Node/Python and two real loopback PostgreSQL databases produced `366/366` root files and `3389/3389` tests; all domain/package/tarball/internal-overlay/public-release pre-gates, typecheck, lint and secret audit passed | Existing optional package-level hardware/dependency skips remain explicitly outside root aggregate and are not live evidence | None | None | None | Preserve the exact command/result ledger and do not promote package-level skips to live evidence | `passed_local` |
 | 8.4 | Formal installer/release-artifact production-composition verification | Existing packaging tools remain available as optional release tooling | Source production composition is covered by 8.2 and does not complete this packaging-only row | Explicitly deferred by the User on 2026-08-26; not a current vertical-loop prerequisite | None | None | None | Revisit only when the User later requests formal installers or release artifacts | `deferred_user` |
@@ -178,12 +178,14 @@ the product can reach Cloud, but current U0 is not yet collaborating.
 
 The exact non-executed 7.4 selection diff, compose render, forward gates and
 mandatory rollback are now frozen in
-[`full-collaboration-stage4-a-host-cutover-plan.md`](./full-collaboration-stage4-a-host-cutover-plan.md).
+[`full-collaboration-stage4-a-host-cutover-plan-94f6d89b.md`](./full-collaboration-stage4-a-host-cutover-plan-94f6d89b.md).
 The retained U0 profile has a real OIDC User, active Device, one candidate Agent,
 a configured local Runtime, and a live-attested OpenContent connection. The U0
-source process is stopped and the candidate is isolated, so a newly approved
-public selection and a fresh exact-source launch are required before the next
-Coordinator smoke.
+source process is stopped, its Codex executable is pinned to the verified
+absolute `/usr/local/bin/codex` path, and the refreshed candidate is isolated.
+The retained approval marker records Attempt 7 only and does not authorize a
+later selection, so a new explicit authorization and fresh exact-source launch
+are required before the next Coordinator smoke.
 This evidence prepares but does not approve or complete 7.4, 8.6, 8.7 or 8.8;
 8.4 remains separately deferred.
 
@@ -246,4 +248,47 @@ availability a revision-ordered superseding fact and registers the server's
 canonical availability entity in the strict response union. Full Collaboration,
 type, lint, composition, security and architecture gates plus a clean production
 build pass. A fresh explicit public-selection approval and real UI proof remain
+required; 7.4 is still `approval_required`, not passed.
+
+The separately approved sixth operation and its mandatory rollback are recorded
+in
+[`full-collaboration-stage4-a-host-cutover-attempt-6.md`](./full-collaboration-stage4-a-host-cutover-attempt-6.md).
+The real U0 Agent heartbeat advanced to revision 47 and its exact current online
+availability committed in the candidate database. The old candidate image then
+returned `validation_failed` because its bundled strict REST entity union did
+not recognize the successful `worker_availability_projection` response. U0 was
+stopped before the exact old public Edge and candidate isolation were restored.
+The failure is Cloud image version skew, not OIDC, Caddy, PostgreSQL, Alibaba
+Cloud networking, Content Space or OpenContent.
+
+Personal-fork commit `94f6d89b` adds the real HTTP heartbeat-to-availability
+regression. A new image/application from that exact commit passed isolated
+bundle/image, schema-v14/no-op migration, aggregate safety, identity-count,
+`200/200/401`, issuer, Caddy and compose gates. Before Attempt 7, the previous
+candidate remained retained and stopped while the refreshed candidate had only
+its two isolated networks, `restart=no`, and no approval marker. The separately
+frozen packet used by Attempt 7 is
+[`full-collaboration-stage4-a-host-cutover-plan-94f6d89b.md`](./full-collaboration-stage4-a-host-cutover-plan-94f6d89b.md).
+
+The separately approved seventh operation and its mandatory rollback are
+recorded in
+[`full-collaboration-stage4-a-host-cutover-attempt-7.md`](./full-collaboration-stage4-a-host-cutover-attempt-7.md).
+Its first bounded window proved the refreshed public gates but stopped before
+U0 launch because the shell supplied unsupported Node 23; exact rollback then
+passed. A second window under supported Node `22.22.1` passed the exact-source,
+public Cloud/OIDC and Identity gates. The refreshed Cloud accepted the existing
+Agent's revision-48 heartbeat and committed its current online availability,
+closing the Attempt 6 response-schema defect. The real UI nevertheless failed
+Collaboration Connect because the U0 machine resolved `codex` to a broken
+Homebrew npm installation whose platform vendor executable was absent. U0 was
+stopped before the exact old Edge, candidate isolation and `restart=no` were
+restored.
+
+After rollback, the same U0 profile passed a bounded `app-server` probe and a
+real offline Electron Runtime smoke with the working absolute
+`/usr/local/bin/codex` path, which was saved through SciForge Settings. This was
+a local profile correction, not a Cloud, Alibaba networking, OIDC, Content
+Space, OpenContent Provider or optional Skill change. A new explicit
+public-selection authorization plus real UI proof of Collaboration connected,
+retained Project focus and Coordinator online User/Agent counts remain
 required; 7.4 is still `approval_required`, not passed.
