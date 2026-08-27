@@ -2,20 +2,41 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type ReactElement,
   type ReactNode
 } from 'react'
 import {
+  Activity,
+  AlertCircle,
   ArrowRightLeft,
+  Bot,
+  Check,
+  CircleDashed,
   ClipboardCheck,
+  Cloud,
+  Clock3,
   FileCheck2,
+  FolderOpen,
+  FileText,
+  LayoutDashboard,
   ListChecks,
   Loader2,
+  Plus,
+  Radio,
   RefreshCw,
+  Settings2,
+  ShieldAlert,
+  SquareKanban,
+  UserRoundCheck,
   UsersRound,
   Warehouse,
+  Wifi,
+  WifiOff,
+  Workflow,
+  Zap,
   X
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -42,6 +63,7 @@ import type {
   ProjectCoordinatorWorkspace
 } from '../contract.js'
 import type { ProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
+import type { ProjectCoordinatorWorkspaceSection } from './workspace-sections.js'
 
 export const PROJECT_COORDINATOR_PANEL_SECTION_IDS = Object.freeze([
   'coordinator',
@@ -52,6 +74,310 @@ export const PROJECT_COORDINATOR_PANEL_SECTION_IDS = Object.freeze([
   'provisioning'
 ] as const)
 
+export const PROJECT_COORDINATOR_LIVE_REFRESH_INTERVAL_MS = 15_000
+
+export const PROJECT_COORDINATOR_BUILT_IN_WORKSPACE_VIEWS = Object.freeze([
+  'overview',
+  'projects',
+  'reviews'
+] as const)
+
+export type ProjectCoordinatorBuiltInWorkspaceView =
+  typeof PROJECT_COORDINATOR_BUILT_IN_WORKSPACE_VIEWS[number]
+
+export type ProjectCoordinatorWorkspaceNavigationItem = Readonly<{
+  id: string
+  label: string
+  description: string
+  icon: React.ElementType
+  order: number
+  source: 'built-in' | 'extension'
+}>
+
+type ProjectCoordinatorWorkerAgent =
+  ProjectCoordinatorProject['workerGroups'][number]['agents'][number]
+
+export type ProjectCoordinatorFlowStageId =
+  | 'plan'
+  | 'dispatch'
+  | 'execute'
+  | 'review'
+  | 'record'
+  | 'complete'
+
+export type ProjectCoordinatorFlowStageState =
+  | 'complete'
+  | 'active'
+  | 'attention'
+  | 'pending'
+
+export type ProjectCoordinatorFlowStage = Readonly<{
+  id: ProjectCoordinatorFlowStageId
+  state: ProjectCoordinatorFlowStageState
+  count: number | null
+}>
+
+export type ProjectCoordinatorAttentionSummary = Readonly<{
+  planConfirmation: number
+  humanAnswers: number
+  resultReviews: number
+  recoveryActions: number
+  revisionTasks: number
+  total: number
+}>
+
+export type ProjectCoordinatorAgentOperationalState = Readonly<{
+  state: 'ready' | 'busy' | 'blocked' | 'offline'
+  online: boolean
+  fresh: boolean
+  runtimeReady: boolean
+  acceptsNewOffers: boolean
+  projectMember: boolean
+  textAuthority: boolean
+  fileAuthority: boolean
+  contentReady: boolean | null
+}>
+
+export type ProjectCoordinatorMeetingPackageSummary = Readonly<{
+  acceptedResults: number
+  observations: number
+  decisions: number
+  artifactRefs: readonly string[]
+}>
+
+/**
+ * Produces one UI projection from the existing orthogonal Cloud facts. It never
+ * turns presence into authority: online, Runtime readiness, offer intake,
+ * Membership, Task Authority, and Content readiness remain individually visible.
+ */
+export function projectCoordinatorAgentOperationalState(
+  agent: ProjectCoordinatorWorkerAgent,
+  observedAt = agent.projectAvailability.observedAt
+): ProjectCoordinatorAgentOperationalState {
+  const view = agent.projectAvailability
+  const availability = view.availability
+  const fresh = Date.parse(availability.expiresAt) > Date.parse(observedAt)
+  const online = fresh && availability.connectionStatus === 'online'
+  const projectMember = view.membership?.state === 'active'
+  const textAuthority = view.taskAuthorities?.some(({ scope, state }) => (
+    scope === 'text_tasks' && state === 'eligible'
+  )) ?? false
+  const fileAuthority = view.taskAuthorities?.some(({ scope, state }) => (
+    scope === 'file_tasks' && state === 'eligible'
+  )) ?? false
+  const contentReady = view.contentReadiness == null
+    ? null
+    : view.contentReadiness.state === 'ready'
+  const runtimeReady = availability.runtimeReadiness === 'ready'
+  const active = availability.agentActive && availability.deviceActive
+  const projectEligible = projectMember && (textAuthority || fileAuthority)
+  const state = !online
+    ? 'offline'
+    : !active || !runtimeReady || !projectEligible
+      ? 'blocked'
+      : !availability.acceptsNewOffers
+        ? 'busy'
+        : 'ready'
+  return Object.freeze({
+    state,
+    online,
+    fresh,
+    runtimeReady,
+    acceptsNewOffers: availability.acceptsNewOffers,
+    projectMember,
+    textAuthority,
+    fileAuthority,
+    contentReady
+  })
+}
+
+export function projectCoordinatorAttentionSummary(
+  project: ProjectCoordinatorProject
+): ProjectCoordinatorAttentionSummary {
+  const planConfirmation = project.plan?.plan.state === 'awaiting_confirmation' ? 1 : 0
+  const humanAnswers = project.pendingHumanNeeded.length
+  const resultReviews = project.reviews.filter(({ decision }) => decision === null).length
+  const recoveryActions = project.provisioning.recoveryActions.filter(({ status }) => (
+    status === 'available'
+  )).length
+  const revisionTasks = project.tasks.filter(({ task }) => (
+    task.status === 'revision_requested' || task.status === 'manual_recovery_required'
+  )).length
+  return Object.freeze({
+    planConfirmation,
+    humanAnswers,
+    resultReviews,
+    recoveryActions,
+    revisionTasks,
+    total: planConfirmation + humanAnswers + resultReviews + recoveryActions + revisionTasks
+  })
+}
+
+export function projectCoordinatorMeetingPackageSummary(
+  project: ProjectCoordinatorProject
+): ProjectCoordinatorMeetingPackageSummary {
+  const acceptedResultIds = new Set(
+    project.finalSummary?.acceptedResultSubmissionIds ?? []
+  )
+  const artifactRefs = project.reviews
+    .filter(({ submission }) => acceptedResultIds.has(submission.resultSubmissionId))
+    .flatMap(({ submission }) => submission.outputs.map(({ locatorDigest }) => locatorDigest))
+  return Object.freeze({
+    acceptedResults: acceptedResultIds.size,
+    observations: project.records.filter(({ kind }) => kind === 'observation').length,
+    decisions: project.records.filter(({ kind }) => kind === 'decision').length,
+    artifactRefs: Object.freeze(artifactRefs)
+  })
+}
+
+/** Maps the canonical Project lifecycle onto the six user-facing workflow stages. */
+export function projectCoordinatorFlowStages(
+  project: ProjectCoordinatorProject
+): readonly ProjectCoordinatorFlowStage[] {
+  if (project.project.status === 'completed') {
+    return Object.freeze(([
+      ['plan', project.plan?.plan.tasks.length ?? null],
+      ['dispatch', project.tasks.length],
+      ['execute', project.tasks.length],
+      ['review', project.reviews.length],
+      ['record', project.records.length],
+      ['complete', 1]
+    ] as const).map(([id, count]) => Object.freeze({ id, count, state: 'complete' as const })))
+  }
+
+  const planState = project.plan?.plan.state
+  const planComplete = planState === 'confirmed'
+  const hasTasks = project.tasks.length > 0
+  const dispatched = hasTasks && project.tasks.every(({ task }) => task.status !== 'planned')
+  const executionAttention = project.tasks.some(({ task }) => (
+    task.status === 'needs_human' ||
+    task.status === 'revision_requested' ||
+    task.status === 'manual_recovery_required' ||
+    task.status === 'failed'
+  ))
+  const executionComplete = hasTasks && project.tasks.every(({ task }) => (
+    task.status === 'awaiting_review' ||
+    task.status === 'completed' ||
+    task.status === 'failed' ||
+    task.status === 'cancelled'
+  ))
+  const pendingReviews = project.reviews.filter(({ decision }) => decision === null).length
+  const awaitingReviewTasks = project.tasks.filter(({ task }) => (
+    task.status === 'awaiting_review'
+  )).length
+  const reviewQueueCount = Math.max(pendingReviews, awaitingReviewTasks)
+  const reviewComplete = hasTasks && project.tasks.every(({ task }) => (
+    task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled'
+  )) && pendingReviews === 0
+  const hasSummaryRecord = project.records.some(({ kind }) => kind === 'summary')
+  const recordReady = reviewComplete && project.records.length > 0
+
+  const stages: ProjectCoordinatorFlowStage[] = [
+    {
+      id: 'plan',
+      count: project.plan?.plan.tasks.length ?? null,
+      state: planComplete
+        ? 'complete'
+        : planState === 'awaiting_confirmation'
+          ? 'attention'
+          : 'active'
+    },
+    {
+      id: 'dispatch',
+      count: project.tasks.length,
+      state: dispatched ? 'complete' : planComplete ? 'active' : 'pending'
+    },
+    {
+      id: 'execute',
+      count: project.tasks.filter(({ task }) => (
+        task.status === 'in_progress' || task.status === 'needs_human'
+      )).length,
+      state: executionAttention
+        ? 'attention'
+        : executionComplete
+          ? 'complete'
+          : dispatched
+            ? 'active'
+            : 'pending'
+    },
+    {
+      id: 'review',
+      count: reviewQueueCount,
+      state: reviewComplete
+        ? 'complete'
+        : reviewQueueCount > 0
+          ? 'attention'
+          : executionComplete
+            ? 'active'
+            : 'pending'
+    },
+    {
+      id: 'record',
+      count: project.records.length,
+      state: hasSummaryRecord ? 'complete' : recordReady ? 'active' : 'pending'
+    },
+    {
+      id: 'complete',
+      count: project.finalSummary ? 1 : 0,
+      state: project.finalSummary || hasSummaryRecord ? 'active' : 'pending'
+    }
+  ]
+  return Object.freeze(stages.map((stage) => Object.freeze(stage)))
+}
+
+export function projectCoordinatorWorkspaceNavigationItems(
+  workspaceSections: readonly ProjectCoordinatorWorkspaceSection[]
+): readonly ProjectCoordinatorWorkspaceNavigationItem[] {
+  const items: ProjectCoordinatorWorkspaceNavigationItem[] = [
+    {
+      id: 'overview',
+      label: 'projectCoordinatorCenterOverview',
+      description: 'projectCoordinatorCenterOverviewDescription',
+      icon: LayoutDashboard,
+      order: 10,
+      source: 'built-in'
+    },
+    {
+      id: 'projects',
+      label: 'projectCoordinatorCenterProjects',
+      description: 'projectCoordinatorCenterProjectsDescription',
+      icon: SquareKanban,
+      order: 20,
+      source: 'built-in'
+    },
+    {
+      id: 'reviews',
+      label: 'projectCoordinatorCenterReviews',
+      description: 'projectCoordinatorCenterReviewsDescription',
+      icon: ClipboardCheck,
+      order: 40,
+      source: 'built-in'
+    }
+  ]
+  const claimed = new Set(items.map(({ id }) => id))
+  for (const section of workspaceSections.filter(({ placement }) => (
+    placement === 'navigation'
+  ))) {
+    if (claimed.has(section.sectionId)) {
+      throw new TypeError(
+        `Collaboration Center navigation section ${section.sectionId} is duplicated.`
+      )
+    }
+    claimed.add(section.sectionId)
+    items.push({
+      id: section.sectionId,
+      label: section.label,
+      description: section.description ?? section.label,
+      icon: section.icon ?? Workflow,
+      order: section.order,
+      source: 'extension'
+    })
+  }
+  return Object.freeze(items.sort((left, right) => (
+    left.order - right.order || left.id.localeCompare(right.id)
+  )).map((item) => Object.freeze(item)))
+}
+
 export type ProjectCoordinatorPanelProps = Readonly<{
   client: ProjectCoordinatorRendererClient
   session: DomainWorkbenchRightPanelSession
@@ -59,6 +385,7 @@ export type ProjectCoordinatorPanelProps = Readonly<{
   className?: string
   onCollapse?: () => void
   onOpenArtifact?: (input: ProjectCoordinatorArtifactReviewPrepareInput) => Promise<void>
+  workspaceSections?: readonly ProjectCoordinatorWorkspaceSection[]
 }>
 
 export function selectFocusedProject(
@@ -108,12 +435,15 @@ export function ProjectCoordinatorPanel({
   initialProjectId,
   className,
   onCollapse,
-  onOpenArtifact
+  onOpenArtifact,
+  workspaceSections = []
 }: ProjectCoordinatorPanelProps): ReactElement {
   const { t } = useTranslation('common')
   const [workspace, setWorkspace] = useState<ProjectCoordinatorWorkspace>()
   const [selectedProjectId, setSelectedProjectId] = useState(initialProjectId ?? '')
   const [loading, setLoading] = useState(true)
+  const [backgroundRefreshing, setBackgroundRefreshing] = useState(false)
+  const [nowMilliseconds, setNowMilliseconds] = useState(() => Date.now())
   const [error, setError] = useState<string>()
   const [draft, setDraft] = useState<ProjectCoordinatorPlanDraft | null>(null)
   const [provisioningPlan, setProvisioningPlan] = useState<ProjectCoordinatorProvisioningPlan>()
@@ -123,34 +453,69 @@ export function ProjectCoordinatorPanel({
   const [createCoordinatorAgentId, setCreateCoordinatorAgentId] = useState('')
   const [createCoordinatorRevision, setCreateCoordinatorRevision] = useState('1')
   const [createWorkerUserIds, setCreateWorkerUserIds] = useState('')
+  const [activeView, setActiveView] = useState<string>('overview')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [newProjectRequest, setNewProjectRequest] = useState(0)
+  const refreshRequestRef = useRef(0)
+  const settingsButtonRef = useRef<HTMLButtonElement>(null)
 
-  const refresh = useCallback(async (projectId?: string, signal?: AbortSignal) => {
-    setLoading(true)
-    setError(undefined)
+  const navigationItems = useMemo(
+    () => projectCoordinatorWorkspaceNavigationItems(workspaceSections),
+    [workspaceSections]
+  )
+  const settingsSections = useMemo(
+    () => workspaceSections.filter(({ placement }) => placement === 'settings'),
+    [workspaceSections]
+  )
+  const activeWorkspaceSection = useMemo(
+    () => workspaceSections.find(({ placement, sectionId }) => (
+      placement === 'navigation' && sectionId === activeView
+    )),
+    [activeView, workspaceSections]
+  )
+
+  const refresh = useCallback(async (
+    projectId?: string,
+    signal?: AbortSignal,
+    mode: 'foreground' | 'background' = 'foreground'
+  ) => {
+    const requestRevision = refreshRequestRef.current + 1
+    refreshRequestRef.current = requestRevision
+    if (mode === 'foreground') {
+      setLoading(true)
+      setBackgroundRefreshing(false)
+      setError(undefined)
+      setProvisioningPlan(undefined)
+    } else {
+      setBackgroundRefreshing(true)
+    }
     try {
       const next = await client.readWorkspace(projectId ? { projectId } : {})
-      if (signal?.aborted) return
+      if (signal?.aborted || refreshRequestRef.current !== requestRevision) return
       setWorkspace(next)
-      setProvisioningPlan(undefined)
+      setNowMilliseconds(Date.now())
       const preferred = projectId ?? next.focusedProjectId
       if (preferred && next.projects.some(({ project }) => project.projectId === preferred)) {
         setSelectedProjectId(preferred)
         const nextDraft = await client.readPlanDraft({ projectId: preferred })
-        if (!signal?.aborted) setDraft(nextDraft)
+        if (!signal?.aborted && refreshRequestRef.current === requestRevision) setDraft(nextDraft)
       } else if (next.projects.length === 1) {
         const onlyProjectId = next.projects[0]!.project.projectId
         setSelectedProjectId(onlyProjectId)
         const nextDraft = await client.readPlanDraft({ projectId: onlyProjectId })
-        if (!signal?.aborted) setDraft(nextDraft)
+        if (!signal?.aborted && refreshRequestRef.current === requestRevision) setDraft(nextDraft)
       } else {
         setSelectedProjectId('')
         setDraft(null)
       }
     } catch (cause) {
-      if (signal?.aborted) return
+      if (signal?.aborted || refreshRequestRef.current !== requestRevision) return
       setError(cause instanceof Error ? cause.message : t('projectCoordinatorReadFailed'))
     } finally {
-      if (!signal?.aborted) setLoading(false)
+      if (!signal?.aborted && refreshRequestRef.current === requestRevision) {
+        if (mode === 'foreground') setLoading(false)
+        else setBackgroundRefreshing(false)
+      }
     }
   }, [client, t])
 
@@ -160,14 +525,54 @@ export function ProjectCoordinatorPanel({
     return () => controller.abort()
   }, [initialProjectId, refresh, session.id])
 
+  useEffect(() => {
+    const timer = setInterval(() => setNowMilliseconds(Date.now()), 10_000)
+    return () => clearInterval(timer)
+  }, [])
+
   const project = useMemo(
     () => selectFocusedProject(workspace, selectedProjectId || initialProjectId),
     [initialProjectId, selectedProjectId, workspace]
   )
 
   useEffect(() => {
+    if (!navigationItems.some(({ id }) => id === activeView)) setActiveView('overview')
+  }, [activeView, navigationItems])
+
+  useEffect(() => {
+    if (
+      workspace?.connection.state === 'ready' &&
+      workspace.projects.length === 0 &&
+      activeView === 'overview'
+    ) {
+      setActiveView('projects')
+    }
+  }, [activeView, workspace])
+
+  useEffect(() => {
     setProvisioningPlan(undefined)
   }, [project?.project.projectId, project?.project.revision])
+
+  useEffect(() => {
+    if (workspace?.connection.state !== 'ready' || busyAction) return
+    const projectId = selectedProjectId || initialProjectId || undefined
+    const refreshVisibleWorkspace = () => {
+      if (globalThis.document?.visibilityState === 'hidden') return
+      void refresh(projectId, undefined, 'background')
+    }
+    const timer = setInterval(
+      refreshVisibleWorkspace,
+      PROJECT_COORDINATOR_LIVE_REFRESH_INTERVAL_MS
+    )
+    const handleVisibility = () => {
+      if (globalThis.document?.visibilityState === 'visible') refreshVisibleWorkspace()
+    }
+    globalThis.document?.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      clearInterval(timer)
+      globalThis.document?.removeEventListener('visibilitychange', handleVisibility)
+    }
+  }, [busyAction, initialProjectId, refresh, selectedProjectId, workspace?.connection.state])
 
   const connectionMessage = workspace && workspace.connection.state !== 'ready'
     ? connectionMessageKey(workspace.connection.state)
@@ -371,72 +776,99 @@ export function ProjectCoordinatorPanel({
     })
   }, [applyProjectWorkspace, client, runAction])
 
+  const navigateWorkspace = useCallback((viewId: string) => {
+    if (!navigationItems.some(({ id }) => id === viewId)) return
+    setSettingsOpen(false)
+    setActiveView(viewId)
+  }, [navigationItems])
+
+  const startNewProject = useCallback(() => {
+    setSettingsOpen(false)
+    setActiveView('projects')
+    setNewProjectRequest((request) => request + 1)
+  }, [])
+
+  useEffect(() => {
+    if (activeView !== 'projects' || newProjectRequest === 0) return
+    const frame = globalThis.requestAnimationFrame?.(() => {
+      focusCoordinatorSection('create')
+    })
+    return () => {
+      if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame)
+    }
+  }, [activeView, newProjectRequest])
+
   return (
     <aside
-      className={`ds-no-drag flex h-full min-h-0 flex-col bg-ds-bg text-ds-text ${className ?? ''}`}
+      className={`project-coordinator-panel ds-no-drag ${className ?? ''}`}
       data-domain="project-coordinator"
       data-session-id={session.id}
+      data-active-workspace-view={activeView}
     >
-      <header className="flex items-center gap-2 border-b border-ds-border px-3 py-2.5">
-        <ClipboardCheck className="h-4 w-4" aria-hidden="true" />
-        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">
-          {t('projectCoordinatorTitle')}
-        </h2>
-        <button
-          type="button"
-          className="rounded p-1 text-ds-muted hover:bg-ds-hover hover:text-ds-text"
-          aria-label={t('projectCoordinatorRefresh')}
-          disabled={loading}
-          onClick={() => void refresh(selectedProjectId || undefined)}
-        >
-          {loading
-            ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-            : <RefreshCw className="h-4 w-4" aria-hidden="true" />}
-        </button>
-        {onCollapse ? (
+      <header className="project-coordinator-header">
+        <span className="project-coordinator-brand-mark" aria-hidden="true">
+          <Workflow />
+        </span>
+        <div className="project-coordinator-heading">
+          <h2>{t('projectCoordinatorTitle')}</h2>
+          <span>{t('projectCoordinatorSubtitle')}</span>
+        </div>
+        <div className="project-coordinator-header-actions">
+          {workspace?.connection.state === 'ready' ? (
+            <LiveSyncStatus
+              observedAt={workspace.observedAt}
+              nowMilliseconds={nowMilliseconds}
+              syncing={backgroundRefreshing}
+            />
+          ) : null}
           <button
             type="button"
-            className="rounded p-1 text-ds-muted hover:bg-ds-hover hover:text-ds-text"
-            aria-label={t('projectCoordinatorCollapse')}
-            onClick={onCollapse}
+            className="project-coordinator-header-button"
+            disabled={workspace?.connection.state !== 'ready'}
+            onClick={startNewProject}
           >
-            <X className="h-4 w-4" aria-hidden="true" />
+            <Plus aria-hidden="true" />
+            <span>{t('projectCoordinatorCenterNewProject')}</span>
           </button>
-        ) : null}
+          <button
+            ref={settingsButtonRef}
+            type="button"
+            className="project-coordinator-icon-button"
+            aria-label={t('projectCoordinatorCenterOpenSettings')}
+            aria-expanded={settingsOpen}
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Settings2 aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="project-coordinator-icon-button"
+            aria-label={t('projectCoordinatorRefresh')}
+            disabled={loading || backgroundRefreshing || Boolean(busyAction)}
+            onClick={() => void refresh(selectedProjectId || undefined)}
+          >
+            {loading || backgroundRefreshing
+              ? <Loader2 className="animate-spin" aria-hidden="true" />
+              : <RefreshCw aria-hidden="true" />}
+          </button>
+          {onCollapse ? (
+            <button
+              type="button"
+              className="project-coordinator-icon-button"
+              aria-label={t('projectCoordinatorCollapse')}
+              onClick={onCollapse}
+            >
+              <X aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
       </header>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
-        {error ? <Notice tone="error">{error}</Notice> : null}
-        {connectionMessage ? (
-          <Notice tone="warning">
-            {t(connectionMessage)}
-            {'reason' in workspace!.connection ? ` ${workspace!.connection.reason}` : ''}
-          </Notice>
-        ) : null}
-        {loading && !workspace ? <Notice>{t('projectCoordinatorLoading')}</Notice> : null}
-
-        {workspace?.connection.state === 'ready' ? (
-          <ProjectCreateForm
-            busy={busyAction === 'project-create'}
-            coordinatorAgentId={createCoordinatorAgentId}
-            coordinatorRevision={createCoordinatorRevision}
-            displayName={createDisplayName}
-            goal={createGoal}
-            workerUserIds={createWorkerUserIds}
-            onCoordinatorAgentId={setCreateCoordinatorAgentId}
-            onCoordinatorRevision={setCreateCoordinatorRevision}
-            onDisplayName={setCreateDisplayName}
-            onGoal={setCreateGoal}
-            onSubmit={createProject}
-            onWorkerUserIds={setCreateWorkerUserIds}
-          />
-        ) : null}
-
+      <div className="project-coordinator-context">
         {workspace?.connection.state === 'ready' && workspace.projects.length > 0 ? (
-          <label className="block text-xs font-medium text-ds-muted">
-            {t('projectCoordinatorProject')}
+          <label className="project-coordinator-project-picker">
+            <span>{t('projectCoordinatorProject')}</span>
             <select
-              className="mt-1 w-full rounded border border-ds-border bg-ds-surface px-2 py-1.5 text-xs text-ds-text"
               value={project?.project.projectId ?? ''}
               onChange={(event) => {
                 const projectId = event.currentTarget.value
@@ -451,60 +883,447 @@ export function ProjectCoordinatorPanel({
               ))}
             </select>
           </label>
-        ) : null}
-
-        {project ? <ProjectSummary project={project} /> : null}
-        <ProjectCoordinatorTransferSection
+        ) : (
+          <span className="project-coordinator-context-label">
+            {t('projectCoordinatorCenterNoActiveProject')}
+          </span>
+        )}
+        <CollaborationReadinessBar
+          workspace={workspace}
           project={project}
-          canTransfer={workspace?.connection.state === 'ready' &&
-            workspace.connection.userId === project?.project.ownerUserId}
-          busy={busyAction === 'coordinator-transfer'}
-          onTransfer={transferCoordinator}
-        />
-        <ProjectCoordinatorPlanSection
-          project={project}
-          draft={draft}
-          busy={Boolean(busyAction?.startsWith('plan-'))}
-          onGenerate={generateDraft}
-          onEditDraft={editDraft}
-          onSubmitDraft={submitDraft}
-          onConfirmActivate={confirmActivate}
-        />
-        <WorkersSection project={project} />
-        <TasksSection project={project} />
-        <ProjectCoordinatorDecisionSection
-          project={project}
-          canAnswer={workspace?.connection.state === 'ready' &&
-            workspace.connection.userId === project?.project.ownerUserId}
-          busy={Boolean(busyAction && !busyAction.startsWith('plan-'))}
-          onCreateHumanNeeded={createHumanNeeded}
-          onAnswerHumanNeeded={answerHumanNeeded}
-          onOpenArtifact={onOpenArtifact ? openArtifact : undefined}
-          onReviewResult={reviewResult}
-          onComplete={completeProject}
-        />
-        <ProjectCoordinatorProvisioningSection
-          project={project}
-          plan={provisioningPlan ?? null}
-          canManage={workspace?.connection.state === 'ready' &&
-            workspace.connection.userId === project?.project.ownerUserId}
-          busy={Boolean(busyAction?.startsWith('provisioning-') ||
-            busyAction?.startsWith('membership-') ||
-            busyAction?.startsWith('recovery-'))}
-          onPreview={previewProvisioning}
-          onApply={applyProvisioning}
-          onAddMember={addMember}
-          onRemoveMember={removeMember}
-          onObserveAndLinkRecovery={observeAndLinkRecovery}
-          onAbandonRecovery={abandonRecovery}
-          onRetryRecoverySuccessor={retryRecoverySuccessor}
+          onNavigate={navigateWorkspace}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       </div>
+
+      <div className="project-coordinator-workspace">
+        <CollaborationWorkspaceNavigation
+          activeView={activeView}
+          items={navigationItems}
+          onNavigate={navigateWorkspace}
+        />
+
+        <main
+          className="project-coordinator-workspace-main"
+          aria-label={t(
+            navigationItems.find(({ id }) => id === activeView)?.label ??
+              'projectCoordinatorTitle'
+          )}
+        >
+          <div className="project-coordinator-global-notices">
+            {error ? <Notice tone="error">{error}</Notice> : null}
+            {connectionMessage ? (
+              <Notice tone="warning">
+                {t(connectionMessage)}
+                {'reason' in workspace!.connection ? ` ${workspace!.connection.reason}` : ''}
+              </Notice>
+            ) : null}
+            {loading && !workspace ? <Notice>{t('projectCoordinatorLoading')}</Notice> : null}
+          </div>
+
+          <div
+            className="project-coordinator-workspace-view"
+            data-workspace-view={activeView}
+            data-extension-view={activeWorkspaceSection ? 'true' : 'false'}
+            role="tabpanel"
+            id={`project-coordinator-view-${activeView}`}
+          >
+            {activeView === 'overview' ? (
+              project ? (
+                <>
+                  <ProjectOverview
+                    project={project}
+                    observedAt={workspace?.observedAt ?? project.project.updatedAt}
+                    nowMilliseconds={nowMilliseconds}
+                    onNavigate={navigateWorkspace}
+                  />
+                  <WorkersSection
+                    project={project}
+                    observedAt={new Date(nowMilliseconds).toISOString()}
+                  />
+                </>
+              ) : (
+                <CollaborationCenterEmpty
+                  title={t('projectCoordinatorCenterNoActiveProject')}
+                  message={t('projectCoordinatorCenterNoActiveProjectDescription')}
+                  action={t('projectCoordinatorCenterNewProject')}
+                  onAction={workspace?.connection.state === 'ready'
+                    ? startNewProject
+                    : () => setSettingsOpen(true)}
+                />
+              )
+            ) : null}
+
+            {activeView === 'projects' ? (
+              <>
+                {workspace?.connection.state === 'ready' ? (
+                  <ProjectCreateForm
+                    defaultExpanded={workspace.projects.length === 0}
+                    requestOpen={newProjectRequest}
+                    busy={busyAction === 'project-create'}
+                    coordinatorAgentId={createCoordinatorAgentId}
+                    coordinatorRevision={createCoordinatorRevision}
+                    displayName={createDisplayName}
+                    goal={createGoal}
+                    workerUserIds={createWorkerUserIds}
+                    onCoordinatorAgentId={setCreateCoordinatorAgentId}
+                    onCoordinatorRevision={setCreateCoordinatorRevision}
+                    onDisplayName={setCreateDisplayName}
+                    onGoal={setCreateGoal}
+                    onSubmit={createProject}
+                    onWorkerUserIds={setCreateWorkerUserIds}
+                  />
+                ) : null}
+                <ProjectCoordinatorPlanSection
+                  project={project}
+                  draft={draft}
+                  busy={Boolean(busyAction?.startsWith('plan-'))}
+                  onGenerate={generateDraft}
+                  onEditDraft={editDraft}
+                  onSubmitDraft={submitDraft}
+                  onConfirmActivate={confirmActivate}
+                />
+                <TasksSection project={project} />
+                <ProjectCoordinatorTransferSection
+                  project={project}
+                  canTransfer={workspace?.connection.state === 'ready' &&
+                    workspace.connection.userId === project?.project.ownerUserId}
+                  busy={busyAction === 'coordinator-transfer'}
+                  onTransfer={transferCoordinator}
+                />
+                <ProjectCoordinatorProvisioningSection
+                  project={project}
+                  plan={provisioningPlan ?? null}
+                  canManage={workspace?.connection.state === 'ready' &&
+                    workspace.connection.userId === project?.project.ownerUserId}
+                  busy={Boolean(busyAction?.startsWith('provisioning-') ||
+                    busyAction?.startsWith('membership-') ||
+                    busyAction?.startsWith('recovery-'))}
+                  onPreview={previewProvisioning}
+                  onApply={applyProvisioning}
+                  onAddMember={addMember}
+                  onRemoveMember={removeMember}
+                  onObserveAndLinkRecovery={observeAndLinkRecovery}
+                  onAbandonRecovery={abandonRecovery}
+                  onRetryRecoverySuccessor={retryRecoverySuccessor}
+                />
+              </>
+            ) : null}
+
+            {activeView === 'reviews' ? (
+              <ProjectCoordinatorDecisionSection
+                project={project}
+                canAnswer={workspace?.connection.state === 'ready' &&
+                  workspace.connection.userId === project?.project.ownerUserId}
+                busy={Boolean(busyAction && !busyAction.startsWith('plan-'))}
+                onCreateHumanNeeded={createHumanNeeded}
+                onAnswerHumanNeeded={answerHumanNeeded}
+                onOpenArtifact={onOpenArtifact ? openArtifact : undefined}
+                onReviewResult={reviewResult}
+                onComplete={completeProject}
+              />
+            ) : null}
+
+            {activeWorkspaceSection
+              ? activeWorkspaceSection.render({
+                  active: true,
+                  className: 'project-coordinator-extension-panel',
+                  session
+                })
+              : null}
+          </div>
+        </main>
+      </div>
+
+      <CollaborationSettingsDrawer
+        open={settingsOpen}
+        sections={settingsSections}
+        session={session}
+        returnFocusRef={settingsButtonRef}
+        onClose={() => setSettingsOpen(false)}
+      />
     </aside>
   )
 }
 
+function CollaborationReadinessBar({
+  workspace,
+  project,
+  onNavigate,
+  onOpenSettings
+}: Readonly<{
+  workspace?: ProjectCoordinatorWorkspace
+  project?: ProjectCoordinatorProject
+  onNavigate(viewId: string): void
+  onOpenSettings(): void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  const coordinator = project?.workerGroups.flatMap(({ agents }) => agents).find(
+    ({ projectAvailability }) => (
+      projectAvailability.agentId === project.project.coordinatorAgentId
+    )
+  )
+  const operational = coordinator
+    ? projectCoordinatorAgentOperationalState(coordinator)
+    : undefined
+  const recoveryRequired = project?.provisioning.recoveryActions.some(({ status }) => (
+    status === 'available'
+  )) ?? false
+  const items = [
+    {
+      id: 'cloud',
+      icon: <Cloud />,
+      label: t('projectCoordinatorCenterCloud'),
+      state: workspace?.connection.state === 'ready' ? 'ready' : 'attention',
+      status: workspace?.connection.state === 'ready'
+        ? t('projectCoordinatorCenterReady')
+        : t('projectCoordinatorCenterActionRequired'),
+      action: onOpenSettings
+    },
+    {
+      id: 'runtime',
+      icon: <Activity />,
+      label: t('projectCoordinatorCenterRuntime'),
+      state: !project ? 'pending' : operational?.runtimeReady ? 'ready' : 'attention',
+      status: !project
+        ? t('projectCoordinatorCenterWhenNeeded')
+        : operational?.runtimeReady
+          ? t('projectCoordinatorCenterReady')
+          : t('projectCoordinatorCenterActionRequired'),
+      action: onOpenSettings
+    },
+    {
+      id: 'agent',
+      icon: <Bot />,
+      label: t('projectCoordinatorCenterAgent'),
+      state: !project ? 'pending' : operational?.online ? 'ready' : 'attention',
+      status: !project
+        ? t('projectCoordinatorCenterWhenNeeded')
+        : operational?.online
+          ? t('projectCoordinatorCenterOnline')
+          : t('projectCoordinatorCenterActionRequired'),
+      action: onOpenSettings
+    },
+    {
+      id: 'files',
+      icon: <FolderOpen />,
+      label: t('projectCoordinatorCenterSharedFiles'),
+      state: project?.provisioning.binding
+        ? 'ready'
+        : recoveryRequired
+          ? 'attention'
+          : 'pending',
+      status: project?.provisioning.binding
+        ? t('projectCoordinatorCenterReady')
+        : recoveryRequired
+          ? t('projectCoordinatorCenterActionRequired')
+          : t('projectCoordinatorCenterWhenNeeded'),
+      action: () => onNavigate('files')
+    }
+  ] as const
+
+  return (
+    <div
+      className="project-coordinator-readiness"
+      aria-label={t('projectCoordinatorCenterReadiness')}
+    >
+      {items.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          data-readiness-id={item.id}
+          data-readiness-state={item.state}
+          onClick={item.action}
+        >
+          <span aria-hidden="true">{item.icon}</span>
+          <span>
+            <strong>{item.label}</strong>
+            <small>{item.status}</small>
+          </span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function CollaborationWorkspaceNavigation({
+  activeView,
+  items,
+  onNavigate
+}: Readonly<{
+  activeView: string
+  items: readonly ProjectCoordinatorWorkspaceNavigationItem[]
+  onNavigate(viewId: string): void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <nav
+      className="project-coordinator-workspace-navigation"
+      aria-label={t('projectCoordinatorCenterNavigation')}
+      role="tablist"
+      onKeyDown={(event) => {
+        if (!['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft', 'Home', 'End']
+          .includes(event.key)) return
+        const tabs = Array.from(
+          event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+        )
+        const current = tabs.indexOf(globalThis.document?.activeElement as HTMLButtonElement)
+        if (tabs.length === 0) return
+        const next = event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? tabs.length - 1
+            : event.key === 'ArrowDown' || event.key === 'ArrowRight'
+              ? (Math.max(current, 0) + 1) % tabs.length
+              : (current <= 0 ? tabs.length : current) - 1
+        event.preventDefault()
+        tabs[next]?.focus()
+        tabs[next]?.click()
+      }}
+    >
+      {items.map((item) => {
+        const Icon = item.icon
+        return (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            id={`project-coordinator-tab-${item.id}`}
+            aria-controls={`project-coordinator-view-${item.id}`}
+            aria-selected={activeView === item.id}
+            tabIndex={activeView === item.id ? 0 : -1}
+            data-navigation-source={item.source}
+            onClick={() => onNavigate(item.id)}
+            title={t(item.description)}
+          >
+            <span className="project-coordinator-navigation-icon" aria-hidden="true">
+              <Icon />
+            </span>
+            <span>
+              <strong>{t(item.label)}</strong>
+              <small>{t(item.description)}</small>
+            </span>
+          </button>
+        )
+      })}
+    </nav>
+  )
+}
+
+function CollaborationCenterEmpty({
+  title,
+  message,
+  action,
+  onAction
+}: Readonly<{
+  title: string
+  message: string
+  action: string
+  onAction(): void
+}>): ReactElement {
+  return (
+    <div className="project-coordinator-center-empty">
+      <span aria-hidden="true"><Workflow /></span>
+      <strong>{title}</strong>
+      <p>{message}</p>
+      <button type="button" onClick={onAction}>{action}</button>
+    </div>
+  )
+}
+
+function CollaborationSettingsDrawer({
+  open,
+  sections,
+  session,
+  returnFocusRef,
+  onClose
+}: Readonly<{
+  open: boolean
+  sections: readonly ProjectCoordinatorWorkspaceSection[]
+  session: DomainWorkbenchRightPanelSession
+  returnFocusRef: React.RefObject<HTMLButtonElement | null>
+  onClose(): void
+}>): ReactElement | null {
+  const { t } = useTranslation('common')
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const close = useCallback(() => {
+    onClose()
+    globalThis.queueMicrotask?.(() => returnFocusRef.current?.focus())
+  }, [onClose, returnFocusRef])
+
+  useEffect(() => {
+    if (!open) return
+    closeButtonRef.current?.focus()
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      close()
+    }
+    globalThis.document?.addEventListener('keydown', onKeyDown)
+    return () => globalThis.document?.removeEventListener('keydown', onKeyDown)
+  }, [close, open])
+
+  if (!open) return null
+  return (
+    <div className="project-coordinator-settings-layer">
+      <button
+        type="button"
+        className="project-coordinator-settings-backdrop"
+        aria-label={t('projectCoordinatorCenterCloseSettings')}
+        onClick={close}
+      />
+      <section
+        className="project-coordinator-settings-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="project-coordinator-settings-title"
+      >
+        <header>
+          <span>
+            <small>{t('projectCoordinatorTitle')}</small>
+            <h3 id="project-coordinator-settings-title">
+              {t('projectCoordinatorCenterConnections')}
+            </h3>
+          </span>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            className="project-coordinator-icon-button"
+            aria-label={t('projectCoordinatorCenterCloseSettings')}
+            onClick={close}
+          >
+            <X aria-hidden="true" />
+          </button>
+        </header>
+        <div className="project-coordinator-settings-scroll">
+          {sections.length > 0 ? sections.map((section) => (
+            <section
+              key={section.contributionId}
+              className="project-coordinator-settings-section"
+              data-settings-section={section.sectionId}
+            >
+              <div className="project-coordinator-settings-section-heading">
+                <strong>{t(section.label)}</strong>
+                {section.description ? <span>{t(section.description)}</span> : null}
+              </div>
+              {section.render({
+                active: true,
+                className: 'project-coordinator-settings-extension',
+                session
+              })}
+            </section>
+          )) : (
+            <Notice>{t('projectCoordinatorCenterSettingsUnavailable')}</Notice>
+          )}
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function ProjectCreateForm({
+  defaultExpanded = false,
+  requestOpen = 0,
   busy,
   coordinatorAgentId,
   coordinatorRevision,
@@ -518,6 +1337,8 @@ function ProjectCreateForm({
   onSubmit,
   onWorkerUserIds
 }: Readonly<{
+  defaultExpanded?: boolean
+  requestOpen?: number
   busy: boolean
   coordinatorAgentId: string
   coordinatorRevision: string
@@ -532,38 +1353,418 @@ function ProjectCreateForm({
   onWorkerUserIds(value: string): void
 }>): ReactElement {
   const { t } = useTranslation('common')
+  const [expanded, setExpanded] = useState(defaultExpanded)
+  useEffect(() => {
+    if (defaultExpanded) setExpanded(true)
+  }, [defaultExpanded])
+  useEffect(() => {
+    if (requestOpen > 0) setExpanded(true)
+  }, [requestOpen])
   return (
-    <form className="rounded-lg border border-ds-border bg-ds-surface p-2.5" onSubmit={onSubmit}>
-      <h3 className="mb-2 text-xs font-semibold">{t('projectCoordinatorCreateProject')}</h3>
-      <div className="grid gap-2">
-        <input required value={displayName} onChange={(event) => onDisplayName(event.currentTarget.value)} placeholder={t('projectCoordinatorProjectName')} className="rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
-        <textarea required value={goal} onChange={(event) => onGoal(event.currentTarget.value)} placeholder={t('projectCoordinatorProjectGoal')} className="rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
-        <input required value={coordinatorAgentId} onChange={(event) => onCoordinatorAgentId(event.currentTarget.value)} placeholder={t('projectCoordinatorCoordinatorAgentId')} className="rounded border border-ds-border bg-ds-bg px-2 py-1.5 font-mono text-xs" />
-        <input required min={1} type="number" value={coordinatorRevision} onChange={(event) => onCoordinatorRevision(event.currentTarget.value)} placeholder={t('projectCoordinatorAgentRevision')} className="rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
-        <input value={workerUserIds} onChange={(event) => onWorkerUserIds(event.currentTarget.value)} placeholder={t('projectCoordinatorWorkerUserIds')} className="rounded border border-ds-border bg-ds-bg px-2 py-1.5 font-mono text-xs" />
-        <button disabled={busy} type="submit" className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50">
+    <details
+      id="project-coordinator-create"
+      className="project-coordinator-create"
+      open={expanded}
+      tabIndex={-1}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary>
+        <span className="project-coordinator-create-icon" aria-hidden="true">
+          <CircleDashed />
+        </span>
+        <span>
+          <strong>{t('projectCoordinatorCreateProject')}</strong>
+          <small>{t('projectCoordinatorCreateProjectHint')}</small>
+        </span>
+      </summary>
+      <form className="project-coordinator-create-form" onSubmit={onSubmit}>
+        <label>
+          <span>{t('projectCoordinatorProjectName')}</span>
+          <input
+            required
+            value={displayName}
+            onChange={(event) => onDisplayName(event.currentTarget.value)}
+            placeholder={t('projectCoordinatorProjectNamePlaceholder')}
+          />
+        </label>
+        <label>
+          <span>{t('projectCoordinatorProjectGoal')}</span>
+          <textarea
+            required
+            rows={3}
+            value={goal}
+            onChange={(event) => onGoal(event.currentTarget.value)}
+            placeholder={t('projectCoordinatorProjectGoalPlaceholder')}
+          />
+        </label>
+        <fieldset>
+          <legend>{t('projectCoordinatorCoordinatorIdentity')}</legend>
+          <p>{t('projectCoordinatorCoordinatorIdentityHint')}</p>
+          <div className="project-coordinator-create-agent-grid">
+            <label>
+              <span>{t('projectCoordinatorCoordinatorAgentId')}</span>
+              <input
+                required
+                value={coordinatorAgentId}
+                onChange={(event) => onCoordinatorAgentId(event.currentTarget.value)}
+                placeholder="agt_…"
+                className="project-coordinator-mono-input"
+              />
+            </label>
+            <label>
+              <span>{t('projectCoordinatorAgentRevision')}</span>
+              <input
+                required
+                min={1}
+                type="number"
+                value={coordinatorRevision}
+                onChange={(event) => onCoordinatorRevision(event.currentTarget.value)}
+              />
+            </label>
+          </div>
+        </fieldset>
+        <label>
+          <span>{t('projectCoordinatorWorkerUserIds')}</span>
+          <input
+            value={workerUserIds}
+            onChange={(event) => onWorkerUserIds(event.currentTarget.value)}
+            placeholder="usr_… , usr_…"
+            className="project-coordinator-mono-input"
+          />
+          <small>{t('projectCoordinatorWorkerUserIdsHint')}</small>
+        </label>
+        <button disabled={busy} type="submit" className="project-coordinator-primary-button">
+          {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Zap aria-hidden="true" />}
           {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorCreateProject')}
         </button>
-      </div>
-    </form>
+      </form>
+    </details>
   )
 }
 
-function ProjectSummary({ project }: Readonly<{ project: ProjectCoordinatorProject }>): ReactElement {
+function LiveSyncStatus({
+  observedAt,
+  nowMilliseconds,
+  syncing
+}: Readonly<{
+  observedAt: string
+  nowMilliseconds: number
+  syncing: boolean
+}>): ReactElement {
+  const { i18n, t } = useTranslation('common')
+  const relative = formatRelativeTime(observedAt, nowMilliseconds, i18n.resolvedLanguage)
+  const observedMilliseconds = Date.parse(observedAt)
+  const stale = !Number.isFinite(observedMilliseconds) ||
+    nowMilliseconds - observedMilliseconds > PROJECT_COORDINATOR_LIVE_REFRESH_INTERVAL_MS * 3
+  const stateLabel = syncing
+    ? t('projectCoordinatorSyncing')
+    : stale
+      ? t('projectCoordinatorStale')
+      : t('projectCoordinatorLive')
+  return (
+    <span
+      className="project-coordinator-live-sync"
+      data-syncing={syncing ? 'true' : 'false'}
+      data-stale={stale ? 'true' : 'false'}
+      title={`${t('projectCoordinatorObservedAt')}: ${observedAt}`}
+      aria-live="polite"
+      aria-label={`${stateLabel} · ${relative}`}
+    >
+      <span className="project-coordinator-live-dot" aria-hidden="true" />
+      <Radio aria-hidden="true" />
+      <span>{stateLabel}</span>
+      <small>{syncing ? t('projectCoordinatorSyncing') : relative}</small>
+    </span>
+  )
+}
+
+function ProjectOverview({
+  project,
+  observedAt,
+  nowMilliseconds,
+  onNavigate
+}: Readonly<{
+  project: ProjectCoordinatorProject
+  observedAt: string
+  nowMilliseconds: number
+  onNavigate(viewId: string): void
+}>): ReactElement {
   const { t } = useTranslation('common')
   const record = project.project
+  const asOf = new Date(nowMilliseconds).toISOString()
+  const presence = projectCoordinatorWorkerPresenceSummary(project, asOf)
+  const agents = project.workerGroups.flatMap(({ agents }) => agents)
+  const readyAgents = agents.filter((agent) => (
+    projectCoordinatorAgentOperationalState(agent, asOf).state === 'ready'
+  )).length
+  const coordinator = agents.find(({ projectAvailability }) => (
+    projectAvailability.agentId === record.coordinatorAgentId
+  ))
+  const attention = projectCoordinatorAttentionSummary(project)
+  const stages = projectCoordinatorFlowStages(project)
+
   return (
-    <div className="rounded border border-ds-border bg-ds-surface p-2.5 text-xs">
-      <div className="font-semibold">{record.displayName}</div>
-      <p className="mt-1 whitespace-pre-wrap text-ds-muted">{record.goal}</p>
-      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[11px]">
-        <dt className="text-ds-muted">{t('projectCoordinatorOwner')}</dt>
-        <dd className="break-all font-mono">{record.ownerUserId}</dd>
-        <dt className="text-ds-muted">{t('projectCoordinatorCoordinator')}</dt>
-        <dd className="break-all font-mono">{record.coordinatorAgentId}</dd>
-        <dt className="text-ds-muted">{t('projectCoordinatorRevision')}</dt>
-        <dd>{record.revision}</dd>
+    <section
+      className="project-coordinator-overview"
+      aria-labelledby="project-coordinator-project-title"
+      data-project-status={record.status}
+      data-project-attention-count={attention.total}
+    >
+      <div className="project-coordinator-overview-heading">
+        <div>
+          <div className="project-coordinator-eyebrow">
+            <span>{t('projectCoordinatorActiveProject')}</span>
+            <Status value={record.status} />
+          </div>
+          <h3 id="project-coordinator-project-title">{record.displayName}</h3>
+          <p>{record.goal}</p>
+        </div>
+        <div className="project-coordinator-avatar-stack" aria-label={t('projectCoordinatorMembers')}>
+          {project.workerGroups.slice(0, 4).map((group) => {
+            const online = group.agents.some((agent) => (
+              projectCoordinatorAgentOperationalState(agent, asOf).online
+            ))
+            return (
+              <span
+                key={group.userId}
+                className="project-coordinator-avatar"
+                data-online={online ? 'true' : 'false'}
+                title={group.displayName}
+              >
+                {initials(group.displayName)}
+              </span>
+            )
+          })}
+          {project.workerGroups.length > 4 ? (
+            <span className="project-coordinator-avatar project-coordinator-avatar-more">
+              +{project.workerGroups.length - 4}
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="project-coordinator-situation-strip">
+        <div>
+          <UserRoundCheck aria-hidden="true" />
+          <span>
+            <strong>{presence.onlineUsers}/{presence.visibleUsers}</strong>
+            {t('projectCoordinatorMembersOnlineShort')}
+          </span>
+        </div>
+        <div>
+          <Bot aria-hidden="true" />
+          <span>
+            <strong>{readyAgents}/{presence.visibleAgents}</strong>
+            {t('projectCoordinatorAgentsReadyShort')}
+          </span>
+        </div>
+        <div>
+          <Workflow aria-hidden="true" />
+          <span>
+            <strong>{project.tasks.length}</strong>
+            {t('projectCoordinatorTasksShort')}
+          </span>
+        </div>
+      </div>
+
+      <div className="project-coordinator-authority-line">
+        <span className="project-coordinator-authority-glyph" aria-hidden="true">
+          <Zap />
+        </span>
+        <span>
+          <small>{t('projectCoordinatorCoordinator')}</small>
+          <strong>{coordinator?.displayName ?? shortIdentifier(record.coordinatorAgentId)}</strong>
+        </span>
+        <code title={record.coordinatorAgentId}>{shortIdentifier(record.coordinatorAgentId)}</code>
+        <span className="project-coordinator-epoch">e{record.coordinatorAuthorityEpoch}</span>
+      </div>
+
+      <ProjectFlowRail stages={stages} onNavigate={onNavigate} />
+      <AttentionDeck attention={attention} onNavigate={onNavigate} />
+      {project.finalSummary ? (
+        <ProjectOutcomeHandoff project={project} onNavigate={onNavigate} />
+      ) : null}
+
+      <footer className="project-coordinator-overview-footer">
+        <span>{t('projectCoordinatorObservedAt')}</span>
+        <time dateTime={observedAt}>{formatAbsoluteTime(observedAt)}</time>
+        <span>·</span>
+        <span>{t('projectCoordinatorRevision')} {record.revision}</span>
+      </footer>
+    </section>
+  )
+}
+
+function ProjectFlowRail({
+  stages,
+  onNavigate
+}: Readonly<{
+  stages: readonly ProjectCoordinatorFlowStage[]
+  onNavigate(viewId: string): void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  const viewByStage: Readonly<Record<ProjectCoordinatorFlowStageId, string>> = {
+    plan: 'projects',
+    dispatch: 'projects',
+    execute: 'projects',
+    review: 'reviews',
+    record: 'reviews',
+    complete: 'reviews'
+  }
+  return (
+    <div className="project-coordinator-flow" aria-label={t('projectCoordinatorFlow')}>
+      <div className="project-coordinator-flow-heading">
+        <span>{t('projectCoordinatorFlow')}</span>
+        <small>{t('projectCoordinatorFlowHint')}</small>
+      </div>
+      <ol>
+        {stages.map((stage) => (
+          <li key={stage.id} data-flow-state={stage.state}>
+            <button
+              type="button"
+              onClick={() => onNavigate(viewByStage[stage.id])}
+            >
+              <span className="project-coordinator-flow-node" aria-hidden="true">
+                {stage.state === 'complete' ? <Check />
+                  : stage.state === 'attention' ? <AlertCircle />
+                    : stage.state === 'active' ? <Activity />
+                      : <CircleDashed />}
+              </span>
+              <span className="project-coordinator-flow-label">
+                {t(flowStageMessageKey(stage.id))}
+              </span>
+              {stage.count !== null ? <small>{stage.count}</small> : null}
+              <span className="sr-only">{t(flowStageStateMessageKey(stage.state))}</span>
+            </button>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
+function AttentionDeck({
+  attention,
+  onNavigate
+}: Readonly<{
+  attention: ProjectCoordinatorAttentionSummary
+  onNavigate(viewId: string): void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  const items = [
+    {
+      id: 'plan-confirmation',
+      count: attention.planConfirmation,
+      view: 'projects',
+      label: t('projectCoordinatorAttentionPlan')
+    },
+    {
+      id: 'human-answers',
+      count: attention.humanAnswers,
+      view: 'reviews',
+      label: t('projectCoordinatorAttentionHuman')
+    },
+    {
+      id: 'result-reviews',
+      count: attention.resultReviews,
+      view: 'reviews',
+      label: t('projectCoordinatorAttentionReview')
+    },
+    {
+      id: 'revision-tasks',
+      count: attention.revisionTasks,
+      view: 'projects',
+      label: t('projectCoordinatorAttentionRevision')
+    },
+    {
+      id: 'recovery-actions',
+      count: attention.recoveryActions,
+      view: 'projects',
+      label: t('projectCoordinatorAttentionRecovery')
+    }
+  ].filter(({ count }) => count > 0)
+
+  return (
+    <div className="project-coordinator-attention" data-has-attention={attention.total > 0 ? 'true' : 'false'}>
+      <div className="project-coordinator-attention-heading">
+        {attention.total > 0 ? <AlertCircle aria-hidden="true" /> : <Check aria-hidden="true" />}
+        <span>{t('projectCoordinatorAttention')}</span>
+        {attention.total > 0 ? <strong>{attention.total}</strong> : null}
+      </div>
+      {items.length > 0 ? (
+        <nav aria-label={t('projectCoordinatorAttention')}>
+          {items.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onNavigate(item.view)}
+            >
+              <span>{item.label}</span>
+              <strong>{item.count}</strong>
+            </button>
+          ))}
+        </nav>
+      ) : (
+        <p>{t('projectCoordinatorNoAttention')}</p>
+      )}
+    </div>
+  )
+}
+
+function ProjectOutcomeHandoff({
+  project,
+  onNavigate
+}: Readonly<{
+  project: ProjectCoordinatorProject
+  onNavigate(viewId: string): void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  const meetingPackage = projectCoordinatorMeetingPackageSummary(project)
+  return (
+    <div className="project-coordinator-handoff" data-completion-handoff="true">
+      <div className="project-coordinator-handoff-heading">
+        <span aria-hidden="true"><FileText /></span>
+        <span>
+          <strong>{t('projectCoordinatorMeetingPackage')}</strong>
+          <small>{t('projectCoordinatorMeetingPackageHint')}</small>
+        </span>
+        <Status value="completed" />
+      </div>
+      <p>{project.finalSummary?.summary ?? project.project.goal}</p>
+      <dl>
+        <div>
+          <dt>{t('projectCoordinatorAcceptedResults')}</dt>
+          <dd>{meetingPackage.acceptedResults}</dd>
+        </div>
+        <div>
+          <dt>{t('projectCoordinatorObservations')}</dt>
+          <dd>{meetingPackage.observations}</dd>
+        </div>
+        <div>
+          <dt>{t('projectCoordinatorDecisions')}</dt>
+          <dd>{meetingPackage.decisions}</dd>
+        </div>
+        <div>
+          <dt>artifactRefs</dt>
+          <dd>{meetingPackage.artifactRefs.length}</dd>
+        </div>
       </dl>
+      {meetingPackage.artifactRefs.length > 0 ? (
+        <details>
+          <summary>{t('projectCoordinatorExactArtifactRefs')}</summary>
+          {meetingPackage.artifactRefs.map((artifactRef) => (
+            <code key={artifactRef}>{artifactRef}</code>
+          ))}
+        </details>
+      ) : null}
+      <div className="project-coordinator-handoff-actions">
+        <button type="button" onClick={() => onNavigate('reviews')}>
+          {t('projectCoordinatorReviewRecord')}
+        </button>
+        <button type="button" onClick={() => onNavigate('projects')}>
+          {t('projectCoordinatorStartFollowUp')}
+        </button>
+      </div>
     </div>
   )
 }
@@ -600,14 +1801,18 @@ export type ProjectCoordinatorWorkerPresenceSummary = Readonly<{
  * owned by the same Human never inflate the online member count.
  */
 export function projectCoordinatorWorkerPresenceSummary(
-  project: ProjectCoordinatorProject
+  project: ProjectCoordinatorProject,
+  observedAt?: string
 ): ProjectCoordinatorWorkerPresenceSummary {
   let onlineUsers = 0
   let onlineAgents = 0
   let visibleAgents = 0
   for (const group of project.workerGroups) {
-    const groupOnlineAgents = group.agents.filter(({ projectAvailability }) => (
-      projectAvailability.availability.connectionStatus === 'online'
+    const groupOnlineAgents = group.agents.filter((agent) => (
+      projectCoordinatorAgentOperationalState(
+        agent,
+        observedAt ?? agent.projectAvailability.availability.observedAt
+      ).online
     )).length
     onlineAgents += groupOnlineAgents
     visibleAgents += group.agents.length
@@ -826,7 +2031,9 @@ export function ProjectCoordinatorPlanSection({
                   <option value="">{t('projectCoordinatorChooseExactAgent')}</option>
                   {visibleAgents.map((agent) => (
                     <option key={agent.projectAvailability.agentId} value={agent.projectAvailability.agentId}>
-                      {agent.displayName} · {agent.projectAvailability.agentId}
+                      {agent.displayName} · {t(agentStateMessageKey(
+                        projectCoordinatorAgentOperationalState(agent).state
+                      ))} · {agent.projectAvailability.availability.runtimeCapabilityTags?.join(', ') || '—'} · {shortIdentifier(agent.projectAvailability.agentId)}
                     </option>
                   ))}
                 </select>
@@ -879,91 +2086,368 @@ export function ProjectCoordinatorPlanSection({
 }
 
 export function WorkersSection({
-  project
-}: Readonly<{ project?: ProjectCoordinatorProject }>): ReactElement {
-  const { t } = useTranslation('common')
-  const presence = project ? projectCoordinatorWorkerPresenceSummary(project) : undefined
+  project,
+  observedAt
+}: Readonly<{
+  project?: ProjectCoordinatorProject
+  observedAt?: string
+}>): ReactElement {
+  const { i18n, t } = useTranslation('common')
+  const asOf = observedAt ?? project?.workerGroups[0]?.agents[0]
+    ?.projectAvailability.availability.observedAt
+  const presence = project ? projectCoordinatorWorkerPresenceSummary(project, asOf) : undefined
+  const readyAgents = project?.workerGroups.flatMap(({ agents }) => agents).filter((agent) => (
+    projectCoordinatorAgentOperationalState(
+      agent,
+      asOf ?? agent.projectAvailability.availability.observedAt
+    ).state === 'ready'
+  )).length ?? 0
   return (
     <Section id="workers" title={t('projectCoordinatorWorkers')} icon={<UsersRound className="h-4 w-4" />}>
       {!project?.workerGroups.length ? (
         <Empty message={project ? t('projectCoordinatorNoWorkers') : undefined} />
       ) : (
-        <>
+        <div className="project-coordinator-workers">
           <div
-            className="mb-2 rounded border border-ds-border bg-ds-bg p-2 text-xs"
+            className="project-coordinator-presence-summary"
             data-project-online-users={presence?.onlineUsers}
             data-project-visible-users={presence?.visibleUsers}
             data-project-online-agents={presence?.onlineAgents}
             data-project-visible-agents={presence?.visibleAgents}
+            data-project-ready-agents={readyAgents}
           >
-            <div className="font-medium">
-              {t('projectCoordinatorOnlineMembers', {
-                online: presence?.onlineUsers,
-                total: presence?.visibleUsers
-              })}
+            <div className="project-coordinator-presence-primary">
+              <span className="project-coordinator-presence-pulse" aria-hidden="true" />
+              <span>
+                <strong>
+                  {t('projectCoordinatorOnlineMembers', {
+                    online: presence?.onlineUsers,
+                    total: presence?.visibleUsers
+                  })}
+                </strong>
+                <small>{t('projectCoordinatorPresenceSource')}</small>
+              </span>
             </div>
-            <div className="mt-0.5 text-[10px] text-ds-muted">
-              {t('projectCoordinatorOnlineAgents', {
-                online: presence?.onlineAgents,
-                total: presence?.visibleAgents
-              })}
+            <div className="project-coordinator-presence-numbers">
+              <span className="sr-only">
+                {t('projectCoordinatorOnlineAgents', {
+                  online: presence?.onlineAgents,
+                  total: presence?.visibleAgents
+                })}
+              </span>
+              <span>
+                <strong>{presence?.onlineAgents}/{presence?.visibleAgents}</strong>
+                {t('projectCoordinatorOnlineAgentsShort')}
+              </span>
+              <span>
+                <strong>{readyAgents}/{presence?.visibleAgents}</strong>
+                {t('projectCoordinatorReadyAgentsShort')}
+              </span>
             </div>
           </div>
-          {project.workerGroups.map((group) => (
-            <div key={group.userId} className="mb-2 rounded border border-ds-border p-2 text-xs">
-              <div className="flex items-start justify-between gap-2">
-                <span className="font-medium">{group.displayName}</span>
-                <Status value={group.agents[0]?.projectAvailability.membership?.state ?? 'not_member'} />
-              </div>
-              <div className="break-all text-[10px] font-mono text-ds-faint">{group.userId}</div>
-              <div className="mt-2 space-y-1.5">
-                {group.agents.map((agent) => (
-                  <div key={agent.projectAvailability.agentId} className="rounded bg-ds-bg px-2 py-1.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>{agent.displayName}</span>
-                      <Status value={agent.projectAvailability.availability.connectionStatus} />
-                    </div>
-                    <div className="break-all text-[10px] font-mono text-ds-faint">
-                      {agent.projectAvailability.agentId}
-                    </div>
-                    <div className="mt-1 text-[10px] text-ds-muted">
-                      {t('projectCoordinatorActiveTasks', {
-                        count: agent.projectAvailability.availability.activeTaskCount
-                      })}
-                    </div>
+
+          <div className="project-coordinator-member-list">
+            {project.workerGroups.map((group) => {
+              const agentStates = group.agents.map((agent) => ({
+                agent,
+                operational: projectCoordinatorAgentOperationalState(
+                  agent,
+                  asOf ?? agent.projectAvailability.availability.observedAt
+                )
+              })).sort((left, right) => (
+                Number(right.agent.projectAvailability.agentId === project.project.coordinatorAgentId) -
+                Number(left.agent.projectAvailability.agentId === project.project.coordinatorAgentId) ||
+                operationalStateRank(left.operational.state) - operationalStateRank(right.operational.state)
+              ))
+              const groupOnline = agentStates.some(({ operational }) => operational.online)
+              const membership = group.agents.find(({ projectAvailability }) => (
+                projectAvailability.membership !== null
+              ))?.projectAvailability.membership
+              return (
+                <article
+                  key={group.userId}
+                  className="project-coordinator-member"
+                  data-member-online={groupOnline ? 'true' : 'false'}
+                >
+                  <header>
+                    <span className="project-coordinator-member-avatar" data-online={groupOnline ? 'true' : 'false'}>
+                      {initials(group.displayName)}
+                    </span>
+                    <span className="project-coordinator-member-name">
+                      <strong>{group.displayName}</strong>
+                      <code title={group.userId}>{shortIdentifier(group.userId)}</code>
+                    </span>
+                    <Status value={membership?.state ?? 'not_member'} />
+                  </header>
+
+                  <div className="project-coordinator-agent-list">
+                    {agentStates.map(({ agent, operational }) => {
+                      const availability = agent.projectAvailability.availability
+                      const isCoordinator = agent.projectAvailability.agentId ===
+                        project.project.coordinatorAgentId
+                      const heartbeat = availability.lastHeartbeatAt
+                      return (
+                        <div
+                          key={agent.projectAvailability.agentId}
+                          className="project-coordinator-agent"
+                          data-agent-state={operational.state}
+                          data-agent-online={operational.online ? 'true' : 'false'}
+                          data-runtime-ready={operational.runtimeReady ? 'true' : 'false'}
+                          data-accepts-offers={operational.acceptsNewOffers ? 'true' : 'false'}
+                          data-text-authority={operational.textAuthority ? 'true' : 'false'}
+                          data-file-authority={operational.fileAuthority ? 'true' : 'false'}
+                          data-content-ready={operational.contentReady === null
+                            ? 'not-applicable'
+                            : operational.contentReady ? 'true' : 'false'}
+                        >
+                          <div className="project-coordinator-agent-heading">
+                            <span className="project-coordinator-agent-icon" aria-hidden="true">
+                              <Bot />
+                              <span data-online={operational.online ? 'true' : 'false'} />
+                            </span>
+                            <span>
+                              <strong>{agent.displayName}</strong>
+                              <small>
+                                {heartbeat
+                                  ? t('projectCoordinatorHeartbeatRelative', {
+                                      time: formatRelativeTime(
+                                        heartbeat,
+                                        Date.parse(asOf ?? availability.observedAt),
+                                        i18n.resolvedLanguage
+                                      )
+                                    })
+                                  : t('projectCoordinatorNoHeartbeat')}
+                              </small>
+                            </span>
+                            {isCoordinator ? (
+                              <span className="project-coordinator-role-badge">
+                                <Zap aria-hidden="true" />
+                                {t('projectCoordinatorCoordinatorShort')}
+                              </span>
+                            ) : null}
+                            <Status value={operational.state} />
+                          </div>
+
+                          <div className="project-coordinator-agent-facts">
+                            <AgentFact
+                              icon={operational.online ? <Wifi /> : <WifiOff />}
+                              label={t('projectCoordinatorPresence')}
+                              value={t(operational.online
+                                ? 'projectCoordinatorOnline'
+                                : 'projectCoordinatorOffline')}
+                              state={operational.online ? 'positive' : 'muted'}
+                            />
+                            <AgentFact
+                              icon={<Activity />}
+                              label={t('projectCoordinatorRuntime')}
+                              value={t(operational.runtimeReady
+                                ? 'projectCoordinatorReady'
+                                : 'projectCoordinatorUnavailable')}
+                              state={operational.runtimeReady ? 'positive' : 'warning'}
+                            />
+                            <AgentFact
+                              icon={<Zap />}
+                              label={t('projectCoordinatorOfferIntake')}
+                              value={t(operational.acceptsNewOffers
+                                ? 'projectCoordinatorOpen'
+                                : 'projectCoordinatorPaused')}
+                              state={operational.acceptsNewOffers ? 'positive' : 'warning'}
+                            />
+                            <AgentFact
+                              icon={<Clock3 />}
+                              label={t('projectCoordinatorLoad')}
+                              value={String(availability.activeTaskCount)}
+                              state={availability.activeTaskCount === 0 ? 'neutral' : 'active'}
+                            />
+                          </div>
+
+                          <div className="project-coordinator-authority-chips" aria-label={t('projectCoordinatorTaskAuthority')}>
+                            <span data-eligible={operational.textAuthority ? 'true' : 'false'}>
+                              <ShieldAlert aria-hidden="true" />
+                              {t('projectCoordinatorTextTasks')}
+                            </span>
+                            <span data-eligible={operational.fileAuthority ? 'true' : 'false'}>
+                              <FileText aria-hidden="true" />
+                              {t('projectCoordinatorFileTasks')}
+                            </span>
+                            <span data-eligible={operational.contentReady === false ? 'false' : 'true'}>
+                              <Warehouse aria-hidden="true" />
+                              {operational.contentReady === null
+                                ? t('projectCoordinatorContentNotRequired')
+                                : t(operational.contentReady
+                                    ? 'projectCoordinatorContentReady'
+                                    : 'projectCoordinatorContentBlocked')}
+                            </span>
+                          </div>
+
+                          <div className="project-coordinator-capabilities">
+                            <span>{t('projectCoordinatorCapabilities')}</span>
+                            {availability.runtimeCapabilityTags.length > 0
+                              ? availability.runtimeCapabilityTags.map((tag) => <code key={tag}>{tag}</code>)
+                              : <small>{t('projectCoordinatorNoCapabilities')}</small>}
+                          </div>
+
+                          <details className="project-coordinator-agent-identifiers">
+                            <summary>{t('projectCoordinatorExactIdentity')}</summary>
+                            <dl>
+                              <dt>Agent</dt>
+                              <dd>{agent.projectAvailability.agentId}</dd>
+                              <dt>Device</dt>
+                              <dd>{availability.deviceId}</dd>
+                              <dt>{t('projectCoordinatorRevision')}</dt>
+                              <dd>{agent.projectAvailability.revision}</dd>
+                            </dl>
+                          </details>
+                        </div>
+                      )
+                    })}
                   </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </>
+                </article>
+              )
+            })}
+          </div>
+        </div>
       )}
     </Section>
   )
 }
 
+function AgentFact({
+  icon,
+  label,
+  value,
+  state
+}: Readonly<{
+  icon: ReactNode
+  label: string
+  value: string
+  state: 'positive' | 'warning' | 'muted' | 'neutral' | 'active'
+}>): ReactElement {
+  return (
+    <span className="project-coordinator-agent-fact" data-fact-state={state}>
+      <span aria-hidden="true">{icon}</span>
+      <small>{label}</small>
+      <strong>{value}</strong>
+    </span>
+  )
+}
+
 function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProject }>): ReactElement {
   const { t } = useTranslation('common')
+  const queue = project ? {
+    active: project.tasks.filter(({ task }) => (
+      task.status === 'offered' || task.status === 'in_progress'
+    )).length,
+    review: project.tasks.filter(({ task }) => task.status === 'awaiting_review').length,
+    attention: project.tasks.filter(({ task }) => (
+      task.status === 'needs_human' ||
+      task.status === 'revision_requested' ||
+      task.status === 'manual_recovery_required' ||
+      task.status === 'failed'
+    )).length,
+    completed: project.tasks.filter(({ task }) => task.status === 'completed').length
+  } : undefined
   return (
     <Section id="tasks" title={t('projectCoordinatorTasks')} icon={<FileCheck2 className="h-4 w-4" />}>
       {!project?.tasks.length ? <Empty message={project ? t('projectCoordinatorNoTasks') : undefined} /> : (
-        <div className="space-y-2 text-xs">
-          {project.tasks.map((task) => (
-            <div key={task.task.taskId} className="rounded border border-ds-border p-2">
-              <div className="flex items-start justify-between gap-2">
-                <span className="font-medium">{task.task.title}</span>
-                <Status value={task.task.status} />
-              </div>
-              <div className="mt-1 break-all text-[10px] font-mono text-ds-faint">
-                {task.task.taskId}
-                {task.task.currentExecutionId
-                  ? ` · ${task.executions.find(({ executionId }) => (
-                      executionId === task.task.currentExecutionId
-                    ))?.assigneeAgentId ?? task.task.currentExecutionId}`
-                  : ''}
-              </div>
-            </div>
-          ))}
+        <div className="project-coordinator-tasks">
+          <div className="project-coordinator-task-queue" aria-label={t('projectCoordinatorTaskQueue')}>
+            <span data-queue-state="active">
+              <Activity aria-hidden="true" />
+              <strong>{queue?.active}</strong>
+              {t('projectCoordinatorQueueActive')}
+            </span>
+            <span data-queue-state="review">
+              <ClipboardCheck aria-hidden="true" />
+              <strong>{queue?.review}</strong>
+              {t('projectCoordinatorQueueReview')}
+            </span>
+            <span data-queue-state="attention">
+              <AlertCircle aria-hidden="true" />
+              <strong>{queue?.attention}</strong>
+              {t('projectCoordinatorQueueAttention')}
+            </span>
+            <span data-queue-state="complete">
+              <Check aria-hidden="true" />
+              <strong>{queue?.completed}</strong>
+              {t('projectCoordinatorQueueComplete')}
+            </span>
+          </div>
+          <div className="project-coordinator-task-list">
+            {project.tasks.map((taskView) => {
+              const task = taskView.task
+              const execution = task.currentExecutionId
+                ? taskView.executions.find(({ executionId }) => executionId === task.currentExecutionId)
+                : undefined
+              const worker = execution ? project.workerGroups.flatMap(({ agents }) => agents).find(
+                ({ projectAvailability }) => (
+                  projectAvailability.agentId === execution.assigneeAgentId
+                )
+              ) : undefined
+              return (
+                <article
+                  key={task.taskId}
+                  className="project-coordinator-task"
+                  data-task-status={task.status}
+                >
+                  <span className="project-coordinator-task-signal" aria-hidden="true" />
+                  <div className="project-coordinator-task-heading">
+                    <span className="project-coordinator-task-kind" aria-hidden="true">
+                      {task.fileIntent ? <FileText /> : <ListChecks />}
+                    </span>
+                    <span>
+                      <strong>{task.title}</strong>
+                      <small>{task.objective}</small>
+                    </span>
+                    <Status value={task.status} />
+                  </div>
+                  <dl className="project-coordinator-task-meta">
+                    <div>
+                      <dt>{t('projectCoordinatorAssignedAgent')}</dt>
+                      <dd>{worker?.displayName ?? (execution
+                        ? shortIdentifier(execution.assigneeAgentId)
+                        : t('projectCoordinatorUnassigned'))}</dd>
+                    </div>
+                    <div>
+                      <dt>{t('projectCoordinatorExecution')}</dt>
+                      <dd>{execution
+                        ? `${t('projectCoordinatorAttempt', { count: execution.attempt })} · ${execution.state.replaceAll('_', ' ')}`
+                        : '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>{t('projectCoordinatorTaskType')}</dt>
+                      <dd>{t(task.fileIntent
+                        ? 'projectCoordinatorFileTask'
+                        : 'projectCoordinatorTextTask')}</dd>
+                    </div>
+                  </dl>
+                  <details className="project-coordinator-task-details">
+                    <summary>{t('projectCoordinatorTaskDetails')}</summary>
+                    <div>
+                      <strong>{t('projectCoordinatorCompletionCriteria')}</strong>
+                      <ul>
+                        {task.completionCriteria.map((criterion) => (
+                          <li key={criterion}>{criterion}</li>
+                        ))}
+                      </ul>
+                      <dl>
+                        <dt>Task</dt>
+                        <dd>{task.taskId}</dd>
+                        {execution ? (
+                          <>
+                            <dt>Execution</dt>
+                            <dd>{execution.executionId}</dd>
+                            <dt>Agent</dt>
+                            <dd>{execution.assigneeAgentId}</dd>
+                          </>
+                        ) : null}
+                      </dl>
+                    </div>
+                  </details>
+                </article>
+              )
+            })}
+          </div>
         </div>
       )}
     </Section>
@@ -1095,7 +2579,9 @@ export function ProjectCoordinatorDecisionSection({
                 <option value="">{t('projectCoordinatorChooseExactAgent')}</option>
                 {project.workerGroups.flatMap(({ agents }) => agents).map((agent) => (
                   <option key={agent.projectAvailability.agentId} value={agent.projectAvailability.agentId}>
-                    {agent.displayName} · {agent.projectAvailability.agentId}
+                    {agent.displayName} · {t(agentStateMessageKey(
+                      projectCoordinatorAgentOperationalState(agent).state
+                    ))} · {agent.projectAvailability.availability.runtimeCapabilityTags?.join(', ') || '—'} · {shortIdentifier(agent.projectAvailability.agentId)}
                   </option>
                 ))}
               </select>
@@ -1502,7 +2988,9 @@ export function ProjectCoordinatorProvisioningSection({
                         key={agent.projectAvailability.agentId}
                         value={agent.projectAvailability.agentId}
                       >
-                        {agent.displayName} · {agent.projectAvailability.agentId}
+                        {agent.displayName} · {t(agentStateMessageKey(
+                          projectCoordinatorAgentOperationalState(agent).state
+                        ))} · {agent.projectAvailability.availability.runtimeCapabilityTags?.join(', ') || '—'} · {shortIdentifier(agent.projectAvailability.agentId)}
                       </option>
                     ))}
                   </select>
@@ -1697,12 +3185,14 @@ function Section({
 }>): ReactElement {
   return (
     <section
-      className="rounded-lg border border-ds-border bg-ds-surface p-2.5"
+      id={`project-coordinator-${id}`}
+      className="project-coordinator-section"
       data-coordinator-section={id}
+      tabIndex={-1}
     >
-      <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold">
-        {icon}
-        {title}
+      <h3>
+        <span aria-hidden="true">{icon}</span>
+        <span>{title}</span>
       </h3>
       {children}
     </section>
@@ -1711,27 +3201,185 @@ function Section({
 
 function Empty({ message }: Readonly<{ message?: string }>): ReactElement {
   const { t } = useTranslation('common')
-  return <p className="text-[11px] text-ds-muted">{message ?? t('projectCoordinatorEmpty')}</p>
+  return <p className="project-coordinator-empty">{message ?? t('projectCoordinatorEmpty')}</p>
 }
 
 function Notice({ children, tone = 'neutral' }: Readonly<{
   children: ReactNode
   tone?: 'neutral' | 'warning' | 'error'
 }>): ReactElement {
-  const toneClass = tone === 'error'
-    ? 'border-red-500/40 text-red-600'
-    : tone === 'warning'
-      ? 'border-amber-500/40 text-amber-700'
-      : 'border-ds-border text-ds-muted'
-  return <p className={`rounded border p-2 text-xs ${toneClass}`}>{children}</p>
+  return (
+    <p className="project-coordinator-notice" data-notice-tone={tone} role={tone === 'error' ? 'alert' : undefined}>
+      {children}
+    </p>
+  )
 }
 
 function Status({ value }: Readonly<{ value: string }>): ReactElement {
+  const { t } = useTranslation('common')
+  const messageKey = statusMessageKey(value)
   return (
-    <span className="shrink-0 rounded-full border border-ds-border px-1.5 py-0.5 text-[10px] text-ds-muted">
-      {value.replaceAll('_', ' ')}
+    <span
+      className="project-coordinator-status"
+      data-status={value}
+      data-status-tone={statusTone(value)}
+    >
+      {messageKey ? t(messageKey) : value.replaceAll('_', ' ')}
     </span>
   )
+}
+
+export function formatRelativeTime(
+  timestamp: string,
+  nowMilliseconds: number,
+  locale?: string
+): string {
+  const timestampMilliseconds = Date.parse(timestamp)
+  if (!Number.isFinite(timestampMilliseconds)) return '—'
+  const deltaSeconds = (timestampMilliseconds - nowMilliseconds) / 1_000
+  const absoluteSeconds = Math.abs(deltaSeconds)
+  const [value, unit] = absoluteSeconds < 60
+    ? [Math.round(deltaSeconds), 'second'] as const
+    : absoluteSeconds < 3_600
+      ? [Math.round(deltaSeconds / 60), 'minute'] as const
+      : absoluteSeconds < 86_400
+        ? [Math.round(deltaSeconds / 3_600), 'hour'] as const
+        : [Math.round(deltaSeconds / 86_400), 'day'] as const
+  return new Intl.RelativeTimeFormat(locale, {
+    numeric: 'auto',
+    style: 'narrow'
+  }).format(value, unit)
+}
+
+function formatAbsoluteTime(timestamp: string): string {
+  const date = new Date(timestamp)
+  if (!Number.isFinite(date.getTime())) return '—'
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).format(date)
+}
+
+function initials(displayName: string): string {
+  const parts = displayName.trim().split(/\s+/u).filter(Boolean)
+  if (parts.length === 0) return '·'
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toLocaleUpperCase()
+  return `${parts[0]![0] ?? ''}${parts.at(-1)?.[0] ?? ''}`.toLocaleUpperCase()
+}
+
+function shortIdentifier(identifier: string): string {
+  return identifier.length <= 14
+    ? identifier
+    : `${identifier.slice(0, 7)}…${identifier.slice(-4)}`
+}
+
+function focusCoordinatorSection(sectionId: string): void {
+  const target = globalThis.document?.getElementById(`project-coordinator-${sectionId}`)
+  if (!target) return
+  if (target.tagName === 'DETAILS') (target as HTMLDetailsElement).open = true
+  const reduceMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+  target.scrollIntoView({
+    behavior: reduceMotion ? 'auto' : 'smooth',
+    block: 'start'
+  })
+  target.focus({ preventScroll: true })
+}
+
+function operationalStateRank(
+  state: ProjectCoordinatorAgentOperationalState['state']
+): number {
+  switch (state) {
+    case 'ready': return 0
+    case 'busy': return 1
+    case 'blocked': return 2
+    case 'offline': return 3
+  }
+}
+
+function statusTone(value: string): 'positive' | 'active' | 'warning' | 'danger' | 'muted' {
+  if ([
+    'ready', 'online', 'active', 'eligible', 'completed', 'accepted', 'confirmed',
+    'match', 'bound'
+  ].includes(value)) return 'positive'
+  if ([
+    'offered', 'in_progress', 'running', 'awaiting_review', 'open', 'provisioning'
+  ].includes(value)) return 'active'
+  if ([
+    'awaiting_confirmation', 'needs_human', 'revision_requested', 'busy',
+    'pending_membership', 'membership_removal_pending', 'degraded'
+  ].includes(value)) return 'warning'
+  if ([
+    'failed', 'manual_recovery_required', 'fenced', 'suspended', 'cancelled', 'blocked'
+  ].includes(value)) return 'danger'
+  return 'muted'
+}
+
+function statusMessageKey(value: string): string | undefined {
+  switch (value) {
+    case 'active': return 'projectCoordinatorStatusActive'
+    case 'paused': return 'projectCoordinatorStatusPaused'
+    case 'completed': return 'projectCoordinatorStatusCompleted'
+    case 'cancelled': return 'projectCoordinatorStatusCancelled'
+    case 'confirmed': return 'projectCoordinatorStatusConfirmed'
+    case 'awaiting_confirmation': return 'projectCoordinatorStatusAwaitingConfirmation'
+    case 'planned': return 'projectCoordinatorStatusPlanned'
+    case 'offered': return 'projectCoordinatorStatusOffered'
+    case 'in_progress': return 'projectCoordinatorStatusInProgress'
+    case 'needs_human':
+    case 'human_needed': return 'projectCoordinatorStatusNeedsHuman'
+    case 'awaiting_review': return 'projectCoordinatorStatusAwaitingReview'
+    case 'revision_requested': return 'projectCoordinatorStatusRevisionRequested'
+    case 'manual_recovery_required': return 'projectCoordinatorStatusManualRecoveryRequired'
+    case 'failed': return 'projectCoordinatorStatusFailed'
+    case 'ready': return 'projectCoordinatorAgentReady'
+    case 'busy': return 'projectCoordinatorAgentBusy'
+    case 'blocked': return 'projectCoordinatorAgentBlocked'
+    case 'offline': return 'projectCoordinatorAgentOffline'
+    case 'online': return 'projectCoordinatorOnline'
+    case 'eligible': return 'projectCoordinatorStatusEligible'
+    case 'suspended': return 'projectCoordinatorStatusSuspended'
+    case 'fenced': return 'projectCoordinatorStatusFenced'
+    case 'pending_membership': return 'projectCoordinatorStatusPendingMembership'
+    case 'membership_removal_pending': return 'projectCoordinatorStatusMembershipRemovalPending'
+    case 'removed': return 'projectCoordinatorStatusRemoved'
+    case 'not_member': return 'projectCoordinatorStatusNotMember'
+    case 'unbound': return 'projectCoordinatorStatusUnbound'
+    case 'bound': return 'projectCoordinatorStatusBound'
+    case 'degraded': return 'projectCoordinatorStatusDegraded'
+    default: return undefined
+  }
+}
+
+function flowStageMessageKey(stage: ProjectCoordinatorFlowStageId): string {
+  switch (stage) {
+    case 'plan': return 'projectCoordinatorStagePlan'
+    case 'dispatch': return 'projectCoordinatorStageDispatch'
+    case 'execute': return 'projectCoordinatorStageExecute'
+    case 'review': return 'projectCoordinatorStageReview'
+    case 'record': return 'projectCoordinatorStageRecord'
+    case 'complete': return 'projectCoordinatorStageComplete'
+  }
+}
+
+function flowStageStateMessageKey(state: ProjectCoordinatorFlowStageState): string {
+  switch (state) {
+    case 'complete': return 'projectCoordinatorStageStateComplete'
+    case 'active': return 'projectCoordinatorStageStateActive'
+    case 'attention': return 'projectCoordinatorStageStateAttention'
+    case 'pending': return 'projectCoordinatorStageStatePending'
+  }
+}
+
+function agentStateMessageKey(
+  state: ProjectCoordinatorAgentOperationalState['state']
+): string {
+  switch (state) {
+    case 'ready': return 'projectCoordinatorAgentReady'
+    case 'busy': return 'projectCoordinatorAgentBusy'
+    case 'blocked': return 'projectCoordinatorAgentBlocked'
+    case 'offline': return 'projectCoordinatorAgentOffline'
+  }
 }
 
 function splitLines(value: string): string[] {

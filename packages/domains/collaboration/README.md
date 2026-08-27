@@ -7,6 +7,12 @@ SciForge 的统一用户—手机—Agent 协作领域包。
 ledger 和 Task adapter；renderer 只通过 Capability Broker 调用公开 capability，不使用
 领域专用 IPC、MCP 或 Host 私有路径。
 
+renderer 通过通用 `workbench.workspace-section` 合同把 `我的任务` 导航和
+`连接与设置` 抽屉贡献给 Collaboration Center。它不注册独立顶栏按钮；原有 command、
+right-panel surface 与同一 capability client 继续服务命令调用和精确深链，因此 UI 合并不会
+产生第二条 Cloud、Task 或恢复路径。Project Coordinator 不导入本包 renderer，也不识别本包
+domain ID。
+
 本地高频状态写入 `<userData>/domains/collaboration/state.json`，使用 0600 原子替换。
 非敏感 Cloud URL 保存到 package-scoped settings。User 请求只通过 identity-access
 提供的 token-free authenticated Cloud transport，OIDC Token 始终留在 Identity 私有边界。

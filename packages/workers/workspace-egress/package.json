@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/workspace-egress",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -30,7 +30,7 @@
     "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@sciforge/domain-sdk": "0.2.6",
+    "@sciforge/domain-sdk": "0.2.7",
     "zod": "^4.4.3"
   },
   "devDependencies": {

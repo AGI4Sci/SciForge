@@ -45,13 +45,23 @@ export const COLLABORATION_OPEN_COMMAND_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.command'
 )
-export const COLLABORATION_TOOLBAR_ACTION_CONTRIBUTION = contributionFor(
+export const COLLABORATION_WORKSPACE_MY_WORK_CONTRIBUTION = contributionFor(
   'renderer',
-  'renderer.workbench-toolbar-action'
+  'renderer.extension',
+  'collaboration.workspace-my-work'
 )
-export const COLLABORATION_TOOLBAR_ACTION_CONTRACT =
+export const COLLABORATION_WORKSPACE_MY_WORK_CONTRACT =
   domainPackageDefinition.contributionContracts[
-    COLLABORATION_TOOLBAR_ACTION_CONTRIBUTION.id
+    COLLABORATION_WORKSPACE_MY_WORK_CONTRIBUTION.id
+  ]!
+export const COLLABORATION_WORKSPACE_SETTINGS_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.extension',
+  'collaboration.workspace-settings'
+)
+export const COLLABORATION_WORKSPACE_SETTINGS_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    COLLABORATION_WORKSPACE_SETTINGS_CONTRIBUTION.id
   ]!
 export const COLLABORATION_I18N_CONTRIBUTION = contributionFor(
   'renderer',

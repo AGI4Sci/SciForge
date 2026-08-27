@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.collaboration",
     "displayName": "Collaboration",
-    "version": "3.2.0",
+    "version": "3.2.1",
     "hostApi": {
       "minimum": "1.5.0",
       "maximumExclusive": "2.0.0"
@@ -35,10 +35,25 @@
       "title": "Collaboration",
       "resourceKind": "collaboration"
     },
-    "collaboration.workbench-toolbar-action": {
-      "location": "workbench.topbar",
-      "commandId": "collaboration.open",
-      "label": "collaborationToolbar"
+    "collaboration.workspace-my-work": {
+      "location": "workbench.workspace-section",
+      "contractVersion": "1.0.0",
+      "workspaceId": "sciforge.collaboration-center",
+      "sectionId": "my-work",
+      "label": "collaborationCenterMyWork",
+      "description": "collaborationCenterMyWorkDescription",
+      "placement": "navigation",
+      "order": 30
+    },
+    "collaboration.workspace-settings": {
+      "location": "workbench.workspace-section",
+      "contractVersion": "1.0.0",
+      "workspaceId": "sciforge.collaboration-center",
+      "sectionId": "connections",
+      "label": "collaborationCenterConnections",
+      "description": "collaborationCenterConnectionsDescription",
+      "placement": "settings",
+      "order": 10
     }
   },
   "packaging": {
@@ -82,8 +97,14 @@
           "id": "collaboration.open"
         },
         {
-          "kind": "renderer.workbench-toolbar-action",
-          "id": "collaboration.workbench-toolbar-action"
+          "kind": "renderer.extension",
+          "id": "collaboration.workspace-my-work",
+          "priority": 30
+        },
+        {
+          "kind": "renderer.extension",
+          "id": "collaboration.workspace-settings",
+          "priority": 10
         },
         {
           "kind": "renderer.i18n-resource",

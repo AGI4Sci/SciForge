@@ -12,6 +12,8 @@ import {
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND,
+  WORKBENCH_WORKSPACE_SECTION_CONTRACT_VERSION,
+  WORKBENCH_WORKSPACE_SECTION_LOCATION,
   WORKBENCH_TOPBAR_LOCATION,
   defineDomainRendererComposerContextProviderContract,
   defineDomainRendererWorkbenchSurfaceContract,
@@ -19,6 +21,7 @@ import {
   domainRendererCommandInvocationSchema,
   domainRendererComposerContextResultSchema,
   domainRendererResourceNavigationContractSchema,
+  domainRendererWorkbenchWorkspaceSectionContractSchema,
   domainRendererWorkspacePickResultSchema,
   domainWorkbenchOpenResourceInputSchema,
   isDomainRendererCommandActive,
@@ -28,6 +31,7 @@ import {
   isDomainRendererResourceNavigationValue,
   isDomainRendererWorkbenchSurfaceValue,
   isDomainRendererWorkbenchToolbarActionValue,
+  isDomainRendererWorkbenchWorkspaceSectionValue,
   type DomainRendererCommandHandler,
   type DomainRendererCommandInvocation,
   type DomainRendererWorkbenchRightPanelRenderContext
@@ -168,7 +172,8 @@ describe('renderer extension contribution contracts', () => {
     const right = defineDomainRendererWorkbenchSurfaceContract({
       location: 'workbench.right-panel',
       title: 'Inspector',
-      resourceKind: 'fixture.inspection'
+      resourceKind: 'fixture.inspection',
+      preferredWidth: 760
     })
     const bottom = defineDomainRendererWorkbenchSurfaceContract({
       location: 'workbench.bottom-panel',
@@ -180,6 +185,7 @@ describe('renderer extension contribution contracts', () => {
     })
 
     assert.equal(right.location, 'workbench.right-panel')
+    assert.equal(right.preferredWidth, 760)
     assert.equal(bottom.location, 'workbench.bottom-panel')
     assert.equal(overlay.location, 'workbench.global-overlay')
     assert.equal(isDomainRendererWorkbenchSurfaceValue({
@@ -189,6 +195,34 @@ describe('renderer extension contribution contracts', () => {
       id: 'duplicated-manifest-id',
       render: () => ({})
     }), false)
+  })
+
+  it('publishes package-neutral composed workspace sections', () => {
+    const contract = domainRendererWorkbenchWorkspaceSectionContractSchema.parse({
+      location: WORKBENCH_WORKSPACE_SECTION_LOCATION,
+      contractVersion: WORKBENCH_WORKSPACE_SECTION_CONTRACT_VERSION,
+      workspaceId: 'fixture.research-workspace',
+      sectionId: 'tasks',
+      label: 'fixtureTasks',
+      description: 'Work assigned to the current user.',
+      placement: 'navigation',
+      order: 30
+    })
+
+    assert.equal(contract.workspaceId, 'fixture.research-workspace')
+    assert.equal(contract.sectionId, 'tasks')
+    assert.equal(isDomainRendererWorkbenchWorkspaceSectionValue({
+      icon: Object.freeze({ fixture: true }),
+      render: () => ({})
+    }), true)
+    assert.equal(isDomainRendererWorkbenchWorkspaceSectionValue({
+      render: () => ({}),
+      owner: 'fixture'
+    }), false)
+    assert.throws(() => domainRendererWorkbenchWorkspaceSectionContractSchema.parse({
+      ...contract,
+      placement: 'host-private'
+    }), z.ZodError)
   })
 
   it('keeps mounted offscreen right-panel renderers viewport-inactive', () => {

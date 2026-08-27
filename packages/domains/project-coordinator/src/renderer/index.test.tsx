@@ -2,7 +2,15 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createElement, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
+import type {
+  DomainRendererContribution,
+  DomainRendererHost
+} from '@sciforge/domain-sdk/host'
+import {
+  RENDERER_EXTENSION_CONTRIBUTION_KIND,
+  WORKBENCH_WORKSPACE_SECTION_CONTRACT_VERSION,
+  WORKBENCH_WORKSPACE_SECTION_LOCATION
+} from '@sciforge/domain-sdk/renderer'
 import type { ProjectCoordinatorProject } from '../contract.js'
 
 import {
@@ -19,11 +27,17 @@ import {
   ProjectCoordinatorProvisioningSection,
   ProjectCoordinatorTransferSection,
   WorkersSection,
+  formatRelativeTime,
+  projectCoordinatorAgentOperationalState,
+  projectCoordinatorAttentionSummary,
   projectCoordinatorCompletionInput,
   projectCoordinatorCreatedSelection,
+  projectCoordinatorFlowStages,
+  projectCoordinatorMeetingPackageSummary,
   projectCoordinatorProvisioningApplyInput,
   projectCoordinatorResultReviewInput,
   projectCoordinatorTransferCandidates,
+  projectCoordinatorWorkspaceNavigationItems,
   projectCoordinatorWorkerPresenceSummary
 } from './ProjectCoordinatorPanel.js'
 import { createProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
@@ -32,6 +46,11 @@ import {
   createProjectCoordinatorOpenCommand,
   createProjectCoordinatorRightPanelContribution
 } from './index.js'
+import {
+  SCIFORGE_COLLABORATION_CENTER_WORKSPACE_ID,
+  collectProjectCoordinatorWorkspaceSections,
+  type ProjectCoordinatorWorkspaceSection
+} from './workspace-sections.js'
 
 test('renderer entry owns one generic Workbench surface without Identity UI contributions', () => {
   const host = rendererHost([])
@@ -81,7 +100,7 @@ test('renderer entry owns one generic Workbench surface without Identity UI cont
   assert.equal(rendered.props.className, 'fixture-panel')
 })
 
-test('panel surface is limited to Coordinator, Plan, Worker, Task, review, and provisioning HCI', () => {
+test('Collaboration Center keeps package-owned HCI behind one ordered workspace navigation', () => {
   assert.deepEqual(PROJECT_COORDINATOR_PANEL_SECTION_IDS, [
     'coordinator',
     'plan',
@@ -90,6 +109,42 @@ test('panel surface is limited to Coordinator, Plan, Worker, Task, review, and p
     'reviews',
     'provisioning'
   ])
+  const workspaceSections = [
+    workspaceSection('fixture.my-work', 'fixture.collaboration', {
+      sectionId: 'my-work',
+      label: 'collaborationWorkspaceMyWork',
+      description: 'collaborationWorkspaceMyWorkDescription',
+      placement: 'navigation',
+      order: 30
+    }),
+    workspaceSection('fixture.files', 'fixture.content-space', {
+      sectionId: 'files',
+      label: 'contentSpaceWorkspaceFiles',
+      description: 'contentSpaceWorkspaceFilesDescription',
+      placement: 'navigation',
+      order: 50
+    }),
+    workspaceSection('fixture.connections', 'fixture.collaboration', {
+      sectionId: 'connections',
+      label: 'collaborationWorkspaceSettings',
+      description: 'collaborationWorkspaceSettingsDescription',
+      placement: 'settings',
+      order: 10
+    })
+  ] satisfies readonly ProjectCoordinatorWorkspaceSection[]
+  assert.deepEqual(
+    projectCoordinatorWorkspaceNavigationItems(workspaceSections).map(({ id, source }) => ({
+      id,
+      source
+    })),
+    [
+      { id: 'overview', source: 'built-in' },
+      { id: 'projects', source: 'built-in' },
+      { id: 'my-work', source: 'extension' },
+      { id: 'reviews', source: 'built-in' },
+      { id: 'files', source: 'extension' }
+    ]
+  )
   const markup = renderToStaticMarkup(createElement(ProjectCoordinatorPanel, {
     client: {
       readWorkspace: async () => ({
@@ -117,12 +172,72 @@ test('panel surface is limited to Coordinator, Plan, Worker, Task, review, and p
       reviewResult: async () => { throw new Error('unused') },
       completeProject: async () => { throw new Error('unused') }
     },
-    session: { id: 'session-1' }
+    session: { id: 'session-1' },
+    workspaceSections
   }))
-  for (const sectionId of PROJECT_COORDINATOR_PANEL_SECTION_IDS) {
-    assert.match(markup, new RegExp(`data-coordinator-section="${sectionId}"`, 'u'))
-  }
+  assert.match(markup, /data-active-workspace-view="overview"/u)
+  assert.match(markup, /id="project-coordinator-tab-overview"/u)
+  assert.match(markup, /id="project-coordinator-tab-projects"/u)
+  assert.match(markup, /id="project-coordinator-tab-my-work"/u)
+  assert.match(markup, /id="project-coordinator-tab-reviews"/u)
+  assert.match(markup, /id="project-coordinator-tab-files"/u)
+  assert.doesNotMatch(markup, /id="project-coordinator-tab-connections"/u)
   assert.doesNotMatch(markup, /password|access token|refresh token|register agent|enroll device/iu)
+})
+
+test('workspace section collector discovers package-neutral sections and fails closed on duplicates', () => {
+  const files = rendererContribution('fixture.files', 'fixture.content-space', {
+    sectionId: 'files',
+    label: 'contentSpaceWorkspaceFiles',
+    placement: 'navigation',
+    order: 50
+  })
+  const work = rendererContribution('fixture.my-work', 'fixture.collaboration', {
+    sectionId: 'my-work',
+    label: 'collaborationWorkspaceMyWork',
+    placement: 'navigation',
+    order: 30
+  })
+  const settings = rendererContribution('fixture.settings', 'fixture.collaboration', {
+    sectionId: 'connections',
+    label: 'collaborationWorkspaceSettings',
+    placement: 'settings',
+    order: 10
+  })
+  const unrelated = rendererContribution('fixture.unrelated', 'fixture.other', {
+    workspaceId: 'fixture.other-workspace',
+    sectionId: 'other',
+    label: 'otherSection',
+    placement: 'navigation',
+    order: 1
+  })
+  const host = rendererHostWithContributions([files, work, settings, unrelated])
+
+  const sections = collectProjectCoordinatorWorkspaceSections(host)
+  assert.deepEqual(sections.map(({ sectionId, ownerId }) => ({ sectionId, ownerId })), [
+    { sectionId: 'connections', ownerId: 'fixture.collaboration' },
+    { sectionId: 'my-work', ownerId: 'fixture.collaboration' },
+    { sectionId: 'files', ownerId: 'fixture.content-space' }
+  ])
+  assert.ok(Object.isFrozen(sections))
+  assert.equal(sections[0]?.render({
+    active: true,
+    className: 'fixture-section',
+    session: { id: 'session-1' }
+  }).type, 'div')
+
+  const duplicate = rendererContribution('fixture.files-duplicate', 'fixture.other', {
+    sectionId: 'files',
+    label: 'duplicateFiles',
+    placement: 'navigation',
+    order: 60
+  })
+  assert.throws(
+    () => collectProjectCoordinatorWorkspaceSections(
+      rendererHostWithContributions([files, duplicate])
+    ),
+    /navigation\/files is duplicated/u
+  )
 })
 
 test('Coordinator transfer HCI is Owner-only, exact-Agent, and shows the old authority fence', () => {
@@ -179,6 +294,116 @@ test('Worker HCI counts distinct online Users and exact Agents from the Cloud pr
   assert.match(markup, /data-project-visible-agents="3"/u)
   assert.match(markup, /projectCoordinatorOnlineMembers/u)
   assert.match(markup, /projectCoordinatorOnlineAgents/u)
+  assert.match(markup, /data-agent-state="blocked"/u)
+  assert.match(markup, /data-agent-online="true"/u)
+  assert.match(markup, /data-runtime-ready="true"/u)
+  assert.match(markup, /data-text-authority="false"/u)
+
+  assert.deepEqual(
+    projectCoordinatorWorkerPresenceSummary(
+      offlineMember,
+      '2026-08-25T03:00:00.000Z'
+    ),
+    {
+      onlineUsers: 0,
+      visibleUsers: 2,
+      onlineAgents: 0,
+      visibleAgents: 3
+    }
+  )
+})
+
+test('operational Agent state never collapses online presence into Project eligibility', () => {
+  const project = coordinatorTransferProjectFixture()
+  const agent = project.workerGroups[0]!.agents[0]!
+  const onlineWithoutAuthority = projectCoordinatorAgentOperationalState(agent)
+  assert.deepEqual(onlineWithoutAuthority, {
+    state: 'blocked',
+    online: true,
+    fresh: true,
+    runtimeReady: true,
+    acceptsNewOffers: true,
+    projectMember: true,
+    textAuthority: false,
+    fileAuthority: false,
+    contentReady: null
+  })
+
+  const eligibleAgent = {
+    ...agent,
+    projectAvailability: {
+      ...agent.projectAvailability,
+      taskAuthorities: [{ scope: 'text_tasks', state: 'eligible' }]
+    }
+  } as unknown as typeof agent
+  assert.equal(projectCoordinatorAgentOperationalState(eligibleAgent).state, 'ready')
+  assert.equal(projectCoordinatorAgentOperationalState({
+    ...eligibleAgent,
+    projectAvailability: {
+      ...eligibleAgent.projectAvailability,
+      availability: {
+        ...eligibleAgent.projectAvailability.availability,
+        acceptsNewOffers: false
+      }
+    }
+  } as never).state, 'busy')
+  assert.equal(projectCoordinatorAgentOperationalState(
+    eligibleAgent,
+    '2026-08-25T03:00:00.000Z'
+  ).state, 'offline')
+})
+
+test('workflow signal and attention derive only from canonical Project facts', () => {
+  const project = awaitingConfirmationProjectFixture() as ProjectCoordinatorProject
+  assert.deepEqual(projectCoordinatorAttentionSummary(project), {
+    planConfirmation: 1,
+    humanAnswers: 0,
+    resultReviews: 0,
+    recoveryActions: 0,
+    revisionTasks: 0,
+    total: 1
+  })
+  assert.deepEqual(projectCoordinatorFlowStages(project).map(({ id, state }) => ({ id, state })), [
+    { id: 'plan', state: 'attention' },
+    { id: 'dispatch', state: 'pending' },
+    { id: 'execute', state: 'pending' },
+    { id: 'review', state: 'pending' },
+    { id: 'record', state: 'pending' },
+    { id: 'complete', state: 'pending' }
+  ])
+  assert.notEqual(formatRelativeTime(
+    '2026-08-25T01:07:45.000Z',
+    Date.parse('2026-08-25T01:08:00.000Z'),
+    'en'
+  ), '—')
+})
+
+test('completed Project meeting package includes only accepted records and artifact refs', () => {
+  const base = decisionProjectFixture('completion')
+  const acceptedResultId = base.reviews[0]!.submission.resultSubmissionId
+  const acceptedArtifactRef = 'a'.repeat(64)
+  const completed = {
+    ...base,
+    project: { ...base.project, status: 'completed' },
+    finalSummary: {
+      acceptedResultSubmissionIds: [acceptedResultId],
+      summary: 'Final bounded summary.'
+    },
+    reviews: [{
+      ...base.reviews[0],
+      submission: {
+        ...base.reviews[0]!.submission,
+        outputs: [{ locatorDigest: acceptedArtifactRef }]
+      }
+    }],
+    records: [{ kind: 'observation' }, { kind: 'observation' }, { kind: 'decision' }]
+  } as unknown as ProjectCoordinatorProject
+  assert.deepEqual(projectCoordinatorMeetingPackageSummary(completed), {
+    acceptedResults: 1,
+    observations: 2,
+    decisions: 1,
+    artifactRefs: [acceptedArtifactRef]
+  })
 })
 
 test('command focuses an exact Project through the generic panel activation contract', () => {
@@ -996,6 +1221,78 @@ test('decision HCI derives exact review and completion CAS facts from the visibl
     records: []
   } as never, 'Final bounded summary.'), null)
 })
+
+function workspaceSection(
+  contributionId: string,
+  ownerId: string,
+  contract: Readonly<{
+    workspaceId?: string
+    sectionId: string
+    label: string
+    description?: string
+    placement: 'navigation' | 'settings'
+    order: number
+  }>
+): ProjectCoordinatorWorkspaceSection {
+  return Object.freeze({
+    location: WORKBENCH_WORKSPACE_SECTION_LOCATION,
+    contractVersion: WORKBENCH_WORKSPACE_SECTION_CONTRACT_VERSION,
+    workspaceId: contract.workspaceId ?? SCIFORGE_COLLABORATION_CENTER_WORKSPACE_ID,
+    sectionId: contract.sectionId,
+    label: contract.label,
+    ...(contract.description ? { description: contract.description } : {}),
+    placement: contract.placement,
+    order: contract.order,
+    contributionId,
+    ownerId,
+    render: ({ className }) => createElement('div', { className })
+  })
+}
+
+function rendererContribution(
+  contributionId: string,
+  ownerId: string,
+  contract: Readonly<{
+    workspaceId?: string
+    sectionId: string
+    label: string
+    description?: string
+    placement: 'navigation' | 'settings'
+    order: number
+  }>
+): DomainRendererContribution {
+  const section = workspaceSection(contributionId, ownerId, contract)
+  return Object.freeze({
+    id: contributionId,
+    kind: RENDERER_EXTENSION_CONTRIBUTION_KIND,
+    packageName: `@fixture/${ownerId}`,
+    owner: Object.freeze({ moduleId: ownerId, moduleVersion: '1.0.0' }),
+    contract: Object.freeze({
+      location: section.location,
+      contractVersion: section.contractVersion,
+      workspaceId: section.workspaceId,
+      sectionId: section.sectionId,
+      label: section.label,
+      ...(section.description ? { description: section.description } : {}),
+      placement: section.placement,
+      order: section.order
+    }),
+    value: Object.freeze({ render: section.render })
+  })
+}
+
+function rendererHostWithContributions(
+  contributions: readonly DomainRendererContribution[]
+): DomainRendererHost {
+  return {
+    ...rendererHost([]),
+    contributions: {
+      list: (kind) => kind === RENDERER_EXTENSION_CONTRIBUTION_KIND
+        ? contributions
+        : []
+    }
+  }
+}
 
 function rendererHost(opened: unknown[]): DomainRendererHost {
   return {

@@ -7,6 +7,13 @@ renderer surface ship at one package version through separate `./main` and
 composition declaration; the application Host does not contain a
 Project-Coordinator feature switch.
 
+Its renderer owns the single top-level **Collaboration Center** shell. Overview,
+Projects, and Reviews remain package-owned views. Independently installed domain
+packages add navigation or settings surfaces only through the generic
+`workbench.workspace-section` renderer-extension contract. The shell never
+imports another domain renderer or maps domain IDs, and removing a contributor
+removes only its declared section.
+
 ## Owned boundary
 
 This package owns only the Human-facing coordination surfaces for:

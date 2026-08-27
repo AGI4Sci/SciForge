@@ -29,6 +29,9 @@ export const WORKBENCH_RIGHT_PANEL_LOCATION = 'workbench.right-panel' as const
 export const WORKBENCH_BOTTOM_PANEL_LOCATION = 'workbench.bottom-panel' as const
 export const WORKBENCH_GLOBAL_OVERLAY_LOCATION = 'workbench.global-overlay' as const
 export const COMPOSER_CONTEXT_LOCATION = 'composer.context' as const
+export const WORKBENCH_WORKSPACE_SECTION_LOCATION =
+  'workbench.workspace-section' as const
+export const WORKBENCH_WORKSPACE_SECTION_CONTRACT_VERSION = '1.0.0' as const
 
 export const domainWorkbenchRightPanelPlacementSchema = z.enum(['focused', 'new'])
 
@@ -260,7 +263,8 @@ const surfaceContractFields = {
 
 export const domainRendererWorkbenchRightPanelContractSchema = z.object({
   location: z.literal(WORKBENCH_RIGHT_PANEL_LOCATION),
-  ...surfaceContractFields
+  ...surfaceContractFields,
+  preferredWidth: z.number().int().min(300).max(1_200).optional()
 }).strict()
 
 export const domainRendererWorkbenchBottomPanelContractSchema = z.object({
@@ -290,6 +294,31 @@ export type DomainRendererWorkbenchGlobalOverlayContract = z.infer<
 >
 export type DomainRendererWorkbenchSurfaceContract = z.infer<
   typeof domainRendererWorkbenchSurfaceContractSchema
+>
+
+/**
+ * Declarative navigation contributed to a package-owned composed workspace.
+ *
+ * The Host treats this as an ordinary renderer extension. The workspace owner
+ * discovers matching sections lazily, so installing or removing a contributor
+ * never requires a central feature map or a cross-package renderer import.
+ */
+export const domainRendererWorkbenchWorkspaceSectionContractSchema = z.object({
+  location: z.literal(WORKBENCH_WORKSPACE_SECTION_LOCATION),
+  contractVersion: z.literal(WORKBENCH_WORKSPACE_SECTION_CONTRACT_VERSION),
+  workspaceId: domainPackageContributionIdSchema,
+  sectionId: z.string().trim().min(1).max(96).regex(
+    /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u,
+    'Use a stable lowercase workspace section slug.'
+  ),
+  label: z.string().trim().min(1).max(160),
+  description: z.string().trim().min(1).max(320).optional(),
+  placement: z.enum(['navigation', 'settings']),
+  order: z.number().int().min(-10_000).max(10_000)
+}).strict()
+
+export type DomainRendererWorkbenchWorkspaceSectionContract = z.infer<
+  typeof domainRendererWorkbenchWorkspaceSectionContractSchema
 >
 
 export type DomainRendererWorkbenchSession = Readonly<{
@@ -346,6 +375,20 @@ export type DomainRendererWorkbenchBottomPanelValue<View = unknown> =
 export type DomainRendererWorkbenchGlobalOverlayValue<View = unknown> =
   DomainRendererWorkbenchSurfaceValue<DomainRendererWorkbenchGlobalOverlayRenderContext, View>
 
+export type DomainRendererWorkbenchWorkspaceSectionRenderContext = Readonly<{
+  active: boolean
+  className: string
+  session: DomainRendererWorkbenchSession
+}>
+
+export type DomainRendererWorkbenchWorkspaceSectionValue<
+  View = unknown,
+  Icon = unknown
+> = Readonly<{
+  icon?: Icon
+  render: (context: DomainRendererWorkbenchWorkspaceSectionRenderContext) => View
+}>
+
 export const domainRendererResourceNavigationContractSchema = z.object({
   resourceKinds: z.array(z.string().trim().min(1).max(192)).min(1).max(64),
   target: z.object({
@@ -390,6 +433,14 @@ export function isDomainRendererWorkbenchSurfaceValue(
   value: unknown
 ): value is DomainRendererWorkbenchSurfaceValue<unknown> {
   return hasOnlyKeys(value, ['render']) && typeof value.render === 'function'
+}
+
+export function isDomainRendererWorkbenchWorkspaceSectionValue(
+  value: unknown
+): value is DomainRendererWorkbenchWorkspaceSectionValue {
+  return hasOnlyKeys(value, ['icon', 'render']) &&
+    typeof value.render === 'function' &&
+    (value.icon === undefined || value.icon !== null)
 }
 
 export const domainRendererComposerContextProviderContractSchema = z.object({

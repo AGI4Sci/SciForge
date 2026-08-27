@@ -8,15 +8,18 @@
 
 ## 先读结论
 
-明天不需要安装任何外部 Codex Plugin，也不需要安装 `opencontent-base.zip`。现场使用的是
-SciForge 顶部工具栏中随源码组合到应用里的四个内置模块：
+明天不需要安装任何外部 Codex Plugin，也不需要安装 `opencontent-base.zip`。现场源码仍组合
+四个独立 domain package，但用户只需要理解两个一级入口：
 
-| 图标 / 界面名称 | 用途 | 谁操作 |
-| --- | --- | --- |
-| `Identity`（人形图标） | 本地账户、OIDC 登录、注册当前 Desktop | U0–U4 |
-| `协作 / Collaboration`（多人图标） | 连接 Cloud、注册 Agent、设置接单策略、接受或拒绝 Task | U0–U4 |
-| `Content Space`（文件夹图标） | 选择 OpenContent、连接个人账号、浏览/下载/上传 | U0–U4 |
-| `协同任务台 / Collaboration workspace`（清单图标） | 创建 Project、查看在线人数、生成/确认 Plan、复审、HumanNeeded、完成 Project | 主要由 U0 |
+| Domain package / 一级入口 | 界面位置 | 用途 | 谁操作 |
+| --- | --- | --- | --- |
+| Identity / `Identity`（人形图标） | 顶部工具栏 | 本地账户、OIDC 登录、注册当前 Desktop | U0–U4 |
+| Project Coordinator / `协同中心`（流程图标） | `概览`、`项目`、`复审` | 创建 Project、查看在线人数、生成/确认 Plan、复审、HumanNeeded、完成 Project | 主要由 U0 |
+| Collaboration / `协同中心` | `我的任务`；右上角设置中的 `连接与设置` | 连接 Cloud、注册 Agent、设置接单策略、接受或拒绝 Task | U0–U4 |
+| Content Space / `协同中心` | `文件` | 选择 OpenContent、连接个人账号、浏览/下载/上传 | U0–U4 |
+
+三个协作 domain package 只合并用户界面，包边界、Capability Broker、Cloud 投递、恢复状态机
+和 Content Space 资源权限路径保持独立。`Artifact History` 不属于本手册的操作顺序。
 
 设置 AgentRuntime 时另用左下角或应用菜单中的 `Settings`：
 
@@ -29,8 +32,8 @@ Coordinator HumanNeeded 和 Project completion。
 
 但是，按 2026-08-27 当前 source UI 审计，**完整的“只靠按钮”文件闭环仍有三个产品入口缺口**：
 
-1. `创建 Project` 要求 Human 手填 `Coordinator Agent revision`，但 `协作` 界面没有显示
-   该 revision，且在线心跳会继续推进它；普通用户无法稳定填写当前值。
+1. `创建 Project` 要求 Human 手填 `Coordinator Agent revision`，但 `协同中心 → 连接与设置`
+   没有显示该 revision，且在线心跳会继续推进它；普通用户无法稳定填写当前值。
 2. `创建 Project` 当前固定发送 `content.mode = none`，`生成 Plan 草稿` 固定使用空的
    `sourceInputLocators`；因此按钮路径不能创建需要 OpenContent provisioning 的文件 Project。
 3. U3 点击 `拒绝 Task` 后，Cloud 会正确 fence 旧 execution 并把 Task 置为
@@ -142,7 +145,7 @@ OpenContent credential、Codex credential 或完整 profile 内容。
 
 ### 3.3 Collaboration：连接 Cloud 并注册 Agent
 
-1. 点击顶部多人图标 `协作`。
+1. 点击顶部流程图标 `协同中心`，再点击右上角设置，打开 `连接与设置`。
 2. 在 `云端连接` 中确认地址精确为：
 
    ```text
@@ -161,12 +164,12 @@ OpenContent credential、Codex credential 或完整 profile 内容。
    - U0：保留 `手动接单` 即可。
 10. 每个人把自己的 User ID、Agent ID 和接单策略发给 U0，禁止发送 credential。
 
-通过标准：五个不同 User、五个不同 Desktop、五个不同 Agent，且五个 Collaboration 面板都显示
+通过标准：五个不同 User、五个不同 Desktop、五个不同 Agent，且五个 `连接与设置` 面板都显示
 Cloud connected、Agent online。
 
 ### 3.4 Content Space：无 Skill 连接 OpenContent
 
-1. 点击顶部文件夹图标 `Content Space`。
+1. 点击顶部流程图标 `协同中心`，再打开 `文件`。
 2. 在 `Content source` 下拉框选择 `OpenContent` 对应的公开 source。
 3. 若显示 `Connect OpenContent`，点击 `Connect account`。
 4. 只在操作系统私有凭据提示框中输入自己的 OpenContent 账号；SciForge 窗口中不填写凭据。
@@ -184,7 +187,7 @@ Cloud connected、Agent online。
 
 1. U0 保持自己的 Stage4 U0 profile 和 Agent 在线。
 2. U1–U4 完成第 3 节并把 `usr_…` 发给 U0。
-3. U0 点击顶部清单图标 `协同任务台`。
+3. U0 点击顶部流程图标 `协同中心`，打开 `概览`。
 4. 若界面已有 `Stage4 U0 Coordinator Count Acceptance`，在 Project 下拉框选中它。
 5. 展开 `内容供应 → Project 成员与 Task Authority`。
 6. 在 `添加精确成员` 中依次输入 U1、U2、U3、U4 的 User ID，每次点击一次 `添加精确成员`，
@@ -199,7 +202,7 @@ Cloud connected、Agent online。
 
 若同一个 User 有两台在线 Device，成员数仍按 User 去重，Agent 数按真实 Agent 数统计。
 
-证据：U0 保存一张完整 `Worker 选择` 截图；U1–U4 各保存一张 `协作` 中 Cloud connected、
+证据：U0 保存一张完整 `Worker 选择` 截图；U1–U4 各保存一张 `连接与设置` 中 Cloud connected、
 Agent online 的截图。该阶段通过只证明五人 Cloud 协作基础，不等于 OpenSpec 8.6 三文件闭环通过。
 
 ## 5. 第二阶段：完整 Project 闭环的目标按钮路径
@@ -209,8 +212,8 @@ Agent online 的截图。该阶段通过只证明五人 Cloud 协作基础，不
 
 ### 5.1 U0 创建 Project
 
-1. U0 打开 `协同任务台`。
-2. 展开 `创建 Project`。
+1. U0 打开 `协同中心 → 项目`。
+2. 点击 `新建项目`，展开 `创建 Project`。
 3. 填写：
    - `Project 名称`：`多用户协作设计评审会`；
    - `Project 目标`：复制下方目标文本；
@@ -243,7 +246,7 @@ Agent online 的截图。该阶段通过只证明五人 Cloud 协作基础，不
    重新读取成员、绑定 Project root。
 3. 核对 `已确认计划摘要` 后点击 `确认并执行内容供应`。
 4. 等待五个成员均显示 active/bound/ready。
-5. 任一成员 OpenContent ACL 不满足时，先由该成员在自己的 `Content Space` 修复连接，再点
+5. 任一成员 OpenContent ACL 不满足时，先由该成员在自己的 `协同中心 → 文件` 修复连接，再点
    `预览安全对账`；不得把 metadata 可见当成下载授权。
 
 ### 5.3 U0 生成、编辑并确认 Plan
@@ -270,14 +273,14 @@ Agent online 的截图。该阶段通过只证明五人 Cloud 协作基础，不
 
 U1：
 
-1. 打开 `协作 → Project 与 Task`。
+1. 打开 `协同中心 → 我的任务 → Project 与 Task`。
 2. 找到“架构评审”，核对 Assigned Agent 是自己的 Agent。
 3. 点击 `接受 Task`。
 4. 观察状态依次进入 accepted/in progress/awaiting review；不要另开测试 driver。
 
 U2：
 
-1. 保持 `自动接单`，打开 `协作 → Project 与 Task`。
+1. 保持 `自动接单`，打开 `协同中心 → 我的任务 → Project 与 Task`。
 2. 找到“会议纪要”；正常情况下不会出现必须手点的接受按钮。
 3. 观察本地 preflight 后自动进入执行；若 Provider/Runtime 不 ready，应 fail closed 并显示原因。
 
@@ -287,20 +290,20 @@ U2：
 
 ### 5.5 U3 拒绝，U0 改派 U4
 
-1. U3 打开 `协作 → Project 与 Task`，找到风险任务。
+1. U3 打开 `协同中心 → 我的任务 → Project 与 Task`，找到风险任务。
 2. 点击 `拒绝 Task`。
 3. U3 记录旧 execution ID，之后不得再提交任何结果。
-4. U0 在 `协同任务台 → 等待你处理 / Task` 中打开被拒任务。
+4. U0 在 `协同中心 → 复审 → 等待你处理 / Task` 中打开被拒任务。
 5. 点击 `重新指派`，选择 U4 的 exact Agent，填写未来 30 分钟的 expiry，并确认。
 6. Cloud 必须创建新的 execution ID，旧 execution 显示 fenced/rejected。
-7. U4 在自己的 `协作 → Project 与 Task` 中看到新 offer，点击 `接受 Task` 并完成。
+7. U4 在自己的 `协同中心 → 我的任务 → Project 与 Task` 中看到新 offer，点击 `接受 Task` 并完成。
 
 若第 5 步没有 `重新指派` 控件，记录 `blocked: rejected_offer_reassignment_hci`。不要让 U3 改成
 “先完成再返修”并声称 reject 已通过；那是另一条业务路径。
 
 ### 5.6 U0 复审并制造一次真实返修
 
-1. U0 打开 `协同任务台 → 结果复审`。
+1. U0 打开 `协同中心 → 复审 → 结果复审`。
 2. 对第一份合格结果点击 `在 Content Space 中打开产物`，人工查看后点击 `接受结果`。
 3. 对另一份结果填写明确的 `返修说明`，例如：
 
@@ -348,8 +351,8 @@ U2：
 | 时间 | 操作 | 通过条件 |
 | --- | --- | --- |
 | 00:00–00:20 | 五人 cold clone、build、runtime-check | 五份 `agent_runtime_ready` |
-| 00:20–00:35 | Identity、Collaboration、Agent | 5 User / 5 Device / 5 Agent online |
-| 00:35–00:45 | Content Space 连接 | 五人各自 Account connected |
+| 00:20–00:35 | Identity、协同中心连接设置、Agent | 5 User / 5 Device / 5 Agent online |
+| 00:35–00:45 | 协同中心文件连接 | 五人各自 Account connected |
 | 00:45–00:55 | U0 在线人数 Gate | `5/5 members`、`5/5 Agents` |
 | 00:55–01:05 | Project/provisioning/Plan | 三 Task 已投递 |
 | 01:05–01:25 | U1/U2 并行、U3 reject、U4 接替 | 两并行闭环 + 新 execution |
@@ -417,9 +420,9 @@ U4-01-reassigned-execution.png
 
 1. 先截图并记下角色、时间、界面、Project/Task/execution 的脱敏引用。
 2. 点击当前模块的 `刷新` 一次；不要连续盲点 mutation 按钮。
-3. Collaboration 断线时先用 `重新连接`，再观察 Inbox sequence 是否续接。
+3. Collaboration 断线时先在 `协同中心 → 连接与设置` 使用 `重新连接`，再观察 Inbox sequence 是否续接。
 4. Runtime 不 ready 时只在该人的 `Settings` 修复；禁止复制另一人的 credential/profile。
-5. OpenContent unauthorized 时由该 Human 在自己的 `Content Space` 修复；禁止 U0 分享 Provider 凭据。
+5. OpenContent unauthorized 时由该 Human 在自己的 `协同中心 → 文件` 修复；禁止 U0 分享 Provider 凭据。
 6. 任何 old execution、Device revoke、Provider removal 或 outcome_unknown 都必须 fail closed。
 7. 发现本手册列出的 UI 入口缺失时，状态记 `blocked`，不要通过服务器直接写数据绕过 Human 路径。
 

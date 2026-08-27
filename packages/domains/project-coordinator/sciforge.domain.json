@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.project-coordinator",
     "displayName": "Project Coordinator",
-    "version": "1.4.1",
+    "version": "1.4.2",
     "hostApi": {
       "minimum": "1.5.0",
       "maximumExclusive": "2.0.0"
@@ -26,7 +26,8 @@
     "project-coordinator.workbench-right-panel": {
       "location": "workbench.right-panel",
       "title": "projectCoordinatorTitle",
-      "resourceKind": "project-coordination"
+      "resourceKind": "project-coordination",
+      "preferredWidth": 760
     },
     "project-coordinator.workbench-toolbar-action": {
       "location": "workbench.topbar",

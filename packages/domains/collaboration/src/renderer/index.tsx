@@ -1,11 +1,11 @@
 import React, { lazy, type ReactElement } from 'react'
-import { UsersRound } from 'lucide-react'
+import { Inbox, Settings2, type LucideIcon } from 'lucide-react'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   defineTrustedRendererDomainPackageEntry,
   type DomainRendererCommandHandler,
   type DomainRendererWorkbenchRightPanelValue,
-  type DomainRendererWorkbenchToolbarActionValue,
+  type DomainRendererWorkbenchWorkspaceSectionValue,
   type TrustedRendererDomainPackageEntry
 } from '@sciforge/domain-sdk/renderer'
 
@@ -14,8 +14,10 @@ import {
   COLLABORATION_OPEN_COMMAND_CONTRIBUTION,
   COLLABORATION_RIGHT_PANEL_CONTRACT,
   COLLABORATION_RIGHT_PANEL_CONTRIBUTION,
-  COLLABORATION_TOOLBAR_ACTION_CONTRACT,
-  COLLABORATION_TOOLBAR_ACTION_CONTRIBUTION,
+  COLLABORATION_WORKSPACE_MY_WORK_CONTRACT,
+  COLLABORATION_WORKSPACE_MY_WORK_CONTRIBUTION,
+  COLLABORATION_WORKSPACE_SETTINGS_CONTRACT,
+  COLLABORATION_WORKSPACE_SETTINGS_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition.js'
 import { createCollaborationRendererClient } from './collaboration-capability-client.js'
@@ -33,12 +35,12 @@ const CollaborationPanel = lazy(() =>
 export type CollaborationRightPanelContribution =
   DomainRendererWorkbenchRightPanelValue<ReactElement>
 
-export type CollaborationToolbarActionContribution =
-  DomainRendererWorkbenchToolbarActionValue<typeof UsersRound>
+export type CollaborationWorkspaceSectionContribution =
+  DomainRendererWorkbenchWorkspaceSectionValue<ReactElement, LucideIcon>
 
 export type CollaborationRendererContribution =
   | CollaborationRightPanelContribution
-  | CollaborationToolbarActionContribution
+  | CollaborationWorkspaceSectionContribution
   | DomainRendererCommandHandler
   | CollaborationI18nResourceContribution
 
@@ -85,9 +87,23 @@ export function createCollaborationOpenCommand(
   })
 }
 
-export function createCollaborationToolbarAction():
-CollaborationToolbarActionContribution {
-  return Object.freeze({ icon: UsersRound })
+export function createCollaborationWorkspaceSectionContribution(
+  host: DomainRendererHost,
+  view: 'work' | 'settings'
+): CollaborationWorkspaceSectionContribution {
+  const client = createCollaborationRendererClient(host.capabilityInvoker)
+  return Object.freeze({
+    icon: view === 'work' ? Inbox : Settings2,
+    render: ({ className, session }) => (
+      <CollaborationPanel
+        client={client}
+        className={className}
+        embedded
+        session={session}
+        view={view}
+      />
+    )
+  })
 }
 
 export function createDomainRendererEntry(
@@ -106,9 +122,14 @@ export function createDomainRendererEntry(
         value: createCollaborationOpenCommand(host)
       },
       {
-        ...COLLABORATION_TOOLBAR_ACTION_CONTRIBUTION,
-        contract: COLLABORATION_TOOLBAR_ACTION_CONTRACT,
-        value: createCollaborationToolbarAction()
+        ...COLLABORATION_WORKSPACE_MY_WORK_CONTRIBUTION,
+        contract: COLLABORATION_WORKSPACE_MY_WORK_CONTRACT,
+        value: createCollaborationWorkspaceSectionContribution(host, 'work')
+      },
+      {
+        ...COLLABORATION_WORKSPACE_SETTINGS_CONTRIBUTION,
+        contract: COLLABORATION_WORKSPACE_SETTINGS_CONTRACT,
+        value: createCollaborationWorkspaceSectionContribution(host, 'settings')
       },
       {
         ...COLLABORATION_I18N_CONTRIBUTION,

@@ -60,6 +60,8 @@ export type CollaborationPanelProps = Readonly<{
   session: CollaborationPanelSession
   className?: string
   onCollapse?: () => void
+  embedded?: boolean
+  view?: 'all' | 'work' | 'settings'
 }>
 
 export function projectionLocatorKey(locator: ProjectionLocator): string {
@@ -296,7 +298,9 @@ export function CollaborationPanel({
   client,
   session,
   className = '',
-  onCollapse
+  onCollapse,
+  embedded = false,
+  view = 'all'
 }: CollaborationPanelProps): ReactElement {
   const { t } = useTranslation('common')
   const [snapshot, setSnapshot] = useState<CollaborationStatusSnapshot | null>(null)
@@ -586,9 +590,15 @@ export function CollaborationPanel({
     if (succeeded) setConfirmSelectedRelink(false)
   }, [client, runAction, selectedClosedProjection, session])
 
+  const showWork = view !== 'settings'
+  const showSettings = view !== 'work'
+
   if (loading && !snapshot) {
     return (
-      <div className={`flex h-full items-center justify-center text-xs text-ds-muted ${className}`}>
+      <div
+        className={`flex h-full items-center justify-center text-xs text-ds-muted ${className}`}
+        data-collaboration-view={view}
+      >
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         {t('collaborationLoading')}
       </div>
@@ -599,8 +609,10 @@ export function CollaborationPanel({
     <div
       className={`flex h-full min-h-0 flex-col bg-ds-card text-ds-ink ${className}`}
       data-collaboration-panel="true"
+      data-collaboration-embedded={embedded ? 'true' : 'false'}
+      data-collaboration-view={view}
     >
-      <header className="flex items-center gap-2 border-b border-ds-border px-3 py-2.5">
+      {!embedded ? <header className="flex items-center gap-2 border-b border-ds-border px-3 py-2.5">
         <Users className="h-4 w-4" />
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">
           {t('collaborationTitle')}
@@ -624,7 +636,7 @@ export function CollaborationPanel({
             <ChevronDown className="h-3.5 w-3.5" />
           </button>
         ) : null}
-      </header>
+      </header> : null}
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
         {actionError ? (
@@ -639,6 +651,8 @@ export function CollaborationPanel({
 
         {snapshot ? (
           <>
+            {showSettings ? (
+              <>
             <CloudConnectionSection
               connection={snapshot.connection}
               baseUrl={baseUrl}
@@ -901,31 +915,37 @@ export function CollaborationPanel({
                 <EmptyState>{t('collaborationNoProjections')}</EmptyState>
               ) : null}
             </section>
+              </>
+            ) : null}
 
-            <ProjectsSection
-              projects={snapshot.projects}
-              participant={participant}
-              busy={busyKey !== null}
-              onTaskOfferDecision={(executionId, decision) => {
-                void runAction(`task-offer-${decision}-${executionId}`, () =>
-                  client.decideTaskOffer(
-                    decision === 'accept'
-                      ? { executionId, decision }
-                      : { executionId, decision, reason: 'human_rejected' }
-                  )
-                )
-              }}
-            />
+            {showWork ? (
+              <>
+                <ProjectsSection
+                  projects={snapshot.projects}
+                  participant={participant}
+                  busy={busyKey !== null}
+                  onTaskOfferDecision={(executionId, decision) => {
+                    void runAction(`task-offer-${decision}-${executionId}`, () =>
+                      client.decideTaskOffer(
+                        decision === 'accept'
+                          ? { executionId, decision }
+                          : { executionId, decision, reason: 'human_rejected' }
+                      )
+                    )
+                  }}
+                />
 
-            <RecoverySection
-              queue={snapshot.queue}
-              diagnostics={snapshot.diagnostics}
-              busy={busyKey !== null}
-              onRetry={(scope, id) => void runAction(
-                `retry-${scope}-${id ?? ''}`,
-                () => client.retrySynchronization({ scope, ...(id ? { id } : {}) })
-              )}
-            />
+                <RecoverySection
+                  queue={snapshot.queue}
+                  diagnostics={snapshot.diagnostics}
+                  busy={busyKey !== null}
+                  onRetry={(scope, id) => void runAction(
+                    `retry-${scope}-${id ?? ''}`,
+                    () => client.retrySynchronization({ scope, ...(id ? { id } : {}) })
+                  )}
+                />
+              </>
+            ) : null}
           </>
         ) : (
           <ExplicitError message={t('collaborationUnavailable')} />
