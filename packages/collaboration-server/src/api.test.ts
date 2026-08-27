@@ -519,16 +519,18 @@ describe('production HTTP OIDC-only boundary', () => {
     })
   })
 
-  it('serves the canonical Provider directory and OIDC-derived atomic Project create responses', async () => {
+  it('serves the Provider directory while Project creation derives authority from the current Device Agent', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
     const identity = await seedOidcUserDevice(repository, 'http-cloud-owner', now())
+    const coordinatorBootstrap = createAgentCredentialBootstrap()
     const coordinator = await service.ensureAgent(identity.user, {
       deviceId: identity.deviceId,
       capabilities: ['project.coordinate'],
-      credentialBootstrapPublicKey: createAgentCredentialBootstrap().publicKey,
+      credentialBootstrapPublicKey: coordinatorBootstrap.publicKey,
       idempotencyKey: 'idem_http_cloud_coordinator'
     })
+    const coordinatorCredential = coordinatorBootstrap.open(coordinator.sealedCredential)
     const token = 'header.cloud.signature'
     const authentication = new AuthenticationService(repository, now, {
       isCandidate: (candidate) => candidate === token,
@@ -566,14 +568,21 @@ describe('production HTTP OIDC-only boundary', () => {
     expect(page.status).toBe(200)
     await expect(page.json()).resolves.toMatchObject({ type: 'rest.provider_directory_principal_page',
       items: [{ userId: identity.userId }] })
-    const project = await postCommand(baseUrl, {
+    const projectCommand = {
       protocolVersion: '1.0', requestId: 'req_HttpProjectCreate1', type: 'project.create',
       idempotencyKey: 'idem_http_project_create_01', displayName: 'HTTP meeting',
-      goal: 'Verify the canonical atomic response.', coordinatorAgentId: coordinator.agent.agentId,
-      expectedCoordinatorAgentRevision: coordinator.agent.revision,
+      goal: 'Verify the canonical atomic response.',
       budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 },
       content: { mode: 'none', members: [{ userId: identity.userId }] }
+    } as const
+    const oidcCreate = await postCommand(baseUrl, {
+      ...projectCommand,
+      requestId: 'req_HttpProjectCreateOidc',
+      idempotencyKey: 'idem_http_project_create_oidc'
     }, token)
+    expect(oidcCreate.status).toBe(403)
+
+    const project = await postCommand(baseUrl, projectCommand, coordinatorCredential)
     expect(project.status).toBe(200)
     const projectBody = await project.json() as { project: { projectId: string } }
     expect(projectBody).toMatchObject({ type: 'rest.project_created',

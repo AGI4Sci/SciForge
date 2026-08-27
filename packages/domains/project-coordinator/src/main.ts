@@ -574,6 +574,7 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
   const state = new ProjectCoordinatorStateStore(host.packageSettings)
   const workspace = createProjectCoordinatorCloudWorkspacePort({
     transport,
+    coordinatorCloudCommands,
     readPlanAssignments: (plan) => state.readPlanAssignments(
       plan.projectPlanId,
       plan.planDigest

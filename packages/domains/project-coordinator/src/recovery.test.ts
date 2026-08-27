@@ -486,7 +486,7 @@ function recoveryWorkspace(
     },
     observedAt: now,
     focusedProjectId: projectId,
-    availableWorkerGroups: [],
+    availableWorkerUsers: [],
     projects: [{
       project: {
         schemaVersion: 1,
@@ -521,6 +521,7 @@ function recoveryWorkspace(
         taskId,
         executionId,
         workerUserId: 'usr_RecoveryWorker01',
+        offeredByCoordinatorAgentId: 'agt_RecoveryCoord01',
         state: 'accepted',
         offeredAt: now,
         expiresAt: '2026-08-26T03:00:00.000Z',
@@ -646,6 +647,7 @@ function recoverySuccessorWorkspace(): ProjectCoordinatorWorkspace {
     taskId,
     executionId: null,
     workerUserId: 'usr_RecoveryWorker01',
+    offeredByCoordinatorAgentId: 'agt_RecoveryCoord01',
     state: 'pending',
     offeredAt: succeededAt,
     expiresAt: '2026-08-27T02:00:00.000Z',

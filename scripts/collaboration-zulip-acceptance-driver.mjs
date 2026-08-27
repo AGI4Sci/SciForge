@@ -870,12 +870,10 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       const state = stateFor(member)
       return [state.public.userId, state]
     })).values()]
-    const created = await collaborationCommand(ownerState.oidcAccessToken, {
+    const created = await collaborationCommand(coordinatorState.agentCredential, {
       type: 'project.create',
       displayName: required(label),
       goal: `Zulip 六用户真实验收 ${runId}`,
-      coordinatorAgentId: coordinator.agentId,
-      expectedCoordinatorAgentRevision: coordinatorState.agentRevision,
       budget: { maxTasks: 20, maxTasksPerRound: 20, maxCoordinationRounds: 5, maxTaskRetries: 1 },
       content: { mode: 'none', members: memberStates.map(({ public: participant }) => ({ userId: participant.userId })) },
       idempotencyKey: idempotency('project_create')

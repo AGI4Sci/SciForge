@@ -356,7 +356,7 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
         finalSummary: view.finalSummary === null ? null : toProjectFinalSummary(view.finalSummary) })
     }
     case 'project.create': {
-      const created = await service.createProject(requiredUser(actor), command)
+      const created = await service.createProject(requiredAgent(actor), command)
       return response(command, { type: 'rest.project_created', project: toProject(created.project),
         memberships: created.memberships.map(toProjectMembership),
         provisioningIntent: created.provisioningIntent === null

@@ -55,6 +55,84 @@ describe.skipIf(connectionString === undefined).sequential(
       }
     })
 
+    it('v17 removes every pre-claim pseudo Execution and preserves claimed retry provenance', async () => {
+      assertSafeStage3Database(connectionString!)
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
+      try {
+        await installRoute(pool, 'current-v16')
+        await seedV16PreclaimExecutionFixture(pool)
+
+        await runCollaborationMigrations(pool)
+
+        const executions = await pool.query(
+          `SELECT execution_id,task_id,attempt,state,accepted_at IS NOT NULL AS accepted
+           FROM sciforge_collaboration.task_executions
+           ORDER BY execution_id`
+        )
+        expect(executions.rows).toEqual([{
+          execution_id: 'exe_stage3_v17_claimed',
+          task_id: 'tsk_stage3_v17_retry',
+          attempt: 1,
+          state: 'failed',
+          accepted: true
+        }])
+
+        const tasks = await pool.query(
+          `SELECT task_id,status,current_execution_id,current_execution_state,execution_count
+           FROM sciforge_collaboration.tasks
+           ORDER BY task_id`
+        )
+        expect(tasks.rows).toEqual([
+          {
+            task_id: 'tsk_stage3_v17_pending', status: 'offered',
+            current_execution_id: null, current_execution_state: null, execution_count: 0
+          },
+          {
+            task_id: 'tsk_stage3_v17_retry', status: 'failed',
+            current_execution_id: 'exe_stage3_v17_claimed', current_execution_state: 'failed',
+            execution_count: 1
+          },
+          {
+            task_id: 'tsk_stage3_v17_timedout', status: 'revision_requested',
+            current_execution_id: null, current_execution_state: null, execution_count: 0
+          }
+        ])
+
+        const offers = await pool.query(
+          `SELECT task_offer_id,state,execution_id,offered_by_coordinator_agent_id
+           FROM sciforge_collaboration.task_offers
+           ORDER BY task_offer_id`
+        )
+        expect(offers.rows).toEqual([
+          {
+            task_offer_id: 'ofr_stage3_v17_accepted', state: 'accepted',
+            execution_id: 'exe_stage3_v17_claimed',
+            offered_by_coordinator_agent_id: 'agn_stage3_v17_coord'
+          },
+          {
+            task_offer_id: 'ofr_stage3_v17_pending', state: 'pending', execution_id: null,
+            offered_by_coordinator_agent_id: 'agn_stage3_v17_coord'
+          },
+          {
+            task_offer_id: 'ofr_stage3_v17_timedout', state: 'timed_out', execution_id: null,
+            offered_by_coordinator_agent_id: 'agn_stage3_v17_coord'
+          },
+          {
+            task_offer_id: 'ofr_stage3_v17_withdrawn', state: 'withdrawn', execution_id: null,
+            offered_by_coordinator_agent_id: 'agn_stage3_v17_coord'
+          }
+        ])
+
+        const inbox = await pool.query(
+          `SELECT message_type FROM sciforge_collaboration.inbox_messages ORDER BY sequence`
+        )
+        expect(inbox.rows).toEqual([{ message_type: 'collaboration.state.changed' }])
+        await expect(isCollaborationDatabaseReady(pool)).resolves.toBe(true)
+      } finally {
+        await pool.end()
+      }
+    })
+
     it('preserves public-v5 Project-scoped HumanNeeded and fences an unsafe Coordinator', async () => {
       assertSafeStage3Database(connectionString!)
       const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
@@ -324,8 +402,12 @@ describe.skipIf(connectionString === undefined).sequential(
       const committedReceipt = await repository.getReceipt(worker.actorKey, command.idempotencyKey)
       expect(committedInbox).toHaveLength(1)
       expect(committedInbox[0]?.payload).toMatchObject({
-        type: 'task.offer.accepted',
-        executionId: committed.execution.executionId
+        type: 'collaboration.state.changed',
+        event: {
+          type: 'task.execution.changed',
+          executionId: committed.execution.executionId,
+          state: 'accepted'
+        }
       })
       expect(committedReceipt?.operation).toBe('task.offer.accept')
       const ackCommand = {
@@ -418,7 +500,8 @@ const ROUTES: readonly CollaborationSchemaRoute[] = [
   'current-v13',
   'current-v14',
   'current-v15',
-  'current-v16'
+  'current-v16',
+  'current-v17'
 ]
 
 const BASELINE_MIGRATIONS = [
@@ -434,7 +517,8 @@ const FORWARD_MIGRATIONS = [
   '0013_full_multi_user_loop.sql',
   '0014_pre_provider_provisioning_binding.sql',
   '0015_canonical_project_created_inbox.sql',
-  '0016_user_targeted_task_offers.sql'
+  '0016_user_targeted_task_offers.sql',
+  '0017_claim_created_task_executions.sql'
 ] as const
 
 const HISTORICAL_MIGRATIONS = [
@@ -479,11 +563,137 @@ async function installRoute(pool: SqlPool, route: CollaborationSchemaRoute): Pro
     'current-v13': 3,
     'current-v14': 4,
     'current-v15': 5,
-    'current-v16': 6
+    'current-v16': 6,
+    'current-v17': 7
   }[route]
   for (const name of FORWARD_MIGRATIONS.slice(0, forwardCount)) {
     await pool.query(await migrationSource(name))
   }
+}
+
+async function seedV16PreclaimExecutionFixture(pool: SqlPool): Promise<void> {
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.user_principals
+       (user_id,display_name,status,revision,created_at,updated_at)
+     VALUES
+       ('usr_stage3_v17_owner','V17 owner','active',1,'2026-08-26T00:00:00Z','2026-08-26T00:00:00Z'),
+       ('usr_stage3_v17_worker','V17 worker','active',1,'2026-08-26T00:00:00Z','2026-08-26T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.devices
+       (device_id,user_id,installation_id,display_name,platform,public_key_jwk,
+        capability_summary,status,revision,created_at,updated_at)
+     VALUES
+       ('dev_stage3_v17_owner','usr_stage3_v17_owner','ins_stage3_v17_owner','Owner device',
+        '{"os":"linux"}'::jsonb,'{"kty":"OKP"}'::jsonb,'[]'::jsonb,'active',1,
+        '2026-08-26T00:00:00Z','2026-08-26T00:00:00Z'),
+       ('dev_stage3_v17_worker','usr_stage3_v17_worker','ins_stage3_v17_worker','Worker device',
+        '{"os":"linux"}'::jsonb,'{"kty":"OKP"}'::jsonb,'[]'::jsonb,'active',1,
+        '2026-08-26T00:00:00Z','2026-08-26T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.agent_nodes
+       (agent_id,owner_user_id,display_name,node_type,capabilities,status,connection_status,
+        credential_generation,revision,last_seen_at,updated_at,device_id)
+     VALUES
+       ('agn_stage3_v17_coord','usr_stage3_v17_owner','Coordinator','desktop','[]'::jsonb,
+        'active','online',1,1,'2026-08-26T00:00:00Z','2026-08-26T00:00:00Z',
+        'dev_stage3_v17_owner'),
+       ('agn_stage3_v17_worker','usr_stage3_v17_worker','Worker','desktop','[]'::jsonb,
+        'active','online',1,1,'2026-08-26T00:00:00Z','2026-08-26T00:00:00Z',
+        'dev_stage3_v17_worker');
+
+     INSERT INTO sciforge_collaboration.projects
+       (project_id,owner_user_id,display_name,goal,status,coordinator_agent_id,max_tasks,
+        max_tasks_per_round,max_task_retries,max_coordination_rounds,coordination_round,
+        revision,created_at,updated_at,content_mode,coordinator_authority_epoch,
+        execution_authority_epoch,content_owner_user_id)
+     VALUES
+       ('prj_stage3_v17','usr_stage3_v17_owner','V17 migration','Remove pseudo executions',
+        'active','agn_stage3_v17_coord',10,5,3,3,1,1,'2026-08-26T00:00:00Z',
+        '2026-08-26T00:00:00Z','none',1,1,NULL);
+
+     INSERT INTO sciforge_collaboration.tasks
+       (task_id,project_id,title,objective,completion_criteria,dependency_task_ids,status,
+        max_retries,coordination_round,revision,created_at,updated_at,completed_at,file_intent,
+        created_by_coordinator_agent_id,current_execution_id,current_execution_state,
+        execution_count,required_capability_tags)
+     VALUES
+       ('tsk_stage3_v17_retry','prj_stage3_v17','Retry task','Preserve the claimed retry',
+        '["done"]'::jsonb,'[]'::jsonb,'revision_requested',3,1,3,'2026-08-26T00:00:00Z',
+        '2026-08-26T00:03:00Z',NULL,NULL,'agn_stage3_v17_coord',
+        NULL,NULL,2,'[]'::jsonb),
+       ('tsk_stage3_v17_timedout','prj_stage3_v17','Timed out task','Remove an old timeout',
+        '["done"]'::jsonb,'[]'::jsonb,'revision_requested',3,1,2,'2026-08-26T00:00:00Z',
+        '2026-08-26T00:02:00Z',NULL,NULL,'agn_stage3_v17_coord',NULL,NULL,1,'[]'::jsonb),
+       ('tsk_stage3_v17_pending','prj_stage3_v17','Pending task','Preserve a v16 User offer',
+        '["done"]'::jsonb,'[]'::jsonb,'offered',3,1,1,'2026-08-26T00:00:00Z',
+        '2026-08-26T00:00:00Z',NULL,NULL,'agn_stage3_v17_coord',NULL,NULL,0,'[]'::jsonb);
+
+     INSERT INTO sciforge_collaboration.task_executions
+       (execution_id,task_id,project_id,attempt,offered_by_coordinator_agent_id,
+        assignee_user_id,assignee_agent_id,assignee_device_id,state,state_revision,fence,file_intent,
+        current_result_submission_id,offered_at,accepted_at,started_at,terminal_at,
+        revision,created_at,updated_at)
+     VALUES
+       ('exe_stage3_v17_rejected','tsk_stage3_v17_retry','prj_stage3_v17',1,
+        'agn_stage3_v17_coord','usr_stage3_v17_worker','agn_stage3_v17_worker',
+        'dev_stage3_v17_worker','rejected',1,
+        '{"schemaVersion":1,"executionId":"exe_stage3_v17_rejected","assigneeUserId":"usr_stage3_v17_worker","assigneeAgentId":"agn_stage3_v17_worker","assigneeDeviceId":"dev_stage3_v17_worker","assignmentTaskRevision":1,"projectExecutionAuthorityEpoch":1,"userTaskAuthorityEpoch":1,"bindingRevision":null,"status":"fenced","reason":"offer_rejected","fencedAt":"2026-08-26T00:01:00Z"}'::jsonb,
+        NULL,NULL,'2026-08-26T00:00:00Z',NULL,NULL,'2026-08-26T00:01:00Z',1,
+        '2026-08-26T00:00:00Z','2026-08-26T00:01:00Z'),
+       ('exe_stage3_v17_claimed','tsk_stage3_v17_retry','prj_stage3_v17',2,
+        'agn_stage3_v17_coord','usr_stage3_v17_worker','agn_stage3_v17_worker',
+        'dev_stage3_v17_worker','failed',2,
+        '{"schemaVersion":1,"executionId":"exe_stage3_v17_claimed","assigneeUserId":"usr_stage3_v17_worker","assigneeAgentId":"agn_stage3_v17_worker","assigneeDeviceId":"dev_stage3_v17_worker","assignmentTaskRevision":2,"projectExecutionAuthorityEpoch":1,"userTaskAuthorityEpoch":1,"bindingRevision":null,"status":"fenced","reason":"execution_failed","fencedAt":"2026-08-26T00:03:00Z"}'::jsonb,
+        NULL,NULL,'2026-08-26T00:02:00Z','2026-08-26T00:02:00Z',NULL,
+        '2026-08-26T00:03:00Z',2,'2026-08-26T00:02:00Z','2026-08-26T00:03:00Z'),
+       ('exe_stage3_v17_timedout','tsk_stage3_v17_timedout','prj_stage3_v17',1,
+        'agn_stage3_v17_coord','usr_stage3_v17_worker','agn_stage3_v17_worker',
+        'dev_stage3_v17_worker','timed_out',1,
+        '{"schemaVersion":1,"executionId":"exe_stage3_v17_timedout","assigneeUserId":"usr_stage3_v17_worker","assigneeAgentId":"agn_stage3_v17_worker","assigneeDeviceId":"dev_stage3_v17_worker","assignmentTaskRevision":1,"projectExecutionAuthorityEpoch":1,"userTaskAuthorityEpoch":1,"bindingRevision":null,"status":"fenced","reason":"offer_timed_out","fencedAt":"2026-08-26T00:02:00Z"}'::jsonb,
+        NULL,NULL,'2026-08-26T00:00:00Z',NULL,NULL,'2026-08-26T00:02:00Z',1,
+        '2026-08-26T00:00:00Z','2026-08-26T00:02:00Z');
+
+     UPDATE sciforge_collaboration.tasks
+     SET status='failed',completed_at='2026-08-26T00:03:00Z',
+         current_execution_id='exe_stage3_v17_claimed',current_execution_state='failed'
+     WHERE task_id='tsk_stage3_v17_retry';
+     UPDATE sciforge_collaboration.tasks
+     SET current_execution_id='exe_stage3_v17_timedout',current_execution_state='timed_out'
+     WHERE task_id='tsk_stage3_v17_timedout';
+
+     INSERT INTO sciforge_collaboration.task_offers
+       (task_offer_id,execution_id,task_id,project_id,worker_user_id,state,offered_at,
+        expires_at,responded_at,revision,created_at,updated_at)
+     VALUES
+       ('ofr_stage3_v17_withdrawn',NULL,'tsk_stage3_v17_retry','prj_stage3_v17',
+        'usr_stage3_v17_worker','withdrawn','2026-08-26T00:00:00Z','2026-08-26T01:00:00Z',
+        '2026-08-26T00:01:00Z',2,'2026-08-26T00:00:00Z','2026-08-26T00:01:00Z'),
+       ('ofr_stage3_v17_accepted','exe_stage3_v17_claimed','tsk_stage3_v17_retry','prj_stage3_v17',
+        'usr_stage3_v17_worker','accepted','2026-08-26T00:02:00Z','2026-08-26T01:02:00Z',
+        '2026-08-26T00:02:00Z',2,'2026-08-26T00:02:00Z','2026-08-26T00:02:00Z'),
+       ('ofr_stage3_v17_timedout',NULL,'tsk_stage3_v17_timedout','prj_stage3_v17',
+        'usr_stage3_v17_worker','timed_out','2026-08-26T00:00:00Z','2026-08-26T01:00:00Z',
+        '2026-08-26T00:02:00Z',2,'2026-08-26T00:00:00Z','2026-08-26T00:02:00Z'),
+       ('ofr_stage3_v17_pending',NULL,'tsk_stage3_v17_pending','prj_stage3_v17',
+        'usr_stage3_v17_worker','pending','2026-08-26T00:04:00Z','2026-08-26T01:04:00Z',
+        NULL,1,'2026-08-26T00:04:00Z','2026-08-26T00:04:00Z');
+
+     INSERT INTO sciforge_collaboration.audit_events
+       (audit_event_id,actor_kind,actor_user_id,actor_endpoint_id,actor_agent_id,action,
+        resource_kind,resource_id,outcome,metadata,created_at)
+     VALUES
+       ('aud_stage3_v17_pending','agent_device','usr_stage3_v17_owner',NULL,
+        'agn_stage3_v17_coord','task.offer.create','task_offer','ofr_stage3_v17_pending',
+        'accepted','{}'::jsonb,'2026-08-26T00:04:00Z');
+
+     INSERT INTO sciforge_collaboration.inbox_messages
+       (recipient_kind,recipient_id,sequence,message_id,message_type,payload,created_at,expires_at)
+     VALUES
+       ('agent','agn_stage3_v17_worker',1,'ibx_stage3_v17_retired','task.offer.accepted',
+        '{"type":"task.offer.accepted"}'::jsonb,'2026-08-26T00:04:00Z','2026-09-26T00:04:00Z'),
+       ('agent','agn_stage3_v17_worker',2,'ibx_stage3_v17_current','collaboration.state.changed',
+        '{"type":"collaboration.state.changed"}'::jsonb,'2026-08-26T00:04:00Z','2026-09-26T00:04:00Z')`
+  )
 }
 
 async function seedHistoricalProjectScopedRequests(pool: SqlPool): Promise<void> {
@@ -825,6 +1035,7 @@ async function seedUserOffer(
       taskId: IDS.task,
       projectId: IDS.project,
       workerUserId: IDS.workerUser,
+      offeredByCoordinatorAgentId: IDS.coordinator,
       state: 'pending',
       offeredAt: at,
       expiresAt,

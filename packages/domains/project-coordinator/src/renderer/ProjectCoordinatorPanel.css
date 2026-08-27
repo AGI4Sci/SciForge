@@ -1509,11 +1509,10 @@
 
 .project-coordinator-member > header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 7px;
   padding: 7px 8px;
-  border-bottom: 1px solid var(--pc-border-muted);
 }
 
 .project-coordinator-member-avatar {
@@ -1553,248 +1552,10 @@
   font-size: 7.5px;
 }
 
-.project-coordinator-agent-list {
-  display: grid;
-  gap: 6px;
-  padding: 7px;
-}
-
-.project-coordinator-agent {
-  position: relative;
-  overflow: hidden;
-  border: 1px solid var(--pc-border-muted);
-  border-radius: 8px;
-  background: var(--pc-surface);
-}
-
-.project-coordinator-agent::before {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 2px;
-  height: 100%;
-  background: var(--pc-faint);
-  content: "";
-}
-
-.project-coordinator-agent[data-agent-state="ready"]::before {
-  background: var(--pc-presence);
-}
-
-.project-coordinator-agent[data-agent-state="busy"]::before {
-  background: var(--pc-relay);
-}
-
-.project-coordinator-agent[data-agent-state="blocked"]::before {
-  background: var(--pc-review);
-}
-
-.project-coordinator-agent-heading {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 7px 6px 9px;
-}
-
-.project-coordinator-agent-icon {
-  position: relative;
-  display: grid;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  border-radius: 7px;
-  background: var(--pc-ice);
-  color: var(--pc-muted);
-}
-
-.project-coordinator-agent-icon > svg {
-  width: 12px;
-  height: 12px;
-}
-
-.project-coordinator-agent-icon > span {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 7px;
-  height: 7px;
-  border: 2px solid var(--pc-surface);
-  border-radius: 50%;
-  background: var(--pc-faint);
-}
-
-.project-coordinator-agent-icon > span[data-online="true"] {
-  background: var(--pc-presence);
-}
-
-.project-coordinator-agent-heading > span:nth-child(2) {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-
-.project-coordinator-agent-heading > span:nth-child(2) strong {
-  overflow: hidden;
-  font-size: 9.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-coordinator-agent-heading > span:nth-child(2) small {
-  color: var(--pc-faint);
-  font-size: 7.5px;
-}
-
-.project-coordinator-role-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px 4px;
-  border-radius: 999px;
-  background: var(--pc-relay-soft);
-  color: var(--pc-relay);
-  font-size: 7px;
-  font-weight: 700;
-}
-
-.project-coordinator-role-badge svg {
-  width: 7px;
-  height: 7px;
-}
-
-.project-coordinator-agent-facts {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin: 0 7px 7px 9px;
-  border: 1px solid var(--pc-border-muted);
-  border-radius: 7px;
-}
-
-.project-coordinator-agent-fact {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 1px 3px;
-  padding: 5px;
-}
-
-.project-coordinator-agent-fact + .project-coordinator-agent-fact {
-  border-left: 1px solid var(--pc-border-muted);
-}
-
-.project-coordinator-agent-fact > span {
-  grid-row: 1 / 3;
-  color: var(--pc-faint);
-}
-
-.project-coordinator-agent-fact svg {
-  width: 9px;
-  height: 9px;
-}
-
-.project-coordinator-agent-fact small {
-  overflow: hidden;
-  color: var(--pc-faint);
-  font-size: 6.5px;
-  line-height: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-coordinator-agent-fact strong {
-  overflow: hidden;
-  color: var(--pc-muted);
-  font-size: 7.5px;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-coordinator-agent-fact[data-fact-state="positive"] > span,
-.project-coordinator-agent-fact[data-fact-state="positive"] strong {
-  color: var(--pc-presence);
-}
-
-.project-coordinator-agent-fact[data-fact-state="warning"] > span,
-.project-coordinator-agent-fact[data-fact-state="warning"] strong {
-  color: var(--pc-review);
-}
-
-.project-coordinator-agent-fact[data-fact-state="active"] > span,
-.project-coordinator-agent-fact[data-fact-state="active"] strong {
-  color: var(--pc-relay);
-}
-
-.project-coordinator-authority-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin: 0 7px 6px 9px;
-}
-
-.project-coordinator-authority-chips span {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 5px;
-  border: 1px solid var(--pc-border-muted);
-  border-radius: 999px;
-  color: var(--pc-faint);
-  font-size: 7px;
-}
-
-.project-coordinator-authority-chips span[data-eligible="true"] {
-  border-color: color-mix(in srgb, var(--pc-presence) 20%, var(--pc-border));
-  background: var(--pc-presence-soft);
-  color: var(--pc-presence);
-}
-
-.project-coordinator-authority-chips span[data-eligible="false"] {
-  border-color: color-mix(in srgb, var(--pc-review) 24%, var(--pc-border));
-  background: var(--pc-review-soft);
-  color: var(--pc-review);
-}
-
-.project-coordinator-authority-chips svg {
-  width: 8px;
-  height: 8px;
-}
-
-.project-coordinator-capabilities {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  margin: 0 7px 7px 9px;
-  color: var(--pc-muted);
-  font-size: 7.5px;
-}
-
-.project-coordinator-capabilities > span {
-  color: var(--pc-faint);
-}
-
-.project-coordinator-capabilities code {
-  padding: 2px 4px;
-  border-radius: 4px;
-  background: var(--pc-ice);
-  color: var(--pc-muted);
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 7px;
-}
-
-.project-coordinator-capabilities small {
-  color: var(--pc-faint);
-  font-size: 7px;
-}
-
-.project-coordinator-agent-identifiers,
 .project-coordinator-task-details {
   border-top: 1px solid var(--pc-border-muted);
 }
 
-.project-coordinator-agent-identifiers > summary,
 .project-coordinator-task-details > summary {
   padding: 5px 8px 5px 9px;
   color: var(--pc-faint);
@@ -1802,7 +1563,6 @@
   cursor: pointer;
 }
 
-.project-coordinator-agent-identifiers dl,
 .project-coordinator-task-details dl {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -1813,12 +1573,10 @@
   font-size: 7px;
 }
 
-.project-coordinator-agent-identifiers dt,
 .project-coordinator-task-details dt {
   color: var(--pc-faint);
 }
 
-.project-coordinator-agent-identifiers dd,
 .project-coordinator-task-details dd {
   min-width: 0;
   margin: 0;
@@ -2111,13 +1869,6 @@
     display: none;
   }
 
-  .project-coordinator-agent-heading {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-
-  .project-coordinator-role-badge {
-    display: none;
-  }
 }
 
 @container (max-width: 520px) {

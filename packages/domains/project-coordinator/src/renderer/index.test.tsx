@@ -151,7 +151,7 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
       readWorkspace: async () => ({
         connection: { state: 'identity_required' as const },
         observedAt: '2026-08-24T09:00:00.000Z',
-        availableWorkerGroups: [],
+        availableWorkerUsers: [],
         projects: []
       }),
       createProject: async () => { throw new Error('unused') },
@@ -189,13 +189,9 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
 
 test('New Project auto-binds only this Project Coordinator and lists only Cloud Worker Users', () => {
   const project = coordinatorTransferProjectFixture()
-  const workerGroups = project.workerGroups.map((group) => ({
+  const workerUsers = project.workerGroups.map((group) => ({
     userId: group.userId,
-    displayName: group.displayName,
-    agents: group.agents.map((agent) => ({
-      displayName: agent.displayName,
-      availability: agent.projectAvailability.availability
-    }))
+    displayName: group.displayName
   }))
   const markup = renderToStaticMarkup(createElement(ProjectCreateForm, {
     defaultExpanded: true,
@@ -204,7 +200,7 @@ test('New Project auto-binds only this Project Coordinator and lists only Cloud 
     displayName: '',
     goal: '',
     selectedWorkerUserIds: [],
-    workerGroups,
+    workerUsers,
     onDisplayName: () => undefined,
     onGoal: () => undefined,
     onSubmit: () => undefined,
@@ -293,7 +289,7 @@ test('Coordinator transfer HCI is Owner-only, exact-Agent, and shows the old aut
   assert.doesNotMatch(markup, /agt_MemberAgent001/u)
 })
 
-test('Worker HCI counts distinct online Users and exact Agents from the Cloud projection', () => {
+test('Worker HCI renders only User-level online and readiness state', () => {
   const project = coordinatorTransferProjectFixture()
   const offlineMember = {
     ...project,
@@ -316,21 +312,21 @@ test('Worker HCI counts distinct online Users and exact Agents from the Cloud pr
 
   assert.deepEqual(projectCoordinatorWorkerPresenceSummary(offlineMember), {
     onlineUsers: 1,
-    visibleUsers: 2,
-    onlineAgents: 2,
-    visibleAgents: 3
+    readyUsers: 0,
+    visibleUsers: 2
   })
   const markup = renderToStaticMarkup(createElement(WorkersSection, { project: offlineMember }))
   assert.match(markup, /data-project-online-users="1"/u)
   assert.match(markup, /data-project-visible-users="2"/u)
-  assert.match(markup, /data-project-online-agents="2"/u)
-  assert.match(markup, /data-project-visible-agents="3"/u)
+  assert.match(markup, /data-project-ready-users="0"/u)
   assert.match(markup, /projectCoordinatorOnlineMembers/u)
-  assert.match(markup, /projectCoordinatorOnlineAgents/u)
-  assert.match(markup, /data-agent-state="blocked"/u)
-  assert.match(markup, /data-agent-online="true"/u)
-  assert.match(markup, /data-runtime-ready="true"/u)
-  assert.match(markup, /data-text-authority="false"/u)
+  assert.match(markup, /projectCoordinatorWorkerUsersReadyShort/u)
+  assert.match(markup, /Project Owner/u)
+  assert.match(markup, /Project Member/u)
+  assert.doesNotMatch(markup, /Current Coordinator Desktop/u)
+  assert.doesNotMatch(markup, /Owner Successor Desktop/u)
+  assert.doesNotMatch(markup, /Member Desktop/u)
+  assert.doesNotMatch(markup, /data-agent-/u)
 
   assert.deepEqual(
     projectCoordinatorWorkerPresenceSummary(
@@ -339,9 +335,8 @@ test('Worker HCI counts distinct online Users and exact Agents from the Cloud pr
     ),
     {
       onlineUsers: 0,
-      visibleUsers: 2,
-      onlineAgents: 0,
-      visibleAgents: 3
+      readyUsers: 0,
+      visibleUsers: 2
     }
   )
 })
@@ -467,7 +462,7 @@ test('renderer Project create applies the exact Cloud-returned workspace focus w
     },
     observedAt: '2026-08-25T01:08:00.000Z',
     focusedProjectId: 'prj_ProjectCreated01',
-    availableWorkerGroups: [],
+    availableWorkerUsers: [],
     projects: [awaitingConfirmationProjectFixture()]
   }
   const client = createProjectCoordinatorRendererClient({
@@ -523,7 +518,7 @@ test('renderer Coordinator transfer invokes one governed Owner command without c
     },
     observedAt: '2026-08-25T01:08:00.000Z',
     focusedProjectId: 'prj_ProjectCreated01',
-    availableWorkerGroups: [],
+    availableWorkerUsers: [],
     projects: [awaitingConfirmationProjectFixture()]
   }
   const client = createProjectCoordinatorRendererClient({
@@ -630,7 +625,7 @@ test('renderer decision HCI invokes only the four governed canonical actions', a
     connection: { state: 'ready' as const, userId: 'usr_Owner0000001', deviceId: 'dev_Device0000001' },
     observedAt: '2026-08-25T01:08:00.000Z',
     focusedProjectId: 'prj_ProjectCreated01',
-    availableWorkerGroups: [],
+    availableWorkerUsers: [],
     projects: [awaitingConfirmationProjectFixture()]
   }
   const client = createProjectCoordinatorRendererClient({
@@ -699,7 +694,7 @@ test('renderer provisioning client keeps the reviewed full plan behind its confi
     connection: { state: 'ready' as const, userId: 'usr_Owner0000001', deviceId: 'dev_Device0000001' },
     observedAt: '2026-08-25T01:08:00.000Z',
     focusedProjectId: 'prj_ProjectCreated01',
-    availableWorkerGroups: [],
+    availableWorkerUsers: [],
     projects: [contentProvisioningProjectFixture()]
   }
   const client = createProjectCoordinatorRendererClient({

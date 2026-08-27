@@ -76,7 +76,7 @@ type RecoverySuccessorTuple = Readonly<{
   action: ProjectCoordinatorProject['provisioning']['recoveryActions'][number]
   journal: ProjectCoordinatorProject['provisioning']['externalOperationJournal'][number]
   previousOffer: ProjectCoordinatorProject['offers'][number]
-  workerGroup: ProjectCoordinatorProject['workerGroups'][number]
+  workerUserId: string
 }>
 
 export function createProjectCoordinatorRecoveryPort(options: Readonly<{
@@ -241,12 +241,6 @@ export function createProjectCoordinatorRecoveryPort(options: Readonly<{
     if (!previousOffer || previousOffer.state !== 'accepted') {
       throw new Error('The abandoned execution does not resolve to its claimed User-level offer.')
     }
-    const workerGroup = project.workerGroups.find(({ userId }) => userId === input.workerUserId)
-    if (!workerGroup || !workerGroup.agents.some(({ projectAvailability }) => (
-      projectAvailability.availability.acceptsNewOffers
-    ))) {
-      throw new Error('The selected Worker User has no currently available Runtime.')
-    }
     return Object.freeze({
       workspace,
       project,
@@ -255,7 +249,7 @@ export function createProjectCoordinatorRecoveryPort(options: Readonly<{
       action,
       journal,
       previousOffer,
-      workerGroup
+      workerUserId: input.workerUserId
     })
   }
 
@@ -437,7 +431,7 @@ export function createProjectCoordinatorRecoveryPort(options: Readonly<{
           current.project.project.coordinatorAuthorityEpoch,
         expectedExecutionAuthorityEpoch:
           current.project.project.executionAuthorityEpoch,
-        workerUserId: current.workerGroup.userId,
+        workerUserId: current.workerUserId,
         offerExpiresAt: input.offerExpiresAt,
         nextFileIntent
       })
@@ -626,7 +620,7 @@ function requireExactSuccessorResponse(
     task.executionCount !== current.task.executionCount ||
     stableDigest(task.fileIntent) !== stableDigest(nextFileIntent) ||
     !offer || offer.state !== 'pending' || offer.executionId !== null ||
-    offer.workerUserId !== current.workerGroup.userId) {
+    offer.workerUserId !== current.workerUserId) {
     throw new Error('Cloud did not return the exact freshly named User-level successor offer.')
   }
   return offer.taskOfferId
@@ -652,7 +646,7 @@ function requireFreshSuccessorWorkspace(
     taskView.task.status !== 'offered' ||
     taskView.task.executionCount !== current.task.executionCount ||
     stableDigest(taskView.task.fileIntent) !== stableDigest(nextFileIntent) ||
-    !successorOffer || successorOffer.workerUserId !== current.workerGroup.userId ||
+    !successorOffer || successorOffer.workerUserId !== current.workerUserId ||
     successorOffer.executionId !== null || successorOffer.state !== 'pending' ||
     !oldExecution || oldExecution.state !== 'cancelled' ||
     oldExecution.fence.status !== 'fenced' ||

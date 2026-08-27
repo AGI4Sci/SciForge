@@ -176,6 +176,7 @@ export function defineProjectCoordinatorWorkspacePort(
 
 export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
   transport: AuthenticatedCloudTransport
+  coordinatorCloudCommands?: CoordinatorCloudCommandService
   readPlanAssignments?: (
     plan: ProjectPlan
   ) => Promise<readonly ProjectCoordinatorPlanAssignment[]>
@@ -196,17 +197,17 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
     const observedAt = now().toISOString()
     if (status.state === 'identity_required') {
       return projectCoordinatorWorkspaceSchema.parse({
-        connection: { state: 'identity_required' }, observedAt, availableWorkerGroups: [], projects: []
+        connection: { state: 'identity_required' }, observedAt, availableWorkerUsers: [], projects: []
       })
     }
     if (status.state === 'device_required') {
       return projectCoordinatorWorkspaceSchema.parse({
-        connection: { state: 'device_required', reason: status.reason }, observedAt, availableWorkerGroups: [], projects: []
+        connection: { state: 'device_required', reason: status.reason }, observedAt, availableWorkerUsers: [], projects: []
       })
     }
     if (status.state === 'unavailable') {
       return projectCoordinatorWorkspaceSchema.parse({
-        connection: { state: 'cloud_unavailable', reason: status.reason }, observedAt, availableWorkerGroups: [], projects: []
+        connection: { state: 'cloud_unavailable', reason: status.reason }, observedAt, availableWorkerUsers: [], projects: []
       })
     }
 
@@ -250,7 +251,7 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
       connection: { state: 'ready', userId: status.userId, deviceId: status.deviceId },
       observedAt: facts?.observedAt ?? workerDirectory.observedAt ?? listed.observedAt,
       ...(focusedProject ? { focusedProjectId: focusedProject.projectId } : {}),
-      availableWorkerGroups: availableWorkerGroups(workerDirectory),
+      availableWorkerUsers: availableWorkerUsers(workerDirectory),
       projects
     })
   }
@@ -263,26 +264,21 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
       if (identity.state !== 'ready') {
         throw new Error('Project creation requires an authenticated User and Device.')
       }
-      const creatorAgent = await readCurrentDeviceAgent(options.transport, requestId)
-      const response = await executeUserCloud(options.transport, {
+      if (!options.coordinatorCloudCommands) {
+        throw new Error('Project creation requires the current Device Agent command service.')
+      }
+      const response = await options.coordinatorCloudCommands.execute({
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         requestId: requestId(),
         type: 'project.create',
         idempotencyKey,
-        ...input,
-        coordinatorAgentId: creatorAgent.agentId,
-        expectedCoordinatorAgentRevision: creatorAgent.revision
+        ...input
       })
       if (response.type !== 'rest.project_created') {
         throw new Error(`Project create returned ${response.type}.`)
       }
-      if (
-        response.project.ownerUserId !== identity.userId ||
-        response.project.coordinatorAgentId !== creatorAgent.agentId
-      ) {
-        throw new Error(
-          'Project create did not preserve the exact current User and Device Agent authority.'
-        )
+      if (response.project.ownerUserId !== identity.userId) {
+        throw new Error('Project create did not preserve the current Agent owner authority.')
       }
       return projectCoordinatorProjectCreateResultSchema.parse({
         createdProjectId: response.project.projectId,
@@ -290,36 +286,6 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
       })
     }
   })
-}
-
-async function readCurrentDeviceAgent(
-  transport: AuthenticatedCloudTransport,
-  requestId: () => `req_${string}`
-) {
-  const identity = transport.status()
-  if (identity.state !== 'ready') {
-    throw new Error('Project creation requires an authenticated User and Cloud Device.')
-  }
-  // identity.deviceId is the Cloud Device identity from OIDC. It must never be
-  // compared with or replaced by the Host installation/execution node ID.
-  const response = await executeUserCloud(transport, {
-    protocolVersion: CURRENT_PROTOCOL_VERSION,
-    requestId: requestId(),
-    type: 'participant.get',
-    userId: identity.userId
-  })
-  if (response.type !== 'participant.snapshot' || response.user.userId !== identity.userId) {
-    throw new Error(`Current Device Agent lookup returned ${response.type}.`)
-  }
-  const matching = response.agents.filter((agent) => (
-    agent.ownerUserId === identity.userId &&
-    agent.deviceId === identity.deviceId &&
-    agent.lifecycleStatus === 'active'
-  ))
-  if (matching.length !== 1) {
-    throw new Error('The current Cloud Device must have exactly one active Agent Runtime.')
-  }
-  return matching[0]!
 }
 
 const generatedPlanContentSchema = z.object({
@@ -358,15 +324,17 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       const project = await readProject(input.projectId)
       const agentExecution = options.getAgentExecution()
       if (!agentExecution) throw new Error('The local Agent Runtime is unavailable.')
-      const candidates = project.workerGroups.flatMap((group) => group.agents
-        .filter(({ projectAvailability }) => projectAvailability.membership?.state === 'active')
-        .map((agent) => ({
+      const candidates = project.workerGroups
+        .filter((group) => group.agents.some(({ projectAvailability }) => (
+          projectAvailability.membership?.state === 'active'
+        )))
+        .map((group) => ({
           userId: group.userId,
-          agentId: agent.projectAvailability.agentId,
-          displayName: agent.displayName,
-          runtimeCapabilityTags: agent.projectAvailability.availability.runtimeCapabilityTags,
-          acceptsNewOffers: agent.projectAvailability.availability.acceptsNewOffers
-        })))
+          displayName: group.displayName,
+          runtimeCapabilityTags: [...new Set(group.agents.flatMap(({ projectAvailability }) => (
+            projectAvailability.availability.runtimeCapabilityTags
+          )))].sort()
+        }))
       const generated = await agentExecution.run({
         clientDirectiveId: `project-plan:${project.project.projectId}:${project.project.revision}`,
         prompt: [
@@ -374,7 +342,7 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
           `Goal: ${project.project.goal}`,
           `Owner instruction: ${input.instruction}`,
           `Budget: ${JSON.stringify(project.project.budget)}`,
-          `Exact Worker candidates: ${JSON.stringify(candidates)}`,
+          `Worker User candidates: ${JSON.stringify(candidates)}`,
           'Return only strict JSON with {tasks,rationale}. Each task must use a stable item_* ID and canonical Project Plan Task fields.'
         ].join('\n'),
         ...(input.modelId ? { model: input.modelId } : {}),
@@ -617,27 +585,6 @@ initialWorkspace: ProjectCoordinatorWorkspace): Promise<ProjectCoordinatorWorksp
     const assignment = assignmentByItem.get(item.planItemId)
     if (!assignment?.workerUserId) {
       throw new Error('Every initial Plan item requires a Worker User assignment.')
-    }
-    const workerGroup = project.workerGroups.find(({ userId }) => userId === assignment.workerUserId)
-    if (!workerGroup) throw new Error('The selected Worker User is no longer visible in Cloud.')
-    const requiredScope = item.fileIntent ? 'file_tasks' : 'text_tasks'
-    const hasEligibleRuntime = workerGroup.agents.some(({ projectAvailability: view }) => {
-      const availability = view.availability
-      return view.membership?.state === 'active' &&
-        Boolean(view.taskAuthorities?.some(({ scope, state }) => (
-          scope === requiredScope && state === 'eligible'
-        ))) &&
-        availability.agentActive &&
-        availability.deviceActive &&
-        availability.connectionStatus === 'online' &&
-        availability.runtimeReadiness === 'ready' &&
-        availability.acceptsNewOffers &&
-        Date.parse(availability.expiresAt) > Date.parse(view.observedAt) &&
-        item.requiredCapabilityTags.every((tag) => availability.runtimeCapabilityTags.includes(tag)) &&
-        (item.fileIntent === null || view.contentReadiness?.state === 'ready')
-    })
-    if (!hasEligibleRuntime) {
-      throw new Error('The selected Worker User has no currently eligible Runtime for this initial Task.')
     }
     const offerExpiresAt = new Date(options.now().getTime() + 15 * 60_000).toISOString()
     const response = await options.coordinatorCloudCommands.execute({
@@ -1307,13 +1254,10 @@ function projectWorkerGroups(
   })
 }
 
-function availableWorkerGroups(
+function availableWorkerUsers(
   workerDirectory: WorkerDirectorySnapshot
-): ProjectCoordinatorWorkspace['availableWorkerGroups'] {
-  const grouped = new Map<string, Array<Readonly<{
-    displayName: string
-    availability: WorkerAvailabilityProjection
-  }>>>()
+): ProjectCoordinatorWorkspace['availableWorkerUsers'] {
+  const userIds = new Set<string>()
   for (const availability of workerDirectory.availability) {
     const agentLabel = workerDirectory.agentLabels.find(({ agentId }) => (
       agentId === availability.agentId
@@ -1323,14 +1267,12 @@ function availableWorkerGroups(
         agentLabel.deviceId !== availability.deviceId) {
       throw new Error(`Worker availability ${availability.agentId} lacks its exact Cloud Agent label.`)
     }
-    const agents = grouped.get(availability.userId) ?? []
-    agents.push({ displayName: agentLabel.displayName, availability })
-    grouped.set(availability.userId, agents)
+    userIds.add(availability.userId)
   }
-  return [...grouped.entries()].map(([userId, agents]) => {
+  return [...userIds].map((userId) => {
     const userLabel = workerDirectory.userLabels.find((label) => label.userId === userId)
     if (!userLabel) throw new Error(`Worker User ${userId} lacks its exact Cloud label.`)
-    return { userId, displayName: userLabel.displayName, agents }
+    return { userId, displayName: userLabel.displayName }
   })
 }
 

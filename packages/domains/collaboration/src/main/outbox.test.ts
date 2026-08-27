@@ -637,6 +637,7 @@ function coordinatorOfferCollection(request: RestRequest): RestResponse {
     taskId: TEST_IDS.taskId,
     executionId: null,
     workerUserId,
+    offeredByCoordinatorAgentId: TEST_IDS.agentId,
     state: 'pending',
     offeredAt: TEST_TIMESTAMP,
     expiresAt: TEST_LATER_TIMESTAMP,

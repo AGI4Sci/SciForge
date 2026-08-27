@@ -365,6 +365,7 @@ export const taskSchema = z.object({
     task.status !== 'planned' &&
     task.status !== 'offered' &&
     task.status !== 'revision_requested' &&
+    task.status !== 'cancelled' &&
     task.currentExecutionId === null
   ) {
     context.addIssue({

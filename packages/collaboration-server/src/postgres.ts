@@ -1145,7 +1145,7 @@ class PostgresReadRepository implements CollaborationReadRepository {
        JOIN sciforge_collaboration.tasks AS task
          ON task.task_id=execution.task_id AND task.current_execution_id=execution.execution_id
        WHERE execution.assignee_agent_id=$1
-         AND execution.state IN ('offered','accepted','running','needs_human')
+         AND execution.state IN ('accepted','running','needs_human')
        ORDER BY execution.created_at,execution.execution_id`, [agentId]
     )
     return result.rows.map(mapTaskExecution)
@@ -1157,7 +1157,7 @@ class PostgresReadRepository implements CollaborationReadRepository {
        JOIN sciforge_collaboration.tasks AS task
          ON task.task_id=execution.task_id AND task.current_execution_id=execution.execution_id
        WHERE execution.assignee_device_id=$1
-         AND execution.state IN ('offered','accepted','running','needs_human')
+         AND execution.state IN ('accepted','running','needs_human')
        ORDER BY execution.created_at,execution.execution_id`, [deviceId]
     )
     return result.rows.map(mapTaskExecution)
@@ -1169,7 +1169,7 @@ class PostgresReadRepository implements CollaborationReadRepository {
        JOIN sciforge_collaboration.tasks AS task
          ON task.task_id=execution.task_id AND task.current_execution_id=execution.execution_id
        WHERE execution.assignee_user_id=$1
-         AND execution.state IN ('offered','accepted','running','needs_human')
+         AND execution.state IN ('accepted','running','needs_human')
        ORDER BY execution.created_at,execution.execution_id`, [userId]
     )
     return result.rows.map(mapTaskExecution)
@@ -1457,7 +1457,7 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
       `SELECT execution.* FROM sciforge_collaboration.task_executions AS execution
        JOIN sciforge_collaboration.tasks AS task ON task.current_execution_id=execution.execution_id
        WHERE execution.assignee_agent_id=$1
-         AND execution.state IN ('offered','accepted','running','needs_human')
+         AND execution.state IN ('accepted','running','needs_human')
        ORDER BY execution.created_at,execution.execution_id FOR UPDATE OF execution,task`, [agentId]
     )
     return result.rows.map(mapTaskExecution)
@@ -1468,7 +1468,7 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
       `SELECT execution.* FROM sciforge_collaboration.task_executions AS execution
        JOIN sciforge_collaboration.tasks AS task ON task.current_execution_id=execution.execution_id
        WHERE execution.assignee_device_id=$1
-         AND execution.state IN ('offered','accepted','running','needs_human')
+         AND execution.state IN ('accepted','running','needs_human')
        ORDER BY execution.created_at,execution.execution_id FOR UPDATE OF execution,task`, [deviceId]
     )
     return result.rows.map(mapTaskExecution)
@@ -1482,7 +1482,7 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
       `SELECT execution.* FROM sciforge_collaboration.task_executions AS execution
        JOIN sciforge_collaboration.tasks AS task ON task.current_execution_id=execution.execution_id
        WHERE execution.project_id=$1 AND execution.assignee_user_id=$2
-         AND execution.state IN ('offered','accepted','running','needs_human')
+         AND execution.state IN ('accepted','running','needs_human')
        ORDER BY execution.created_at,execution.execution_id FOR UPDATE OF execution,task`, [projectId, userId]
     )
     return result.rows.map(mapTaskExecution)
@@ -1492,10 +1492,24 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     const result = await this.sql.query(
       `SELECT execution.* FROM sciforge_collaboration.task_executions AS execution
        JOIN sciforge_collaboration.tasks AS task ON task.current_execution_id=execution.execution_id
-       WHERE execution.project_id=$1 AND execution.state IN ('offered','accepted','running','needs_human')
+       WHERE execution.project_id=$1 AND execution.state IN ('accepted','running','needs_human')
        ORDER BY execution.created_at,execution.execution_id FOR UPDATE OF execution,task`, [projectId]
     )
     return result.rows.map(mapTaskExecution)
+  }
+
+  async listPendingTaskOffersForProjectForUpdate(
+    projectId: string,
+    workerUserId?: string
+  ): Promise<StoredTaskOffer[]> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.task_offers
+       WHERE project_id=$1 AND state='pending'
+         AND ($2::text IS NULL OR worker_user_id=$2)
+       ORDER BY task_offer_id FOR UPDATE`,
+      [projectId, workerUserId ?? null]
+    )
+    return result.rows.map(mapTaskOffer)
   }
 
   async getProjectMemberForUpdate(projectId: string, userId: string): Promise<StoredProjectMember | null> {
@@ -2525,11 +2539,13 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
   async insertTaskOffer(offer: StoredTaskOffer): Promise<void> {
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.task_offers
-       (task_offer_id,execution_id,task_id,project_id,worker_user_id,state,offered_at,
-        expires_at,responded_at,revision,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+       (task_offer_id,execution_id,task_id,project_id,worker_user_id,
+        offered_by_coordinator_agent_id,state,offered_at,expires_at,responded_at,
+        revision,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       [offer.taskOfferId, offer.executionId, offer.taskId, offer.projectId, offer.workerUserId,
-        offer.state, offer.offeredAt, offer.expiresAt, offer.respondedAt, offer.revision,
+        offer.offeredByCoordinatorAgentId, offer.state, offer.offeredAt, offer.expiresAt,
+        offer.respondedAt, offer.revision,
         offer.createdAt, offer.updatedAt]
     )
   }
@@ -2914,7 +2930,7 @@ function mapTaskExecution(row: SqlRow): StoredTaskExecution {
     fence: jsonRecord(row.fence) as StoredTaskExecution['fence'],
     fileIntent: row.file_intent == null ? null : jsonRecord(row.file_intent) as StoredTaskExecution['fileIntent'],
     currentResultSubmissionId: optionalString(row, 'current_result_submission_id') ?? null,
-    offeredAt: iso(row.offered_at), acceptedAt: optionalIso(row.accepted_at) ?? null,
+    offeredAt: iso(row.offered_at), acceptedAt: iso(row.accepted_at),
     startedAt: optionalIso(row.started_at) ?? null, terminalAt: optionalIso(row.terminal_at) ?? null,
     revision: number(row.revision), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
   }
@@ -2924,6 +2940,7 @@ function mapTaskOffer(row: SqlRow): StoredTaskOffer {
     taskOfferId: string(row, 'task_offer_id'), executionId: optionalString(row, 'execution_id') ?? null,
     taskId: string(row, 'task_id'), projectId: string(row, 'project_id'),
     workerUserId: string(row, 'worker_user_id'),
+    offeredByCoordinatorAgentId: string(row, 'offered_by_coordinator_agent_id'),
     state: string(row, 'state') as StoredTaskOffer['state'], offeredAt: iso(row.offered_at),
     expiresAt: iso(row.expires_at), respondedAt: optionalIso(row.responded_at) ?? null,
     revision: number(row.revision),

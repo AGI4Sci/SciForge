@@ -15,7 +15,7 @@ if (!connectionString || !expectedSource) {
 }
 if (![
   'fresh-v4', 'upstream-v4', 'public-v5', 'staging-v9', 'a-v11', 'current-v12',
-  'current-v13', 'current-v14', 'current-v15', 'current-v16'
+  'current-v13', 'current-v14', 'current-v15', 'current-v16', 'current-v17'
 ].includes(expectedSource)) {
   throw new Error('SCIFORGE_A_POSTGRES17_SOURCE names an unsupported forward-upgrade source')
 }
@@ -156,6 +156,7 @@ try {
     })
     await tx.insertTaskOffer({
       taskOfferId: 'ofr_PgOffer000001', executionId, taskId, projectId, workerUserId,
+      offeredByCoordinatorAgentId: coordinatorId,
       state: 'accepted', offeredAt: at, expiresAt, respondedAt: at,
       revision: 1, createdAt: at, updatedAt: at
     })

@@ -20059,7 +20059,6 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
                       "needs-human",
                       "submitting",
                       "completed",
-                      "rejected",
                       "dismissed",
                       "claimed-elsewhere",
                       "closed",
@@ -20489,7 +20488,6 @@ Reads local canonical cloud Task projections and restart reconciliation state.
             "needs-human",
             "submitting",
             "completed",
-            "rejected",
             "dismissed",
             "claimed-elsewhere",
             "closed",
@@ -20570,7 +20568,6 @@ Reads local canonical cloud Task projections and restart reconciliation state.
                 "needs-human",
                 "submitting",
                 "completed",
-                "rejected",
                 "dismissed",
                 "claimed-elsewhere",
                 "closed",
@@ -76208,149 +76205,10 @@ Executes only the exact Human-confirmed full plan, journals ordinary Provider op
       }
     },
     "properties": {
-      "availableWorkerGroups": {
+      "availableWorkerUsers": {
         "items": {
           "additionalProperties": false,
           "properties": {
-            "agents": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "availability": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "acceptsNewOffers": {
-                        "type": "boolean"
-                      },
-                      "activeTaskCount": {
-                        "maximum": 10000,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "agentActive": {
-                        "type": "boolean"
-                      },
-                      "agentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "connectionStatus": {
-                        "enum": [
-                          "online",
-                          "offline"
-                        ],
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "deviceActive": {
-                        "type": "boolean"
-                      },
-                      "deviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "lastHeartbeatAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "runtimeCapabilityTags": {
-                        "items": {
-                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                          "type": "string"
-                        },
-                        "maxItems": 256,
-                        "type": "array"
-                      },
-                      "runtimeReadiness": {
-                        "enum": [
-                          "ready",
-                          "unavailable"
-                        ],
-                        "type": "string"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "type": {
-                        "const": "worker_availability_projection",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "userId",
-                      "agentId",
-                      "deviceId",
-                      "agentActive",
-                      "deviceActive",
-                      "connectionStatus",
-                      "lastHeartbeatAt",
-                      "runtimeReadiness",
-                      "runtimeCapabilityTags",
-                      "acceptsNewOffers",
-                      "activeTaskCount",
-                      "observedAt",
-                      "expiresAt"
-                    ],
-                    "type": "object"
-                  },
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "displayName",
-                  "availability"
-                ],
-                "type": "object"
-              },
-              "maxItems": 64,
-              "type": "array"
-            },
             "displayName": {
               "maxLength": 200,
               "minLength": 1,
@@ -76364,8 +76222,7 @@ Executes only the exact Human-confirmed full plan, journals ordinary Provider op
           "readOnly": true,
           "required": [
             "userId",
-            "displayName",
-            "agents"
+            "displayName"
           ],
           "type": "object"
         },
@@ -76661,6 +76518,10 @@ Executes only the exact Human-confirmed full plan, journals ordinary Provider op
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                     "type": "string"
                   },
+                  "offeredByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
                   "projectId": {
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
@@ -76728,6 +76589,7 @@ Executes only the exact Human-confirmed full plan, journals ordinary Provider op
                   "taskId",
                   "executionId",
                   "workerUserId",
+                  "offeredByCoordinatorAgentId",
                   "state",
                   "offeredAt",
                   "expiresAt",
@@ -80181,16 +80043,9 @@ Executes only the exact Human-confirmed full plan, journals ordinary Provider op
                       "additionalProperties": false,
                       "properties": {
                         "acceptedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
                         },
                         "assigneeAgentId": {
                           "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -80286,9 +80141,6 @@ Executes only the exact Human-confirmed full plan, journals ordinary Provider op
                               "anyOf": [
                                 {
                                   "enum": [
-                                    "offer_rejected",
-                                    "offer_withdrawn",
-                                    "offer_timed_out",
                                     "result_submitted",
                                     "reassigned",
                                     "device_revoked",
@@ -80492,9 +80344,7 @@ Executes only the exact Human-confirmed full plan, journals ordinary Provider op
                         },
                         "state": {
                           "enum": [
-                            "offered",
                             "accepted",
-                            "rejected",
                             "running",
                             "needs_human",
                             "result_submitted",
@@ -80502,7 +80352,6 @@ Executes only the exact Human-confirmed full plan, journals ordinary Provider op
                             "completed",
                             "failed",
                             "cancelled",
-                            "timed_out",
                             "revoked",
                             "superseded"
                           ],
@@ -80617,9 +80466,7 @@ Executes only the exact Human-confirmed full plan, journals ordinary Provider op
                         "anyOf": [
                           {
                             "enum": [
-                              "offered",
                               "accepted",
-                              "rejected",
                               "running",
                               "needs_human",
                               "result_submitted",
@@ -80627,7 +80474,6 @@ Executes only the exact Human-confirmed full plan, journals ordinary Provider op
                               "completed",
                               "failed",
                               "cancelled",
-                              "timed_out",
                               "revoked",
                               "superseded"
                             ],
@@ -81771,7 +81617,7 @@ Executes only the exact Human-confirmed full plan, journals ordinary Provider op
     "required": [
       "connection",
       "observedAt",
-      "availableWorkerGroups",
+      "availableWorkerUsers",
       "projects"
     ],
     "type": "object"
@@ -82141,149 +81987,10 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
       }
     },
     "properties": {
-      "availableWorkerGroups": {
+      "availableWorkerUsers": {
         "items": {
           "additionalProperties": false,
           "properties": {
-            "agents": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "availability": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "acceptsNewOffers": {
-                        "type": "boolean"
-                      },
-                      "activeTaskCount": {
-                        "maximum": 10000,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "agentActive": {
-                        "type": "boolean"
-                      },
-                      "agentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "connectionStatus": {
-                        "enum": [
-                          "online",
-                          "offline"
-                        ],
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "deviceActive": {
-                        "type": "boolean"
-                      },
-                      "deviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "lastHeartbeatAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "runtimeCapabilityTags": {
-                        "items": {
-                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                          "type": "string"
-                        },
-                        "maxItems": 256,
-                        "type": "array"
-                      },
-                      "runtimeReadiness": {
-                        "enum": [
-                          "ready",
-                          "unavailable"
-                        ],
-                        "type": "string"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "type": {
-                        "const": "worker_availability_projection",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "userId",
-                      "agentId",
-                      "deviceId",
-                      "agentActive",
-                      "deviceActive",
-                      "connectionStatus",
-                      "lastHeartbeatAt",
-                      "runtimeReadiness",
-                      "runtimeCapabilityTags",
-                      "acceptsNewOffers",
-                      "activeTaskCount",
-                      "observedAt",
-                      "expiresAt"
-                    ],
-                    "type": "object"
-                  },
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "displayName",
-                  "availability"
-                ],
-                "type": "object"
-              },
-              "maxItems": 64,
-              "type": "array"
-            },
             "displayName": {
               "maxLength": 200,
               "minLength": 1,
@@ -82297,8 +82004,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
           "readOnly": true,
           "required": [
             "userId",
-            "displayName",
-            "agents"
+            "displayName"
           ],
           "type": "object"
         },
@@ -82594,6 +82300,10 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                     "type": "string"
                   },
+                  "offeredByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
                   "projectId": {
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
@@ -82661,6 +82371,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                   "taskId",
                   "executionId",
                   "workerUserId",
+                  "offeredByCoordinatorAgentId",
                   "state",
                   "offeredAt",
                   "expiresAt",
@@ -86114,16 +85825,9 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                       "additionalProperties": false,
                       "properties": {
                         "acceptedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
                         },
                         "assigneeAgentId": {
                           "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -86219,9 +85923,6 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                               "anyOf": [
                                 {
                                   "enum": [
-                                    "offer_rejected",
-                                    "offer_withdrawn",
-                                    "offer_timed_out",
                                     "result_submitted",
                                     "reassigned",
                                     "device_revoked",
@@ -86425,9 +86126,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                         },
                         "state": {
                           "enum": [
-                            "offered",
                             "accepted",
-                            "rejected",
                             "running",
                             "needs_human",
                             "result_submitted",
@@ -86435,7 +86134,6 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                             "completed",
                             "failed",
                             "cancelled",
-                            "timed_out",
                             "revoked",
                             "superseded"
                           ],
@@ -86550,9 +86248,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                         "anyOf": [
                           {
                             "enum": [
-                              "offered",
                               "accepted",
-                              "rejected",
                               "running",
                               "needs_human",
                               "result_submitted",
@@ -86560,7 +86256,6 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                               "completed",
                               "failed",
                               "cancelled",
-                              "timed_out",
                               "revoked",
                               "superseded"
                             ],
@@ -87704,7 +87399,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
     "required": [
       "connection",
       "observedAt",
-      "availableWorkerGroups",
+      "availableWorkerUsers",
       "projects"
     ],
     "type": "object"
@@ -87797,149 +87492,10 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
       }
     },
     "properties": {
-      "availableWorkerGroups": {
+      "availableWorkerUsers": {
         "items": {
           "additionalProperties": false,
           "properties": {
-            "agents": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "availability": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "acceptsNewOffers": {
-                        "type": "boolean"
-                      },
-                      "activeTaskCount": {
-                        "maximum": 10000,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "agentActive": {
-                        "type": "boolean"
-                      },
-                      "agentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "connectionStatus": {
-                        "enum": [
-                          "online",
-                          "offline"
-                        ],
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "deviceActive": {
-                        "type": "boolean"
-                      },
-                      "deviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "lastHeartbeatAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "runtimeCapabilityTags": {
-                        "items": {
-                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                          "type": "string"
-                        },
-                        "maxItems": 256,
-                        "type": "array"
-                      },
-                      "runtimeReadiness": {
-                        "enum": [
-                          "ready",
-                          "unavailable"
-                        ],
-                        "type": "string"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "type": {
-                        "const": "worker_availability_projection",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "userId",
-                      "agentId",
-                      "deviceId",
-                      "agentActive",
-                      "deviceActive",
-                      "connectionStatus",
-                      "lastHeartbeatAt",
-                      "runtimeReadiness",
-                      "runtimeCapabilityTags",
-                      "acceptsNewOffers",
-                      "activeTaskCount",
-                      "observedAt",
-                      "expiresAt"
-                    ],
-                    "type": "object"
-                  },
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "displayName",
-                  "availability"
-                ],
-                "type": "object"
-              },
-              "maxItems": 64,
-              "type": "array"
-            },
             "displayName": {
               "maxLength": 200,
               "minLength": 1,
@@ -87953,8 +87509,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
           "readOnly": true,
           "required": [
             "userId",
-            "displayName",
-            "agents"
+            "displayName"
           ],
           "type": "object"
         },
@@ -88250,6 +87805,10 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                     "type": "string"
                   },
+                  "offeredByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
                   "projectId": {
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
@@ -88317,6 +87876,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                   "taskId",
                   "executionId",
                   "workerUserId",
+                  "offeredByCoordinatorAgentId",
                   "state",
                   "offeredAt",
                   "expiresAt",
@@ -91770,16 +91330,9 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                       "additionalProperties": false,
                       "properties": {
                         "acceptedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
                         },
                         "assigneeAgentId": {
                           "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -91875,9 +91428,6 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                               "anyOf": [
                                 {
                                   "enum": [
-                                    "offer_rejected",
-                                    "offer_withdrawn",
-                                    "offer_timed_out",
                                     "result_submitted",
                                     "reassigned",
                                     "device_revoked",
@@ -92081,9 +91631,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                         },
                         "state": {
                           "enum": [
-                            "offered",
                             "accepted",
-                            "rejected",
                             "running",
                             "needs_human",
                             "result_submitted",
@@ -92091,7 +91639,6 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                             "completed",
                             "failed",
                             "cancelled",
-                            "timed_out",
                             "revoked",
                             "superseded"
                           ],
@@ -92206,9 +91753,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                         "anyOf": [
                           {
                             "enum": [
-                              "offered",
                               "accepted",
-                              "rejected",
                               "running",
                               "needs_human",
                               "result_submitted",
@@ -92216,7 +91761,6 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                               "completed",
                               "failed",
                               "cancelled",
-                              "timed_out",
                               "revoked",
                               "superseded"
                             ],
@@ -93360,7 +92904,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
     "required": [
       "connection",
       "observedAt",
-      "availableWorkerGroups",
+      "availableWorkerUsers",
       "projects"
     ],
     "type": "object"
@@ -93470,149 +93014,10 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
       }
     },
     "properties": {
-      "availableWorkerGroups": {
+      "availableWorkerUsers": {
         "items": {
           "additionalProperties": false,
           "properties": {
-            "agents": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "availability": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "acceptsNewOffers": {
-                        "type": "boolean"
-                      },
-                      "activeTaskCount": {
-                        "maximum": 10000,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "agentActive": {
-                        "type": "boolean"
-                      },
-                      "agentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "connectionStatus": {
-                        "enum": [
-                          "online",
-                          "offline"
-                        ],
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "deviceActive": {
-                        "type": "boolean"
-                      },
-                      "deviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "lastHeartbeatAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "runtimeCapabilityTags": {
-                        "items": {
-                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                          "type": "string"
-                        },
-                        "maxItems": 256,
-                        "type": "array"
-                      },
-                      "runtimeReadiness": {
-                        "enum": [
-                          "ready",
-                          "unavailable"
-                        ],
-                        "type": "string"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "type": {
-                        "const": "worker_availability_projection",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "userId",
-                      "agentId",
-                      "deviceId",
-                      "agentActive",
-                      "deviceActive",
-                      "connectionStatus",
-                      "lastHeartbeatAt",
-                      "runtimeReadiness",
-                      "runtimeCapabilityTags",
-                      "acceptsNewOffers",
-                      "activeTaskCount",
-                      "observedAt",
-                      "expiresAt"
-                    ],
-                    "type": "object"
-                  },
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "displayName",
-                  "availability"
-                ],
-                "type": "object"
-              },
-              "maxItems": 64,
-              "type": "array"
-            },
             "displayName": {
               "maxLength": 200,
               "minLength": 1,
@@ -93626,8 +93031,7 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
           "readOnly": true,
           "required": [
             "userId",
-            "displayName",
-            "agents"
+            "displayName"
           ],
           "type": "object"
         },
@@ -93923,6 +93327,10 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                     "type": "string"
                   },
+                  "offeredByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
                   "projectId": {
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
@@ -93990,6 +93398,7 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                   "taskId",
                   "executionId",
                   "workerUserId",
+                  "offeredByCoordinatorAgentId",
                   "state",
                   "offeredAt",
                   "expiresAt",
@@ -97443,16 +96852,9 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                       "additionalProperties": false,
                       "properties": {
                         "acceptedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
                         },
                         "assigneeAgentId": {
                           "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -97548,9 +96950,6 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                               "anyOf": [
                                 {
                                   "enum": [
-                                    "offer_rejected",
-                                    "offer_withdrawn",
-                                    "offer_timed_out",
                                     "result_submitted",
                                     "reassigned",
                                     "device_revoked",
@@ -97754,9 +97153,7 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                         },
                         "state": {
                           "enum": [
-                            "offered",
                             "accepted",
-                            "rejected",
                             "running",
                             "needs_human",
                             "result_submitted",
@@ -97764,7 +97161,6 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                             "completed",
                             "failed",
                             "cancelled",
-                            "timed_out",
                             "revoked",
                             "superseded"
                           ],
@@ -97879,9 +97275,7 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                         "anyOf": [
                           {
                             "enum": [
-                              "offered",
                               "accepted",
-                              "rejected",
                               "running",
                               "needs_human",
                               "result_submitted",
@@ -97889,7 +97283,6 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                               "completed",
                               "failed",
                               "cancelled",
-                              "timed_out",
                               "revoked",
                               "superseded"
                             ],
@@ -99033,7 +98426,7 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
     "required": [
       "connection",
       "observedAt",
-      "availableWorkerGroups",
+      "availableWorkerUsers",
       "projects"
     ],
     "type": "object"
@@ -99126,149 +98519,10 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
       }
     },
     "properties": {
-      "availableWorkerGroups": {
+      "availableWorkerUsers": {
         "items": {
           "additionalProperties": false,
           "properties": {
-            "agents": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "availability": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "acceptsNewOffers": {
-                        "type": "boolean"
-                      },
-                      "activeTaskCount": {
-                        "maximum": 10000,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "agentActive": {
-                        "type": "boolean"
-                      },
-                      "agentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "connectionStatus": {
-                        "enum": [
-                          "online",
-                          "offline"
-                        ],
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "deviceActive": {
-                        "type": "boolean"
-                      },
-                      "deviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "lastHeartbeatAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "runtimeCapabilityTags": {
-                        "items": {
-                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                          "type": "string"
-                        },
-                        "maxItems": 256,
-                        "type": "array"
-                      },
-                      "runtimeReadiness": {
-                        "enum": [
-                          "ready",
-                          "unavailable"
-                        ],
-                        "type": "string"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "type": {
-                        "const": "worker_availability_projection",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "userId",
-                      "agentId",
-                      "deviceId",
-                      "agentActive",
-                      "deviceActive",
-                      "connectionStatus",
-                      "lastHeartbeatAt",
-                      "runtimeReadiness",
-                      "runtimeCapabilityTags",
-                      "acceptsNewOffers",
-                      "activeTaskCount",
-                      "observedAt",
-                      "expiresAt"
-                    ],
-                    "type": "object"
-                  },
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "displayName",
-                  "availability"
-                ],
-                "type": "object"
-              },
-              "maxItems": 64,
-              "type": "array"
-            },
             "displayName": {
               "maxLength": 200,
               "minLength": 1,
@@ -99282,8 +98536,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
           "readOnly": true,
           "required": [
             "userId",
-            "displayName",
-            "agents"
+            "displayName"
           ],
           "type": "object"
         },
@@ -99579,6 +98832,10 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                     "type": "string"
                   },
+                  "offeredByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
                   "projectId": {
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
@@ -99646,6 +98903,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                   "taskId",
                   "executionId",
                   "workerUserId",
+                  "offeredByCoordinatorAgentId",
                   "state",
                   "offeredAt",
                   "expiresAt",
@@ -103099,16 +102357,9 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                       "additionalProperties": false,
                       "properties": {
                         "acceptedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
                         },
                         "assigneeAgentId": {
                           "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -103204,9 +102455,6 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                               "anyOf": [
                                 {
                                   "enum": [
-                                    "offer_rejected",
-                                    "offer_withdrawn",
-                                    "offer_timed_out",
                                     "result_submitted",
                                     "reassigned",
                                     "device_revoked",
@@ -103410,9 +102658,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                         },
                         "state": {
                           "enum": [
-                            "offered",
                             "accepted",
-                            "rejected",
                             "running",
                             "needs_human",
                             "result_submitted",
@@ -103420,7 +102666,6 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                             "completed",
                             "failed",
                             "cancelled",
-                            "timed_out",
                             "revoked",
                             "superseded"
                           ],
@@ -103535,9 +102780,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                         "anyOf": [
                           {
                             "enum": [
-                              "offered",
                               "accepted",
-                              "rejected",
                               "running",
                               "needs_human",
                               "result_submitted",
@@ -103545,7 +102788,6 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                               "completed",
                               "failed",
                               "cancelled",
-                              "timed_out",
                               "revoked",
                               "superseded"
                             ],
@@ -104689,7 +103931,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
     "required": [
       "connection",
       "observedAt",
-      "availableWorkerGroups",
+      "availableWorkerUsers",
       "projects"
     ],
     "type": "object"
@@ -104801,149 +104043,10 @@ Submits the current Project Owner answer through the OIDC User path.
       }
     },
     "properties": {
-      "availableWorkerGroups": {
+      "availableWorkerUsers": {
         "items": {
           "additionalProperties": false,
           "properties": {
-            "agents": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "availability": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "acceptsNewOffers": {
-                        "type": "boolean"
-                      },
-                      "activeTaskCount": {
-                        "maximum": 10000,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "agentActive": {
-                        "type": "boolean"
-                      },
-                      "agentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "connectionStatus": {
-                        "enum": [
-                          "online",
-                          "offline"
-                        ],
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "deviceActive": {
-                        "type": "boolean"
-                      },
-                      "deviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "lastHeartbeatAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "runtimeCapabilityTags": {
-                        "items": {
-                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                          "type": "string"
-                        },
-                        "maxItems": 256,
-                        "type": "array"
-                      },
-                      "runtimeReadiness": {
-                        "enum": [
-                          "ready",
-                          "unavailable"
-                        ],
-                        "type": "string"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "type": {
-                        "const": "worker_availability_projection",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "userId",
-                      "agentId",
-                      "deviceId",
-                      "agentActive",
-                      "deviceActive",
-                      "connectionStatus",
-                      "lastHeartbeatAt",
-                      "runtimeReadiness",
-                      "runtimeCapabilityTags",
-                      "acceptsNewOffers",
-                      "activeTaskCount",
-                      "observedAt",
-                      "expiresAt"
-                    ],
-                    "type": "object"
-                  },
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "displayName",
-                  "availability"
-                ],
-                "type": "object"
-              },
-              "maxItems": 64,
-              "type": "array"
-            },
             "displayName": {
               "maxLength": 200,
               "minLength": 1,
@@ -104957,8 +104060,7 @@ Submits the current Project Owner answer through the OIDC User path.
           "readOnly": true,
           "required": [
             "userId",
-            "displayName",
-            "agents"
+            "displayName"
           ],
           "type": "object"
         },
@@ -105254,6 +104356,10 @@ Submits the current Project Owner answer through the OIDC User path.
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                     "type": "string"
                   },
+                  "offeredByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
                   "projectId": {
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
@@ -105321,6 +104427,7 @@ Submits the current Project Owner answer through the OIDC User path.
                   "taskId",
                   "executionId",
                   "workerUserId",
+                  "offeredByCoordinatorAgentId",
                   "state",
                   "offeredAt",
                   "expiresAt",
@@ -108774,16 +107881,9 @@ Submits the current Project Owner answer through the OIDC User path.
                       "additionalProperties": false,
                       "properties": {
                         "acceptedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
                         },
                         "assigneeAgentId": {
                           "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -108879,9 +107979,6 @@ Submits the current Project Owner answer through the OIDC User path.
                               "anyOf": [
                                 {
                                   "enum": [
-                                    "offer_rejected",
-                                    "offer_withdrawn",
-                                    "offer_timed_out",
                                     "result_submitted",
                                     "reassigned",
                                     "device_revoked",
@@ -109085,9 +108182,7 @@ Submits the current Project Owner answer through the OIDC User path.
                         },
                         "state": {
                           "enum": [
-                            "offered",
                             "accepted",
-                            "rejected",
                             "running",
                             "needs_human",
                             "result_submitted",
@@ -109095,7 +108190,6 @@ Submits the current Project Owner answer through the OIDC User path.
                             "completed",
                             "failed",
                             "cancelled",
-                            "timed_out",
                             "revoked",
                             "superseded"
                           ],
@@ -109210,9 +108304,7 @@ Submits the current Project Owner answer through the OIDC User path.
                         "anyOf": [
                           {
                             "enum": [
-                              "offered",
                               "accepted",
-                              "rejected",
                               "running",
                               "needs_human",
                               "result_submitted",
@@ -109220,7 +108312,6 @@ Submits the current Project Owner answer through the OIDC User path.
                               "completed",
                               "failed",
                               "cancelled",
-                              "timed_out",
                               "revoked",
                               "superseded"
                             ],
@@ -110364,7 +109455,7 @@ Submits the current Project Owner answer through the OIDC User path.
     "required": [
       "connection",
       "observedAt",
-      "availableWorkerGroups",
+      "availableWorkerUsers",
       "projects"
     ],
     "type": "object"
@@ -110482,149 +109573,10 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
       }
     },
     "properties": {
-      "availableWorkerGroups": {
+      "availableWorkerUsers": {
         "items": {
           "additionalProperties": false,
           "properties": {
-            "agents": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "availability": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "acceptsNewOffers": {
-                        "type": "boolean"
-                      },
-                      "activeTaskCount": {
-                        "maximum": 10000,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "agentActive": {
-                        "type": "boolean"
-                      },
-                      "agentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "connectionStatus": {
-                        "enum": [
-                          "online",
-                          "offline"
-                        ],
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "deviceActive": {
-                        "type": "boolean"
-                      },
-                      "deviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "lastHeartbeatAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "runtimeCapabilityTags": {
-                        "items": {
-                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                          "type": "string"
-                        },
-                        "maxItems": 256,
-                        "type": "array"
-                      },
-                      "runtimeReadiness": {
-                        "enum": [
-                          "ready",
-                          "unavailable"
-                        ],
-                        "type": "string"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "type": {
-                        "const": "worker_availability_projection",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "userId",
-                      "agentId",
-                      "deviceId",
-                      "agentActive",
-                      "deviceActive",
-                      "connectionStatus",
-                      "lastHeartbeatAt",
-                      "runtimeReadiness",
-                      "runtimeCapabilityTags",
-                      "acceptsNewOffers",
-                      "activeTaskCount",
-                      "observedAt",
-                      "expiresAt"
-                    ],
-                    "type": "object"
-                  },
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "displayName",
-                  "availability"
-                ],
-                "type": "object"
-              },
-              "maxItems": 64,
-              "type": "array"
-            },
             "displayName": {
               "maxLength": 200,
               "minLength": 1,
@@ -110638,8 +109590,7 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
           "readOnly": true,
           "required": [
             "userId",
-            "displayName",
-            "agents"
+            "displayName"
           ],
           "type": "object"
         },
@@ -110935,6 +109886,10 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                     "type": "string"
                   },
+                  "offeredByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
                   "projectId": {
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
@@ -111002,6 +109957,7 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
                   "taskId",
                   "executionId",
                   "workerUserId",
+                  "offeredByCoordinatorAgentId",
                   "state",
                   "offeredAt",
                   "expiresAt",
@@ -114455,16 +113411,9 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
                       "additionalProperties": false,
                       "properties": {
                         "acceptedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
                         },
                         "assigneeAgentId": {
                           "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -114560,9 +113509,6 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
                               "anyOf": [
                                 {
                                   "enum": [
-                                    "offer_rejected",
-                                    "offer_withdrawn",
-                                    "offer_timed_out",
                                     "result_submitted",
                                     "reassigned",
                                     "device_revoked",
@@ -114766,9 +113712,7 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
                         },
                         "state": {
                           "enum": [
-                            "offered",
                             "accepted",
-                            "rejected",
                             "running",
                             "needs_human",
                             "result_submitted",
@@ -114776,7 +113720,6 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
                             "completed",
                             "failed",
                             "cancelled",
-                            "timed_out",
                             "revoked",
                             "superseded"
                           ],
@@ -114891,9 +113834,7 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
                         "anyOf": [
                           {
                             "enum": [
-                              "offered",
                               "accepted",
-                              "rejected",
                               "running",
                               "needs_human",
                               "result_submitted",
@@ -114901,7 +113842,6 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
                               "completed",
                               "failed",
                               "cancelled",
-                              "timed_out",
                               "revoked",
                               "superseded"
                             ],
@@ -116045,7 +114985,7 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
     "required": [
       "connection",
       "observedAt",
-      "availableWorkerGroups",
+      "availableWorkerUsers",
       "projects"
     ],
     "type": "object"
@@ -116167,149 +115107,10 @@ Adds the exact User and Provider fact to Cloud; content-required membership rema
       }
     },
     "properties": {
-      "availableWorkerGroups": {
+      "availableWorkerUsers": {
         "items": {
           "additionalProperties": false,
           "properties": {
-            "agents": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "availability": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "acceptsNewOffers": {
-                        "type": "boolean"
-                      },
-                      "activeTaskCount": {
-                        "maximum": 10000,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "agentActive": {
-                        "type": "boolean"
-                      },
-                      "agentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "connectionStatus": {
-                        "enum": [
-                          "online",
-                          "offline"
-                        ],
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "deviceActive": {
-                        "type": "boolean"
-                      },
-                      "deviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "lastHeartbeatAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "runtimeCapabilityTags": {
-                        "items": {
-                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                          "type": "string"
-                        },
-                        "maxItems": 256,
-                        "type": "array"
-                      },
-                      "runtimeReadiness": {
-                        "enum": [
-                          "ready",
-                          "unavailable"
-                        ],
-                        "type": "string"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "type": {
-                        "const": "worker_availability_projection",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "userId",
-                      "agentId",
-                      "deviceId",
-                      "agentActive",
-                      "deviceActive",
-                      "connectionStatus",
-                      "lastHeartbeatAt",
-                      "runtimeReadiness",
-                      "runtimeCapabilityTags",
-                      "acceptsNewOffers",
-                      "activeTaskCount",
-                      "observedAt",
-                      "expiresAt"
-                    ],
-                    "type": "object"
-                  },
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "displayName",
-                  "availability"
-                ],
-                "type": "object"
-              },
-              "maxItems": 64,
-              "type": "array"
-            },
             "displayName": {
               "maxLength": 200,
               "minLength": 1,
@@ -116323,8 +115124,7 @@ Adds the exact User and Provider fact to Cloud; content-required membership rema
           "readOnly": true,
           "required": [
             "userId",
-            "displayName",
-            "agents"
+            "displayName"
           ],
           "type": "object"
         },
@@ -116620,6 +115420,10 @@ Adds the exact User and Provider fact to Cloud; content-required membership rema
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                     "type": "string"
                   },
+                  "offeredByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
                   "projectId": {
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
@@ -116687,6 +115491,7 @@ Adds the exact User and Provider fact to Cloud; content-required membership rema
                   "taskId",
                   "executionId",
                   "workerUserId",
+                  "offeredByCoordinatorAgentId",
                   "state",
                   "offeredAt",
                   "expiresAt",
@@ -120140,16 +118945,9 @@ Adds the exact User and Provider fact to Cloud; content-required membership rema
                       "additionalProperties": false,
                       "properties": {
                         "acceptedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
                         },
                         "assigneeAgentId": {
                           "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -120245,9 +119043,6 @@ Adds the exact User and Provider fact to Cloud; content-required membership rema
                               "anyOf": [
                                 {
                                   "enum": [
-                                    "offer_rejected",
-                                    "offer_withdrawn",
-                                    "offer_timed_out",
                                     "result_submitted",
                                     "reassigned",
                                     "device_revoked",
@@ -120451,9 +119246,7 @@ Adds the exact User and Provider fact to Cloud; content-required membership rema
                         },
                         "state": {
                           "enum": [
-                            "offered",
                             "accepted",
-                            "rejected",
                             "running",
                             "needs_human",
                             "result_submitted",
@@ -120461,7 +119254,6 @@ Adds the exact User and Provider fact to Cloud; content-required membership rema
                             "completed",
                             "failed",
                             "cancelled",
-                            "timed_out",
                             "revoked",
                             "superseded"
                           ],
@@ -120576,9 +119368,7 @@ Adds the exact User and Provider fact to Cloud; content-required membership rema
                         "anyOf": [
                           {
                             "enum": [
-                              "offered",
                               "accepted",
-                              "rejected",
                               "running",
                               "needs_human",
                               "result_submitted",
@@ -120586,7 +119376,6 @@ Adds the exact User and Provider fact to Cloud; content-required membership rema
                               "completed",
                               "failed",
                               "cancelled",
-                              "timed_out",
                               "revoked",
                               "superseded"
                             ],
@@ -121730,7 +120519,7 @@ Adds the exact User and Provider fact to Cloud; content-required membership rema
     "required": [
       "connection",
       "observedAt",
-      "availableWorkerGroups",
+      "availableWorkerUsers",
       "projects"
     ],
     "type": "object"
@@ -121834,149 +120623,10 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
       }
     },
     "properties": {
-      "availableWorkerGroups": {
+      "availableWorkerUsers": {
         "items": {
           "additionalProperties": false,
           "properties": {
-            "agents": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "availability": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "acceptsNewOffers": {
-                        "type": "boolean"
-                      },
-                      "activeTaskCount": {
-                        "maximum": 10000,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "agentActive": {
-                        "type": "boolean"
-                      },
-                      "agentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "connectionStatus": {
-                        "enum": [
-                          "online",
-                          "offline"
-                        ],
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "deviceActive": {
-                        "type": "boolean"
-                      },
-                      "deviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "lastHeartbeatAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "runtimeCapabilityTags": {
-                        "items": {
-                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                          "type": "string"
-                        },
-                        "maxItems": 256,
-                        "type": "array"
-                      },
-                      "runtimeReadiness": {
-                        "enum": [
-                          "ready",
-                          "unavailable"
-                        ],
-                        "type": "string"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "type": {
-                        "const": "worker_availability_projection",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "userId",
-                      "agentId",
-                      "deviceId",
-                      "agentActive",
-                      "deviceActive",
-                      "connectionStatus",
-                      "lastHeartbeatAt",
-                      "runtimeReadiness",
-                      "runtimeCapabilityTags",
-                      "acceptsNewOffers",
-                      "activeTaskCount",
-                      "observedAt",
-                      "expiresAt"
-                    ],
-                    "type": "object"
-                  },
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "displayName",
-                  "availability"
-                ],
-                "type": "object"
-              },
-              "maxItems": 64,
-              "type": "array"
-            },
             "displayName": {
               "maxLength": 200,
               "minLength": 1,
@@ -121990,8 +120640,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
           "readOnly": true,
           "required": [
             "userId",
-            "displayName",
-            "agents"
+            "displayName"
           ],
           "type": "object"
         },
@@ -122287,6 +120936,10 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                     "type": "string"
                   },
+                  "offeredByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
                   "projectId": {
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
@@ -122354,6 +121007,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                   "taskId",
                   "executionId",
                   "workerUserId",
+                  "offeredByCoordinatorAgentId",
                   "state",
                   "offeredAt",
                   "expiresAt",
@@ -125807,16 +124461,9 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                       "additionalProperties": false,
                       "properties": {
                         "acceptedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
                         },
                         "assigneeAgentId": {
                           "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -125912,9 +124559,6 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                               "anyOf": [
                                 {
                                   "enum": [
-                                    "offer_rejected",
-                                    "offer_withdrawn",
-                                    "offer_timed_out",
                                     "result_submitted",
                                     "reassigned",
                                     "device_revoked",
@@ -126118,9 +124762,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                         },
                         "state": {
                           "enum": [
-                            "offered",
                             "accepted",
-                            "rejected",
                             "running",
                             "needs_human",
                             "result_submitted",
@@ -126128,7 +124770,6 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                             "completed",
                             "failed",
                             "cancelled",
-                            "timed_out",
                             "revoked",
                             "superseded"
                           ],
@@ -126243,9 +124884,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                         "anyOf": [
                           {
                             "enum": [
-                              "offered",
                               "accepted",
-                              "rejected",
                               "running",
                               "needs_human",
                               "result_submitted",
@@ -126253,7 +124892,6 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                               "completed",
                               "failed",
                               "cancelled",
-                              "timed_out",
                               "revoked",
                               "superseded"
                             ],
@@ -127397,7 +126035,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
     "required": [
       "connection",
       "observedAt",
-      "availableWorkerGroups",
+      "availableWorkerUsers",
       "projects"
     ],
     "type": "object"
@@ -129405,149 +128043,10 @@ Confirms the exact immutable Plan as the Coordinator Human and activates from fr
       }
     },
     "properties": {
-      "availableWorkerGroups": {
+      "availableWorkerUsers": {
         "items": {
           "additionalProperties": false,
           "properties": {
-            "agents": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "availability": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "acceptsNewOffers": {
-                        "type": "boolean"
-                      },
-                      "activeTaskCount": {
-                        "maximum": 10000,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "agentActive": {
-                        "type": "boolean"
-                      },
-                      "agentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "connectionStatus": {
-                        "enum": [
-                          "online",
-                          "offline"
-                        ],
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "deviceActive": {
-                        "type": "boolean"
-                      },
-                      "deviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "lastHeartbeatAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "runtimeCapabilityTags": {
-                        "items": {
-                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                          "type": "string"
-                        },
-                        "maxItems": 256,
-                        "type": "array"
-                      },
-                      "runtimeReadiness": {
-                        "enum": [
-                          "ready",
-                          "unavailable"
-                        ],
-                        "type": "string"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "type": {
-                        "const": "worker_availability_projection",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "userId",
-                      "agentId",
-                      "deviceId",
-                      "agentActive",
-                      "deviceActive",
-                      "connectionStatus",
-                      "lastHeartbeatAt",
-                      "runtimeReadiness",
-                      "runtimeCapabilityTags",
-                      "acceptsNewOffers",
-                      "activeTaskCount",
-                      "observedAt",
-                      "expiresAt"
-                    ],
-                    "type": "object"
-                  },
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "displayName",
-                  "availability"
-                ],
-                "type": "object"
-              },
-              "maxItems": 64,
-              "type": "array"
-            },
             "displayName": {
               "maxLength": 200,
               "minLength": 1,
@@ -129561,8 +128060,7 @@ Confirms the exact immutable Plan as the Coordinator Human and activates from fr
           "readOnly": true,
           "required": [
             "userId",
-            "displayName",
-            "agents"
+            "displayName"
           ],
           "type": "object"
         },
@@ -129858,6 +128356,10 @@ Confirms the exact immutable Plan as the Coordinator Human and activates from fr
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                     "type": "string"
                   },
+                  "offeredByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
                   "projectId": {
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
@@ -129925,6 +128427,7 @@ Confirms the exact immutable Plan as the Coordinator Human and activates from fr
                   "taskId",
                   "executionId",
                   "workerUserId",
+                  "offeredByCoordinatorAgentId",
                   "state",
                   "offeredAt",
                   "expiresAt",
@@ -133378,16 +131881,9 @@ Confirms the exact immutable Plan as the Coordinator Human and activates from fr
                       "additionalProperties": false,
                       "properties": {
                         "acceptedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
                         },
                         "assigneeAgentId": {
                           "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -133483,9 +131979,6 @@ Confirms the exact immutable Plan as the Coordinator Human and activates from fr
                               "anyOf": [
                                 {
                                   "enum": [
-                                    "offer_rejected",
-                                    "offer_withdrawn",
-                                    "offer_timed_out",
                                     "result_submitted",
                                     "reassigned",
                                     "device_revoked",
@@ -133689,9 +132182,7 @@ Confirms the exact immutable Plan as the Coordinator Human and activates from fr
                         },
                         "state": {
                           "enum": [
-                            "offered",
                             "accepted",
-                            "rejected",
                             "running",
                             "needs_human",
                             "result_submitted",
@@ -133699,7 +132190,6 @@ Confirms the exact immutable Plan as the Coordinator Human and activates from fr
                             "completed",
                             "failed",
                             "cancelled",
-                            "timed_out",
                             "revoked",
                             "superseded"
                           ],
@@ -133814,9 +132304,7 @@ Confirms the exact immutable Plan as the Coordinator Human and activates from fr
                         "anyOf": [
                           {
                             "enum": [
-                              "offered",
                               "accepted",
-                              "rejected",
                               "running",
                               "needs_human",
                               "result_submitted",
@@ -133824,7 +132312,6 @@ Confirms the exact immutable Plan as the Coordinator Human and activates from fr
                               "completed",
                               "failed",
                               "cancelled",
-                              "timed_out",
                               "revoked",
                               "superseded"
                             ],
@@ -134968,7 +133455,7 @@ Confirms the exact immutable Plan as the Coordinator Human and activates from fr
     "required": [
       "connection",
       "observedAt",
-      "availableWorkerGroups",
+      "availableWorkerUsers",
       "projects"
     ],
     "type": "object"
@@ -135495,149 +133982,10 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
       "workspace": {
         "additionalProperties": false,
         "properties": {
-          "availableWorkerGroups": {
+          "availableWorkerUsers": {
             "items": {
               "additionalProperties": false,
               "properties": {
-                "agents": {
-                  "items": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "availability": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "acceptsNewOffers": {
-                            "type": "boolean"
-                          },
-                          "activeTaskCount": {
-                            "maximum": 10000,
-                            "minimum": 0,
-                            "type": "integer"
-                          },
-                          "agentActive": {
-                            "type": "boolean"
-                          },
-                          "agentId": {
-                            "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "connectionStatus": {
-                            "enum": [
-                              "online",
-                              "offline"
-                            ],
-                            "type": "string"
-                          },
-                          "createdAt": {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          "deviceActive": {
-                            "type": "boolean"
-                          },
-                          "deviceId": {
-                            "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "expiresAt": {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          "lastHeartbeatAt": {
-                            "anyOf": [
-                              {
-                                "format": "date-time",
-                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "observedAt": {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          "revision": {
-                            "maximum": 9007199254740991,
-                            "minimum": 1,
-                            "type": "integer"
-                          },
-                          "runtimeCapabilityTags": {
-                            "items": {
-                              "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                              "type": "string"
-                            },
-                            "maxItems": 256,
-                            "type": "array"
-                          },
-                          "runtimeReadiness": {
-                            "enum": [
-                              "ready",
-                              "unavailable"
-                            ],
-                            "type": "string"
-                          },
-                          "schemaVersion": {
-                            "const": 1,
-                            "type": "number"
-                          },
-                          "type": {
-                            "const": "worker_availability_projection",
-                            "type": "string"
-                          },
-                          "updatedAt": {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          "userId": {
-                            "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "schemaVersion",
-                          "revision",
-                          "createdAt",
-                          "updatedAt",
-                          "type",
-                          "userId",
-                          "agentId",
-                          "deviceId",
-                          "agentActive",
-                          "deviceActive",
-                          "connectionStatus",
-                          "lastHeartbeatAt",
-                          "runtimeReadiness",
-                          "runtimeCapabilityTags",
-                          "acceptsNewOffers",
-                          "activeTaskCount",
-                          "observedAt",
-                          "expiresAt"
-                        ],
-                        "type": "object"
-                      },
-                      "displayName": {
-                        "maxLength": 200,
-                        "minLength": 1,
-                        "type": "string"
-                      }
-                    },
-                    "readOnly": true,
-                    "required": [
-                      "displayName",
-                      "availability"
-                    ],
-                    "type": "object"
-                  },
-                  "maxItems": 64,
-                  "type": "array"
-                },
                 "displayName": {
                   "maxLength": 200,
                   "minLength": 1,
@@ -135651,8 +133999,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
               "readOnly": true,
               "required": [
                 "userId",
-                "displayName",
-                "agents"
+                "displayName"
               ],
               "type": "object"
             },
@@ -135948,6 +134295,10 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                         "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                         "type": "string"
                       },
+                      "offeredByCoordinatorAgentId": {
+                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
                       "projectId": {
                         "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                         "type": "string"
@@ -136015,6 +134366,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                       "taskId",
                       "executionId",
                       "workerUserId",
+                      "offeredByCoordinatorAgentId",
                       "state",
                       "offeredAt",
                       "expiresAt",
@@ -139468,16 +137820,9 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                           "additionalProperties": false,
                           "properties": {
                             "acceptedAt": {
-                              "anyOf": [
-                                {
-                                  "format": "date-time",
-                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
                             },
                             "assigneeAgentId": {
                               "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -139573,9 +137918,6 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                   "anyOf": [
                                     {
                                       "enum": [
-                                        "offer_rejected",
-                                        "offer_withdrawn",
-                                        "offer_timed_out",
                                         "result_submitted",
                                         "reassigned",
                                         "device_revoked",
@@ -139779,9 +138121,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                             },
                             "state": {
                               "enum": [
-                                "offered",
                                 "accepted",
-                                "rejected",
                                 "running",
                                 "needs_human",
                                 "result_submitted",
@@ -139789,7 +138129,6 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                 "completed",
                                 "failed",
                                 "cancelled",
-                                "timed_out",
                                 "revoked",
                                 "superseded"
                               ],
@@ -139904,9 +138243,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                             "anyOf": [
                               {
                                 "enum": [
-                                  "offered",
                                   "accepted",
-                                  "rejected",
                                   "running",
                                   "needs_human",
                                   "result_submitted",
@@ -139914,7 +138251,6 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                   "completed",
                                   "failed",
                                   "cancelled",
-                                  "timed_out",
                                   "revoked",
                                   "superseded"
                                 ],
@@ -141058,7 +139394,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
         "required": [
           "connection",
           "observedAt",
-          "availableWorkerGroups",
+          "availableWorkerUsers",
           "projects"
         ],
         "type": "object"
@@ -141197,149 +139533,10 @@ Submits the Coordinator final summary and atomically completes the Project.
       }
     },
     "properties": {
-      "availableWorkerGroups": {
+      "availableWorkerUsers": {
         "items": {
           "additionalProperties": false,
           "properties": {
-            "agents": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "availability": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "acceptsNewOffers": {
-                        "type": "boolean"
-                      },
-                      "activeTaskCount": {
-                        "maximum": 10000,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "agentActive": {
-                        "type": "boolean"
-                      },
-                      "agentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "connectionStatus": {
-                        "enum": [
-                          "online",
-                          "offline"
-                        ],
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "deviceActive": {
-                        "type": "boolean"
-                      },
-                      "deviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "lastHeartbeatAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "runtimeCapabilityTags": {
-                        "items": {
-                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                          "type": "string"
-                        },
-                        "maxItems": 256,
-                        "type": "array"
-                      },
-                      "runtimeReadiness": {
-                        "enum": [
-                          "ready",
-                          "unavailable"
-                        ],
-                        "type": "string"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "type": {
-                        "const": "worker_availability_projection",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "userId",
-                      "agentId",
-                      "deviceId",
-                      "agentActive",
-                      "deviceActive",
-                      "connectionStatus",
-                      "lastHeartbeatAt",
-                      "runtimeReadiness",
-                      "runtimeCapabilityTags",
-                      "acceptsNewOffers",
-                      "activeTaskCount",
-                      "observedAt",
-                      "expiresAt"
-                    ],
-                    "type": "object"
-                  },
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "displayName",
-                  "availability"
-                ],
-                "type": "object"
-              },
-              "maxItems": 64,
-              "type": "array"
-            },
             "displayName": {
               "maxLength": 200,
               "minLength": 1,
@@ -141353,8 +139550,7 @@ Submits the Coordinator final summary and atomically completes the Project.
           "readOnly": true,
           "required": [
             "userId",
-            "displayName",
-            "agents"
+            "displayName"
           ],
           "type": "object"
         },
@@ -141650,6 +139846,10 @@ Submits the Coordinator final summary and atomically completes the Project.
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                     "type": "string"
                   },
+                  "offeredByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
                   "projectId": {
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
@@ -141717,6 +139917,7 @@ Submits the Coordinator final summary and atomically completes the Project.
                   "taskId",
                   "executionId",
                   "workerUserId",
+                  "offeredByCoordinatorAgentId",
                   "state",
                   "offeredAt",
                   "expiresAt",
@@ -145170,16 +143371,9 @@ Submits the Coordinator final summary and atomically completes the Project.
                       "additionalProperties": false,
                       "properties": {
                         "acceptedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
                         },
                         "assigneeAgentId": {
                           "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -145275,9 +143469,6 @@ Submits the Coordinator final summary and atomically completes the Project.
                               "anyOf": [
                                 {
                                   "enum": [
-                                    "offer_rejected",
-                                    "offer_withdrawn",
-                                    "offer_timed_out",
                                     "result_submitted",
                                     "reassigned",
                                     "device_revoked",
@@ -145481,9 +143672,7 @@ Submits the Coordinator final summary and atomically completes the Project.
                         },
                         "state": {
                           "enum": [
-                            "offered",
                             "accepted",
-                            "rejected",
                             "running",
                             "needs_human",
                             "result_submitted",
@@ -145491,7 +143680,6 @@ Submits the Coordinator final summary and atomically completes the Project.
                             "completed",
                             "failed",
                             "cancelled",
-                            "timed_out",
                             "revoked",
                             "superseded"
                           ],
@@ -145606,9 +143794,7 @@ Submits the Coordinator final summary and atomically completes the Project.
                         "anyOf": [
                           {
                             "enum": [
-                              "offered",
                               "accepted",
-                              "rejected",
                               "running",
                               "needs_human",
                               "result_submitted",
@@ -145616,7 +143802,6 @@ Submits the Coordinator final summary and atomically completes the Project.
                               "completed",
                               "failed",
                               "cancelled",
-                              "timed_out",
                               "revoked",
                               "superseded"
                             ],
@@ -146760,7 +144945,7 @@ Submits the Coordinator final summary and atomically completes the Project.
     "required": [
       "connection",
       "observedAt",
-      "availableWorkerGroups",
+      "availableWorkerUsers",
       "projects"
     ],
     "type": "object"
@@ -147011,149 +145196,10 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
       "workspace": {
         "additionalProperties": false,
         "properties": {
-          "availableWorkerGroups": {
+          "availableWorkerUsers": {
             "items": {
               "additionalProperties": false,
               "properties": {
-                "agents": {
-                  "items": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "availability": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "acceptsNewOffers": {
-                            "type": "boolean"
-                          },
-                          "activeTaskCount": {
-                            "maximum": 10000,
-                            "minimum": 0,
-                            "type": "integer"
-                          },
-                          "agentActive": {
-                            "type": "boolean"
-                          },
-                          "agentId": {
-                            "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "connectionStatus": {
-                            "enum": [
-                              "online",
-                              "offline"
-                            ],
-                            "type": "string"
-                          },
-                          "createdAt": {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          "deviceActive": {
-                            "type": "boolean"
-                          },
-                          "deviceId": {
-                            "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "expiresAt": {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          "lastHeartbeatAt": {
-                            "anyOf": [
-                              {
-                                "format": "date-time",
-                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "observedAt": {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          "revision": {
-                            "maximum": 9007199254740991,
-                            "minimum": 1,
-                            "type": "integer"
-                          },
-                          "runtimeCapabilityTags": {
-                            "items": {
-                              "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                              "type": "string"
-                            },
-                            "maxItems": 256,
-                            "type": "array"
-                          },
-                          "runtimeReadiness": {
-                            "enum": [
-                              "ready",
-                              "unavailable"
-                            ],
-                            "type": "string"
-                          },
-                          "schemaVersion": {
-                            "const": 1,
-                            "type": "number"
-                          },
-                          "type": {
-                            "const": "worker_availability_projection",
-                            "type": "string"
-                          },
-                          "updatedAt": {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          "userId": {
-                            "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "schemaVersion",
-                          "revision",
-                          "createdAt",
-                          "updatedAt",
-                          "type",
-                          "userId",
-                          "agentId",
-                          "deviceId",
-                          "agentActive",
-                          "deviceActive",
-                          "connectionStatus",
-                          "lastHeartbeatAt",
-                          "runtimeReadiness",
-                          "runtimeCapabilityTags",
-                          "acceptsNewOffers",
-                          "activeTaskCount",
-                          "observedAt",
-                          "expiresAt"
-                        ],
-                        "type": "object"
-                      },
-                      "displayName": {
-                        "maxLength": 200,
-                        "minLength": 1,
-                        "type": "string"
-                      }
-                    },
-                    "readOnly": true,
-                    "required": [
-                      "displayName",
-                      "availability"
-                    ],
-                    "type": "object"
-                  },
-                  "maxItems": 64,
-                  "type": "array"
-                },
                 "displayName": {
                   "maxLength": 200,
                   "minLength": 1,
@@ -147167,8 +145213,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
               "readOnly": true,
               "required": [
                 "userId",
-                "displayName",
-                "agents"
+                "displayName"
               ],
               "type": "object"
             },
@@ -147464,6 +145509,10 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                         "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                         "type": "string"
                       },
+                      "offeredByCoordinatorAgentId": {
+                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
                       "projectId": {
                         "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                         "type": "string"
@@ -147531,6 +145580,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                       "taskId",
                       "executionId",
                       "workerUserId",
+                      "offeredByCoordinatorAgentId",
                       "state",
                       "offeredAt",
                       "expiresAt",
@@ -150984,16 +149034,9 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                           "additionalProperties": false,
                           "properties": {
                             "acceptedAt": {
-                              "anyOf": [
-                                {
-                                  "format": "date-time",
-                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
                             },
                             "assigneeAgentId": {
                               "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -151089,9 +149132,6 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                   "anyOf": [
                                     {
                                       "enum": [
-                                        "offer_rejected",
-                                        "offer_withdrawn",
-                                        "offer_timed_out",
                                         "result_submitted",
                                         "reassigned",
                                         "device_revoked",
@@ -151295,9 +149335,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                             },
                             "state": {
                               "enum": [
-                                "offered",
                                 "accepted",
-                                "rejected",
                                 "running",
                                 "needs_human",
                                 "result_submitted",
@@ -151305,7 +149343,6 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                 "completed",
                                 "failed",
                                 "cancelled",
-                                "timed_out",
                                 "revoked",
                                 "superseded"
                               ],
@@ -151420,9 +149457,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                             "anyOf": [
                               {
                                 "enum": [
-                                  "offered",
                                   "accepted",
-                                  "rejected",
                                   "running",
                                   "needs_human",
                                   "result_submitted",
@@ -151430,7 +149465,6 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                   "completed",
                                   "failed",
                                   "cancelled",
-                                  "timed_out",
                                   "revoked",
                                   "superseded"
                                 ],
@@ -152574,7 +150608,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
         "required": [
           "connection",
           "observedAt",
-          "availableWorkerGroups",
+          "availableWorkerUsers",
           "projects"
         ],
         "type": "object"
@@ -152951,149 +150985,10 @@ Accepts one immutable result or requests a fresh fenced revision execution.
       }
     },
     "properties": {
-      "availableWorkerGroups": {
+      "availableWorkerUsers": {
         "items": {
           "additionalProperties": false,
           "properties": {
-            "agents": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "availability": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "acceptsNewOffers": {
-                        "type": "boolean"
-                      },
-                      "activeTaskCount": {
-                        "maximum": 10000,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "agentActive": {
-                        "type": "boolean"
-                      },
-                      "agentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "connectionStatus": {
-                        "enum": [
-                          "online",
-                          "offline"
-                        ],
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "deviceActive": {
-                        "type": "boolean"
-                      },
-                      "deviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "lastHeartbeatAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "runtimeCapabilityTags": {
-                        "items": {
-                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                          "type": "string"
-                        },
-                        "maxItems": 256,
-                        "type": "array"
-                      },
-                      "runtimeReadiness": {
-                        "enum": [
-                          "ready",
-                          "unavailable"
-                        ],
-                        "type": "string"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "type": {
-                        "const": "worker_availability_projection",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "userId",
-                      "agentId",
-                      "deviceId",
-                      "agentActive",
-                      "deviceActive",
-                      "connectionStatus",
-                      "lastHeartbeatAt",
-                      "runtimeReadiness",
-                      "runtimeCapabilityTags",
-                      "acceptsNewOffers",
-                      "activeTaskCount",
-                      "observedAt",
-                      "expiresAt"
-                    ],
-                    "type": "object"
-                  },
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "displayName",
-                  "availability"
-                ],
-                "type": "object"
-              },
-              "maxItems": 64,
-              "type": "array"
-            },
             "displayName": {
               "maxLength": 200,
               "minLength": 1,
@@ -153107,8 +151002,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
           "readOnly": true,
           "required": [
             "userId",
-            "displayName",
-            "agents"
+            "displayName"
           ],
           "type": "object"
         },
@@ -153404,6 +151298,10 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                     "type": "string"
                   },
+                  "offeredByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
                   "projectId": {
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
@@ -153471,6 +151369,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                   "taskId",
                   "executionId",
                   "workerUserId",
+                  "offeredByCoordinatorAgentId",
                   "state",
                   "offeredAt",
                   "expiresAt",
@@ -156924,16 +154823,9 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                       "additionalProperties": false,
                       "properties": {
                         "acceptedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
                         },
                         "assigneeAgentId": {
                           "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -157029,9 +154921,6 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                               "anyOf": [
                                 {
                                   "enum": [
-                                    "offer_rejected",
-                                    "offer_withdrawn",
-                                    "offer_timed_out",
                                     "result_submitted",
                                     "reassigned",
                                     "device_revoked",
@@ -157235,9 +155124,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                         },
                         "state": {
                           "enum": [
-                            "offered",
                             "accepted",
-                            "rejected",
                             "running",
                             "needs_human",
                             "result_submitted",
@@ -157245,7 +155132,6 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                             "completed",
                             "failed",
                             "cancelled",
-                            "timed_out",
                             "revoked",
                             "superseded"
                           ],
@@ -157360,9 +155246,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                         "anyOf": [
                           {
                             "enum": [
-                              "offered",
                               "accepted",
-                              "rejected",
                               "running",
                               "needs_human",
                               "result_submitted",
@@ -157370,7 +155254,6 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                               "completed",
                               "failed",
                               "cancelled",
-                              "timed_out",
                               "revoked",
                               "superseded"
                             ],
@@ -158514,7 +156397,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
     "required": [
       "connection",
       "observedAt",
-      "availableWorkerGroups",
+      "availableWorkerUsers",
       "projects"
     ],
     "type": "object"
@@ -158597,149 +156480,10 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
       }
     },
     "properties": {
-      "availableWorkerGroups": {
+      "availableWorkerUsers": {
         "items": {
           "additionalProperties": false,
           "properties": {
-            "agents": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "availability": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "acceptsNewOffers": {
-                        "type": "boolean"
-                      },
-                      "activeTaskCount": {
-                        "maximum": 10000,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "agentActive": {
-                        "type": "boolean"
-                      },
-                      "agentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "connectionStatus": {
-                        "enum": [
-                          "online",
-                          "offline"
-                        ],
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "deviceActive": {
-                        "type": "boolean"
-                      },
-                      "deviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "expiresAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "lastHeartbeatAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "runtimeCapabilityTags": {
-                        "items": {
-                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                          "type": "string"
-                        },
-                        "maxItems": 256,
-                        "type": "array"
-                      },
-                      "runtimeReadiness": {
-                        "enum": [
-                          "ready",
-                          "unavailable"
-                        ],
-                        "type": "string"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "type": {
-                        "const": "worker_availability_projection",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "userId",
-                      "agentId",
-                      "deviceId",
-                      "agentActive",
-                      "deviceActive",
-                      "connectionStatus",
-                      "lastHeartbeatAt",
-                      "runtimeReadiness",
-                      "runtimeCapabilityTags",
-                      "acceptsNewOffers",
-                      "activeTaskCount",
-                      "observedAt",
-                      "expiresAt"
-                    ],
-                    "type": "object"
-                  },
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "displayName",
-                  "availability"
-                ],
-                "type": "object"
-              },
-              "maxItems": 64,
-              "type": "array"
-            },
             "displayName": {
               "maxLength": 200,
               "minLength": 1,
@@ -158753,8 +156497,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
           "readOnly": true,
           "required": [
             "userId",
-            "displayName",
-            "agents"
+            "displayName"
           ],
           "type": "object"
         },
@@ -159050,6 +156793,10 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                     "type": "string"
                   },
+                  "offeredByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
                   "projectId": {
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
@@ -159117,6 +156864,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                   "taskId",
                   "executionId",
                   "workerUserId",
+                  "offeredByCoordinatorAgentId",
                   "state",
                   "offeredAt",
                   "expiresAt",
@@ -162570,16 +160318,9 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                       "additionalProperties": false,
                       "properties": {
                         "acceptedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
                         },
                         "assigneeAgentId": {
                           "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -162675,9 +160416,6 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                               "anyOf": [
                                 {
                                   "enum": [
-                                    "offer_rejected",
-                                    "offer_withdrawn",
-                                    "offer_timed_out",
                                     "result_submitted",
                                     "reassigned",
                                     "device_revoked",
@@ -162881,9 +160619,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                         },
                         "state": {
                           "enum": [
-                            "offered",
                             "accepted",
-                            "rejected",
                             "running",
                             "needs_human",
                             "result_submitted",
@@ -162891,7 +160627,6 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                             "completed",
                             "failed",
                             "cancelled",
-                            "timed_out",
                             "revoked",
                             "superseded"
                           ],
@@ -163006,9 +160741,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                         "anyOf": [
                           {
                             "enum": [
-                              "offered",
                               "accepted",
-                              "rejected",
                               "running",
                               "needs_human",
                               "result_submitted",
@@ -163016,7 +160749,6 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                               "completed",
                               "failed",
                               "cancelled",
-                              "timed_out",
                               "revoked",
                               "superseded"
                             ],
@@ -164160,7 +161892,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
     "required": [
       "connection",
       "observedAt",
-      "availableWorkerGroups",
+      "availableWorkerUsers",
       "projects"
     ],
     "type": "object"

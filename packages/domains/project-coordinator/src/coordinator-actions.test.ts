@@ -445,7 +445,7 @@ function workspaceFixture(
     },
     observedAt: TEST_TIMESTAMP,
     focusedProjectId: TEST_IDS.projectId,
-    availableWorkerGroups: [],
+    availableWorkerUsers: [],
     projects: [{
       project,
       plan: null,

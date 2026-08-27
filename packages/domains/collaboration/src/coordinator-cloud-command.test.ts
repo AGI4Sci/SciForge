@@ -29,6 +29,23 @@ const envelope = {
 const commands = [
   {
     ...envelope,
+    idempotencyKey: 'idem_project.create-01',
+    type: 'project.create' as const,
+    displayName: 'Agent-owned Project',
+    goal: 'Bind the current Device Agent as Coordinator.',
+    budget: {
+      maxTasks: 5,
+      maxTasksPerRound: 5,
+      maxTaskRetries: 1,
+      maxCoordinationRounds: 2
+    },
+    content: {
+      mode: 'none' as const,
+      members: [{ userId: TEST_IDS.userId }]
+    }
+  },
+  {
+    ...envelope,
     idempotencyKey: 'idem_project.plan.submit-01',
     type: 'project.plan.submit' as const,
     projectId: TEST_IDS.projectId,
@@ -100,6 +117,7 @@ test('Coordinator Cloud command service exposes one closed Agent-command allowli
   assert.equal(COORDINATOR_CLOUD_COMMAND_SERVICE_ID, 'sciforge.collaboration.coordinator-cloud-command')
   assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '4.0.0')
   assert.deepEqual(commands.map((command) => coordinatorCloudCommandSchema.parse(command).type), [
+    'project.create',
     'project.plan.submit',
     'task.offer.create',
     'task.offer.withdraw',
@@ -107,7 +125,6 @@ test('Coordinator Cloud command service exposes one closed Agent-command allowli
   ])
 
   for (const forbiddenType of [
-    'project.create',
     'project.plan.confirm',
     'task.offer.accept',
     'task.result.submit',

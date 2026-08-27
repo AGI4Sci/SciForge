@@ -73,6 +73,8 @@ test('duplicate User offers persist once and a Device dismissal remains local', 
 
   const [offer] = store.snapshot().pendingTaskOffers
   assert.equal(offer?.state, 'awaiting-manual')
+  assert.deepEqual(offer?.preflightReasons, [])
+  assert.equal(store.snapshot().tasks[0]?.title, cloud.task.title)
   assert.equal(store.snapshot().pendingTaskOffers.length, 1)
   assert.equal(store.snapshot().taskRuns.length, 0)
   assert.equal(cloud.commands.filter((type) => !type.startsWith('worker.')).length, 0)
@@ -84,6 +86,27 @@ test('duplicate User offers persist once and a Device dismissal remains local', 
   assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [])
   assert.equal(store.snapshot().pendingTaskOffers[0]?.state, 'dismissed')
   assert.equal(store.snapshot().taskRuns.length, 0)
+})
+
+test('manual acceptance uses the same Device preflight and leaves an unavailable offer unclaimed', async () => {
+  const cloud = new FakeWorkerCloud()
+  const { adapter, store } = await createRunner(cloud, {
+    runtimeReadiness: async () => ({ state: 'unavailable', reason: 'Runtime is unavailable.' }),
+    run: async () => { throw new Error('Unavailable Runtime must not execute a Task.') }
+  })
+
+  await adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await adapter.waitForIdle()
+  assert.equal(store.snapshot().pendingTaskOffers[0]?.state, 'awaiting-manual')
+  assert.deepEqual(store.snapshot().pendingTaskOffers[0]?.preflightReasons, ['runtime_not_ready'])
+  assert.equal(store.snapshot().tasks[0]?.title, cloud.task.title)
+  await adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await adapter.waitForIdle()
+
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [])
+  assert.equal(store.snapshot().taskRuns.length, 0)
+  assert.equal(store.snapshot().pendingTaskOffers[0]?.state, 'awaiting-manual')
+  assert.match(store.snapshot().pendingTaskOffers[0]?.error ?? '', /Another Device may still claim/u)
 })
 
 test('automatic text execution journals before Agent and uses explicit vNext commands only', async () => {
@@ -282,7 +305,7 @@ test('Worker HumanNeeded resumes the same execution and Runtime Session after th
   assert.equal(created.store.snapshot().taskRuns[0]?.state, 'completed')
 })
 
-test('revision reconciliation never masks a simultaneous Cloud authority denial', async () => {
+test('post-claim Cloud authority denial closes the execution through the canonical failure command', async () => {
   const cloud = new FakeWorkerCloud('running')
   cloud.denyPreflight()
   const initial = emptyState()
@@ -305,7 +328,8 @@ test('revision reconciliation never masks a simultaneous Cloud authority denial'
 
   assert.equal(agentRuns, 0)
   assert.deepEqual(cloud.preflightExpectedRevisions, [{ task: 1, execution: 1 }])
-  assert.equal(created.store.snapshot().taskRuns[0]?.state, 'fenced')
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), ['task.execution.fail'])
+  assert.equal(created.store.snapshot().taskRuns[0]?.state, 'failed')
 })
 
 test('an unavailable Device leaves the User offer unclaimed without rejecting it globally', async () => {
@@ -330,7 +354,7 @@ test('an unavailable Device leaves the User offer unclaimed without rejecting it
   assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [])
   assert.equal(store.snapshot().taskRuns.length, 0)
   assert.equal(store.snapshot().pendingTaskOffers[0]?.state, 'failed')
-  assert.match(store.snapshot().pendingTaskOffers[0]?.error ?? '', /another Device may still claim/u)
+  assert.match(store.snapshot().pendingTaskOffers[0]?.error ?? '', /Another Device may still claim/u)
 })
 
 test('a terminal AgentRuntime failure is journaled and fails only the current execution', async () => {
@@ -372,7 +396,7 @@ test('a terminal AgentRuntime failure is journaled and fails only the current ex
   assert.equal(run?.lateOutcomes.length, 0)
 })
 
-test('file claim uses generic token-free Content preflight and fences only this Device on denial', async () => {
+test('file Provider denial leaves the User offer unclaimed after generic token-free preflight', async () => {
   const cloud = new FakeWorkerCloud('offered', true)
   const capabilityCalls: string[] = []
   const capabilities = capabilityInvoker(
@@ -392,13 +416,11 @@ test('file claim uses generic token-free Content preflight and fences only this 
   await adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await adapter.waitForIdle()
 
-  const fileRun = store.snapshot().taskRuns[0]
-  assert.equal(fileRun?.resources.length, 2)
   assert.deepEqual(capabilityCalls, [CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT.actionId])
-  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), ['task.offer.accept'])
-  assert.equal(store.snapshot().taskRuns[0]?.decision?.decision, 'accept')
-  assert.equal(store.snapshot().taskRuns[0]?.state, 'fenced')
-  assert.deepEqual(store.snapshot().taskRuns[0]?.latestPreflight?.reasons, ['provider_not_ready'])
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [])
+  assert.equal(store.snapshot().taskRuns.length, 0)
+  assert.equal(store.snapshot().pendingTaskOffers[0]?.state, 'failed')
+  assert.match(store.snapshot().pendingTaskOffers[0]?.error ?? '', /Provider session is not ready/u)
 })
 
 test('operation-time Provider denial fails the accepted execution without Runtime or a result', async () => {
@@ -1525,7 +1547,7 @@ function durableTaskRun(
   }
 }
 
-type FakeWorkerExecutionState = 'accepted' | 'rejected' | 'running' | 'needs_human' | 'failed'
+type FakeWorkerExecutionState = 'accepted' | 'running' | 'needs_human' | 'failed'
 type FakeWorkerTaskState = 'offered' | FakeWorkerExecutionState
 
 class FakeWorkerCloud {
@@ -1562,6 +1584,7 @@ class FakeWorkerCloud {
       taskId: TEST_IDS.taskId,
       executionId: state === 'offered' ? null : TEST_IDS.executionId,
       workerUserId: TEST_IDS.userId,
+      offeredByCoordinatorAgentId: TEST_IDS.secondAgentId,
       state: state === 'offered' ? 'pending' : 'accepted',
       offeredAt: TEST_TIMESTAMP,
       expiresAt: TEST_LATER_TIMESTAMP,
@@ -1682,6 +1705,9 @@ class FakeWorkerCloud {
             ))
           if (!resource) throw new Error('Unknown ResourceRef.')
           return entityResponse(request, resource)
+        }
+        if (request.type === 'project.content.binding.get' && this.fileMode) {
+          return entityResponse(request, fileContentBinding())
         }
         assert.equal(request.type, 'task.get')
         return {
@@ -1902,16 +1928,14 @@ class FakeWorkerCloud {
   private advance(state: FakeWorkerExecutionState): void {
     const taskRevision = this.task.revision + 1
     const assignmentTaskRevision = this.execution.fence.assignmentTaskRevision
-    const terminal = state === 'rejected' || state === 'failed'
+    const terminal = state === 'failed'
     this.execution = taskExecutionSchema.parse({
       ...this.execution,
       state,
       stateRevision: this.execution.stateRevision + 1,
       revision: this.execution.revision + 1,
       updatedAt: TEST_LATER_TIMESTAMP,
-      acceptedAt: state === 'rejected'
-        ? null
-        : this.execution.acceptedAt ?? TEST_LATER_TIMESTAMP,
+      acceptedAt: this.execution.acceptedAt,
       startedAt: state === 'running' || state === 'needs_human' || state === 'failed'
         ? this.execution.startedAt ?? TEST_LATER_TIMESTAMP
         : null,
@@ -1920,7 +1944,7 @@ class FakeWorkerCloud {
         ...this.execution.fence,
         assignmentTaskRevision,
         status: terminal ? 'fenced' : 'open',
-        reason: state === 'rejected' ? 'offer_rejected' : state === 'failed' ? 'execution_failed' : null,
+        reason: state === 'failed' ? 'execution_failed' : null,
         fencedAt: terminal ? TEST_LATER_TIMESTAMP : null
       },
       fileIntent: this.fileMode ? fileExecutionIntent(assignmentTaskRevision) : null
@@ -1957,9 +1981,7 @@ function makeTask(state: FakeWorkerTaskState, revision: number, fileMode = false
         ? 'needs_human'
       : state === 'running' || state === 'accepted'
         ? 'in_progress'
-        : state === 'rejected'
-          ? 'revision_requested'
-          : 'offered',
+        : 'offered',
     executionCount: unclaimed ? 0 : 1,
     maxRetries: 2,
     completedAt: state === 'failed' ? TEST_LATER_TIMESTAMP : null,
@@ -1970,12 +1992,11 @@ function makeTask(state: FakeWorkerTaskState, revision: number, fileMode = false
 }
 
 function makeExecution(
-  state: 'offered' | 'accepted' | 'rejected' | 'running',
+  state: 'accepted' | 'running',
   taskRevision: number,
   fileMode = false,
   assignmentTaskRevision = 1
 ): TaskExecution {
-  const terminal = state === 'rejected'
   return taskExecutionSchema.parse({
     schemaVersion: 1,
     type: 'task_execution',
@@ -1988,7 +2009,7 @@ function makeExecution(
     assigneeAgentId: TEST_IDS.agentId,
     assigneeDeviceId: TEST_IDS.deviceId,
     state,
-    stateRevision: state === 'offered' ? 1 : 3,
+    stateRevision: 3,
     fence: {
       schemaVersion: 1,
       executionId: TEST_IDS.executionId,
@@ -1999,17 +2020,17 @@ function makeExecution(
       projectExecutionAuthorityEpoch: 1,
       userTaskAuthorityEpoch: 1,
       bindingRevision: fileMode ? FILE_BINDING_REVISION : null,
-      status: terminal ? 'fenced' : 'open',
-      reason: terminal ? 'offer_rejected' : null,
-      fencedAt: terminal ? TEST_LATER_TIMESTAMP : null
+      status: 'open',
+      reason: null,
+      fencedAt: null
     },
     fileIntent: fileMode ? fileExecutionIntent(assignmentTaskRevision) : null,
     currentResultSubmissionId: null,
     offeredAt: TEST_TIMESTAMP,
-    acceptedAt: state === 'accepted' || state === 'running' ? TEST_LATER_TIMESTAMP : null,
+    acceptedAt: TEST_LATER_TIMESTAMP,
     startedAt: state === 'running' ? TEST_LATER_TIMESTAMP : null,
-    terminalAt: terminal ? TEST_LATER_TIMESTAMP : null,
-    revision: state === 'offered' ? 1 : 3,
+    terminalAt: null,
+    revision: 3,
     createdAt: TEST_TIMESTAMP,
     updatedAt: TEST_LATER_TIMESTAMP
   })
@@ -2338,7 +2359,7 @@ function canonicalFixture(input: unknown): string {
 
 function emptyState(): CollaborationLocalState {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     lastInboxSequence: 0,
     endpoints: [],

@@ -17,10 +17,10 @@ Project SHALL 使用 `memberUserIds` 表达参与者，使用 `coordinatorAgentI
 
 Project SHALL 同时记录一个 active Coordinator Agent。只有该 Agent 能维护正式计划、创建或改派 Task、接受结果和完成 Project；Coordinator 的 owner SHALL 是 Project 成员或显式服务角色。
 
-#### Scenario: 发起人指定 Coordinator
+#### Scenario: 发起人当前 Device Agent 自动成为 Coordinator
 
-- **WHEN** 用户创建 Project 并选择一台有权 Agent
-- **THEN** 云端 SHALL 原子记录 Coordinator 和 Project revision
+- **WHEN** 用户从当前已认证 Device 创建 Project
+- **THEN** 云端 SHALL 从该 Device 的 canonical Agent 派生并原子记录 Coordinator 和 Project revision
 - **AND** 向该 Agent 投递 `project.started`。
 
 #### Scenario: 手动转交 Coordinator

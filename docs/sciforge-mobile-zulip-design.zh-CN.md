@@ -20,7 +20,7 @@ SciForge 需要同时解决两类问题：
 | --- | --- | --- |
 | Zulip | 登录、手机/网页聊天、channel、Topic、历史、未读与通知 | Agent 所有权、Project/Task 状态、本机权限 |
 | Collaboration Server | User、端点绑定、Agent ownership、projection、Project/Task、共享记录、inbox、receipt 与授权 | 模型推理、本地工具、完整私人 transcript |
-| SciForge 协作领域 | Agent 注册、固定 Session 映射、本地 durable queue、AgentRuntime 执行、协作 UI | 保存 Bot 服务凭据、猜测跨用户路由 |
+| SciForge 协作领域 | 消费 canonical Device Agent 绑定、固定 Session 映射、本地 durable queue、AgentRuntime 执行、协作 UI | 保存 Bot 服务凭据、猜测跨用户路由 |
 | 本地 AgentRuntime | 个人 Session 上下文、turn、模型和工具执行 | 多人 Project 的共同事实 |
 
 云端 PostgreSQL 是协作事实源；本地 AgentRuntime thread 是个人 Session 上下文事实源；Zulip Server
@@ -32,13 +32,13 @@ SciForge 需要同时解决两类问题：
 
 - 稳定 `userId`；
 - 已验证 `HumanEndpointBinding`，由 `(provider, realmId, providerUserId)` 唯一标识；
-- 用户明确选择的 primary `AgentNode`。
+- Identity 为各 ACTIVE Device 自动确保并复用的 `AgentNode` 集合。
 
 显示名、邮箱、channel 和 Topic 都是可变元数据，不是内部身份。手机 challenge 只在短期内有效，
 成功后立即消费。同一 provider 身份不能同时属于两个 active User。
 
-每台 SciForge 使用稳定 `agentId` 和独立设备凭据。重启恢复同一 Agent；所有权转移、撤销和凭据轮换
-必须显式且可审计。多台 Agent 不按“最近在线”自动替代。
+每台 SciForge 使用稳定 `agentId` 和独立设备凭据。重启恢复同一 Agent；renderer 不提供手工注册或
+primary 选择。所有权转移、撤销和凭据轮换必须显式且可审计，多台 Agent 不按“最近在线”自动替代。
 
 身份与授权分开判断：同一用户的手机端点通常是 `verified`，Agent 设备是 `device`，高风险操作可能
 仍要求桌面或更强保证级别。

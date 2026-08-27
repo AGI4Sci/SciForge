@@ -148,7 +148,6 @@ export const collaborationTaskViewSchema = z.object({
     'needs-human',
     'submitting',
     'completed',
-    'rejected',
     'dismissed',
     'claimed-elsewhere',
     'closed',

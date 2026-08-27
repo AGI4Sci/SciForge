@@ -207,15 +207,13 @@ async function contentRecoveryProjectFixture(suffix: string) {
     worker.user,
     providerFactCommand(worker.user, worker.deviceId, `${suffix}-provider-worker`, `idem_${suffix}_worker_fact`)
   )
-  const created = await service.createProject(owner.user, {
+  const created = await service.createProject(coordinator, {
     protocolVersion: '1.0',
     type: 'project.create',
     requestId: `req_${stableDigest(`${suffix}_project`).slice(0, 24)}`,
     idempotencyKey: `idem_${suffix}_project`,
     displayName: `${suffix} Project`,
     goal: 'Exercise exact Project Content recovery semantics.',
-    coordinatorAgentId: coordinator.agentId,
-    expectedCoordinatorAgentRevision: 1,
     budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 },
     content: {
       mode: 'required',
@@ -461,15 +459,13 @@ async function activeTextOfferFixture(suffix: string) {
     secondWorkerAgent,
     `idem_${suffix}_second_worker_availability`
   )
-  const created = await service.createProject(owner.user, {
+  const created = await service.createProject(coordinator, {
     protocolVersion: '1.0',
     type: 'project.create',
     requestId: `req_${stableDigest(`${suffix}_project`).slice(0, 24)}`,
     idempotencyKey: `idem_${suffix}_project`,
     displayName: `${suffix} workflow`,
     goal: 'Exercise exact workflow authority and execution fencing.',
-    coordinatorAgentId: coordinator.agentId,
-    expectedCoordinatorAgentRevision: 1,
     budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 2, maxCoordinationRounds: 2 },
     content: {
       mode: 'none',
@@ -894,15 +890,13 @@ describe('vNext Cloud application service', () => {
       'project-created-inbox-owner'
     )
     const requestId = 'req_ProjectCreatedInbox01'
-    const created = await service.createProject(owner.user, {
+    const created = await service.createProject(coordinator, {
       protocolVersion: '1.0',
       type: 'project.create',
       requestId,
       idempotencyKey: 'idem_project_created_inbox_01',
       displayName: 'Inbox contract Project',
       goal: 'Deliver a canonical Project creation notification to the Coordinator Agent.',
-      coordinatorAgentId: coordinator.agentId,
-      expectedCoordinatorAgentRevision: 1,
       budget: {
         maxTasks: 5,
         maxTasksPerRound: 5,
@@ -1061,11 +1055,10 @@ describe('vNext Cloud application service', () => {
         'idem_availability_provider_worker'
       )
     )
-    const created = await service.createProject(owner.user, {
+    const created = await service.createProject(coordinator, {
       protocolVersion: '1.0', type: 'project.create', requestId: 'req_availability_project',
       idempotencyKey: 'idem_availability_project', displayName: 'Availability Project',
       goal: 'Compose independent Worker and Content readiness facts.',
-      coordinatorAgentId: coordinator.agentId, expectedCoordinatorAgentRevision: 1,
       budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 },
       content: { mode: 'required', contentOwnerUserId: owner.userId,
         providerInstance: ownerFact.providerPrincipal.providerInstance,
@@ -1165,8 +1158,6 @@ describe('vNext Cloud application service', () => {
       idempotencyKey: 'idem_project_create_vnext',
       displayName: 'Multi-user design review',
       goal: 'Produce reviewed meeting artifacts.',
-      coordinatorAgentId: coordinator.agentId,
-      expectedCoordinatorAgentRevision: 1,
       budget: {
         maxTasks: 20,
         maxTasksPerRound: 10,
@@ -1193,14 +1184,14 @@ describe('vNext Cloud application service', () => {
       }
     }
 
-    await expect(service.createProject(owner.user, {
+    await expect(service.createProject(coordinator, {
       ...command,
       requestId: 'req_project_create_cross_owner',
       idempotencyKey: 'idem_project_create_cross_owner',
       content: { ...command.content, contentOwnerUserId: worker.userId }
     })).rejects.toMatchObject({ code: 'permission_denied' })
 
-    const created = await service.createProject(owner.user, command)
+    const created = await service.createProject(coordinator, command)
     expect(created.project).toMatchObject({
       ownerUserId: owner.userId,
       coordinatorAgentId: coordinator.agentId,
@@ -2091,11 +2082,10 @@ describe('vNext Cloud application service', () => {
     })
     const workerFact = await service.publishProviderDirectoryPrincipalFact(worker.user,
       providerFactCommand(worker.user, worker.deviceId, 'content-provider-worker', 'idem_content_worker_fact'))
-    const created = await service.createProject(owner.user, {
+    const created = await service.createProject(coordinator, {
       protocolVersion: '1.0', type: 'project.create', requestId: 'req_content_project_01',
       idempotencyKey: 'idem_content_project_01', displayName: 'Signed Content meeting',
-      goal: 'Verify the exact Provider root and member roster.', coordinatorAgentId: coordinator.agentId,
-      expectedCoordinatorAgentRevision: 1,
+      goal: 'Verify the exact Provider root and member roster.',
       budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 },
       content: { mode: 'required', contentOwnerUserId: owner.userId,
         providerInstance: ownerFact.providerPrincipal.providerInstance,
@@ -2488,11 +2478,10 @@ describe('vNext Cloud application service', () => {
     const originalWorker = await seedOidcUserDevice(repository, 'membership-original-worker', at)
     const addedWorker = await seedOidcUserDevice(repository, 'membership-added-worker', at)
     const coordinator = await registeredAgent(service, owner.user, owner.deviceId, 'membership-owner')
-    const created = await service.createProject(owner.user, {
+    const created = await service.createProject(coordinator, {
       protocolVersion: '1.0', type: 'project.create', requestId: 'req_membership_project_01',
       idempotencyKey: 'idem_membership_project_01', displayName: 'Dynamic meeting team',
-      goal: 'Exercise User-level membership authority.', coordinatorAgentId: coordinator.agentId,
-      expectedCoordinatorAgentRevision: 1,
+      goal: 'Exercise User-level membership authority.',
       budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 },
       content: { mode: 'none', members: [{ userId: owner.userId }, { userId: originalWorker.userId }] }
     })
@@ -2517,11 +2506,10 @@ describe('vNext Cloud application service', () => {
       state === 'fenced' && reason === 'membership_removed')).toBe(true)
     expect(removed.provisioningIntent).toBeNull()
 
-    const secondProject = await service.createProject(owner.user, {
+    const secondProject = await service.createProject(coordinator, {
       protocolVersion: '1.0', type: 'project.create', requestId: 'req_membership_project_02',
       idempotencyKey: 'idem_membership_project_02', displayName: 'Second dynamic meeting',
-      goal: 'Exercise an actor-bound Project list continuation.', coordinatorAgentId: coordinator.agentId,
-      expectedCoordinatorAgentRevision: 1,
+      goal: 'Exercise an actor-bound Project list continuation.',
       budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 },
       content: { mode: 'none', members: [{ userId: owner.userId }] }
     })
@@ -2583,15 +2571,13 @@ describe('vNext Cloud application service', () => {
       memberAgent,
       'transfer_member'
     )
-    const created = await service.createProject(owner.user, {
+    const created = await service.createProject(coordinator, {
       protocolVersion: '1.0',
       type: 'project.create',
       requestId: 'req_transfer_owner_project',
       idempotencyKey: 'idem_transfer_owner_project',
       displayName: 'Owner-only Coordinator transfer',
       goal: 'Fence the old Coordinator without creating a role account.',
-      coordinatorAgentId: coordinator.agentId,
-      expectedCoordinatorAgentRevision: 1,
       budget: {
         maxTasks: 5,
         maxTasksPerRound: 5,
@@ -2793,6 +2779,7 @@ describe('vNext Cloud application service', () => {
     expect(reassigned.offer).toMatchObject({
       executionId: null,
       workerUserId: fixture.owner.userId,
+      offeredByCoordinatorAgentId: fixture.nextCoordinatorAgent.agentId,
       state: 'pending'
     })
 
@@ -2820,6 +2807,20 @@ describe('vNext Cloud application service', () => {
       expectedTaskRevision: tasks[0]!.revision,
       expectedOfferRevision: withdrawn.offer.revision
     })).rejects.toMatchObject({ code: 'invalid_state_transition' })
+
+    const claimed = await fixture.service.acceptTaskOffer(fixture.nextCoordinatorAgent, {
+      protocolVersion: '1.0',
+      type: 'task.offer.accept',
+      requestId: 'req_reassign_current_claim',
+      idempotencyKey: 'idem_reassign_current_claim',
+      taskOfferId: reassigned.offer.taskOfferId,
+      taskId: reassigned.task.taskId,
+      expectedTaskRevision: reassigned.task.revision,
+      expectedOfferRevision: reassigned.offer.revision
+    })
+    expect(claimed.execution.offeredByCoordinatorAgentId).toBe(
+      fixture.nextCoordinatorAgent.agentId
+    )
   })
 
   it('broadcasts one User offer to both Devices and creates exactly one execution at claim time', async () => {
@@ -2842,6 +2843,29 @@ describe('vNext Cloud application service', () => {
       ))).toBe(true)
     }
 
+    const secondAgent = (await fixture.repository.getAgent(fixture.secondWorkerAgent.agentId))!
+    const offlineSecondAgent = await fixture.service.heartbeatAgent(fixture.secondWorkerAgent, {
+      expectedRevision: secondAgent.revision,
+      connectionStatus: 'offline',
+      capabilities: RUNTIME_CAPABILITY_TAGS,
+      idempotencyKey: 'idem_user_offer_second_device_offline_heartbeat'
+    })
+    await fixture.service.publishWorkerAvailability(fixture.secondWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'worker.availability.publish',
+      requestId: 'req_user_offer_second_device_offline',
+      idempotencyKey: 'idem_user_offer_second_device_offline',
+      agentId: fixture.secondWorkerAgent.agentId,
+      expectedAgentRevision: offlineSecondAgent.revision,
+      connectionStatus: 'offline',
+      lastHeartbeatAt: null,
+      runtimeReadiness: 'unavailable',
+      runtimeCapabilityTags: RUNTIME_CAPABILITY_TAGS,
+      acceptsNewOffers: false,
+      activeTaskCount: 0,
+      observedAt: at.toISOString()
+    })
+
     const claimFacts = {
       taskOfferId: fixture.offered.offer.taskOfferId,
       taskId: fixture.offered.task.taskId,
@@ -2860,6 +2884,7 @@ describe('vNext Cloud application service', () => {
         assigneeUserId: fixture.firstWorker.userId,
         assigneeAgentId: fixture.firstWorkerAgent.agentId,
         assigneeDeviceId: fixture.firstWorkerAgent.deviceId,
+        offeredByCoordinatorAgentId: fixture.coordinator.agentId,
         state: 'accepted'
       },
       offer: { executionId: claimed.execution.executionId, state: 'accepted' }
@@ -2877,6 +2902,91 @@ describe('vNext Cloud application service', () => {
       null,
       10
     )).toEqual([claimed.execution])
+    const offlineDeviceInbox = await fixture.service.pullInbox(
+      fixture.secondWorkerAgent,
+      { afterSequence: 0, limit: 100 }
+    )
+    expect(offlineDeviceInbox.messages.some(({ payload }) => (
+      payload.type === 'task.offer.claimed' &&
+      payload.taskOfferId === fixture.offered.offer.taskOfferId &&
+      payload.claimedByAgentId === fixture.firstWorkerAgent.agentId
+    ))).toBe(true)
+  })
+
+  it.each([
+    ['paused', 'revision_requested'],
+    ['cancelled', 'cancelled']
+  ] as const)('closes every pending User offer when a Project becomes %s', async (
+    projectStatus,
+    taskStatus
+  ) => {
+    const fixture = await activeTextOfferFixture(`project-${projectStatus}-offer`)
+    const currentProject = (await fixture.repository.getProject(fixture.activeProject.projectId))!
+    await fixture.service.transitionProject(fixture.owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.transition',
+      requestId: `req_project_${projectStatus}_pending_offer`,
+      idempotencyKey: `idem_project_${projectStatus}_pending_offer`,
+      projectId: fixture.activeProject.projectId,
+      expectedRevision: currentProject.revision,
+      expectedCoordinatorAuthorityEpoch: currentProject.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: currentProject.executionAuthorityEpoch,
+      status: projectStatus
+    })
+
+    expect(await fixture.repository.getTaskOffer(fixture.offered.offer.taskOfferId)).toMatchObject({
+      state: 'withdrawn',
+      executionId: null
+    })
+    expect(await fixture.repository.getTask(fixture.offered.task.taskId)).toMatchObject({
+      status: taskStatus,
+      currentExecutionId: null,
+      currentExecutionState: null
+    })
+    for (const agent of [fixture.firstWorkerAgent, fixture.secondWorkerAgent]) {
+      const inbox = await fixture.service.pullInbox(agent, { afterSequence: 0, limit: 100 })
+      expect(inbox.messages.some(({ payload }) => (
+        payload.type === 'task.offer.closed' &&
+        payload.taskOfferId === fixture.offered.offer.taskOfferId &&
+        payload.outcome === 'withdrawn'
+      ))).toBe(true)
+    }
+  })
+
+  it('closes a removed member User pending offer before revoking Project authority', async () => {
+    const fixture = await activeTextOfferFixture('member-remove-pending-offer')
+    const membership = (await fixture.repository.getProjectMember(
+      fixture.activeProject.projectId,
+      fixture.firstWorker.userId
+    ))!
+    const currentProject = (await fixture.repository.getProject(fixture.activeProject.projectId))!
+    await fixture.service.removeProjectMembership(fixture.owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.membership.remove',
+      requestId: 'req_member_remove_pending_offer',
+      idempotencyKey: 'idem_member_remove_pending_offer',
+      projectId: fixture.activeProject.projectId,
+      projectMembershipId: membership.projectMembershipId,
+      expectedProjectRevision: currentProject.revision,
+      expectedMembershipRevision: membership.revision
+    })
+
+    expect(await fixture.repository.getTaskOffer(fixture.offered.offer.taskOfferId)).toMatchObject({
+      state: 'withdrawn',
+      executionId: null
+    })
+    expect(await fixture.repository.getTask(fixture.offered.task.taskId)).toMatchObject({
+      status: 'revision_requested',
+      currentExecutionId: null
+    })
+    const inbox = await fixture.service.pullInbox(
+      fixture.secondWorkerAgent,
+      { afterSequence: 0, limit: 100 }
+    )
+    expect(inbox.messages.some(({ payload }) => (
+      payload.type === 'task.offer.closed' &&
+      payload.taskOfferId === fixture.offered.offer.taskOfferId
+    ))).toBe(true)
   })
 
   it('rejects Coordinator reassignment until the current execution is a retryable immutable terminal fact', async () => {
@@ -3254,7 +3364,7 @@ describe('vNext Cloud application service', () => {
     expect(await fixture.repository.getTaskExecution(revokedExecution.executionId)).toEqual(revokedExecution)
   })
 
-  it('request_revision creates a fresh offered execution while preserving the reviewed result provenance', async () => {
+  it('request_revision creates a fresh User offer without an Execution while preserving reviewed provenance', async () => {
     const fixture = await activeTextOfferFixture('review-revision')
     const accepted = await fixture.service.acceptTaskOffer(fixture.firstWorkerAgent, {
       protocolVersion: '1.0',
@@ -3424,11 +3534,10 @@ describe('vNext Cloud application service', () => {
       runtimeReadiness: 'ready', runtimeCapabilityTags: RUNTIME_CAPABILITY_TAGS, acceptsNewOffers: true,
       activeTaskCount: 0, observedAt: at.toISOString()
     })
-    const created = await service.createProject(owner.user, {
+    const created = await service.createProject(coordinator, {
       protocolVersion: '1.0', type: 'project.create', requestId: 'req_text_project_001',
       idempotencyKey: 'idem_text_project_001', displayName: 'Meeting synthesis',
-      goal: 'Synthesize and approve meeting decisions.', coordinatorAgentId: coordinator.agentId,
-      expectedCoordinatorAgentRevision: 1,
+      goal: 'Synthesize and approve meeting decisions.',
       budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 },
       content: { mode: 'none', members: [{ userId: owner.userId }, { userId: worker.userId }] }
     })

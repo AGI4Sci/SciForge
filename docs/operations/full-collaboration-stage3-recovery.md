@@ -28,7 +28,7 @@ offer 超时、撤权、Coordinator 转移、改派和 Provider 不确定写入�
 
 1. 在服务接受流量前运行 `migrations.ts` 的正式 route 检测和 catalog fingerprint
    校验。仅允许 `fresh-v4`、`upstream-v4`、`public-v5`、`staging-v9`、`a-v11`、
-   `current-v12` 至 `current-v16`；未知或漂移 catalog 必须 fail closed。
+   `current-v12` 至 `current-v17`；未知或漂移 catalog 必须 fail closed。
 2. migration 在单一 PostgreSQL connection 和显式 transaction 内完成；失败先
    rollback，再释放 connection。不得用部分 DDL、手工改 version 或跳过 fingerprint
    使服务进入 ready。

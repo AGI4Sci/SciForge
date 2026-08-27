@@ -109,7 +109,7 @@ SciForge 的本地工作区、worker 边界、MCP/Skill、Model Router 和 Evide
 | 长任务研究工作台 | 真实截图显示 33 篇 AI4AI 论文整理、综述扩展、文件列表和成本/cache 信息。 |
 | 本地 workspace 操作 | 会话和文件树绑定真实目录，可读写论文、Markdown、CSV、提取文本等。 |
 | 插件/worker 接入 | 插件页显示定时任务、K-Dense Skill、Scientific Plotting、Image Generation、Canvas、ppt-master 等入口。 |
-| 手机/IM 协作 | 协作右侧面板提供云端连接、Zulip 身份挑战、Agent 注册、固定 Session 投影和队列恢复；云端服务统一处理身份、顺序、回执和权限。 |
+| 手机/IM 协作 | 协作右侧面板提供云端连接、Zulip 身份挑战、自动 Device Agent 状态、固定 Session 投影和队列恢复；云端服务统一处理身份、顺序、回执和权限。 |
 | 科学扩展架构 | 代码中已有 `evidence-dag`、`project-dag`、`paper-radar` 等领域包，以及 `model-router`、`sci-modality-router`、`scientific-plotting`、`ppt-master`、`canvas` 等 worker。 |
 | 研究案例 | 报告中的 scenario-01 research sprint 记录了长周期研究闭环：132 stages、约 199 commits、文献、候选基因、结构验证、图表与手稿包。 |
 

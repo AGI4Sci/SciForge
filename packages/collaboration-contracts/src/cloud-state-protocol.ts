@@ -78,7 +78,6 @@ import {
 import {
   taskExecutionSchema,
   taskExecutionStateSchema,
-  taskOfferRejectionReasonSchema,
   taskOfferSchema
 } from './task-execution.js'
 import {
@@ -191,23 +190,22 @@ export const projectCreateContentSchema = z.discriminatedUnion('mode', [
 ])
 
 /**
- * The sole Project creation transaction. The authenticated OIDC actor is the
- * Owner; callers cannot nominate another Owner. Required content facts are
- * validated and snapshotted with Memberships and the provisioning intent.
+ * The sole Project creation transaction. The authenticated Agent machine
+ * identity supplies both the current Device Coordinator and its owning User;
+ * neither authority may be nominated by the caller. Required content facts
+ * are validated and snapshotted with Memberships and the provisioning intent.
  */
 export const projectCreateCommandSchema = z.object({
   ...writeCommandShape,
   type: z.literal('project.create'),
   displayName: displayNameSchema,
   goal: nonEmptyTextSchema,
-  coordinatorAgentId: agentIdSchema,
-  expectedCoordinatorAgentRevision: revisionSchema,
   budget: projectBudgetSchema,
   content: projectCreateContentSchema
 }).strict()
 export type ProjectCreateCommand = z.infer<typeof projectCreateCommandSchema>
 
-/** Service precondition because the authenticated OIDC Owner is intentionally not caller input. */
+/** Service precondition because the authenticated Agent Owner is intentionally not caller input. */
 export function projectCreateIncludesAuthenticatedOwner(
   command: ProjectCreateCommand,
   authenticatedOwnerUserId: string

@@ -1092,7 +1092,7 @@ function mapPendingTaskOfferView(
     state,
     acceptanceMode,
     decisionRequired: offer.state === 'awaiting-manual',
-    preflightReasons: [],
+    preflightReasons: offer.preflightReasons,
     updatedAt: offer.updatedAt,
     ...(offer.error ? { error: offer.error } : {})
   }

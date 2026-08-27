@@ -7,12 +7,10 @@ import type {
 } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import {
   TEST_IDS,
-  agentNodeFixture,
   humanNeededFixture,
-  participantProfileFixture,
-  projectRecordFixture,
-  userPrincipalFixture
+  projectRecordFixture
 } from '@sciforge/collaboration-contracts/testing'
+import type { CoordinatorCloudCommand } from '@sciforge/domain-collaboration/coordinator-cloud-command'
 
 import {
   createProjectCoordinatorCloudWorkspacePort
@@ -21,45 +19,12 @@ import {
 const createdAt = '2026-08-25T01:00:00.000Z'
 const updatedAt = '2026-08-25T01:05:00.000Z'
 
-test('OIDC Project create returns a workspace focused on the exact new Project after paginated Cloud reads', async () => {
+test('current Device Agent Project create returns a workspace focused on the exact new Project after paginated Cloud reads', async () => {
   const requests: AuthenticatedCloudRequest[] = []
+  const coordinatorRequests: CoordinatorCloudCommand[] = []
   const project = projectFixture('prj_ProjectCreated01', 'Created meeting')
   const existing = projectFixture('prj_ProjectExisting1', 'Existing meeting')
   const responses = [
-    response(200, {
-      protocolVersion: '1.0',
-      type: 'participant.snapshot',
-      requestId: 'req_CurrentDeviceAgent1',
-      user: {
-        ...userPrincipalFixture,
-        userId: 'usr_Owner0000001',
-        displayName: 'Owner'
-      },
-      participant: {
-        ...participantProfileFixture,
-        participantId: 'par_OwnerProfile001',
-        userId: 'usr_Owner0000001',
-        primaryHumanEndpointId: null,
-        primaryAgentId: 'agt_Coordinator01',
-        status: 'incomplete'
-      },
-      humanEndpoints: [],
-      agents: [{
-        ...agentNodeFixture,
-        agentId: 'agt_Coordinator01',
-        ownerUserId: 'usr_Owner0000001',
-        deviceId: 'dev_Device0000001',
-        revision: 3
-      }]
-    }),
-    response(200, {
-      protocolVersion: '1.0',
-      type: 'rest.project_created',
-      requestId: 'req_CreateProject0001',
-      project,
-      memberships: [membershipFixture(project.projectId)],
-      provisioningIntent: null
-    }),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_page',
@@ -125,6 +90,20 @@ test('OIDC Project create returns a workspace focused on the exact new Project a
   let requestOrdinal = 0
   const port = createProjectCoordinatorCloudWorkspacePort({
     transport,
+    coordinatorCloudCommands: {
+      execute: async (command) => {
+        coordinatorRequests.push(command)
+        return response(200, {
+          protocolVersion: '1.0',
+          type: 'rest.project_created',
+          requestId: command.requestId,
+          project,
+          memberships: [membershipFixture(project.projectId)],
+          provisioningIntent: null
+        }).body
+      },
+      subscribe: () => () => undefined
+    },
     requestId: () => `req_TracerRequest${String(++requestOrdinal).padStart(4, '0')}`
   })
 
@@ -155,8 +134,6 @@ test('OIDC Project create returns a workspace focused on the exact new Project a
   assert.deepEqual(
     requests.map(({ payload }) => payload.type),
     [
-      'participant.get',
-      'project.create',
       'project.list',
       'project.list',
       'worker.availability.list',
@@ -164,15 +141,29 @@ test('OIDC Project create returns a workspace focused on the exact new Project a
       'project.coordination.read'
     ]
   )
-  assert.deepEqual(requests[1]?.payload.type === 'project.create' ? {
-    coordinatorAgentId: requests[1].payload.coordinatorAgentId,
-    expectedCoordinatorAgentRevision: requests[1].payload.expectedCoordinatorAgentRevision
-  } : null, {
-    coordinatorAgentId: 'agt_Coordinator01',
-    expectedCoordinatorAgentRevision: 3
-  })
+  assert.deepEqual(coordinatorRequests, [{
+    protocolVersion: '1.0',
+    requestId: 'req_TracerRequest0001',
+    type: 'project.create',
+    idempotencyKey: 'idem_CreateProjectTracer01',
+    displayName: 'Created meeting',
+    goal: 'Run one realistic multi-user meeting.',
+    budget: {
+      maxTasks: 8,
+      maxTasksPerRound: 4,
+      maxTaskRetries: 2,
+      maxCoordinationRounds: 3
+    },
+    content: {
+      mode: 'none',
+      members: [
+        { userId: 'usr_Owner0000001' },
+        { userId: 'usr_Worker000001' }
+      ]
+    }
+  }])
   assert.deepEqual(
-    requests.slice(5).map(({ payload }) => (
+    requests.slice(3).map(({ payload }) => (
       payload.type === 'project.coordination.read' ? payload.collections : []
     )),
     [
@@ -182,77 +173,46 @@ test('OIDC Project create returns a workspace focused on the exact new Project a
   )
 })
 
-test('OIDC Project create rejects a Cloud response that changes the exact creator authority', async () => {
-  for (const project of [{
+test('Agent-authored Project create rejects a Cloud response that changes the creator Owner', async () => {
+  const project = {
     ...projectFixture('prj_ProjectWrongOwner1', 'Wrong owner'),
     ownerUserId: 'usr_OtherOwner0001'
-  }, {
-    ...projectFixture('prj_ProjectWrongAgent1', 'Wrong Coordinator'),
-    coordinatorAgentId: 'agt_OtherAgent0001'
-  }]) {
-    const responses = [
-      response(200, {
-        protocolVersion: '1.0',
-        type: 'participant.snapshot',
-        requestId: 'req_CurrentDeviceAgent2',
-        user: {
-          ...userPrincipalFixture,
-          userId: 'usr_Owner0000001',
-          displayName: 'Owner'
-        },
-        participant: {
-          ...participantProfileFixture,
-          participantId: 'par_OwnerProfile001',
-          userId: 'usr_Owner0000001',
-          primaryHumanEndpointId: null,
-          primaryAgentId: 'agt_Coordinator01',
-          status: 'incomplete'
-        },
-        humanEndpoints: [],
-        agents: [{
-          ...agentNodeFixture,
-          agentId: 'agt_Coordinator01',
-          ownerUserId: 'usr_Owner0000001',
-          deviceId: 'dev_Device0000001',
-          revision: 3
-        }]
-      }),
-      response(200, {
-        protocolVersion: '1.0',
-        type: 'rest.project_created',
-        requestId: 'req_CreateProject0002',
-        project,
-        memberships: [membershipFixture(project.projectId)],
-        provisioningIntent: null
-      })
-    ]
-    const transport: AuthenticatedCloudTransport = {
-      status: () => ({
-        state: 'ready',
-        baseUrl: 'https://cloud.run0.invalid/',
-        userId: 'usr_Owner0000001',
-        deviceId: 'dev_Device0000001'
-      }),
-      execute: async () => {
-        const next = responses.shift()
-        if (!next) throw new Error('Unexpected Cloud request.')
-        return next
-      }
-    }
-
-    await assert.rejects(
-      createProjectCoordinatorCloudWorkspacePort({ transport }).createProject({
-        displayName: project.displayName,
-        goal: project.goal,
-        budget: project.budget,
-        content: {
-          mode: 'none',
-          members: [{ userId: 'usr_Owner0000001' }]
-        }
-      }, `idem_${project.projectId}`),
-      /exact current User and Device Agent authority/
-    )
   }
+  const transport: AuthenticatedCloudTransport = {
+    status: () => ({
+      state: 'ready',
+      baseUrl: 'https://cloud.run0.invalid/',
+      userId: 'usr_Owner0000001',
+      deviceId: 'dev_Device0000001'
+    }),
+    execute: async () => { throw new Error('User transport must not create Projects.') }
+  }
+
+  await assert.rejects(
+    createProjectCoordinatorCloudWorkspacePort({
+      transport,
+      coordinatorCloudCommands: {
+        execute: async (command) => response(200, {
+          protocolVersion: '1.0',
+          type: 'rest.project_created',
+          requestId: command.requestId,
+          project,
+          memberships: [membershipFixture(project.projectId)],
+          provisioningIntent: null
+        }).body,
+        subscribe: () => () => undefined
+      }
+    }).createProject({
+      displayName: project.displayName,
+      goal: project.goal,
+      budget: project.budget,
+      content: {
+        mode: 'none',
+        members: [{ userId: 'usr_Owner0000001' }]
+      }
+    }, `idem_${project.projectId}`),
+    /current Agent owner authority/
+  )
 })
 
 test('Cloud-global online Worker Users stay visible outside current Project membership with grouped Agent evidence', async () => {
@@ -334,14 +294,9 @@ test('Cloud-global online Worker Users stay visible outside current Project memb
 
   const workspace = await port.readWorkspace({ projectId: project.projectId })
 
-  assert.deepEqual(workspace.availableWorkerGroups.map((group) => ({
-    userId: group.userId,
-    displayName: group.displayName,
-    agentIds: group.agents.map(({ availability }) => availability.agentId)
-  })), [{
+  assert.deepEqual(workspace.availableWorkerUsers, [{
     userId: 'usr_Worker000001',
-    displayName: 'Worker User',
-    agentIds: ['agt_WorkerAgent001', 'agt_WorkerAgent002']
+    displayName: 'Worker User'
   }])
   assert.deepEqual(workspace.projects[0]?.workerGroups.map((group) => ({
     userId: group.userId,

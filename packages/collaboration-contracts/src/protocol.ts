@@ -800,7 +800,7 @@ export const restResponseSchema = z.discriminatedUnion('type', [
     }
     const memberUsers = response.memberships.map(({ userId }) => userId)
     if (new Set(memberUsers).size !== memberUsers.length || !memberUsers.includes(response.project.ownerUserId)) {
-      context.addIssue({ code: 'custom', path: ['memberships'], message: 'Created Memberships are unique and include the OIDC-derived Owner.' })
+      context.addIssue({ code: 'custom', path: ['memberships'], message: 'Created Memberships are unique and include the authenticated Agent owner User.' })
     }
     const requiresContent = response.project.contentMode === 'required'
     if (requiresContent !== (response.provisioningIntent !== null)) {

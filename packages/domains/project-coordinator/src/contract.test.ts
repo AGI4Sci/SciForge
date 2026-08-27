@@ -27,7 +27,7 @@ const fixture = {
   },
   observedAt: updatedAt,
   focusedProjectId: 'prj_Project000001',
-  availableWorkerGroups: [],
+  availableWorkerUsers: [],
   projects: [{
     project: {
       schemaVersion: 1 as const,

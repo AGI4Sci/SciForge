@@ -195,6 +195,13 @@ export const collaborationPendingTaskOfferSchema = z.object({
   offerRevision: taskSchema.shape.revision,
   recipientAgentId: agentNodeSchema.shape.agentId,
   receivedAt: timestampSchema,
+  preflightReasons: z.array(z.enum([
+    'runtime_not_ready',
+    'task_unavailable',
+    'offer_not_current',
+    'content_not_ready',
+    'provider_not_ready'
+  ])).max(5),
   state: z.enum(['pending', 'awaiting-manual', 'claiming', 'dismissed', 'claimed_elsewhere', 'closed', 'failed']),
   updatedAt: timestampSchema,
   completedAt: timestampSchema.nullable(),
@@ -378,7 +385,7 @@ export const collaborationTaskRunSchema = z.object({
   )) {
     context.addIssue({ code: 'custom', path: ['execution'], message: 'Execution snapshot must match the immutable offer.' })
   }
-  const terminal = ['completed', 'rejected', 'failed', 'fenced', 'manual-recovery'].includes(run.state)
+  const terminal = ['completed', 'failed', 'fenced', 'manual-recovery'].includes(run.state)
   if (terminal !== (run.completedAt !== null)) {
     context.addIssue({ code: 'custom', path: ['completedAt'], message: 'Terminal Worker run requires completion time.' })
   }
@@ -413,7 +420,7 @@ export const collaborationLocalRemoteApprovalSchema = z.object({
 }).strict()
 
 export const collaborationLocalStateSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   lastInboxSequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   user: userPrincipalSchema.optional(),
@@ -472,7 +479,7 @@ export type CollaborationWorkerAcceptancePolicy = z.infer<
 export type CollaborationLocalRemoteApproval = z.infer<typeof collaborationLocalRemoteApprovalSchema>
 
 export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.freeze({
-  schemaVersion: 1,
+  schemaVersion: 2,
   revision: 0,
   lastInboxSequence: 0,
   endpoints: [],
@@ -547,6 +554,15 @@ export class CollaborationLocalStore {
   async open(): Promise<CollaborationLocalState> {
     if (this.state) return structuredClone(this.state)
     const stored = await this.backend.read()
+    if (
+      stored !== undefined &&
+      (!stored || typeof stored !== 'object' || Array.isArray(stored) ||
+        (stored as { schemaVersion?: unknown }).schemaVersion !== 2)
+    ) {
+      throw new Error(
+        'Collaboration local state is not schema version 2; clear the obsolete local Collaboration state and reconnect to Cloud.'
+      )
+    }
     this.state = stored === undefined
       ? structuredClone(EMPTY_COLLABORATION_LOCAL_STATE)
       : collaborationLocalStateSchema.parse(stored)

@@ -36,7 +36,7 @@ test('workspace read remains a strict non-writing coordination capability', asyn
         readWorkspace: async () => ({
           connection: { state: 'identity_required' },
           observedAt: '2026-08-24T09:00:00.000Z',
-          availableWorkerGroups: [],
+          availableWorkerUsers: [],
           projects: []
         }),
         createProject: async () => { throw new Error('unused') }
@@ -68,7 +68,7 @@ test('workspace read remains a strict non-writing coordination capability', asyn
     output: {
       connection: { state: 'identity_required' },
       observedAt: '2026-08-24T09:00:00.000Z',
-      availableWorkerGroups: [],
+      availableWorkerUsers: [],
       projects: []
     }
   })
@@ -231,7 +231,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
       },
       observedAt: '2026-08-25T01:05:00.000Z',
       focusedProjectId: 'prj_ProjectCreated01',
-      availableWorkerGroups: [],
+      availableWorkerUsers: [],
       projects: []
     }
   }
@@ -242,7 +242,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
       readWorkspace: async () => ({
         connection: { state: 'identity_required' as const },
         observedAt: '2026-08-25T01:05:00.000Z',
-        availableWorkerGroups: [],
+        availableWorkerUsers: [],
         projects: []
       }),
       createProject: async () => created

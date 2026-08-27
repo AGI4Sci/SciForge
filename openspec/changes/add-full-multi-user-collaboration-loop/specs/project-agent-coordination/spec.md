@@ -10,20 +10,20 @@
 
 #### Scenario: Owner 创建 Project
 
-- **WHEN** Owner 在已登录、已绑定 Agent 的当前 Cloud Device 上通过 HCI 创建 Project
-- **THEN** Desktop main SHALL 在写入前重新读取该 User 当前 Cloud Device 的唯一 active Agent 及 revision，并由 Cloud 将它记录为该 Project 的唯一 Coordinator
+- **WHEN** Owner 在已登录且 Identity 已自动确保 canonical Agent 的当前 Cloud Device 上通过 HCI 创建 Project
+- **THEN** Desktop main SHALL 通过当前 Device 的 Agent-authenticated canonical command path 创建 Project，Cloud SHALL 从该认证 Agent 派生 Owner User、Device 与唯一 Coordinator
 - **AND** renderer SHALL NOT 接收或提交 `coordinatorAgentId`、Agent revision 或手工注册输入
 - **AND** 该身份 SHALL 仅建立此 Project 的 Coordinator 关系，不得把 User、Device 或 Agent 标记为账号级 Coordinator
 - **AND** Cloud Device ID SHALL 与 Host installation/execution node ID 保持不同语义，不得通过令二者相等来建立绑定。
 
 ### Requirement: Worker 由 Coordinator HCI 选择 User
 
-Coordinator HCI SHALL 从 Cloud-global online Worker directory 中聚合 Worker User；在 Plan 中 Human SHALL 为每个 Task 选择精确 `workerUserId`，不得选择 Agent 或 Device。候选 SHALL NOT 限于当前 Project Member 或当前 OIDC User 的 `participant.get` self-Agent 列表。User 和 Worker 集合 SHALL 是动态的；Cloud SHALL NOT 固定角色账号、验收 fixture 用户或每 User 只有一个 Agent。Agent/Device 明细 MAY 作为当前可派发证据展示，但 SHALL NOT 下发为 Plan 或 Offer 的选择值。
+Coordinator HCI SHALL 从 Cloud-global online Worker directory 中聚合 Worker User；在 Plan 中 Human SHALL 为每个 Task 选择精确 `workerUserId`，不得选择 Agent 或 Device。候选 SHALL NOT 限于当前 Project Member 或当前 OIDC User 的 `participant.get` self-Agent 列表。User 和 Worker 集合 SHALL 是动态的；Cloud SHALL NOT 固定角色账号、验收 fixture 用户或每 User 只有一个 Agent。创建与派发选择合约 SHALL 只向 renderer 下发 User ID 与显示名；Agent/Device/revision 仅保留在 Cloud/Main 的资格与投递证据中。
 
 #### Scenario: 一个 User 有两台可用 Desktop
 
 - **WHEN** Coordinator 选择该 User 为 Worker
-- **THEN** HCI MAY 显示两个 Agent/Device 的当前状态，但 SHALL 只提交该 `workerUserId`
+- **THEN** HCI SHALL 只显示并提交该 `workerUserId`，不得暴露或选择两个 Agent/Device
 - **AND** Cloud SHALL 向该 User 所有满足 Task capability/authority/readiness 的在线 Agent/Device Runtime 广播同一个 User-level Task Offer。
 
 ### Requirement: Worker Availability Projection 只描述当前事实
@@ -38,15 +38,15 @@ Cloud SHALL 为 Coordinator 提供包含 Agent/Device active 状态、online/off
 
 #### Scenario: Coordinator 查看 Cloud 全局在线候选
 
-- **WHEN** Coordinator HCI 读取包含多个 User 和多个 Agent/Device 的 Cloud-global availability page
-- **THEN** Cloud SHALL 为该页返回每个可见 User 和 Agent 的安全显示标签、所有权与 Device 关系，但不得返回凭据或 Runtime 配置
-- **AND** HCI SHALL 把至少有一个 `online` Agent 的每个可见 User 精确计为一名在线候选
-- **AND** SHALL 同时显示在线 Agent 数与可接新 Task 的 Agent 数，使同一 User 的多个 Device 不会虚增 User 数
+- **WHEN** Desktop main 读取包含多个 User 和多个 Agent/Device 的 Cloud-global availability page
+- **THEN** Cloud SHALL 向 main 返回资格判定所需的安全 Agent/Device 事实，但不得返回凭据或 Runtime 配置
+- **AND** main SHALL 向创建 HCI 只投影至少有一个 `online` Agent 的唯一 User ID 与显示名
+- **AND** HCI SHALL 不显示 Agent 数、Agent ID、Device ID 或 availability revision，使同一 User 的多个 Device 不会虚增或泄漏选择维度
 - **AND** 所有候选与计数 SHALL 直接派生自本次 Cloud projection，不得使用 Project Member 列表、本地窗口、轮询旁路或猜测的 heartbeat 统计。
 
 ### Requirement: 接单策略是每 Agent Device 的本地持久策略
 
-每个 Agent Device SHALL 本地持久化 `manual` 或 `automatic` Task acceptance policy。Cloud Task 合同 SHALL NOT 包含 `acceptancePolicy`，策略 SHALL NOT 跨 Device 同步。自动接单仍 SHALL 在本机检查 Device、Runtime、Task capability、并发、Project membership 和内容 readiness 后明确发送 claim；手动模式 SHALL 要求 Human 选择 claim 或 local dismiss。local dismiss 只影响当前 Device，不得产生 Cloud User-level reject。
+每个 Agent Device SHALL 本地持久化 `manual` 或 `automatic` Task acceptance policy。Cloud Task 合同 SHALL NOT 包含 `acceptancePolicy`，策略 SHALL NOT 跨 Device 同步。自动与手动接单 SHALL 在 claim 前共享本机 Runtime、精确 Task 与 Provider/content preflight；Cloud SHALL 在唯一原子 claim 路径权威检查 Device/Agent、Project Membership、Task Authority、capability、并发与当前 revision。手动模式 SHALL 要求 Human 选择 claim 或 local dismiss。local dismiss 只影响当前 Device，不得产生 Cloud User-level reject。
 
 #### Scenario: 同一 User 的两个 Agent 使用不同策略
 

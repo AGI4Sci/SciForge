@@ -21,7 +21,7 @@ const openFence = {
   fencedAt: null
 }
 
-const offeredExecution = {
+const acceptedExecution = {
   schemaVersion: 1 as const,
   type: 'task_execution' as const,
   projectId: TEST_IDS.projectId,
@@ -32,13 +32,13 @@ const offeredExecution = {
   assigneeUserId: TEST_IDS.secondUserId,
   assigneeAgentId: TEST_IDS.secondAgentId,
   assigneeDeviceId: 'dev_WorkerDevice01',
-  state: 'offered' as const,
+  state: 'accepted' as const,
   stateRevision: 1,
   fence: openFence,
   fileIntent: null,
   currentResultSubmissionId: null,
   offeredAt: TEST_TIMESTAMP,
-  acceptedAt: null,
+  acceptedAt: TEST_TIMESTAMP,
   startedAt: null,
   terminalAt: null,
   revision: 1,
@@ -47,13 +47,13 @@ const offeredExecution = {
 }
 
 describe('Task execution attempts and fences', () => {
-  it('permits an offered execution to be cancelled or Device-revoked without inventing acceptance', () => {
+  it('preserves claim acceptance when an execution is cancelled or Device-revoked', () => {
     for (const [state, reason] of [
       ['cancelled', 'execution_cancelled'],
       ['revoked', 'device_revoked']
     ] as const) {
       expect(taskExecutionSchema.safeParse({
-        ...offeredExecution,
+        ...acceptedExecution,
         state,
         stateRevision: 2,
         fence: {
@@ -71,7 +71,7 @@ describe('Task execution attempts and fences', () => {
 
   it('retains the immutable result submission after review acceptance', () => {
     const completed = {
-      ...offeredExecution,
+      ...acceptedExecution,
       state: 'completed' as const,
       stateRevision: 5,
       fence: {
@@ -96,7 +96,7 @@ describe('Task execution attempts and fences', () => {
 
   it('rejects a live execution whose write fence is already closed', () => {
     expect(taskExecutionSchema.safeParse({
-      ...offeredExecution,
+      ...acceptedExecution,
       state: 'running',
       acceptedAt: TEST_TIMESTAMP,
       startedAt: TEST_TIMESTAMP,
@@ -111,7 +111,7 @@ describe('Task execution attempts and fences', () => {
 
   it('preflights current Project, User, Device and Agent authority without fencing on ordinary entity revisions', () => {
     const runningExecution = taskExecutionSchema.parse({
-      ...offeredExecution,
+      ...acceptedExecution,
       state: 'running',
       stateRevision: 3,
       acceptedAt: TEST_TIMESTAMP,

@@ -177,15 +177,13 @@ async function publishAvailability(rig, registered, key) {
 }
 
 async function createActiveTextProject(rig, { owner, members, coordinator, tasks, key }) {
-  const created = await rig.service.createProject(owner.actor, {
+  const created = await rig.service.createProject(coordinator.actor, {
     protocolVersion: '1.0',
     type: 'project.create',
     requestId: `req_project_${key}`,
     idempotencyKey: `idem_project_${key}`,
     displayName: `Project ${key}`,
     goal: `Canonical collaboration goal ${key}`,
-    coordinatorAgentId: coordinator.agent.agentId,
-    expectedCoordinatorAgentRevision: coordinator.agent.revision,
     budget: { maxTasks: 20, maxTasksPerRound: 20, maxTaskRetries: 1, maxCoordinationRounds: 5 },
     content: { mode: 'none', members: [owner, ...members].map(({ userId }) => ({ userId })) }
   })
@@ -585,19 +583,15 @@ test('8.4 canonical service bounds payloads and blocks sensitive Project Record 
     protocolVersion: '1.0', type: 'project.create', requestId: 'req_oversized_project',
     displayName: '超限 Project',
     goal: 'x'.repeat(32_001),
-    coordinatorAgentId: agentA.agent.agentId,
-    expectedCoordinatorAgentRevision: agentA.agent.revision,
     budget: { maxTasks: 2, maxTasksPerRound: 2, maxTaskRetries: 1, maxCoordinationRounds: 1 },
     content: { mode: 'none', members: [{ userId: a.userId }] },
     idempotencyKey: 'idem_oversized_project'
   }))
 
-  const { project } = await rig.service.createProject(a.actor, {
+  const { project } = await rig.service.createProject(agentA.actor, {
     protocolVersion: '1.0', type: 'project.create', requestId: 'req_security_project',
     displayName: '安全记录 Project',
     goal: '安全记录测试',
-    coordinatorAgentId: agentA.agent.agentId,
-    expectedCoordinatorAgentRevision: agentA.agent.revision,
     budget: { maxTasks: 2, maxTasksPerRound: 2, maxTaskRetries: 1, maxCoordinationRounds: 1 },
     content: { mode: 'none', members: [{ userId: a.userId }] },
     idempotencyKey: 'idem_security_project'

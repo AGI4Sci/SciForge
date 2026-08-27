@@ -16,9 +16,7 @@ import {
 import { taskExecutionFileIntentSchema } from './content-space-task-io.js'
 
 export const taskExecutionStateSchema = z.enum([
-  'offered',
   'accepted',
-  'rejected',
   'running',
   'needs_human',
   'result_submitted',
@@ -26,7 +24,6 @@ export const taskExecutionStateSchema = z.enum([
   'completed',
   'failed',
   'cancelled',
-  'timed_out',
   'revoked',
   'superseded'
 ])
@@ -34,9 +31,6 @@ export type TaskExecutionState = z.infer<typeof taskExecutionStateSchema>
 
 export const taskExecutionFenceStatusSchema = z.enum(['open', 'fenced'])
 export const taskExecutionFenceReasonSchema = z.enum([
-  'offer_rejected',
-  'offer_withdrawn',
-  'offer_timed_out',
   'result_submitted',
   'reassigned',
   'device_revoked',
@@ -96,7 +90,7 @@ export const taskExecutionSchema = z.object({
   fileIntent: taskExecutionFileIntentSchema.nullable(),
   currentResultSubmissionId: resultSubmissionIdSchema.nullable(),
   offeredAt: timestampSchema,
-  acceptedAt: timestampSchema.nullable(),
+  acceptedAt: timestampSchema,
   startedAt: timestampSchema.nullable(),
   terminalAt: timestampSchema.nullable()
 }).strict().superRefine((execution, context) => {
@@ -135,39 +129,12 @@ export const taskExecutionSchema = z.object({
     }
   }
 
-  const acceptanceRequired = execution.state === 'accepted' ||
-    execution.state === 'running' ||
-    execution.state === 'needs_human' ||
-    execution.state === 'result_submitted' ||
-    execution.state === 'manual_recovery_required' ||
-    execution.state === 'completed' ||
-    execution.state === 'failed'
-  const acceptanceForbidden = execution.state === 'offered' ||
-    execution.state === 'rejected' ||
-    execution.state === 'timed_out'
-  if (acceptanceRequired && execution.acceptedAt === null) {
-    context.addIssue({
-      code: 'custom',
-      path: ['acceptedAt'],
-      message: 'This execution state requires its preserved acceptance time.'
-    })
-  }
-  if (acceptanceForbidden && execution.acceptedAt !== null) {
-    context.addIssue({
-      code: 'custom',
-      path: ['acceptedAt'],
-      message: 'An unaccepted offer cannot have an acceptance time.'
-    })
-  }
   const startRequired = execution.state === 'running' ||
     execution.state === 'needs_human' ||
     execution.state === 'result_submitted' ||
     execution.state === 'manual_recovery_required' ||
     execution.state === 'completed'
-  const startForbidden = execution.state === 'offered' ||
-    execution.state === 'accepted' ||
-    execution.state === 'rejected' ||
-    execution.state === 'timed_out'
+  const startForbidden = execution.state === 'accepted'
   if (startRequired && execution.startedAt === null) {
     context.addIssue({
       code: 'custom',
@@ -182,13 +149,11 @@ export const taskExecutionSchema = z.object({
       message: 'An execution that never started cannot have a start time.'
     })
   }
-  const terminal = execution.state === 'rejected' ||
-    execution.state === 'result_submitted' ||
+  const terminal = execution.state === 'result_submitted' ||
     execution.state === 'manual_recovery_required' ||
     execution.state === 'completed' ||
     execution.state === 'failed' ||
     execution.state === 'cancelled' ||
-    execution.state === 'timed_out' ||
     execution.state === 'revoked' ||
     execution.state === 'superseded'
   if (terminal && (execution.terminalAt === null || execution.fence.status !== 'fenced')) {
@@ -230,17 +195,6 @@ export const taskOfferStateSchema = z.enum([
   'withdrawn',
   'timed_out'
 ])
-export const taskOfferRejectionReasonSchema = z.enum([
-  'runtime_not_ready',
-  'provider_not_ready',
-  'device_inactive',
-  'membership_not_active',
-  'content_not_ready',
-  'capacity_reached',
-  'unsupported_capability',
-  'human_rejected',
-  'other'
-])
 
 export const taskOfferSchema = z.object({
   ...entityMetadataShape,
@@ -251,6 +205,7 @@ export const taskOfferSchema = z.object({
   /** Filled exactly once by the Device whose Agent wins the User-level claim. */
   executionId: executionIdSchema.nullable(),
   workerUserId: userIdSchema,
+  offeredByCoordinatorAgentId: agentIdSchema,
   state: taskOfferStateSchema,
   offeredAt: timestampSchema,
   expiresAt: timestampSchema,

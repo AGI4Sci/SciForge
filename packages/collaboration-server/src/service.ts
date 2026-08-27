@@ -1940,7 +1940,7 @@ export class CollaborationService {
   }
 
   async createProject(
-    actor: UserActor,
+    actor: AgentActor,
     input: CloudCommand<'project.create'>
   ): Promise<Readonly<{
     project: StoredProject
@@ -1960,16 +1960,23 @@ export class CollaborationService {
         if (user.status !== 'active') fail('credential_revoked', 'Every Project member must be active.')
       }
 
-      const coordinator = required(await tx.getAgentForUpdate(input.coordinatorAgentId), 'Coordinator Agent')
-      expectRevision(coordinator.revision, input.expectedCoordinatorAgentRevision)
-      const coordinatorDevice = required(await tx.getDeviceForUpdate(coordinator.deviceId), 'Coordinator Device')
+      const coordinator = required(await tx.getAgentForUpdate(actor.agentId), 'Coordinator Agent')
+      const coordinatorDevice = required(await tx.getDeviceForUpdate(actor.deviceId), 'Coordinator Device')
       if (
+        coordinator.agentId !== actor.agentId ||
+        coordinator.deviceId !== actor.deviceId ||
         coordinator.status !== 'active' ||
         coordinatorDevice.status !== 'active' ||
+        coordinator.ownerUserId !== actor.userId ||
+        coordinatorDevice.userId !== actor.userId ||
+        coordinatorDevice.deviceId !== coordinator.deviceId ||
         coordinatorDevice.userId !== coordinator.ownerUserId ||
         !memberUserIds.includes(coordinator.ownerUserId)
       ) {
-        fail('permission_denied', 'The exact Coordinator Agent and Device must belong to an active Project member.')
+        fail(
+          'permission_denied',
+          'Project creation requires the exact authenticated Agent and Device owned by the Project creator.'
+        )
       }
 
       const facts = new Map<string, StoredProviderDirectoryPrincipalFact>()
@@ -2290,6 +2297,13 @@ export class CollaborationService {
 
       const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
       if (fencesExecutions) {
+        notifications.push(...await this.closePendingTaskOffers(
+          tx,
+          project.projectId,
+          undefined,
+          terminal ? 'cancelled' : 'revision_requested',
+          at
+        ))
         for (const execution of await tx.listCurrentTaskExecutionsForProjectForUpdate(project.projectId)) {
           const task = required(await tx.getTaskForUpdate(execution.taskId), 'Current Task')
           if (task.currentExecutionId !== execution.executionId || execution.fence.status === 'fenced') continue
@@ -2668,6 +2682,13 @@ export class CollaborationService {
       }
 
       const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+      notifications.push(...await this.closePendingTaskOffers(
+        tx,
+        project.projectId,
+        locked.userId,
+        'revision_requested',
+        at
+      ))
       for (const execution of await tx.listCurrentTaskExecutionsForProjectUserForUpdate(project.projectId, locked.userId)) {
         if (execution.fence.status === 'fenced') continue
         const task = required(await tx.getTaskForUpdate(execution.taskId), 'Current Task')
@@ -4248,6 +4269,7 @@ export class CollaborationService {
         taskId,
         projectId: project.projectId,
         workerUserId: input.workerUserId,
+        offeredByCoordinatorAgentId: actor.agentId,
         state: 'pending',
         offeredAt: at,
         expiresAt: input.offerExpiresAt,
@@ -4332,7 +4354,7 @@ export class CollaborationService {
         taskId: task.taskId,
         projectId: project.projectId,
         attempt: task.executionCount + 1,
-        offeredByCoordinatorAgentId: task.createdByCoordinatorAgentId,
+        offeredByCoordinatorAgentId: offer.offeredByCoordinatorAgentId,
         assigneeUserId: actor.userId,
         assigneeAgentId: actor.agentId,
         assigneeDeviceId: actor.deviceId,
@@ -4372,13 +4394,33 @@ export class CollaborationService {
       await tx.updateTaskOffer(updatedOffer, offer.revision)
       await tx.updateTask(updatedTask, task.revision)
       const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
-      const coordinatorMessage = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId }, 'task.offer.accepted', {
-        protocolVersion: '1.0', type: 'task.offer.accepted', projectId: project.projectId,
-        taskId: task.taskId, executionId: execution.executionId, taskOfferId: offer.taskOfferId
-      }, at)
+      const coordinatorMessage = await this.appendInbox(
+        tx,
+        { kind: 'agent', id: project.coordinatorAgentId },
+        'collaboration.state.changed',
+        agentInboxPayloadSchema.parse({
+          protocolVersion: '1.0',
+          type: 'collaboration.state.changed',
+          event: cloudStateEventSchema.parse({
+            protocolVersion: '1.0',
+            eventId: newId('evt'),
+            causedByRequestId: input.requestId,
+            occurredAt: at,
+            type: 'task.execution.changed',
+            projectId: project.projectId,
+            taskId: task.taskId,
+            executionId: execution.executionId,
+            state: execution.state,
+            revision: execution.revision
+          })
+        }),
+        at
+      )
       notifications.push({ recipient: coordinatorMessage.recipient, sequence: coordinatorMessage.sequence })
-      const userAgentIds = [...new Set((await tx.listWorkerAvailabilityForUser(offer.workerUserId, at))
-        .map(({ agentId }) => agentId))].sort()
+      const userAgentIds = (await tx.listAgentsForUser(offer.workerUserId))
+        .filter(({ status }) => status === 'active')
+        .map(({ agentId }) => agentId)
+        .sort()
       for (const agentId of userAgentIds) {
         const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offer.claimed', {
           protocolVersion: '1.0', type: 'task.offer.claimed', projectId: project.projectId,
@@ -4446,7 +4488,9 @@ export class CollaborationService {
         const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
         const recipientAgentIds = new Set([
           project.coordinatorAgentId,
-          ...(await tx.listWorkerAvailabilityForUser(offer.workerUserId, committedAt)).map(({ agentId }) => agentId)
+          ...(await tx.listAgentsForUser(offer.workerUserId))
+            .filter(({ status }) => status === 'active')
+            .map(({ agentId }) => agentId)
         ])
         for (const agentId of [...recipientAgentIds].sort()) {
           const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offer.closed', {
@@ -4490,7 +4534,8 @@ export class CollaborationService {
       await tx.updateTaskOffer(updatedOffer, offer.revision)
       await tx.updateTask(updatedTask, task.revision)
       const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
-      const recipientAgentIds = new Set((await tx.listWorkerAvailabilityForUser(offer.workerUserId, at))
+      const recipientAgentIds = new Set((await tx.listAgentsForUser(offer.workerUserId))
+        .filter(({ status }) => status === 'active')
         .map(({ agentId }) => agentId))
       for (const agentId of [...recipientAgentIds].sort()) {
         const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offer.closed', {
@@ -4545,8 +4590,8 @@ export class CollaborationService {
           task.currentExecutionId !== previous.executionId ||
           previous.taskId !== task.taskId ||
           previous.fence.status !== 'fenced' ||
-          !(['failed', 'cancelled', 'timed_out', 'revoked'] as const).includes(
-            previous.state as 'failed' | 'cancelled' | 'timed_out' | 'revoked'
+          !(['failed', 'cancelled', 'revoked'] as const).includes(
+            previous.state as 'failed' | 'cancelled' | 'revoked'
           )
         ) {
           fail('invalid_state_transition', 'Reassignment requires a retryable terminal execution.')
@@ -4568,7 +4613,8 @@ export class CollaborationService {
         requiredCapabilityTags: task.requiredCapabilityTags, at })
       const offer: StoredTaskOffer = {
         taskOfferId: newId('ofr'), executionId: null, taskId: task.taskId, projectId: task.projectId,
-        workerUserId: input.workerUserId, state: 'pending', offeredAt: at,
+        workerUserId: input.workerUserId, offeredByCoordinatorAgentId: actor.agentId,
+        state: 'pending', offeredAt: at,
         expiresAt: input.offerExpiresAt, respondedAt: null,
         revision: 1, createdAt: at, updatedAt: at
       }
@@ -4985,6 +5031,7 @@ export class CollaborationService {
         nextTaskOfferId = newId('ofr')
         nextOffer = { taskOfferId: nextTaskOfferId, executionId: null, taskId: task.taskId,
           projectId: task.projectId, workerUserId: input.nextWorkerUserId!,
+          offeredByCoordinatorAgentId: actor.agentId,
           state: 'pending', offeredAt: at, expiresAt: input.nextOfferExpiresAt!, respondedAt: null,
           revision: 1, createdAt: at, updatedAt: at }
         updatedTask = { ...task, status: 'offered', currentExecutionId: null,
@@ -5508,6 +5555,59 @@ export class CollaborationService {
         at
       )
       notifications.push({ recipient: message.recipient, sequence: message.sequence })
+    }
+    return notifications
+  }
+
+  /** Closes pre-claim User offers in the same transaction as their enclosing authority change. */
+  private async closePendingTaskOffers(
+    tx: CollaborationTransaction,
+    projectId: string,
+    workerUserId: string | undefined,
+    taskStatus: 'revision_requested' | 'cancelled',
+    at: string
+  ): Promise<Array<{ recipient: InboxRecipient; sequence: number }>> {
+    const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+    for (const offer of await tx.listPendingTaskOffersForProjectForUpdate(projectId, workerUserId)) {
+      const task = required(await tx.getTaskForUpdate(offer.taskId), 'Pending-offer Task')
+      if (
+        offer.executionId !== null ||
+        offer.state !== 'pending' ||
+        task.projectId !== projectId ||
+        task.status !== 'offered' ||
+        task.currentExecutionId !== null
+      ) {
+        fail('revision_conflict', 'A pending User offer must be the Task\'s exact pre-claim authority.')
+      }
+      const closed: StoredTaskOffer = {
+        ...offer,
+        state: 'withdrawn',
+        respondedAt: at,
+        revision: offer.revision + 1,
+        updatedAt: at
+      }
+      await tx.updateTaskOffer(closed, offer.revision)
+      await tx.updateTask({
+        ...task,
+        status: taskStatus,
+        completedAt: taskStatus === 'cancelled' ? at : null,
+        revision: task.revision + 1,
+        updatedAt: at
+      }, task.revision)
+      for (const agent of (await tx.listAgentsForUser(offer.workerUserId))
+        .filter(({ status }) => status === 'active')) {
+        const message = await this.appendInbox(tx, { kind: 'agent', id: agent.agentId },
+          'task.offer.closed', {
+            protocolVersion: '1.0',
+            type: 'task.offer.closed',
+            projectId,
+            taskId: task.taskId,
+            taskOfferId: offer.taskOfferId,
+            outcome: 'withdrawn',
+            offerRevision: closed.revision
+          }, at)
+        notifications.push({ recipient: message.recipient, sequence: message.sequence })
+      }
     }
     return notifications
   }

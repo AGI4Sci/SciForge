@@ -453,7 +453,7 @@ export type StoredTaskExecution = {
   fileIntent: import('@sciforge/collaboration-contracts').TaskExecutionFileIntent | null
   currentResultSubmissionId: string | null
   offeredAt: string
-  acceptedAt: string | null
+  acceptedAt: string
   startedAt: string | null
   terminalAt: string | null
   revision: number
@@ -467,6 +467,7 @@ export type StoredTaskOffer = {
   taskId: string
   projectId: string
   workerUserId: string
+  offeredByCoordinatorAgentId: string
   state: 'pending' | 'accepted' | 'withdrawn' | 'timed_out'
   offeredAt: string
   expiresAt: string

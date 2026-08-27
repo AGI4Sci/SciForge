@@ -144,14 +144,13 @@ OpenContent credential、Codex credential 或完整 profile 内容。
 3. 首次配置点击 `保存并连接`；已保存但断开时点击 `连接` 或 `重新连接`。
 4. 等待状态显示 `已连接`，并记录当前 `Inbox #`，它不应反复归零。
 5. 不需要手机控制时，**不要点击 `开始手机配对`**；手机 endpoint 不是 Project/Agent 前置条件。
-6. 在 `Agent 显示名称` 输入 `Run0-U0`、`Run0-U1`……对应名称。
-7. 点击 `注册这台 SciForge`。
-8. 等待 Agent 卡片显示 `在线`，复制卡片中的 `agt_…`；Participant 顶部复制自己的 `usr_…`。
-9. 在 Agent 卡片的 `Worker 接单策略` 下拉框选择本角色策略：
+6. 确认当前 Device 的 Agent 已由 Identity 自动 ensure，等待 Agent 卡片显示 `在线`；界面不应出现手工注册或 primary 选择。
+7. 复制卡片中的 `agt_…`；Participant 顶部复制自己的 `usr_…`。
+8. 在 Agent 卡片的 `Worker 接单策略` 下拉框选择本角色策略：
    - U1、U3、U4：`手动接单`；
    - U2：`自动接单`；
    - U0：保留 `手动接单` 即可。
-10. 每个人把自己的 User ID、Agent ID 和接单策略发给 U0，禁止发送 credential。
+9. 每个人把自己的 User ID 和接单策略发给 U0；Agent ID 仅用于脱敏验收证据，不是 Worker 选择值。禁止发送 credential。
 
 通过标准：五个不同 User、五个不同 Desktop、五个不同 Agent，且五个 `连接与设置` 面板都显示
 Cloud connected、Agent online。

@@ -29,7 +29,7 @@ const created: ProjectCoordinatorProjectCreateResult = {
     },
     observedAt: '2026-08-27T01:30:00.000Z',
     focusedProjectId: TEST_IDS.projectId,
-    availableWorkerGroups: [],
+    availableWorkerUsers: [],
     projects: [{
       project: projectFixture,
       coordinatorTransferFeedback: null,

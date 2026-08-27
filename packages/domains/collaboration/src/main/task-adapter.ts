@@ -82,13 +82,11 @@ const TERMINAL_RUN_STATES = new Set<CollaborationTaskRun['state']>([
 ])
 
 const TERMINAL_EXECUTION_EVENT_STATES = new Set<TaskExecution['state']>([
-  'rejected',
   'result_submitted',
   'manual_recovery_required',
   'completed',
   'failed',
   'cancelled',
-  'timed_out',
   'revoked',
   'superseded'
 ])
@@ -236,6 +234,7 @@ export class CollaborationTaskAdapter {
         offerRevision: payload.offerRevision,
         recipientAgentId,
         receivedAt,
+        preflightReasons: [],
         state: 'pending',
         updatedAt: receivedAt,
         completedAt: null,
@@ -605,7 +604,12 @@ export class CollaborationTaskAdapter {
     const preflight = await this.refreshPreflight(run)
     run = this.requireRun(executionId)
     if (preflight.outcome === 'denied') {
-      await this.markFenced(run, `Worker preflight denied: ${preflight.reasons.join(', ')}`)
+      const message = `Worker preflight denied: ${preflight.reasons.join(', ')}`
+      if (requireExecution(run).fence.status === 'open') {
+        await this.failExecution(run, 'worker_preflight_denied', message)
+      } else {
+        await this.markFenced(run, message)
+      }
       return
     }
     await this.acceptAndStart(run)
@@ -615,23 +619,151 @@ export class CollaborationTaskAdapter {
     let offer = initial
     if (['dismissed', 'claimed_elsewhere', 'closed', 'failed'].includes(offer.state) ||
         offer.state === 'awaiting-manual') return
-    if (offer.state === 'pending') {
-      if (this.policies.read(offer.recipientAgentId) === 'manual') {
-        await this.updatePendingOffer(offer.taskOfferId, { state: 'awaiting-manual', error: null })
-        return
-      }
-      if (!await this.runtimeReady()) {
-        await this.updatePendingOffer(offer.taskOfferId, {
-          state: 'failed',
-          completedAt: this.now().toISOString(),
-          error: 'This Device Runtime is not ready; another Device may still claim the User-level offer.'
-        })
-        return
-      }
-      offer = await this.updatePendingOffer(offer.taskOfferId, { state: 'claiming', error: null })
+    const acceptanceMode = this.policies.read(offer.recipientAgentId)
+    const preflight = await this.preflightPendingOffer(offer)
+    const preflightReasons = preflight.reason ? [preflight.reason] : []
+    if (offer.state === 'pending' && acceptanceMode === 'manual') {
+      await this.updatePendingOffer(offer.taskOfferId, {
+        state: 'awaiting-manual',
+        preflightReasons,
+        error: null
+      }, preflight.task)
+      return
     }
-    if (offer.state !== 'claiming') return
+    if (preflight.reason) {
+      const manual = acceptanceMode === 'manual'
+      await this.updatePendingOffer(offer.taskOfferId, {
+        state: manual ? 'awaiting-manual' : 'failed',
+        preflightReasons,
+        completedAt: manual ? null : this.now().toISOString(),
+        error: `${preflight.message} Another Device may still claim the User-level offer.`
+      }, preflight.task)
+      return
+    }
+    offer = await this.updatePendingOffer(offer.taskOfferId, {
+      state: 'claiming',
+      preflightReasons: [],
+      error: null
+    }, preflight.task)
     await this.claimPendingOffer(offer)
+  }
+
+  /** Advisory Device-local checks shared by manual and automatic acceptance before the Cloud claim. */
+  private async preflightPendingOffer(offer: CollaborationPendingTaskOffer): Promise<Readonly<{
+    task?: Task
+    reason: CollaborationPendingTaskOffer['preflightReasons'][number] | null
+    message: string
+  }>> {
+    let task: Task
+    try {
+      task = await this.readTask(offer.taskId)
+    } catch {
+      return { reason: 'task_unavailable', message: 'The current Task facts are unavailable.' }
+    }
+    if (
+      task.projectId !== offer.projectId ||
+      task.revision !== offer.currentTaskRevision ||
+      task.status !== 'offered' ||
+      task.currentExecutionId !== null
+    ) {
+      return {
+        task,
+        reason: 'offer_not_current',
+        message: 'The User-level offer is no longer current on this Device.'
+      }
+    }
+    if (!await this.runtimeReady()) {
+      return { task, reason: 'runtime_not_ready', message: 'This Device Runtime is not ready.' }
+    }
+    if (!task.fileIntent) return { task, reason: null, message: '' }
+
+    try {
+      const response = await this.options.connection.executeAsAgent(restRequestSchema.parse({
+        protocolVersion: '1.0',
+        requestId: collaborationRequestId(),
+        type: 'project.content.binding.get',
+        projectId: offer.projectId
+      }))
+      if (
+        response.type !== 'rest.entity' ||
+        response.entity.type !== 'project_content_space_binding'
+      ) {
+        return {
+          task,
+          reason: 'content_not_ready',
+          message: 'The current Project Content binding is unavailable.'
+        }
+      }
+      const binding = response.entity
+      if (
+        binding.projectId !== offer.projectId ||
+        binding.status !== 'active' ||
+        binding.revision !== task.fileIntent.bindingRevision ||
+        !binding.rootLocator ||
+        !binding.rootLocatorDigest
+      ) {
+        return {
+          task,
+          reason: 'content_not_ready',
+          message: 'The current Project Content binding is not ready.'
+        }
+      }
+
+      const root = contentSpacePortableContainerReferenceEnvelopeSchema.parse(binding.rootLocator)
+      const workspaceRoot = this.options.workspaceRootForExecution(offer.taskOfferId)
+      await mkdir(workspaceRoot, { recursive: true, mode: 0o700 })
+      await chmod(workspaceRoot, 0o700)
+      const intents = [
+        ...task.fileIntent.inputs.map((input) => ({
+          operation: 'download' as const,
+          input: {
+            root,
+            candidate: contentSpacePortableFileReferenceEnvelopeSchema.parse(input.locator),
+            workspaceRelativePath: input.destinationName
+          }
+        })),
+        {
+          operation: 'upload-new' as const,
+          input: {
+            root,
+            name: task.fileIntent.output.fileName,
+            workspaceRelativePath: task.fileIntent.output.fileName
+          }
+        }
+      ]
+      for (const intent of intents) {
+        const result = await this.options.capabilities.invoke(
+          CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT,
+          CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT.inputSchema.parse(intent),
+          {
+            workspaceId: workspaceRoot,
+            systemExecutionContext: {
+              contractVersion: 1,
+              phase: 'task-offer-preflight',
+              projectId: offer.projectId,
+              taskId: offer.taskId,
+              taskOfferId: offer.taskOfferId,
+              taskRevision: offer.currentTaskRevision,
+              offerRevision: offer.offerRevision
+            }
+          }
+        )
+        if (!result.ok || result.value.status !== 'ready') {
+          return {
+            task,
+            reason: 'provider_not_ready',
+            message: 'This Device Provider session is not ready for the exact file Task.'
+          }
+        }
+      }
+      return { task, reason: null, message: '' }
+    } catch {
+      return {
+        task,
+        reason: 'provider_not_ready',
+        message: 'This Device Provider session is not ready for the exact file Task.'
+      }
+    }
   }
 
   private async claimPendingOffer(pending: CollaborationPendingTaskOffer): Promise<void> {
@@ -1894,12 +2026,7 @@ export class CollaborationTaskAdapter {
         execution, state: 'manual-recovery', completedAt: now,
         error: 'Cloud requires manual execution recovery.'
       })
-    } else if (execution.state === 'rejected') {
-      await this.updateRun(run.offer.executionId, {
-        execution, state: 'fenced', completedAt: now,
-        error: 'Cloud fenced a historical execution before the User-level claim protocol.'
-      })
-    } else if (['failed', 'cancelled', 'revoked', 'superseded', 'timed_out'].includes(execution.state)) {
+    } else if (['failed', 'cancelled', 'revoked', 'superseded'].includes(execution.state)) {
       await this.updateRun(run.offer.executionId, {
         execution,
         state: execution.state === 'failed' ? 'failed' : 'fenced',
@@ -1969,12 +2096,16 @@ export class CollaborationTaskAdapter {
 
   private async updatePendingOffer(
     taskOfferId: string,
-    update: Partial<CollaborationPendingTaskOffer>
+    update: Partial<CollaborationPendingTaskOffer>,
+    task?: Task
   ): Promise<CollaborationPendingTaskOffer> {
     return this.options.store.transact((draft) => {
       const offer = draft.pendingTaskOffers.find((candidate) => candidate.taskOfferId === taskOfferId)
       if (!offer) throw new Error('Local pending Task offer was not found.')
       Object.assign(offer, update, { updatedAt: this.now().toISOString() })
+      if (task) {
+        draft.tasks = [...draft.tasks.filter((candidate) => candidate.taskId !== task.taskId), task]
+      }
       return structuredClone(offer)
     })
   }

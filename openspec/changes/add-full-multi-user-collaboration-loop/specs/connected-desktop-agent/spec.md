@@ -70,8 +70,8 @@ Device 私钥、Agent machine credential 和 OIDC material SHALL 只由 Identity
 - **THEN** 回执 MAY 记录脱敏 ID、公钥指纹和验证状态
 - **AND** SHALL NOT 记录私钥、Token、密码、Provider credential 或可重放 machine credential。
 
-#### Scenario: Agent 注册与 WSS 恢复
+#### Scenario: Agent 自动确保与 WSS 恢复
 
-- **WHEN** Desktop 注册/旋转 Agent 或在重启后恢复 Agent-authenticated command、Inbox 或 WSS
+- **WHEN** Desktop 在 Runtime ready 后自动 ensure/复用 Agent、旋转 credential，或在重启后恢复 Agent-authenticated command、Inbox 或 WSS
 - **THEN** Identity SHALL 在私有边界完成 ephemeral bootstrap、credential 解封、ACTIVE Device/Agent 绑定复核和 authorization 注入
 - **AND** collaboration SHALL 只收到严格的 Agent facts、事件、响应与非秘密状态，不得收到 credential、Authorization header 或可用于恢复 credential 的 bearer locator。

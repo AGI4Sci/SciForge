@@ -17,7 +17,6 @@ import {
   CircleDashed,
   ClipboardCheck,
   Cloud,
-  Clock3,
   FileCheck2,
   FolderOpen,
   FileText,
@@ -28,14 +27,11 @@ import {
   Radio,
   RefreshCw,
   Settings2,
-  ShieldAlert,
   SquareKanban,
   UserRound,
   UserRoundCheck,
   UsersRound,
   Warehouse,
-  Wifi,
-  WifiOff,
   Workflow,
   Zap,
   X
@@ -597,7 +593,7 @@ export function ProjectCoordinatorPanel({
     event.preventDefault()
     if (workspace?.connection.state !== 'ready') return
     const creatorUserId = workspace.connection.userId
-    const visibleWorkerUserIds = new Set(workspace.availableWorkerGroups.map(({ userId }) => userId))
+    const visibleWorkerUserIds = new Set(workspace.availableWorkerUsers.map(({ userId }) => userId))
     const memberUserIds = [
       creatorUserId,
       ...createWorkerUserIds.filter((userId) => (
@@ -971,7 +967,7 @@ export function ProjectCoordinatorPanel({
                     displayName={createDisplayName}
                     goal={createGoal}
                     selectedWorkerUserIds={createWorkerUserIds}
-                    workerGroups={workspace.availableWorkerGroups}
+                    workerUsers={workspace.availableWorkerUsers}
                     onDisplayName={setCreateDisplayName}
                     onGoal={setCreateGoal}
                     onSubmit={createProject}
@@ -1333,7 +1329,7 @@ export function ProjectCreateForm({
   displayName,
   goal,
   selectedWorkerUserIds,
-  workerGroups,
+  workerUsers,
   onDisplayName,
   onGoal,
   onSubmit,
@@ -1346,7 +1342,7 @@ export function ProjectCreateForm({
   displayName: string
   goal: string
   selectedWorkerUserIds: readonly string[]
-  workerGroups: ProjectCoordinatorWorkspace['availableWorkerGroups']
+  workerUsers: ProjectCoordinatorWorkspace['availableWorkerUsers']
   onDisplayName(value: string): void
   onGoal(value: string): void
   onSubmit(event: FormEvent<HTMLFormElement>): void
@@ -1354,7 +1350,7 @@ export function ProjectCreateForm({
 }>): ReactElement {
   const { t } = useTranslation('common')
   const [expanded, setExpanded] = useState(defaultExpanded)
-  const candidates = workerGroups.filter(({ userId }) => userId !== creatorUserId)
+  const candidates = workerUsers.filter(({ userId }) => userId !== creatorUserId)
   useEffect(() => {
     if (defaultExpanded) setExpanded(true)
   }, [defaultExpanded])
@@ -1490,9 +1486,9 @@ function ProjectOverview({
   const asOf = new Date(nowMilliseconds).toISOString()
   const presence = projectCoordinatorWorkerPresenceSummary(project, asOf)
   const agents = project.workerGroups.flatMap(({ agents }) => agents)
-  const readyAgents = agents.filter((agent) => (
+  const readyUsers = project.workerGroups.filter((group) => group.agents.some((agent) => (
     projectCoordinatorAgentOperationalState(agent, asOf).state === 'ready'
-  )).length
+  ))).length
   const coordinator = agents.find(({ projectAvailability }) => (
     projectAvailability.agentId === record.coordinatorAgentId
   ))
@@ -1548,10 +1544,10 @@ function ProjectOverview({
           </span>
         </div>
         <div>
-          <Bot aria-hidden="true" />
+          <UserRoundCheck aria-hidden="true" />
           <span>
-            <strong>{readyAgents}/{presence.visibleAgents}</strong>
-            {t('projectCoordinatorAgentsReadyShort')}
+            <strong>{readyUsers}/{presence.visibleUsers}</strong>
+            {t('projectCoordinatorWorkerUsersReadyShort')}
           </span>
         </div>
         <div>
@@ -1786,9 +1782,8 @@ export function projectCoordinatorTransferCandidates(
 
 export type ProjectCoordinatorWorkerPresenceSummary = Readonly<{
   onlineUsers: number
+  readyUsers: number
   visibleUsers: number
-  onlineAgents: number
-  visibleAgents: number
 }>
 
 /**
@@ -1801,24 +1796,21 @@ export function projectCoordinatorWorkerPresenceSummary(
   observedAt?: string
 ): ProjectCoordinatorWorkerPresenceSummary {
   let onlineUsers = 0
-  let onlineAgents = 0
-  let visibleAgents = 0
+  let readyUsers = 0
   for (const group of project.workerGroups) {
-    const groupOnlineAgents = group.agents.filter((agent) => (
+    const operationalStates = group.agents.map((agent) => (
       projectCoordinatorAgentOperationalState(
         agent,
         observedAt ?? agent.projectAvailability.availability.observedAt
-      ).online
-    )).length
-    onlineAgents += groupOnlineAgents
-    visibleAgents += group.agents.length
-    if (groupOnlineAgents > 0) onlineUsers += 1
+      )
+    ))
+    if (operationalStates.some(({ online }) => online)) onlineUsers += 1
+    if (operationalStates.some(({ state }) => state === 'ready')) readyUsers += 1
   }
   return Object.freeze({
     onlineUsers,
-    visibleUsers: project.workerGroups.length,
-    onlineAgents,
-    visibleAgents
+    readyUsers,
+    visibleUsers: project.workerGroups.length
   })
 }
 
@@ -2099,16 +2091,10 @@ export function WorkersSection({
   project?: ProjectCoordinatorProject
   observedAt?: string
 }>): ReactElement {
-  const { i18n, t } = useTranslation('common')
+  const { t } = useTranslation('common')
   const asOf = observedAt ?? project?.workerGroups[0]?.agents[0]
     ?.projectAvailability.availability.observedAt
   const presence = project ? projectCoordinatorWorkerPresenceSummary(project, asOf) : undefined
-  const readyAgents = project?.workerGroups.flatMap(({ agents }) => agents).filter((agent) => (
-    projectCoordinatorAgentOperationalState(
-      agent,
-      asOf ?? agent.projectAvailability.availability.observedAt
-    ).state === 'ready'
-  )).length ?? 0
   return (
     <Section id="workers" title={t('projectCoordinatorWorkers')} icon={<UsersRound className="h-4 w-4" />}>
       {!project?.workerGroups.length ? (
@@ -2119,9 +2105,7 @@ export function WorkersSection({
             className="project-coordinator-presence-summary"
             data-project-online-users={presence?.onlineUsers}
             data-project-visible-users={presence?.visibleUsers}
-            data-project-online-agents={presence?.onlineAgents}
-            data-project-visible-agents={presence?.visibleAgents}
-            data-project-ready-agents={readyAgents}
+            data-project-ready-users={presence?.readyUsers}
           >
             <div className="project-coordinator-presence-primary">
               <span className="project-coordinator-presence-pulse" aria-hidden="true" />
@@ -2136,37 +2120,23 @@ export function WorkersSection({
               </span>
             </div>
             <div className="project-coordinator-presence-numbers">
-              <span className="sr-only">
-                {t('projectCoordinatorOnlineAgents', {
-                  online: presence?.onlineAgents,
-                  total: presence?.visibleAgents
-                })}
-              </span>
               <span>
-                <strong>{presence?.onlineAgents}/{presence?.visibleAgents}</strong>
-                {t('projectCoordinatorOnlineAgentsShort')}
-              </span>
-              <span>
-                <strong>{readyAgents}/{presence?.visibleAgents}</strong>
-                {t('projectCoordinatorReadyAgentsShort')}
+                <strong>{presence?.readyUsers}/{presence?.visibleUsers}</strong>
+                {t('projectCoordinatorWorkerUsersReadyShort')}
               </span>
             </div>
           </div>
 
           <div className="project-coordinator-member-list">
             {project.workerGroups.map((group) => {
-              const agentStates = group.agents.map((agent) => ({
-                agent,
-                operational: projectCoordinatorAgentOperationalState(
+              const operationalStates = group.agents.map((agent) => (
+                projectCoordinatorAgentOperationalState(
                   agent,
                   asOf ?? agent.projectAvailability.availability.observedAt
                 )
-              })).sort((left, right) => (
-                Number(right.agent.projectAvailability.agentId === project.project.coordinatorAgentId) -
-                Number(left.agent.projectAvailability.agentId === project.project.coordinatorAgentId) ||
-                operationalStateRank(left.operational.state) - operationalStateRank(right.operational.state)
               ))
-              const groupOnline = agentStates.some(({ operational }) => operational.online)
+              const groupOnline = operationalStates.some(({ online }) => online)
+              const groupReady = operationalStates.some(({ state }) => state === 'ready')
               const membership = group.agents.find(({ projectAvailability }) => (
                 projectAvailability.membership !== null
               ))?.projectAvailability.membership
@@ -2175,6 +2145,7 @@ export function WorkersSection({
                   key={group.userId}
                   className="project-coordinator-member"
                   data-member-online={groupOnline ? 'true' : 'false'}
+                  data-member-ready={groupReady ? 'true' : 'false'}
                 >
                   <header>
                     <span className="project-coordinator-member-avatar" data-online={groupOnline ? 'true' : 'false'}>
@@ -2185,130 +2156,9 @@ export function WorkersSection({
                       <code title={group.userId}>{shortIdentifier(group.userId)}</code>
                     </span>
                     <Status value={membership?.state ?? 'not_member'} />
+                    <Status value={groupReady ? 'ready' : groupOnline ? 'online' : 'offline'} />
                   </header>
 
-                  <div className="project-coordinator-agent-list">
-                    {agentStates.map(({ agent, operational }) => {
-                      const availability = agent.projectAvailability.availability
-                      const isCoordinator = agent.projectAvailability.agentId ===
-                        project.project.coordinatorAgentId
-                      const heartbeat = availability.lastHeartbeatAt
-                      return (
-                        <div
-                          key={agent.projectAvailability.agentId}
-                          className="project-coordinator-agent"
-                          data-agent-state={operational.state}
-                          data-agent-online={operational.online ? 'true' : 'false'}
-                          data-runtime-ready={operational.runtimeReady ? 'true' : 'false'}
-                          data-accepts-offers={operational.acceptsNewOffers ? 'true' : 'false'}
-                          data-text-authority={operational.textAuthority ? 'true' : 'false'}
-                          data-file-authority={operational.fileAuthority ? 'true' : 'false'}
-                          data-content-ready={operational.contentReady === null
-                            ? 'not-applicable'
-                            : operational.contentReady ? 'true' : 'false'}
-                        >
-                          <div className="project-coordinator-agent-heading">
-                            <span className="project-coordinator-agent-icon" aria-hidden="true">
-                              <Bot />
-                              <span data-online={operational.online ? 'true' : 'false'} />
-                            </span>
-                            <span>
-                              <strong>{agent.displayName}</strong>
-                              <small>
-                                {heartbeat
-                                  ? t('projectCoordinatorHeartbeatRelative', {
-                                      time: formatRelativeTime(
-                                        heartbeat,
-                                        Date.parse(asOf ?? availability.observedAt),
-                                        i18n.resolvedLanguage
-                                      )
-                                    })
-                                  : t('projectCoordinatorNoHeartbeat')}
-                              </small>
-                            </span>
-                            {isCoordinator ? (
-                              <span className="project-coordinator-role-badge">
-                                <Zap aria-hidden="true" />
-                                {t('projectCoordinatorCoordinatorShort')}
-                              </span>
-                            ) : null}
-                            <Status value={operational.state} />
-                          </div>
-
-                          <div className="project-coordinator-agent-facts">
-                            <AgentFact
-                              icon={operational.online ? <Wifi /> : <WifiOff />}
-                              label={t('projectCoordinatorPresence')}
-                              value={t(operational.online
-                                ? 'projectCoordinatorOnline'
-                                : 'projectCoordinatorOffline')}
-                              state={operational.online ? 'positive' : 'muted'}
-                            />
-                            <AgentFact
-                              icon={<Activity />}
-                              label={t('projectCoordinatorRuntime')}
-                              value={t(operational.runtimeReady
-                                ? 'projectCoordinatorReady'
-                                : 'projectCoordinatorUnavailable')}
-                              state={operational.runtimeReady ? 'positive' : 'warning'}
-                            />
-                            <AgentFact
-                              icon={<Zap />}
-                              label={t('projectCoordinatorOfferIntake')}
-                              value={t(operational.acceptsNewOffers
-                                ? 'projectCoordinatorOpen'
-                                : 'projectCoordinatorPaused')}
-                              state={operational.acceptsNewOffers ? 'positive' : 'warning'}
-                            />
-                            <AgentFact
-                              icon={<Clock3 />}
-                              label={t('projectCoordinatorLoad')}
-                              value={String(availability.activeTaskCount)}
-                              state={availability.activeTaskCount === 0 ? 'neutral' : 'active'}
-                            />
-                          </div>
-
-                          <div className="project-coordinator-authority-chips" aria-label={t('projectCoordinatorTaskAuthority')}>
-                            <span data-eligible={operational.textAuthority ? 'true' : 'false'}>
-                              <ShieldAlert aria-hidden="true" />
-                              {t('projectCoordinatorTextTasks')}
-                            </span>
-                            <span data-eligible={operational.fileAuthority ? 'true' : 'false'}>
-                              <FileText aria-hidden="true" />
-                              {t('projectCoordinatorFileTasks')}
-                            </span>
-                            <span data-eligible={operational.contentReady === false ? 'false' : 'true'}>
-                              <Warehouse aria-hidden="true" />
-                              {operational.contentReady === null
-                                ? t('projectCoordinatorContentNotRequired')
-                                : t(operational.contentReady
-                                    ? 'projectCoordinatorContentReady'
-                                    : 'projectCoordinatorContentBlocked')}
-                            </span>
-                          </div>
-
-                          <div className="project-coordinator-capabilities">
-                            <span>{t('projectCoordinatorCapabilities')}</span>
-                            {availability.runtimeCapabilityTags.length > 0
-                              ? availability.runtimeCapabilityTags.map((tag) => <code key={tag}>{tag}</code>)
-                              : <small>{t('projectCoordinatorNoCapabilities')}</small>}
-                          </div>
-
-                          <details className="project-coordinator-agent-identifiers">
-                            <summary>{t('projectCoordinatorExactIdentity')}</summary>
-                            <dl>
-                              <dt>Agent</dt>
-                              <dd>{agent.projectAvailability.agentId}</dd>
-                              <dt>Device</dt>
-                              <dd>{availability.deviceId}</dd>
-                              <dt>{t('projectCoordinatorRevision')}</dt>
-                              <dd>{agent.projectAvailability.revision}</dd>
-                            </dl>
-                          </details>
-                        </div>
-                      )
-                    })}
-                  </div>
                 </article>
               )
             })}
@@ -2316,26 +2166,6 @@ export function WorkersSection({
         </div>
       )}
     </Section>
-  )
-}
-
-function AgentFact({
-  icon,
-  label,
-  value,
-  state
-}: Readonly<{
-  icon: ReactNode
-  label: string
-  value: string
-  state: 'positive' | 'warning' | 'muted' | 'neutral' | 'active'
-}>): ReactElement {
-  return (
-    <span className="project-coordinator-agent-fact" data-fact-state={state}>
-      <span aria-hidden="true">{icon}</span>
-      <small>{label}</small>
-      <strong>{value}</strong>
-    </span>
   )
 }
 
@@ -3280,17 +3110,6 @@ function focusCoordinatorSection(sectionId: string): void {
     block: 'start'
   })
   target.focus({ preventScroll: true })
-}
-
-function operationalStateRank(
-  state: ProjectCoordinatorAgentOperationalState['state']
-): number {
-  switch (state) {
-    case 'ready': return 0
-    case 'busy': return 1
-    case 'blocked': return 2
-    case 'offline': return 3
-  }
 }
 
 function statusTone(value: string): 'positive' | 'active' | 'warning' | 'danger' | 'muted' {

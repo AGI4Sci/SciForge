@@ -290,7 +290,7 @@ function workspaceFixture() {
     },
     observedAt: updatedAt,
     focusedProjectId: 'prj_ProjectCreated01',
-    availableWorkerGroups: [],
+    availableWorkerUsers: [],
     projects: [{
       project: {
         schemaVersion: 1 as const,
@@ -550,6 +550,7 @@ function taskOfferResponse(command: Extract<
     taskId,
     executionId: null,
     workerUserId: command.workerUserId,
+    offeredByCoordinatorAgentId: 'agt_Coordinator01',
     state: 'pending',
     offeredAt: at,
     expiresAt: command.offerExpiresAt,

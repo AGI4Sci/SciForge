@@ -57,7 +57,7 @@ project resume/link/兼容命令。后续尝试必须创建新的 provisioning/r
 ## 前置条件
 
 - Node.js `>=22.12.0`。
-- PostgreSQL 17；schema-v16 的 fresh、v4、v5、v9、A-v11 与 current-v12 至 current-v15 升级路线均以 PostgreSQL 17 作为发布门禁。
+- PostgreSQL 17；schema-v17 的 fresh、v4、v5、v9、A-v11 与 current-v12 至 current-v16 升级路线均以 PostgreSQL 17 作为发布门禁。
 - npm workspace 安装的仓库依赖。生产发布还必须包含版本完全匹配的 contracts、provider adapter 与 server 包。
 - 反向代理必须支持 HTTP/1.1 WebSocket Upgrade；应用默认只监听 loopback。
 
@@ -106,7 +106,7 @@ npm --workspace @sciforge/collaboration-server run dev
 
 `dev` 会读取包目录中可选的 `.env`。该文件只适合本机、必须被 Git 忽略，并且不应保存共享或生产凭据。更安全的做法是由 shell 的临时环境或本地 secret manager 向进程注入数据库连接。
 
-迁移是显式、forward-only、失败即非零退出的发布步骤。schema-v16 只接受代码中冻结且具有机械 catalog fingerprint 的 source routes；fresh/v4/v5/v9/A-v11 会依次进入 0011–0016，current-v12 至 current-v15 只执行其后的缺失迁移。`0016_user_targeted_task_offers.sql` 在安装新约束前先 fence 旧的 pending Agent 直派执行，再把 Task Offer 改为 User target 与 nullable execution。v16 是唯一 ready 状态；未知、混合或部分 lineage 必须保持 `/readyz` 失败。
+迁移是显式、forward-only、失败即非零退出的发布步骤。schema-v17 只接受代码中冻结且具有机械 catalog fingerprint 的 source routes；fresh/v4/v5/v9/A-v11 会依次进入 0011–0017，current-v12 至 current-v16 只执行其后的缺失迁移。`0016_user_targeted_task_offers.sql` 把 Task Offer 改为 User target 与 nullable execution；`0017_claim_created_task_executions.sql` 删除全部未 claim 的伪 Execution、重排真实 claim attempt、固化 Offer 的 Coordinator provenance，并清理不能通过当前 Inbox contract 的旧消息。v17 是唯一 ready 状态；未知、混合或部分 lineage 必须保持 `/readyz` 失败。
 
 `0012` 删除匿名 endpoint challenge、非 Agent credential 与 `agent_nodes.installation_id`，并要求每个 Active Agent 精确绑定一个 Active Device、每个 Device 最多拥有一个 Active Agent。它不会把 installation-only Agent 猜测迁移为 Device authority；存在未绑定 Agent 时迁移会 fail closed。升级前必须在隔离副本验证数据并保留可恢复备份。不要在应用 worker 启动时隐式迁移，也不要让多个 migration unit 并发执行。
 

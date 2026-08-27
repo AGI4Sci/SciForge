@@ -66,15 +66,15 @@ Coordinator 与 Worker 必须使用各自 Desktop 当前配置的真实 AgentRun
 1. U0–U4 分别通过现有 `login-test/realms/SciForge` system-browser OIDC 注册/登录；U3-A/U3-B 必须是同一 U3 User 的两个独立 Device。
 2. Cloud 只通过 OIDC JIT 创建/找到五个 Canonical User。
 3. 每个 Desktop 注册独立 `ACTIVE` Device。
-4. 每个 Human 配置至少一个真实 AgentRuntime；在这之前不得创建 Agent。
-5. 每个 Device 创建一个 active Agent，并建立 Agent-authenticated presence/WSS。
+4. 每个 Human 配置至少一个真实 AgentRuntime；Runtime ready 后 Identity 自动 ensure 或复用当前 Device 的唯一 active Agent。
+5. 每个 Device 建立 Agent-authenticated presence/WSS，renderer 不显示手工注册或 primary 选择。
 6. 每个 Human 在自己的 Desktop 输入真实 OpenContent credential、绑定自己的 Provider account，并发布 Device/Principal 证明的非秘密 Provider Directory Principal Reference。
 
 证据包括脱敏 User/Device/Agent 对应关系、Device 状态、Runtime readiness、Provider identity readiness 和无秘密审计结果。
 
 ### 2. Project 与 Content provisioning
 
-1. U0 选择自己当前 Device 上的精确 Agent 作为唯一 Coordinator，创建 Project。
+1. U0 从当前 Device 创建 Project；该 Device 的认证 Agent 自动成为且只成为此 Project 的唯一 Coordinator。
 2. Cloud 原子保存 Project、Member、`contentOwnerUserId = ownerUserId`、Owner-owned Coordinator、exact Provider members 和 provisioning intent；Project lifecycle 为 `paused`，Content Binding lifecycle 独立为 `provisioning`。
 3. U0 HCI 展示 exact revision 的有限操作计划，并由 Human 确认一次。
 4. U0 Desktop 通过标准 Content Space path 创建恰好一个 shared Content Container，逐个添加 exact Provider members，并重新读取完整成员列表。
