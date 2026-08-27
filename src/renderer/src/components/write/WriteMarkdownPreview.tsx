@@ -110,6 +110,10 @@ const LANGUAGE_REGEX = /language-([^\s]+)/
 const TRAILING_NEWLINES_REGEX = /\n+$/
 const COLLAPSE_HEIGHT = 200
 const COPY_RESET_MS = 2000
+let mermaidInitialized = false
+const MERMAID_CACHE_LIMIT = 100
+const mermaidSvgCache = new Map<string, string>()
+const mermaidRenderPromises = new Map<string, Promise<string>>()
 
 type MarkdownImagePreview = {
   src: string
@@ -170,6 +174,105 @@ function copyTextFallback(text: string): boolean {
   const ok = document.execCommand('copy')
   document.body.removeChild(textarea)
   return ok
+}
+
+type MermaidRenderState =
+  | { status: 'loading' }
+  | { status: 'ready'; svg: string }
+  | { status: 'error'; message: string }
+
+function cacheMermaidSvg(cacheKey: string, svg: string): void {
+  mermaidSvgCache.delete(cacheKey)
+  mermaidSvgCache.set(cacheKey, svg)
+  while (mermaidSvgCache.size > MERMAID_CACHE_LIMIT) {
+    const oldestKey = mermaidSvgCache.keys().next().value
+    if (typeof oldestKey !== 'string') break
+    mermaidSvgCache.delete(oldestKey)
+  }
+}
+
+function renderMermaidDiagram(code: string, cacheKey: string): Promise<string> {
+  const cached = mermaidSvgCache.get(cacheKey)
+  if (cached) return Promise.resolve(cached)
+  const pending = mermaidRenderPromises.get(cacheKey)
+  if (pending) return pending
+
+  const renderPromise = import('mermaid').then(async ({ default: mermaid }) => {
+    if (!mermaidInitialized) {
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        suppressErrorRendering: true,
+        theme: 'neutral'
+      })
+      mermaidInitialized = true
+    }
+    const renderId = `write-mermaid-${stableStringHash(cacheKey)}`
+    const { svg } = await mermaid.render(renderId, code)
+    cacheMermaidSvg(cacheKey, svg)
+    return svg
+  }).finally(() => {
+    mermaidRenderPromises.delete(cacheKey)
+  })
+  mermaidRenderPromises.set(cacheKey, renderPromise)
+  return renderPromise
+}
+
+function MermaidDiagram({ code, cacheKey }: { code: string; cacheKey: string }): ReactElement {
+  const { t } = useTranslation('common')
+  const trimmedCode = useMemo(() => code.replace(TRAILING_NEWLINES_REGEX, '').trim(), [code])
+  const [state, setState] = useState<MermaidRenderState>(() => {
+    const cached = mermaidSvgCache.get(cacheKey)
+    return cached ? { status: 'ready', svg: cached } : { status: 'loading' }
+  })
+
+  useEffect(() => {
+    let cancelled = false
+    const cached = mermaidSvgCache.get(cacheKey)
+    if (cached) {
+      setState((current) => current.status === 'ready' && current.svg === cached
+        ? current
+        : { status: 'ready', svg: cached })
+      return
+    }
+    setState((current) => current.status === 'loading' ? current : { status: 'loading' })
+    void renderMermaidDiagram(trimmedCode, cacheKey).then(
+      (svg) => {
+        if (!cancelled) setState({ status: 'ready', svg })
+      },
+      (error: unknown) => {
+        if (!cancelled) {
+          setState({
+            status: 'error',
+            message: error instanceof Error ? error.message : String(error)
+          })
+        }
+      }
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [cacheKey, trimmedCode])
+
+  if (state.status === 'ready') {
+    return (
+      <div
+        className="write-mermaid-diagram"
+        role="img"
+        aria-label={t('mermaidDiagramLabel')}
+        dangerouslySetInnerHTML={{ __html: state.svg }}
+      />
+    )
+  }
+  if (state.status === 'error') {
+    return (
+      <div className="write-mermaid-error" role="alert">
+        <div>{t('mermaidDiagramError')}</div>
+        <div className="mt-1 font-mono text-[11px] opacity-80">{state.message}</div>
+      </div>
+    )
+  }
+  return <div className="write-mermaid-loading">{t('mermaidDiagramLoading')}</div>
 }
 
 function PreviewCodeBlock({
@@ -335,6 +438,10 @@ function PreviewCode({ className, children, node, ...props }: CodeProps): ReactN
 
   const match = className?.match(LANGUAGE_REGEX)
   const language = match?.[1] ?? ''
+  if (language.toLocaleLowerCase() === 'mermaid') {
+    const cacheKey = getCodeBlockExpansionKey(text, language, node, expansionContext?.filePath)
+    return <MermaidDiagram code={text} cacheKey={cacheKey} />
+  }
   if (!expansionContext) {
     return <PreviewCodeBlock code={text} language={language} />
   }
