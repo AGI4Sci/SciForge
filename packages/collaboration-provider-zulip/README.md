@@ -24,8 +24,9 @@ through its public status or diagnostic values.
   rendering, content-only and partial-topic updates never mutate a binding.
 - A `sciforge-answer` Topic reply produces only a provider candidate. Cloud must
   resolve its sender to the active verified Human Endpoint already bound to the
-  OIDC Project Owner, match the exact Project locator and invoke the same
-  canonical HumanAnswer service; raw IM text never creates a HumanAnswer.
+  request's exact target User, require that User's active Project Membership,
+  match the exact Project locator and invoke the same canonical HumanAnswer
+  service; raw IM text never creates a HumanAnswer.
 - Unknown event and API response fields are rejected.
 - A delivery with an uncertain result is reconciled before any retry.
 - Provider credentials and challenge values are not logged, serialized, returned to

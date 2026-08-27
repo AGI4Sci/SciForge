@@ -356,7 +356,7 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
         finalSummary: view.finalSummary === null ? null : toProjectFinalSummary(view.finalSummary) })
     }
     case 'project.create': {
-      const created = await service.createProject(requiredUser(actor), command)
+      const created = await service.createProject(requiredAgent(actor), command)
       return response(command, { type: 'rest.project_created', project: toProject(created.project),
         memberships: created.memberships.map(toProjectMembership),
         provisioningIntent: created.provisioningIntent === null
@@ -480,23 +480,19 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     )
     case 'task.offer.create': {
       const result = await service.createTaskOffer(requiredAgent(actor), command)
-      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
+      return collectionResponse(command, [toTask(result.task), toTaskOffer(result.offer)])
     }
     case 'task.offer.accept': {
       const result = await service.acceptTaskOffer(requiredAgent(actor), command)
       return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
     }
-    case 'task.offer.reject': {
-      const result = await service.rejectTaskOffer(requiredAgent(actor), command)
-      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
-    }
     case 'task.offer.withdraw': {
       const result = await service.withdrawTaskOffer(requiredAgent(actor), command)
-      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
+      return collectionResponse(command, [toTask(result.task), toTaskOffer(result.offer)])
     }
     case 'task.offer.reassign': {
       const result = await service.reassignTaskOffer(requiredAgent(actor), command)
-      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
+      return collectionResponse(command, [toTask(result.task), toTaskOffer(result.offer)])
     }
     case 'task.execution.start': {
       const result = await service.startTaskExecution(requiredAgent(actor), command)

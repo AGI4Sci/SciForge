@@ -30,7 +30,39 @@ import {
 } from './ports.js'
 import { ProjectCoordinatorStateStore } from './state.js'
 
-test('Coordinator creates Project-scoped HumanNeeded while only the OIDC Owner answers it', async () => {
+test('Coordinator consumes the canonical project.started Inbox notification from fresh Cloud facts', async () => {
+  const workspace = workspaceFixture()
+  let reads = 0
+  const port = createProjectCoordinatorActionPort({
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => {
+        reads += 1
+        return workspace
+      }
+    }),
+    coordinatorCloudCommands: {
+      execute: async () => { throw new Error('Project start consumption must not write to Cloud.') },
+      subscribe: () => () => undefined
+    },
+    transport: unusedTransport(),
+    state: coordinatorState()
+  })
+
+  await port.handleInbox(agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    recipientAgentId: projectFixture.coordinatorAgentId,
+    payload: {
+      protocolVersion: '1.0',
+      type: 'project.started',
+      projectId: projectFixture.projectId,
+      revision: projectFixture.revision
+    }
+  }))
+
+  assert.equal(reads, 1)
+})
+
+test('Coordinator creates Project-scoped HumanNeeded for one explicit Project member User', async () => {
   const workspace = workspaceFixture()
   const coordinatorCommands: RestRequest[] = []
   const userCommands: RestRequest[] = []
@@ -41,7 +73,7 @@ test('Coordinator creates Project-scoped HumanNeeded while only the OIDC Owner a
       scope: 'coordinator_project' as const,
       coordinatorAuthorityEpoch: projectFixture.coordinatorAuthorityEpoch
     },
-    targetUserId: projectFixture.ownerUserId,
+    targetUserId: TEST_IDS.secondUserId,
     requestedByAgentId: projectFixture.coordinatorAgentId
   }
   const answer = {
@@ -84,6 +116,7 @@ test('Coordinator creates Project-scoped HumanNeeded while only the OIDC Owner a
 
   await port.createHumanNeeded({
     projectId: TEST_IDS.projectId,
+    targetUserId: TEST_IDS.secondUserId,
     expectedProjectRevision: projectFixture.revision,
     expectedCoordinatorAuthorityEpoch: projectFixture.coordinatorAuthorityEpoch,
     requiredAssurance: 'verified',
@@ -103,6 +136,7 @@ test('Coordinator creates Project-scoped HumanNeeded while only the OIDC Owner a
     type: 'human.needed.create',
     idempotencyKey: 'idem_CoordinatorHuman01',
     projectId: TEST_IDS.projectId,
+    targetUserId: TEST_IDS.secondUserId,
     context: {
       scope: 'coordinator_project',
       expectedProjectRevision: projectFixture.revision,
@@ -113,7 +147,6 @@ test('Coordinator creates Project-scoped HumanNeeded while only the OIDC Owner a
     confirmableAction: null,
     expiresAt: TEST_LATER_TIMESTAMP
   }])
-  assert.equal(Object.hasOwn(coordinatorCommands[0]!, 'targetUserId'), false)
   assert.equal(Object.hasOwn(coordinatorCommands[0]!, 'executionId'), false)
   assert.deepEqual(userCommands, [{
     protocolVersion: '1.0',
@@ -146,7 +179,7 @@ test('Coordinator accepts or requests revision through the exact immutable resul
         decision: command.decision,
         instruction: command.instruction,
         acceptedProjectRecordId: command.decision === 'accept' ? TEST_IDS.projectRecordId : null,
-        nextExecutionId: command.decision === 'request_revision' ? 'exe_NextRevision001' : null,
+        nextTaskOfferId: command.decision === 'request_revision' ? 'ofr_NextRevision001' : null,
         decidedAt: TEST_TIMESTAMP,
         revision: 1,
         createdAt: TEST_TIMESTAMP,
@@ -189,8 +222,7 @@ test('Coordinator accepts or requests revision through the exact immutable resul
     ...common,
     decision: 'accept',
     instruction: null,
-    nextAssigneeAgentId: null,
-    expectedNextAssigneeAvailabilityRevision: null,
+    nextWorkerUserId: null,
     nextOfferExpiresAt: null,
     nextFileIntent: null
   }, 'idem_ResultAccept0001')
@@ -198,8 +230,7 @@ test('Coordinator accepts or requests revision through the exact immutable resul
     ...common,
     decision: 'request_revision',
     instruction: 'Re-run with the Owner-confirmed cost assumptions.',
-    nextAssigneeAgentId: TEST_IDS.secondAgentId,
-    expectedNextAssigneeAvailabilityRevision: 7,
+    nextWorkerUserId: TEST_IDS.secondUserId,
     nextOfferExpiresAt: TEST_LATER_TIMESTAMP,
     nextFileIntent: null
   }, 'idem_ResultRevision01')
@@ -213,20 +244,17 @@ test('Coordinator accepts or requests revision through the exact immutable resul
       ? {
           decision: command.decision,
           instruction: command.instruction,
-          nextAssigneeAgentId: command.nextAssigneeAgentId,
-          availabilityRevision: command.expectedNextAssigneeAvailabilityRevision
+          nextWorkerUserId: command.nextWorkerUserId
         }
       : null
   )), [{
     decision: 'accept',
     instruction: null,
-    nextAssigneeAgentId: null,
-    availabilityRevision: null
+    nextWorkerUserId: null
   }, {
     decision: 'request_revision',
     instruction: 'Re-run with the Owner-confirmed cost assumptions.',
-    nextAssigneeAgentId: TEST_IDS.secondAgentId,
-    availabilityRevision: 7
+    nextWorkerUserId: TEST_IDS.secondUserId
   }])
 })
 
@@ -331,7 +359,7 @@ test('Coordinator final summary atomically completes the Project through accepte
   }])
 })
 
-test('durable Coordinator Inbox turns the exact Owner HumanAnswer into one official decision', async () => {
+test('durable Coordinator Inbox turns the exact target member HumanAnswer into one official decision', async () => {
   const answer = {
     ...humanAnswerFixture,
     context: {
@@ -450,12 +478,32 @@ function workspaceFixture(
     },
     observedAt: TEST_TIMESTAMP,
     focusedProjectId: TEST_IDS.projectId,
-    availableWorkerGroups: [],
+    availableWorkerUsers: [],
     projects: [{
       project,
       plan: null,
+      memberUsers: [{
+        schemaVersion: 1,
+        type: 'project_user_label_fact',
+        projectId: project.projectId,
+        userId: project.ownerUserId,
+        displayName: 'Project Owner',
+        status: 'active',
+        revision: 1,
+        observedAt: TEST_TIMESTAMP
+      }, {
+        schemaVersion: 1,
+        type: 'project_user_label_fact',
+        projectId: project.projectId,
+        userId: TEST_IDS.secondUserId,
+        displayName: 'Project Member',
+        status: 'active',
+        revision: 1,
+        observedAt: TEST_TIMESTAMP
+      }],
       workerGroups: [],
       tasks: [],
+      offers: [],
       reviews: [],
       pendingHumanNeeded: [],
       records: facts.records ?? [],
@@ -464,7 +512,8 @@ function workspaceFixture(
         intent: null,
         attestation: null,
         binding: null,
-        memberships: [],
+        memberships: [projectMembership(project, project.ownerUserId, 'pmb_ProjectOwner01'),
+          projectMembership(project, TEST_IDS.secondUserId, 'pmb_ProjectMember01')],
         providerPrincipalFacts: [],
         contentReadiness: [],
         providerMembershipObservations: [],
@@ -473,6 +522,25 @@ function workspaceFixture(
       }
     }]
   })
+}
+
+function projectMembership(project: typeof projectFixture, userId: string, projectMembershipId: string) {
+  return {
+    schemaVersion: 1 as const,
+    type: 'project_membership' as const,
+    projectMembershipId,
+    projectId: project.projectId,
+    userId,
+    state: 'active' as const,
+    authorityEpoch: 1,
+    activatedAt: project.createdAt,
+    removalRequestedAt: null,
+    removalRequestedByUserId: null,
+    removedAt: null,
+    revision: 1,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt
+  }
 }
 
 function entityResponse(requestId: string, entity: unknown): RestResponse {

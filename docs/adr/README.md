@@ -30,10 +30,11 @@ This directory preserves architectural decisions together with their lifecycle. 
 | 0036 | accepted | The first live PoC upgrades the existing A test environment through a backed-up candidate migration and reversible edge cutover instead of waiting for new Run-0 DNS. |
 | 0037 | accepted | Content Space authorizes PoC operations from the current Principal, Broker authority and live Provider binding; static verification profiles are removed, and optional Agent skills never gate Provider use. |
 | 0038 | accepted | Identity automatically ensures one Device-named Agent for the exact ACTIVE Desktop Device; renderer registration and primary-Agent selection do not exist. |
+| 0039 | accepted | Coordinators select a Worker User; Cloud broadcasts one User-level Offer, and the first eligible Device Agent atomically claims it to create the exact Task Execution. |
 
 ## Current authority order
 
-The canonical full-collaboration target is `CONTEXT-MAP.md`, the context glossaries, ADR-0031 through ADR-0038, and `openspec/changes/add-full-multi-user-collaboration-loop/`. `docs/SciForge_New_Cloudcolab.md`, the same-named root document, meeting summaries and donor-branch reports are historical or supporting evidence only; they cannot override the current OpenSpec or delivery gates.
+The canonical full-collaboration target is `CONTEXT-MAP.md`, the context glossaries, ADR-0031 through ADR-0039, and `openspec/changes/add-full-multi-user-collaboration-loop/`. `docs/SciForge_New_Cloudcolab.md`, the same-named root document, meeting summaries and donor-branch reports are historical or supporting evidence only; they cannot override the current OpenSpec or delivery gates.
 
 When documents disagree, use this order:
 

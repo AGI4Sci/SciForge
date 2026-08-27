@@ -14,7 +14,7 @@ import { WorkerAcceptancePolicyService } from './worker-acceptance-policy.js'
 
 test('Worker acceptance policy defaults to manual and persists independently per Agent Device', async () => {
   const backend = new MemoryBackend({
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     lastInboxSequence: 0,
     endpoints: [],
@@ -47,7 +47,7 @@ test('Worker acceptance policy defaults to manual and persists independently per
 
 test('Worker acceptance policy cannot be attached to a missing or revoked local Agent', async () => {
   const store = new CollaborationLocalStore(new MemoryBackend({
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     lastInboxSequence: 0,
     endpoints: [],

@@ -456,7 +456,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
       capability(
         COLLABORATION_CAPABILITY_IDS.taskOfferDecide,
         'Decide a Worker Task offer',
-        'Accepts or explicitly rejects one exact manual Worker execution offer.',
+        'Claims one User-targeted offer or dismisses it only on this exact local Agent Device.',
         'external-write',
         collaborationTaskOfferDecisionInputSchema,
         collaborationTaskOfferDecisionResultSchema,

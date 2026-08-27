@@ -19,7 +19,7 @@ test('Run-0 meeting fixture describes the complete synthetic five-user review lo
     'users',
     'version'
   ])
-  assert.equal(manifest.version, 'sciforge.run0-meeting-fixture/1')
+  assert.equal(manifest.version, 'sciforge.run0-meeting-fixture/2')
   assert.equal(manifest.projectDisplayName, '多用户协作设计评审会')
   assert.deepEqual(
     manifest.users.map(({ fixtureLabel, behavior }) => ({ fixtureLabel, behavior })),
@@ -27,7 +27,7 @@ test('Run-0 meeting fixture describes the complete synthetic five-user review lo
       { fixtureLabel: 'U0', behavior: 'owner_coordinator' },
       { fixtureLabel: 'U1', behavior: 'manual_worker' },
       { fixtureLabel: 'U2', behavior: 'automatic_worker_human_needed' },
-      { fixtureLabel: 'U3', behavior: 'reject_worker' },
+      { fixtureLabel: 'U3', behavior: 'local_dismiss_worker' },
       { fixtureLabel: 'U4', behavior: 'replacement_worker' }
     ]
   )
@@ -41,7 +41,7 @@ test('Run-0 meeting fixture describes the complete synthetic five-user review lo
     'manual_accept',
     'automatic_accept_after_preflight',
     'human_needed_owner_answer',
-    'reject_and_exact_agent_reassign',
+    'local_dismiss_then_user_reassign',
     'review_accept',
     'review_request_revision',
     'project_complete'
@@ -58,9 +58,9 @@ test('Run-0 meeting inputs are synthetic, complete, and contain no credential ma
   for (const marker of [
     '纯合成数据',
     '单一 Coordinator',
-    '精确 Agent',
+    'Worker User',
     'HumanNeeded',
-    '拒绝后改派',
+    '本地忽略',
     '真实 Content Space',
     '复审',
     '恢复'

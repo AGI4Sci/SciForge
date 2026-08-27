@@ -79,14 +79,14 @@ U0 先完成一次 pilot，确认新 stack 后再让 U1–U4 登录。每位真�
 1. 通过 system browser 登录/注册自己的 OIDC User；
 2. 确认自己的 Device 为 `ACTIVE`；
 3. 配置并实测自己的 Runtime/model；
-4. 注册自己的 Agent，并看到 collaboration connected/online；
+4. 等待 Identity 为当前 Device 自动 ensure/reuse Agent，并看到 collaboration connected/online；
 5. 在 Content Space 中选择公开的 OpenContent Provider，绑定自己的 OpenContent account；
 6. 用自己的 Provider ACL 完成一次真实个人库或 Team 读取。
 
-U0 pilot 还必须创建或打开一个由自己的精确 Agent 担任 Coordinator 的 Project。在
-Project Coordinator 的 Worker 区确认显示“在线成员 1 / 1”和“在线 Agent 1 / 1”；同一
-User 以后增加第二台在线 Device 时，成员数仍只增加一次而 Agent 数按真实 Agent 增加。
-这两个数字必须来自当前 Cloud availability，不能用本机进程数或口头确认替代。
+U0 pilot 还必须创建或打开一个由当前 Device Agent 担任 Coordinator 的 Project。在
+Project Coordinator 的 Worker 区只确认 Worker User 的在线与可接单汇总；不得显示、计数
+或选择该 User 的 Agent/Device。同一 User 以后增加第二台在线 Device 时，Worker 列表仍只
+出现一次。可接单状态必须由 Cloud availability 聚合，不能用本机进程数或口头确认替代。
 
 五个人都完成后，组织者记录脱敏 User/Device/Agent/Runtime/Provider readiness。任何人的
 credential、Authorization header、完整账号标识或 profile 目录内容都不得进入群消息或回执。
@@ -98,12 +98,12 @@ exact Provider members，并确认计划。三个文件 Task 同时派发：
 
 - P1：U1 manual 接受 `architecture-review.md`；至少经历一次 request-revision 后接受；
 - P2：U2 automatic 接受 `meeting-minutes.md`；与 P1 的 execution 时间区间必须重叠；
-- R：U3 明确拒绝 `risk-register.md`，U0 选择 U4 的精确 Agent，U4 通过新 execution 完成；
+- R：U3 的一台 Device local dismiss `risk-register.md`，U0 撤回共享 Offer 并选择 U4 User，U4 某台 Device claim 后通过新 execution 完成；
 - H：三个结果复审通过后，Coordinator 只创建一次 `coordinator_project` HumanNeeded，
   由 U0 真人回答，Coordinator 写 decision/summary 并完成 Project。
 
 P1 和 P2 各自必须留下真实 download → 本机 Runtime → OpenContent upload-new → review 的
-闭环证据。R 必须证明旧 execution 被 fence。H 是本 happy path 唯一真人决策支路；不要在
+闭环证据。R 必须证明 U3 未产生 execution、旧 Offer 已关闭且 U4 claim 才创建 execution。H 是本 happy path 唯一真人决策支路；不要在
 U2 worker execution 中再造第二个 HumanNeeded。
 
 ## 5. Go/No-Go 看板

@@ -2,13 +2,13 @@
 
 ## ADDED Requirements
 
-### Requirement: Project 成员是用户，执行者是 Agent
+### Requirement: Project 成员与 Worker 目标是 User，Execution 执行者是 Agent
 
-Project SHALL 使用 `memberUserIds` 表达参与者，使用 `coordinatorAgentId` 和 Task `assigneeAgentId` 表达执行节点。系统 SHALL 通过 Agent `ownerUserId` 验证成员与执行者关系，不能把 userId 和 agentId 当成可互换身份。
+Project SHALL 使用 `memberUserIds` 表达参与者，使用 `coordinatorAgentId` 表达 Project Coordinator，并使用 Task Offer `workerUserId` 表达 Worker 目标。只有成功 claim 后的 Task Execution SHALL 记录 `assigneeAgentId`/Device。系统 SHALL 通过 Agent `ownerUserId` 验证成员、Offer 目标与执行者关系，不能把 userId 和 agentId 当成可互换身份。
 
 #### Scenario: 六名用户加入 Project
 
-- **WHEN** 六个 UserPrincipal 成为成员并分别选择自己的 Agent
+- **WHEN** 六个 UserPrincipal 成为成员且各自的一台或多台 Agent/Device 运行时上线
 - **THEN** Project SHALL 记录六个 userId
 - **AND** Agent registry SHALL 分别记录其 owner
 - **AND** 手机与机器 SHALL 在 UI 中组合显示为六个协作个体。
@@ -17,10 +17,10 @@ Project SHALL 使用 `memberUserIds` 表达参与者，使用 `coordinatorAgentI
 
 Project SHALL 同时记录一个 active Coordinator Agent。只有该 Agent 能维护正式计划、创建或改派 Task、接受结果和完成 Project；Coordinator 的 owner SHALL 是 Project 成员或显式服务角色。
 
-#### Scenario: 发起人指定 Coordinator
+#### Scenario: 发起人当前 Device Agent 自动成为 Coordinator
 
-- **WHEN** 用户创建 Project 并选择一台有权 Agent
-- **THEN** 云端 SHALL 原子记录 Coordinator 和 Project revision
+- **WHEN** 用户从当前已认证 Device 创建 Project
+- **THEN** 云端 SHALL 从该 Device 的 canonical Agent 派生并原子记录 Coordinator 和 Project revision
 - **AND** 向该 Agent 投递 `project.started`。
 
 #### Scenario: 手动转交 Coordinator
@@ -31,13 +31,13 @@ Project SHALL 同时记录一个 active Coordinator Agent。只有该 Agent 能�
 
 ### Requirement: Project 使用星形结构化任务协作
 
-Coordinator SHALL 通过云端为 Worker 创建独立 Task；Worker SHALL 只更新分配给自己的 Task、提交结果或提出子任务建议，不得自由修改计划或向其他 Agent 广播可执行指令。
+Coordinator SHALL 通过云端为 Worker User 创建独立 Task Offer；Cloud SHALL 向该 User 的合格 Agent/Device Runtime 广播，但只有首个原子 claim 成功的 Agent SHALL 更新其 Execution、提交结果或提出子任务建议，不得自由修改计划或向其他 Agent 广播可执行指令。
 
 #### Scenario: 两个 Worker 并行执行
 
-- **WHEN** Coordinator 创建两个无依赖 Task 并分配给两个 Agent
-- **THEN** 两个 Agent MAY 并行执行
-- **AND** 各自 SHALL 只能更新自己的 Task。
+- **WHEN** Coordinator 创建两个无依赖 Task 并分配给两个 Worker User
+- **THEN** 两个 User 中各自首个领取的 Agent MAY 并行执行
+- **AND** 各自 SHALL 只能更新已绑定自己 Agent/Device 的 Task Execution。
 
 #### Scenario: Worker 需要其他能力
 
@@ -68,7 +68,7 @@ PoC SHALL 限制每 Project Task 数、每轮新增 Task、重试次数和协调
 
 ### Requirement: HumanNeeded 定向到用户并恢复 Project
 
-Agent 无法可靠继续时 SHALL 创建绑定 Project/Task 和 `targetUserId` 的 HumanNeeded。有效 HumanAnswer SHALL 记录回答 endpoint 和 assurance，并通知 Coordinator；无关用户的回答 SHALL 被拒绝。
+Agent 无法可靠继续时 SHALL 创建绑定 Project/Task 和必填 `targetUserId` 的 HumanNeeded；该 User SHALL 是 active Project member，Worker execution 默认选择其 assignee User，Coordinator 可显式选择其他 active member。有效 HumanAnswer SHALL 记录回答 endpoint 和 assurance，并通知 Coordinator；非目标 User 的回答 SHALL 被拒绝。
 
 #### Scenario: B 回答自己的问题
 

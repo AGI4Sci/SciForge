@@ -60,7 +60,10 @@ test('runtime routes durable exact-output recovery and abandonment to the Worker
   } as AgentInboxMessage['payload']), false)
 })
 
-test('runtime reserves Coordinator transfer feedback for the single Project Coordinator Inbox owner', () => {
+test('runtime reserves Project lifecycle and Coordinator feedback for the single Project Coordinator Inbox owner', () => {
+  assert.equal(isCoordinatorProjectInboxPayload({
+    type: 'project.started'
+  } as AgentInboxMessage['payload']), true)
   assert.equal(isCoordinatorProjectInboxPayload({
     type: 'coordinator.transferred'
   } as AgentInboxMessage['payload']), true)

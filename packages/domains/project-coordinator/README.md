@@ -23,7 +23,8 @@ This package owns only the Human-facing coordination surfaces for:
   Project's Coordinator;
 - generating, editing, submitting, and confirming a Project Plan;
 - browsing the Cloud-global online Worker directory, selecting Project members
-  by User, and selecting an exact Agent for each Task;
+  and Task recipients by User while keeping nested Agent facts as readiness
+  evidence only;
 - transferring Coordinator authority only to another exact active Agent owned
   by the same Project Owner, with durable old-authority fencing feedback;
 - reviewing immutable Task results, asking/answering Project HumanNeeded, and
@@ -61,18 +62,20 @@ Collaboration runtime owns the one canonical current Cloud Device-to-Agent
 binding; this package freshly reads that exact active Agent and its Cloud
 revision immediately before `project.create`. A Cloud Device ID is an Identity
 authority fact and is never treated as the Host installation/execution node ID.
-The creator Agent is Coordinator only for the created Project and may remain a
-Worker Agent in another Project.
+The creator Agent is Coordinator only for the created Project and may claim a
+Worker offer in another Project.
 
 Coordinator Agent Plan submission, HumanNeeded, result review, decision, and
 final completion acquire Collaboration's versioned, main-only command service.
 Collaboration binds the active local Agent and owns durable delivery plus the
-single Coordinator Agent Inbox subscription; this package cannot provide an
+single Coordinator Agent Inbox subscription. Project creation is announced on
+that boundary with the direct `project.started` payload; this package cannot provide an
 Agent identity, route, header, or credential. A `coordinator_project`
 HumanAnswer is consumed here and becomes a Coordinator-authored decision with a
 stable idempotency key. `coordinator.transferred` is durably consumed through
 the same single Inbox owner and projected as default-visible transferred-in or
-transferred-out feedback before ACK. The OIDC Owner answer itself uses
+transferred-out feedback before ACK. HumanNeeded creation selects one exact
+active Project member User, and only that target User may answer. The OIDC answer uses
 Identity's token-free User transport and never becomes a second ProjectRecord
 writer. OIDC material never enters this package. Local Plan drafts are
 non-secret package settings guarded by revision compare-and-set. Plan generation
@@ -106,8 +109,8 @@ safe recovery action without deleting Provider content.
 `./contract` contains the strict renderer-safe coordination read model. It
 composes the Cloud-global online Worker directory and the canonical Project
 Plan, Project-scoped Worker Availability, Membership,
-Task Authority, execution, result/review, content readiness, provisioning and
-recovery records; it adds only UI-specific grouping, exact selection and focus
+Task Authority, User-level offers, execution, result/review, content readiness,
+provisioning and recovery records; it adds only UI-specific grouping, User selection and focus
 wrappers rather than redefining those state machines.
 `./ports` contains the narrow package-owned workspace, Plan, provisioning, and
 action workflow ports used by the capability factory plus the closed
@@ -121,8 +124,18 @@ review, completion, Coordinator fencing, membership fences, and root recovery
 cards are default-visible. There is no renderer transport, HTTP client,
 Provider adapter, or second Cloud DTO.
 
+Plan generation exposes Worker identity only at User level while preserving
+anonymous per-Runtime profiles that keep capability tags paired with that same
+Runtime's eligible Task scopes. It never unions facts across a User's devices.
+Generation, assignment edits, and a fresh pre-submit read each require one
+currently eligible Runtime to satisfy the complete Task profile; Cloud
+revalidates the same facts again during offer creation and claim.
+
 Owner confirmation activates the Project and dispatches each dependency-free
 initial Plan item through the canonical Coordinator Agent command service. Main
-re-reads the exact Agent availability immediately before every offer and sends
-the fresh availability revision; an offline, unready, non-member, ineligible,
-busy, expired, capability-mismatched, or content-unready Agent fails closed.
+re-reads the selected User's current Project-scoped availability immediately
+before every offer and requires at least one eligible Runtime. The Cloud command
+contains only `workerUserId`; Cloud broadcasts the pending Offer to all eligible
+Runtime Agents owned by that User, and the first Device claim creates the exact
+Task Execution. No Agent identity or availability revision is supplied by the
+renderer or persisted as a pre-claim assignment.

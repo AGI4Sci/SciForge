@@ -144,15 +144,17 @@ function transferWorkspace(transferred: boolean) {
     },
     observedAt: TEST_TIMESTAMP,
     focusedProjectId: TEST_IDS.projectId,
-    availableWorkerGroups: [],
+    availableWorkerUsers: [],
     projects: [{
       project,
       plan: null,
+      memberUsers: [],
       workerGroups: [
         workerGroup(projectFixture.ownerUserId, TEST_IDS.secondAgentId, 7),
         workerGroup(TEST_IDS.secondUserId, 'agt_MemberAgent001', 9)
       ],
       tasks: [],
+      offers: [],
       reviews: [],
       pendingHumanNeeded: [],
       records: [],

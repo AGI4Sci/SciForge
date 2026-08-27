@@ -36,17 +36,17 @@ Run-0 SHALL 使用现有 `login-test` Keycloak issuer 的真实 OIDC/PKCE、JIT 
 
 ### Requirement: 固定验收角色不限制产品动态性
 
-Run-0 验收 SHALL 使用 U0 Project Owner、U0 所有的精确 Coordinator Agent、U1 manual Worker、U2 automatic Worker、U3 reject Worker、U4 replacement Worker 的固定角色脚本。U0-U4 SHALL 是本次证据中的脱敏 fixture label；产品合同和实现 SHALL 支持动态 User、Device、Agent、Membership 和 Worker 选择，不得硬编码这些 label 或数量。固定 happy path SHALL 由 U0 Coordinator 在接受三个结果后通过 `coordinator_project` 发起一次 HumanNeeded；`worker_execution` scope SHALL 在 focused/recovery tests 中独立覆盖。
+Run-0 验收 SHALL 使用 U0 Project Owner、U0 当前 Device 自动绑定的 Project Coordinator Agent、U1 manual Worker、U2 automatic Worker、U3 local-dismiss Worker、U4 replacement Worker 的固定角色脚本。U0-U4 SHALL 是本次证据中的脱敏 fixture label；产品合同和实现 SHALL 支持动态 User、Device、Agent、Membership 和 Worker 选择，不得硬编码这些 label 或数量。固定 happy path SHALL 由 U0 Coordinator 在接受三个结果后通过 `coordinator_project` 发起一次 HumanNeeded；`worker_execution` scope SHALL 在 focused/recovery tests 中独立覆盖。
 
-#### Scenario: U3 拒绝并由 U4 接替
+#### Scenario: U3 本机忽略并由 U4 接替
 
-- **WHEN** U3 对精确 Task offer 手动拒绝
-- **THEN** Coordinator HCI SHALL 从动态 availability 中选择 U4 的精确 Agent 并创建新 execution
-- **AND** U3 的旧 execution SHALL 被 fenced。
+- **WHEN** U3 的一台 Device 对 User-level Task Offer 执行 local dismiss，随后 Coordinator 撤回共享 Offer 并选择 U4 User
+- **THEN** Cloud SHALL 不为 U3 创建或 fence 任何 execution，并向 U4 的合格 Device Runtime 广播新 Offer
+- **AND** 只有 U4 某台 Device 成功 claim 后才 SHALL 创建新 execution。
 
 ### Requirement: 会议脚本产生三项真实协作产物
 
-验收 Project SHALL 命名为“多用户协作设计评审会”。U0 Coordinator Agent SHALL 读取真实合成 agenda/requirements 文件，通过真实 AgentRuntime 生成由 Human 确认或编辑的 plan，并并行派发生成 `architecture-review.md`、`meeting-minutes.md`、`risk-register.md` 的三个最终 Task。U1 SHALL 手动接单，U2 SHALL 自动接单，U3 SHALL 拒绝且 U4 SHALL 接替；所有 Worker SHALL 真实下载输入、调用本机 Runtime/模型、上传结果。
+验收 Project SHALL 命名为“多用户协作设计评审会”。U0 Coordinator Agent SHALL 读取真实合成 agenda/requirements 文件，通过真实 AgentRuntime 生成由 Human 确认或编辑的 plan，并并行派发生成 `architecture-review.md`、`meeting-minutes.md`、`risk-register.md` 的三个最终 Task。U1 SHALL 从其 Device 手动 claim，U2 SHALL 由其 Device 自动 claim，U3 的 Device SHALL 执行 local dismiss 且 Cloud Offer 仍保持 pending，随后 U0 SHALL withdraw 并改派给 U4 由其 Device claim；所有实际领取的 Worker SHALL 真实下载输入、调用本机 Runtime/模型、上传结果。
 
 #### Scenario: 三个输出完成初稿
 

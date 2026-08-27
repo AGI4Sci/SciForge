@@ -3,7 +3,6 @@ import { test } from 'node:test'
 import {
   createCollaborationError,
   restResponseSchema,
-  taskExecutionSchema,
   taskOfferSchema,
   type RestRequest,
   type RestResponse
@@ -579,9 +578,7 @@ function coordinatorWithdrawCommand(): RestRequest {
     type: 'task.offer.withdraw',
     taskOfferId: TEST_IDS.taskOfferId,
     taskId: TEST_IDS.taskId,
-    executionId: TEST_IDS.executionId,
     expectedTaskRevision: 1,
-    expectedExecutionRevision: 1,
     expectedOfferRevision: 1,
     expectedCoordinatorAuthorityEpoch: 1,
     reason: 'Coordinator changed the synthetic assignment.'
@@ -601,8 +598,7 @@ function coordinatorCreateCommand(): RestRequest {
     projectPlanId: TEST_IDS.projectPlanId,
     expectedPlanRevision: 1,
     planItemId: 'item_Plan00000001',
-    assigneeAgentId: TEST_IDS.secondAgentId,
-    expectedAvailabilityRevision: 1,
+    workerUserId: TEST_IDS.secondUserId,
     offerExpiresAt: TEST_LATER_TIMESTAMP
   }
 }
@@ -614,73 +610,38 @@ function coordinatorReassignCommand(): RestRequest {
     idempotencyKey: 'idem_task.offer.reassign-outbox-01',
     type: 'task.offer.reassign',
     taskId: TEST_IDS.taskId,
-    previousExecutionId: TEST_IDS.executionId,
+    previousTaskOfferId: TEST_IDS.taskOfferId,
+    expectedPreviousOfferRevision: 1,
     expectedProjectRevision: 1,
     expectedTaskRevision: 1,
-    expectedExecutionRevision: 1,
     expectedCoordinatorAuthorityEpoch: 1,
     expectedExecutionAuthorityEpoch: 1,
-    assigneeAgentId: TEST_IDS.secondAgentId,
-    expectedAvailabilityRevision: 1,
+    workerUserId: TEST_IDS.secondUserId,
     offerExpiresAt: TEST_LATER_TIMESTAMP,
     nextFileIntent: null
   }
 }
 
 function coordinatorOfferCollection(request: RestRequest): RestResponse {
-  const execution = taskExecutionSchema.parse({
-    schemaVersion: 1,
-    type: 'task_execution',
-    projectId: TEST_IDS.projectId,
-    taskId: TEST_IDS.taskId,
-    executionId: TEST_IDS.executionId,
-    attempt: 1,
-    offeredByCoordinatorAgentId: TEST_IDS.agentId,
-    assigneeUserId: TEST_IDS.secondUserId,
-    assigneeAgentId: TEST_IDS.secondAgentId,
-    assigneeDeviceId: 'dev_WorkerDevice01',
-    state: 'offered',
-    stateRevision: 1,
-    fence: {
-      schemaVersion: 1,
-      executionId: TEST_IDS.executionId,
-      assigneeUserId: TEST_IDS.secondUserId,
-      assigneeAgentId: TEST_IDS.secondAgentId,
-      assigneeDeviceId: 'dev_WorkerDevice01',
-      assignmentTaskRevision: 1,
-      projectExecutionAuthorityEpoch: 1,
-      userTaskAuthorityEpoch: 1,
-      bindingRevision: null,
-      status: 'open',
-      reason: null,
-      fencedAt: null
-    },
-    fileIntent: null,
-    currentResultSubmissionId: null,
-    offeredAt: TEST_TIMESTAMP,
-    acceptedAt: null,
-    startedAt: null,
-    terminalAt: null,
-    revision: 1,
-    createdAt: TEST_TIMESTAMP,
-    updatedAt: TEST_TIMESTAMP
-  })
+  const taskRevision = request.type === 'task.offer.reassign'
+    ? request.expectedTaskRevision + 1
+    : 1
+  const workerUserId = request.type === 'task.offer.create' || request.type === 'task.offer.reassign'
+    ? request.workerUserId
+    : TEST_IDS.secondUserId
   const offer = taskOfferSchema.parse({
     schemaVersion: 1,
     type: 'task_offer',
     taskOfferId: TEST_IDS.taskOfferId,
     projectId: TEST_IDS.projectId,
     taskId: TEST_IDS.taskId,
-    executionId: TEST_IDS.executionId,
-    assigneeUserId: TEST_IDS.secondUserId,
-    assigneeAgentId: TEST_IDS.secondAgentId,
-    assigneeDeviceId: 'dev_WorkerDevice01',
+    executionId: null,
+    workerUserId,
+    offeredByCoordinatorAgentId: TEST_IDS.agentId,
     state: 'pending',
     offeredAt: TEST_TIMESTAMP,
     expiresAt: TEST_LATER_TIMESTAMP,
     respondedAt: null,
-    rejectionReason: null,
-    safeReasonDetail: null,
     revision: 1,
     createdAt: TEST_TIMESTAMP,
     updatedAt: TEST_TIMESTAMP
@@ -689,7 +650,11 @@ function coordinatorOfferCollection(request: RestRequest): RestResponse {
     protocolVersion: '1.0',
     type: 'rest.collection',
     requestId: request.requestId,
-    items: [taskFixture, execution, offer]
+    items: [{
+      ...taskFixture,
+      revision: taskRevision,
+      updatedAt: taskRevision === 1 ? TEST_TIMESTAMP : TEST_LATER_TIMESTAMP
+    }, offer]
   })
 }
 
@@ -697,30 +662,14 @@ function coordinatorWithdrawCollection(request: RestRequest): RestResponse {
   const created = coordinatorOfferCollection(request)
   assert.equal(created.type, 'rest.collection')
   const task = created.items.find((item) => item.type === 'task')
-  const execution = created.items.find((item) => item.type === 'task_execution')
   const offer = created.items.find((item) => item.type === 'task_offer')
-  assert.ok(task && execution && offer)
+  assert.ok(task && offer)
   return restResponseSchema.parse({
     ...created,
     items: [
       {
         ...task,
-        currentExecutionState: 'cancelled',
         status: 'revision_requested',
-        revision: 2,
-        updatedAt: TEST_LATER_TIMESTAMP
-      },
-      {
-        ...execution,
-        state: 'cancelled',
-        stateRevision: 2,
-        fence: {
-          ...execution.fence,
-          status: 'fenced',
-          reason: 'offer_withdrawn',
-          fencedAt: TEST_LATER_TIMESTAMP
-        },
-        terminalAt: TEST_LATER_TIMESTAMP,
         revision: 2,
         updatedAt: TEST_LATER_TIMESTAMP
       },
@@ -739,38 +688,11 @@ function coordinatorReassignCollection(request: RestRequest): RestResponse {
   const created = coordinatorOfferCollection(request)
   assert.equal(created.type, 'rest.collection')
   const task = created.items.find((item) => item.type === 'task')
-  const execution = created.items.find((item) => item.type === 'task_execution')
   const offer = created.items.find((item) => item.type === 'task_offer')
-  assert.ok(task && execution && offer)
-  const replacementExecutionId = 'exe_Exec00000002'
+  assert.ok(task && offer)
   return restResponseSchema.parse({
     ...created,
-    items: [
-      {
-        ...task,
-        currentExecutionId: replacementExecutionId,
-        executionCount: 2,
-        revision: 2,
-        updatedAt: TEST_LATER_TIMESTAMP
-      },
-      {
-        ...execution,
-        executionId: replacementExecutionId,
-        attempt: 2,
-        fence: {
-          ...execution.fence,
-          executionId: replacementExecutionId,
-          assignmentTaskRevision: 2
-        },
-        updatedAt: TEST_LATER_TIMESTAMP
-      },
-      {
-        ...offer,
-        taskOfferId: 'ofr_Offer00000002',
-        executionId: replacementExecutionId,
-        updatedAt: TEST_LATER_TIMESTAMP
-      }
-    ]
+    items: [task, { ...offer, taskOfferId: 'ofr_Offer00000002' }]
   })
 }
 

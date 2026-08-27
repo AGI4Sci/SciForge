@@ -18,8 +18,9 @@ offer 超时、撤权、Coordinator 转移、改派和 Provider 不确定写入�
 4. `task.offer.withdraw` 是唯一 offer 撤回命令。`revoke` 只表示 Device/Agent
    authority revoke；Desktop 不得上报 timeout，公开 REST/SDK 也没有 timeout
    命令。
-5. 旧 execution 永久保留为不可变审计事实。只有当前 Coordinator Agent 可在
-   合法 terminal predecessor 后 reassign；每次 reassign 创建新的 `executionId`。
+5. Offer 以 Worker User 为目标，不预选 Device/Agent，也不预创建 Execution。首个
+   合格 Device Agent 通过 Cloud CAS 认领后，Cloud 才在同一事务创建不可变 Execution。
+   旧 execution 永久保留为审计事实；reassign 创建新 Offer，后续认领再创建新 `executionId`。
 
 ## 2. 正常启动与重连顺序
 
@@ -27,13 +28,13 @@ offer 超时、撤权、Coordinator 转移、改派和 Provider 不确定写入�
 
 1. 在服务接受流量前运行 `migrations.ts` 的正式 route 检测和 catalog fingerprint
    校验。仅允许 `fresh-v4`、`upstream-v4`、`public-v5`、`staging-v9`、`a-v11`、
-   `current-v12`、`current-v13`、`current-v14`；未知或漂移 catalog 必须 fail closed。
+   `current-v12` 至 `current-v17`；未知或漂移 catalog 必须 fail closed。
 2. migration 在单一 PostgreSQL connection 和显式 transaction 内完成；失败先
    rollback，再释放 connection。不得用部分 DDL、手工改 version 或跳过 fingerprint
    使服务进入 ready。
 3. repository 和 service 构建完成后，执行同一个 Cloud-owned offer expiry
    reconciliation。它仅根据服务端当前时间与持久化 `expiresAt` 处理过期 offer，
-   幂等且不创建 successor execution。
+   幂等且不创建 Execution 或 successor Offer。
 4. 只有 migration、repository readiness 和启动 reconciliation 均完成后才开放
    `readyz`、REST 和 WSS。
 
@@ -61,16 +62,17 @@ offer 超时、撤权、Coordinator 转移、改派和 Provider 不确定写入�
 
 | 事件 | Cloud 原子事实 | 允许的下一步 | 禁止行为 |
 | --- | --- | --- | --- |
-| Worker reject | Offer rejected；Execution fenced `offer_rejected`；Task `revision_requested`；Inbox、receipt 同事务 | 当前 Coordinator Agent reassign | 复用 executionId；旧 Worker 继续写 |
-| Coordinator withdraw | Offer withdrawn；Execution fenced `offer_withdrawn` | 当前 Coordinator Agent reassign | 新增 revoke alias；Desktop timeout |
-| Cloud timeout | 按服务端时间处理持久化 `expiresAt`；Execution fenced `offer_timed_out` | 先保持 terminal fact，再由当前 Coordinator 明确 reassign | timeout 自动创建 successor；多条 scheduler/REST fallback |
+| Device 本地忽略 | 仅本机 pending-offer journal 进入 `dismissed`；没有 Cloud 写入 | 同一 User 的其他 Device 仍可认领；本机可等待新 Offer | 把本机忽略解释为 User 全局拒绝；创建或 fence Execution |
+| 首个 Device claim | Offer `accepted`；Cloud 原子创建并绑定实际 User/Device/Agent Execution；Task `in_progress`；其他 Device 收到 claimed | 获胜 Device 启动 exact Execution | 预选 Agent；二次 claim 创建另一 Execution；renderer 传 revision 快照之外的 authority |
+| Coordinator withdraw | 未认领 Offer `withdrawn`；Task `revision_requested`；没有 Execution | 当前 Coordinator Agent 可重新向 Worker User 发 Offer | 新增 revoke alias；Desktop timeout；伪造旧 Execution |
+| Cloud timeout | 按服务端时间处理持久化 `expiresAt`；未认领 Offer `timed_out`，Task `revision_requested`，没有 Execution | 当前 Coordinator 明确 reassign | timeout 自动创建 successor；多条 scheduler/REST fallback |
 | Agent revoke | Agent、credential、availability 与其 current executions 同事务撤权/fence | 当前 Coordinator 可从 fenced predecessor reassign | 旧 Agent command/WSS/Runtime/file write |
-| Device revoke | Device 及其 active Agents、credentials、availability 与 current executions 同事务撤权/fence | 当前 Coordinator 可改派至 eligible active Agent | 只删本地 credential 而保留 Cloud execution open |
+| Device revoke | Device 及其 active Agents、credentials、availability 与 current executions 同事务撤权/fence | 当前 Coordinator 可改派至 eligible Worker User | 只删本地 credential 而保留 Cloud execution open |
 | Coordinator transfer | Owner OIDC User 选择同一 Owner 的另一个 active Agent；Project revision 与 coordinator authority epoch 前进 | 新 Coordinator 读取 durable Inbox/workspace 后继续 | 旧 Coordinator 任何 coordinator-only write；Human 直接写 ProjectRecord/completion |
 
 每次恢复操作都必须携带当前 revision、authority epoch 和稳定 idempotency key。
 revision/epoch 冲突应重新读取 Cloud 事实，而不是修改本地 expected 值重试。旧 execution
-上的 offer decision、start/fail、TaskResult、HumanNeeded、resource/file association、
+上的 start/fail、TaskResult、HumanNeeded、resource/file association、
 review 和 recovery 写入一律应得到 fence/authority 拒绝。
 
 ## 4. Provider removal 与 `outcome_unknown`
@@ -111,11 +113,10 @@ unauthorized；其他成员各自的 readiness/connection 不得被连带降级�
   以“修复”启动。
 - forward-only migration 不提供原地 downgrade。若必须回退，应把备份恢复到独立数据库，
   校验 catalog 和事实一致性后，再通过单独批准的切换流程处理。
-- Cloud restart 验证至少比较同一 Task/Execution/Offer revision 与 fence、Inbox sequence、
+- Cloud restart 验证至少比较同一 User Offer、获胜 Execution 的 User/Device/Agent、revision 与 fence、Inbox sequence、
   receipt response、idempotency replay 和 external-operation journal。只看 row count 不足以
   证明恢复一致。
-- 事务中途失败必须同时看不到 Task/Execution/Offer 变化、Inbox 和 business receipt；
-  audit/journal 若按设计在独立拒绝事务记录，不得被误判为业务半提交。
+- claim 事务中途失败必须仍只有原 Task/Offer，且看不到新 Execution、Inbox 和 business receipt。
 
 ## 6. 安全观测与告警
 

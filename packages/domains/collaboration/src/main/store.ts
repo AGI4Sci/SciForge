@@ -14,7 +14,6 @@ import {
   remoteSessionProjectionSchema,
   taskExecutionPreflightSchema,
   taskExecutionSchema,
-  taskOfferRejectionReasonSchema,
   taskResultOutputSchema,
   taskSchema,
   userPrincipalSchema
@@ -187,6 +186,37 @@ export const collaborationTaskOfferJournalSchema = z.object({
   receivedAt: timestampSchema
 }).strict()
 
+export const collaborationPendingTaskOfferSchema = z.object({
+  projectId: projectSchema.shape.projectId,
+  taskId: taskSchema.shape.taskId,
+  taskOfferId: taskOfferIdSchema,
+  workerUserId: userPrincipalSchema.shape.userId,
+  currentTaskRevision: taskSchema.shape.revision,
+  offerRevision: taskSchema.shape.revision,
+  recipientAgentId: agentNodeSchema.shape.agentId,
+  receivedAt: timestampSchema,
+  preflightReasons: z.array(z.enum([
+    'runtime_not_ready',
+    'task_unavailable',
+    'offer_not_current',
+    'content_not_ready',
+    'provider_not_ready'
+  ])).max(5),
+  state: z.enum(['pending', 'awaiting-manual', 'claiming', 'dismissed', 'claimed_elsewhere', 'closed', 'failed']),
+  updatedAt: timestampSchema,
+  completedAt: timestampSchema.nullable(),
+  error: z.string().trim().min(1).max(4_000).nullable()
+}).strict().superRefine((offer, context) => {
+  const terminal = ['dismissed', 'claimed_elsewhere', 'closed', 'failed'].includes(offer.state)
+  if (terminal !== (offer.completedAt !== null)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['completedAt'],
+      message: 'A terminal pending-offer journal requires its completion time.'
+    })
+  }
+})
+
 export const collaborationWorkerPreflightSchema = z.object({
   cloud: taskExecutionPreflightSchema,
   outcome: z.enum(['allowed', 'denied']),
@@ -212,26 +242,10 @@ export const collaborationWorkerPreflightSchema = z.object({
   }
 })
 
-export const collaborationTaskOfferDecisionSchema = z.discriminatedUnion('decision', [
-  z.object({
-    decision: z.literal('accept'),
-    decidedAt: timestampSchema
-  }).strict(),
-  z.object({
-    decision: z.literal('reject'),
-    reason: taskOfferRejectionReasonSchema,
-    safeReasonDetail: z.string().trim().min(1).max(500).nullable(),
-    decidedAt: timestampSchema
-  }).strict().superRefine((decision, context) => {
-    if ((decision.reason === 'other') !== (decision.safeReasonDetail !== null)) {
-      context.addIssue({
-        code: 'custom',
-        path: ['safeReasonDetail'],
-        message: 'Only other rejection requires a bounded safe detail.'
-      })
-    }
-  })
-])
+export const collaborationTaskOfferDecisionSchema = z.object({
+  decision: z.literal('accept'),
+  decidedAt: timestampSchema
+}).strict()
 
 export const collaborationAgentInvocationJournalSchema = z.object({
   logicalInvocationId: localInvocationIdSchema,
@@ -327,18 +341,15 @@ export const collaborationTaskRunSchema = z.object({
   task: taskSchema.nullable(),
   execution: taskExecutionSchema.nullable(),
   latestPreflight: collaborationWorkerPreflightSchema.nullable(),
-  decision: collaborationTaskOfferDecisionSchema.nullable(),
+  decision: collaborationTaskOfferDecisionSchema,
   expectedTaskRevision: taskSchema.shape.revision,
   expectedExecutionRevision: taskExecutionSchema.shape.revision,
   state: z.enum([
-    'offered',
-    'awaiting-manual',
     'accepting',
     'running',
     'needs-human',
     'submitting',
     'completed',
-    'rejected',
     'failed',
     'fenced',
     'manual-recovery'
@@ -374,7 +385,7 @@ export const collaborationTaskRunSchema = z.object({
   )) {
     context.addIssue({ code: 'custom', path: ['execution'], message: 'Execution snapshot must match the immutable offer.' })
   }
-  const terminal = ['completed', 'rejected', 'failed', 'fenced', 'manual-recovery'].includes(run.state)
+  const terminal = ['completed', 'failed', 'fenced', 'manual-recovery'].includes(run.state)
   if (terminal !== (run.completedAt !== null)) {
     context.addIssue({ code: 'custom', path: ['completedAt'], message: 'Terminal Worker run requires completion time.' })
   }
@@ -409,7 +420,7 @@ export const collaborationLocalRemoteApprovalSchema = z.object({
 }).strict()
 
 export const collaborationLocalStateSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   lastInboxSequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   user: userPrincipalSchema.optional(),
@@ -425,6 +436,7 @@ export const collaborationLocalStateSchema = z.object({
   projects: z.array(projectSchema).max(10_000),
   tasks: z.array(taskSchema).max(100_000),
   taskRuns: z.array(collaborationTaskRunSchema).max(100_000),
+  pendingTaskOffers: z.array(collaborationPendingTaskOfferSchema).max(100_000).default([]),
   workerAcceptancePolicies: z.array(collaborationWorkerAcceptancePolicySchema)
     .max(64)
     .default([])
@@ -454,6 +466,7 @@ export type CollaborationQueueItem = z.infer<typeof collaborationQueueItemSchema
 export type CollaborationLocalReceipt = z.infer<typeof collaborationLocalReceiptSchema>
 export type CollaborationOutboxEntry = z.infer<typeof collaborationOutboxEntrySchema>
 export type CollaborationTaskRun = z.infer<typeof collaborationTaskRunSchema>
+export type CollaborationPendingTaskOffer = z.infer<typeof collaborationPendingTaskOfferSchema>
 export type CollaborationExternalOperationJournal = z.infer<
   typeof collaborationExternalOperationJournalSchema
 >
@@ -466,7 +479,7 @@ export type CollaborationWorkerAcceptancePolicy = z.infer<
 export type CollaborationLocalRemoteApproval = z.infer<typeof collaborationLocalRemoteApprovalSchema>
 
 export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.freeze({
-  schemaVersion: 1,
+  schemaVersion: 2,
   revision: 0,
   lastInboxSequence: 0,
   endpoints: [],
@@ -477,6 +490,7 @@ export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.f
   projects: [],
   tasks: [],
   taskRuns: [],
+  pendingTaskOffers: [],
   workerAcceptancePolicies: [],
   queue: [],
   receipts: [],
@@ -540,6 +554,15 @@ export class CollaborationLocalStore {
   async open(): Promise<CollaborationLocalState> {
     if (this.state) return structuredClone(this.state)
     const stored = await this.backend.read()
+    if (
+      stored !== undefined &&
+      (!stored || typeof stored !== 'object' || Array.isArray(stored) ||
+        (stored as { schemaVersion?: unknown }).schemaVersion !== 2)
+    ) {
+      throw new Error(
+        'Collaboration local state is not schema version 2; clear the obsolete local Collaboration state and reconnect to Cloud.'
+      )
+    }
     this.state = stored === undefined
       ? structuredClone(EMPTY_COLLABORATION_LOCAL_STATE)
       : collaborationLocalStateSchema.parse(stored)

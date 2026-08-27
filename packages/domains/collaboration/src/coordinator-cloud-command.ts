@@ -2,6 +2,7 @@ import { z } from 'zod'
 import {
   agentInboxMessageSchema,
   humanNeededCreateCommandSchema,
+  projectCreateCommandSchema,
   projectDecisionSubmitCommandSchema,
   projectFinalSummarySubmitCommandSchema,
   projectPlanSubmitCommandSchema,
@@ -16,13 +17,15 @@ import {
 
 export const COORDINATOR_CLOUD_COMMAND_SERVICE_ID =
   'sciforge.collaboration.coordinator-cloud-command' as const
-export const COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION = '3.0.0' as const
+export const COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION = '4.0.0' as const
 
 /**
- * Agent-authored Coordinator writes only. Owner/User commands and Worker
- * execution commands deliberately remain outside this service.
+ * Agent-authored Project creation and Coordinator writes only. The current
+ * local Agent identity is bound by the durable outbox; Owner/User commands and
+ * Worker execution commands deliberately remain outside this service.
  */
 export const coordinatorCloudCommandSchema = z.discriminatedUnion('type', [
+  projectCreateCommandSchema,
   projectPlanSubmitCommandSchema,
   taskOfferCreateCommandSchema,
   taskOfferWithdrawCommandSchema,

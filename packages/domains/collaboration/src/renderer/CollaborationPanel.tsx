@@ -887,12 +887,10 @@ export function CollaborationPanel({
                   projects={snapshot.projects}
                   participant={participant}
                   busy={busyKey !== null}
-                  onTaskOfferDecision={(executionId, decision) => {
-                    void runAction(`task-offer-${decision}-${executionId}`, () =>
+                  onTaskOfferDecision={(taskOfferId, decision) => {
+                    void runAction(`task-offer-${decision}-${taskOfferId}`, () =>
                       client.decideTaskOffer(
-                        decision === 'accept'
-                          ? { executionId, decision }
-                          : { executionId, decision, reason: 'human_rejected' }
+                        { taskOfferId, decision }
                       )
                     )
                   }}
@@ -1897,7 +1895,7 @@ export function ProjectsSection({
   projects: readonly ProjectView[]
   participant?: ParticipantView
   busy: boolean
-  onTaskOfferDecision: (executionId: string, decision: 'accept' | 'reject') => void
+  onTaskOfferDecision: (taskOfferId: string, decision: 'accept' | 'dismiss') => void
 }>): ReactElement {
   const { t } = useTranslation('common')
   return (
@@ -1936,7 +1934,7 @@ export function ProjectsSection({
                 <div className="space-y-1.5">
                   {project.tasks.map((task) => (
                     <TaskRow
-                      key={task.executionId}
+                      key={task.taskOfferId}
                       task={task}
                       participant={participant}
                       busy={busy}
@@ -1957,10 +1955,11 @@ function TaskRow({ task, participant, busy, onOfferDecision }: Readonly<{
   task: CollaborationTaskView
   participant?: ParticipantView
   busy: boolean
-  onOfferDecision: (executionId: string, decision: 'accept' | 'reject') => void
+  onOfferDecision: (taskOfferId: string, decision: 'accept' | 'dismiss') => void
 }>): ReactElement {
   const { t } = useTranslation('common')
   const agent = participant?.agents.find(({ agentId }) => agentId === task.assigneeAgentId)
+  const workerUser = participant?.userId === task.workerUserId ? participant.displayName : task.workerUserId
   return (
     <div
       className="rounded bg-ds-hover p-2"
@@ -1973,7 +1972,7 @@ function TaskRow({ task, participant, busy, onOfferDecision }: Readonly<{
         <StatusPill status={task.state} />
       </div>
       <div className="mt-1 text-ds-muted">
-        {t('collaborationAssignee')}: {agent?.displayName || task.assigneeAgentId} · Revision {task.revision}
+        {t('collaborationAssignee')}: {agent?.displayName || workerUser} · Revision {task.revision}
       </div>
       <div className="mt-1 text-ds-muted">
         {t('collaborationWorkerAcceptancePolicy')}: {task.acceptanceMode === 'manual'
@@ -1991,7 +1990,7 @@ function TaskRow({ task, participant, busy, onOfferDecision }: Readonly<{
             type="button"
             className={PRIMARY_BUTTON}
             disabled={busy}
-            onClick={() => onOfferDecision(task.executionId, 'accept')}
+            onClick={() => onOfferDecision(task.taskOfferId, 'accept')}
           >
             {t('collaborationTaskAccept')}
           </button>
@@ -1999,9 +1998,9 @@ function TaskRow({ task, participant, busy, onOfferDecision }: Readonly<{
             type="button"
             className={SECONDARY_BUTTON}
             disabled={busy}
-            onClick={() => onOfferDecision(task.executionId, 'reject')}
+            onClick={() => onOfferDecision(task.taskOfferId, 'dismiss')}
           >
-            {t('collaborationTaskReject')}
+            {t('collaborationTaskDismiss')}
           </button>
         </div>
       ) : null}

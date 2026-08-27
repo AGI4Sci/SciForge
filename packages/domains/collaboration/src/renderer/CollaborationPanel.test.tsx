@@ -656,7 +656,7 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
   assert.match(error, /Typed permission error/u)
 })
 
-test('renders explicit accept and reject controls only for a manual Worker offer', () => {
+test('renders explicit claim and local-dismiss controls only for a manual Worker offer', () => {
   const fixture = statusFixture()
   const snapshot = collaborationStatusSnapshotSchema.parse({
     ...fixture,
@@ -679,7 +679,7 @@ test('renders explicit accept and reject controls only for a manual Worker offer
   )
   assert.match(html, /data-task-offer-decision="true"/u)
   assert.match(html, /collaborationTaskAccept/u)
-  assert.match(html, /collaborationTaskReject/u)
+  assert.match(html, /collaborationTaskDismiss/u)
 })
 
 test('keeps the challenge poll handle out of render state and has no provider branch', () => {
@@ -900,6 +900,8 @@ function statusFixture() {
       tasks: [{
         taskId: 'task-1',
         projectId: 'project-1',
+        taskOfferId: 'offer-task-1',
+        workerUserId: 'user-a',
         executionId: 'execution-task-1',
         assigneeAgentId: 'agent-b',
         revision: 2,

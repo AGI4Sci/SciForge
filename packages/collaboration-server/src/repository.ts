@@ -230,6 +230,10 @@ export interface CollaborationTransaction extends CollaborationReadRepository {
     userId: string
   ): Promise<StoredTaskExecution[]>
   listCurrentTaskExecutionsForProjectForUpdate(projectId: string): Promise<StoredTaskExecution[]>
+  listPendingTaskOffersForProjectForUpdate(
+    projectId: string,
+    workerUserId?: string
+  ): Promise<StoredTaskOffer[]>
   getProjectMemberForUpdate(projectId: string, userId: string): Promise<StoredProjectMember | null>
   getProjectContentSpaceBindingForUpdate(projectId: string): Promise<StoredProjectContentSpaceBinding | null>
   getProviderDirectoryPrincipalFactForUpdate(

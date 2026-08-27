@@ -29,6 +29,23 @@ const envelope = {
 const commands = [
   {
     ...envelope,
+    idempotencyKey: 'idem_project.create-01',
+    type: 'project.create' as const,
+    displayName: 'Agent-owned Project',
+    goal: 'Bind the current Device Agent as Coordinator.',
+    budget: {
+      maxTasks: 5,
+      maxTasksPerRound: 5,
+      maxTaskRetries: 1,
+      maxCoordinationRounds: 2
+    },
+    content: {
+      mode: 'none' as const,
+      members: [{ userId: TEST_IDS.userId }]
+    }
+  },
+  {
+    ...envelope,
     idempotencyKey: 'idem_project.plan.submit-01',
     type: 'project.plan.submit' as const,
     projectId: TEST_IDS.projectId,
@@ -65,8 +82,7 @@ const commands = [
     projectPlanId: TEST_IDS.projectPlanId,
     expectedPlanRevision: 1,
     planItemId: 'item_Plan00000001',
-    assigneeAgentId: TEST_IDS.secondAgentId,
-    expectedAvailabilityRevision: 1,
+    workerUserId: TEST_IDS.secondUserId,
     offerExpiresAt: TEST_TIMESTAMP
   },
   {
@@ -75,9 +91,7 @@ const commands = [
     type: 'task.offer.withdraw' as const,
     taskOfferId: TEST_IDS.taskOfferId,
     taskId: TEST_IDS.taskId,
-    executionId: TEST_IDS.executionId,
     expectedTaskRevision: 1,
-    expectedExecutionRevision: 1,
     expectedOfferRevision: 1,
     expectedCoordinatorAuthorityEpoch: 1,
     reason: 'Coordinator changed the synthetic assignment.'
@@ -87,14 +101,13 @@ const commands = [
     idempotencyKey: 'idem_task.offer.reassign-01',
     type: 'task.offer.reassign' as const,
     taskId: TEST_IDS.taskId,
-    previousExecutionId: TEST_IDS.executionId,
+    previousTaskOfferId: TEST_IDS.taskOfferId,
+    expectedPreviousOfferRevision: 1,
     expectedProjectRevision: 1,
     expectedTaskRevision: 1,
-    expectedExecutionRevision: 1,
     expectedCoordinatorAuthorityEpoch: 1,
     expectedExecutionAuthorityEpoch: 1,
-    assigneeAgentId: TEST_IDS.secondAgentId,
-    expectedAvailabilityRevision: 1,
+    workerUserId: TEST_IDS.secondUserId,
     offerExpiresAt: TEST_TIMESTAMP,
     nextFileIntent: null
   }
@@ -102,8 +115,9 @@ const commands = [
 
 test('Coordinator Cloud command service exposes one closed Agent-command allowlist', () => {
   assert.equal(COORDINATOR_CLOUD_COMMAND_SERVICE_ID, 'sciforge.collaboration.coordinator-cloud-command')
-  assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '3.0.0')
+  assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '4.0.0')
   assert.deepEqual(commands.map((command) => coordinatorCloudCommandSchema.parse(command).type), [
+    'project.create',
     'project.plan.submit',
     'task.offer.create',
     'task.offer.withdraw',
@@ -111,7 +125,6 @@ test('Coordinator Cloud command service exposes one closed Agent-command allowli
   ])
 
   for (const forbiddenType of [
-    'project.create',
     'project.plan.confirm',
     'task.offer.accept',
     'task.result.submit',
@@ -135,6 +148,7 @@ test('Coordinator Agent allowlist owns HumanNeeded, review, decision, and final 
     idempotencyKey: 'idem_human.needed.create-01',
     type: 'human.needed.create' as const,
     projectId: TEST_IDS.projectId,
+    targetUserId: TEST_IDS.secondUserId,
     context: {
       scope: 'coordinator_project' as const,
       expectedProjectRevision: 5,
@@ -159,8 +173,7 @@ test('Coordinator Agent allowlist owns HumanNeeded, review, decision, and final 
     expectedCoordinatorAuthorityEpoch: 2,
     decision: 'accept' as const,
     instruction: null,
-    nextAssigneeAgentId: null,
-    expectedNextAssigneeAvailabilityRevision: null,
+    nextWorkerUserId: null,
     nextOfferExpiresAt: null,
     nextFileIntent: null
   }, {
@@ -202,7 +215,7 @@ test('Coordinator Agent allowlist owns HumanNeeded, review, decision, and final 
     type: 'human.answer',
     humanRequestId: TEST_IDS.humanRequestId,
     requestRevision: 1,
-    answer: 'Owner-only OIDC answer.'
+    answer: 'Target-member OIDC answer.'
   }).success, false)
 })
 

@@ -205,8 +205,9 @@ export type ProviderRemoteApprovalRespondedEvent = z.infer<
 /**
  * A provider-authored candidate is not a HumanAnswer. Cloud must first resolve
  * the Provider identity to one active verified Human Endpoint, match that
- * endpoint to the current Project Owner and exact Project locator, and then run
- * the canonical HumanAnswer service.
+ * endpoint to the request's exact target User and Project locator, require that
+ * User's active Project Membership, and then run the canonical HumanAnswer
+ * service.
  */
 export const providerHumanAnswerCandidateEventSchema = z.object({
   ...providerEventEnvelopeShape,

@@ -164,7 +164,7 @@ describe('Project content provisioning facts', () => {
     }).success).toBe(true)
   })
 
-  it('creates a content-required Project from one canonical member/fact roster and no caller-nominated Owner', () => {
+  it('creates a content-required Project without caller-nominated Owner or Coordinator authority', () => {
     const request = {
       protocolVersion: '1.0',
       type: 'project.create',
@@ -172,8 +172,6 @@ describe('Project content provisioning facts', () => {
       idempotencyKey: 'idem_project_create_0001',
       displayName: 'Meeting PoC',
       goal: 'Complete one real multi-user meeting loop.',
-      coordinatorAgentId: TEST_IDS.agentId,
-      expectedCoordinatorAgentRevision: 4,
       budget: {
         maxTasks: 20,
         maxTasksPerRound: 5,
@@ -201,6 +199,8 @@ describe('Project content provisioning facts', () => {
     expect(projectCreateIncludesAuthenticatedOwner(parsed, TEST_IDS.userId)).toBe(true)
     expect(projectCreateIncludesAuthenticatedOwner(parsed, 'usr_NotAMember0001')).toBe(false)
     expect(restRequestSchema.safeParse({ ...request, ownerUserId: TEST_IDS.userId }).success).toBe(false)
+    expect(restRequestSchema.safeParse({ ...request, coordinatorAgentId: TEST_IDS.agentId }).success).toBe(false)
+    expect(restRequestSchema.safeParse({ ...request, expectedCoordinatorAgentRevision: 4 }).success).toBe(false)
     expect(restRequestSchema.safeParse({ ...request, memberUserIds: [TEST_IDS.userId] }).success).toBe(false)
     expect(restRequestSchema.safeParse({
       ...request,

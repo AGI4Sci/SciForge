@@ -5,10 +5,10 @@
 ## 业务需求
 
 - User 是动态的；每个非终态 Project 必须有且只有一个精确 Coordinator Agent。
-- Coordinator Human 通过 HCI 按 User 分组查看 Worker availability，但最终选择值必须是精确 Agent ID。
+- Coordinator Human 通过 HCI 查看由 Worker availability 聚合的 User 列表，最终选择值必须是 Worker User ID；Agent/Device 只是可派发证据。
 - 每个 Agent Device 本地独立保存 manual 或 automatic 接单策略；Cloud 不保存策略字段。
-- Worker 只能在本机 Device、Runtime、Membership、Provider readiness 和 execution fence 都通过时接单。
-- 拒绝后改派必须创建新 execution，旧 execution 不得写回。
+- Cloud 向 Worker User 的所有合格运行时广播同一 Offer；Worker Device 只能在本机 Device、Runtime、Membership、Provider readiness 和 Task capability 都通过时原子 claim。
+- 单台 Device 的 local dismiss 不得关闭 User Offer。Coordinator withdraw/reassign 后才创建新 User Offer；execution 只在成功 claim 时创建，旧 execution 不得写回。
 - 三项结果通过复审后，Coordinator 以 `coordinator_project` 发起一次 HumanNeeded；只有 Project Owner 的 OIDC Human 可回答。Worker execution HumanNeeded 只在 focused/recovery tests 覆盖，不进入本次 live happy path。
 - 结果必须经 Coordinator 复审；request revision 会产生新的当前 execution/revision。
 

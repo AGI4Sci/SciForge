@@ -35,7 +35,7 @@ type Facts = {
 const migrationRollbackDatabaseUrl = process.env.SCIFORGE_A_MIGRATION_ROLLBACK_TEST_URL
 
 describe('collaboration forward-only migration lineage', () => {
-  it('routes only admitted historical lineages, v11-v14 predecessors, and current v15', () => {
+  it('routes only admitted historical lineages, v11-v16 predecessors, and current v17', () => {
     expect(detectCollaborationSchemaRoute(facts(null))).toBe('fresh-v4')
     expect(detectCollaborationSchemaRoute(facts(4, { managedContainers: true, remoteApprovals: true })))
       .toBe('upstream-v4')
@@ -65,16 +65,24 @@ describe('collaboration forward-only migration lineage', () => {
       managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
       taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: true
     }))).toBe('current-v15')
+    expect(detectCollaborationSchemaRoute(facts(16, {
+      managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
+      taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: true
+    }))).toBe('current-v16')
+    expect(detectCollaborationSchemaRoute(facts(17, {
+      managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
+      taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: true
+    }))).toBe('current-v17')
     expect(() => detectCollaborationSchemaRoute(facts(10, {
       managedContainers: true, oidcIdentities: true, devices: true, legacyResourceRefs: true
     }))).toThrow(/lineage_unsupported/u)
   })
 
-  it('installs fresh v4 then the 0011-0015 forward migrations', async () => {
+  it('installs fresh v4 then the 0011-0017 forward migrations', async () => {
     const harness = migrationHarness(facts(null))
     await runCollaborationMigrations(harness.pool, migrationRuntime(harness))
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(15)
-    expect(harness.migrations).toHaveLength(9)
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(17)
+    expect(harness.migrations).toHaveLength(11)
     expect(harness.migrations[0]).toContain('VALUES (1)')
     expect(harness.migrations[3]).toContain('remote_capability_approvals')
     expect(harness.migrations[4]).toContain('migration_0011_unsupported_source_lineage')
@@ -104,6 +112,10 @@ describe('collaboration forward-only migration lineage', () => {
     )
     expect(harness.migrations[8]).toContain('migration_0015_requires_v14')
     expect(harness.migrations[8]).toContain('VALUES (15)')
+    expect(harness.migrations[9]).toContain('migration_0016_requires_v15')
+    expect(harness.migrations[9]).toContain('VALUES (16)')
+    expect(harness.migrations[10]).toContain('migration_0017_requires_v16')
+    expect(harness.migrations[10]).toContain('VALUES (17)')
     await expect(isCollaborationDatabaseReady(harness.pool, {
       currentCatalogFingerprint: harness.currentCatalogFingerprint
     })).resolves.toBe(true)
@@ -117,22 +129,24 @@ describe('collaboration forward-only migration lineage', () => {
   ] as const)('upgrades %s without replaying colliding historical migration numbers', async (_route, initial) => {
     const harness = migrationHarness(initial)
     await runCollaborationMigrations(harness.pool, migrationRuntime(harness))
-    expect(harness.migrations).toHaveLength(5)
+    expect(harness.migrations).toHaveLength(7)
     expect(harness.migrations[0]).toContain('VALUES (11)')
     expect(harness.migrations[0]).not.toContain('VALUES (10)')
     expect(harness.migrations[1]).toContain('VALUES (12)')
     expect(harness.migrations[2]).toContain('VALUES (13)')
     expect(harness.migrations[3]).toContain('VALUES (14)')
     expect(harness.migrations[4]).toContain('VALUES (15)')
+    expect(harness.migrations[5]).toContain('VALUES (16)')
+    expect(harness.migrations[6]).toContain('VALUES (17)')
   })
 
-  it('upgrades v12 through only the forward v13-v15 migrations', async () => {
+  it('upgrades v12 through only the forward v13-v17 migrations', async () => {
     const harness = migrationHarness(facts(12, {
       managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
       taskResourceRefs: true, projectContentSpaceBindings: true
     }))
     await runCollaborationMigrations(harness.pool, migrationRuntime(harness))
-    expect(harness.migrations).toHaveLength(3)
+    expect(harness.migrations).toHaveLength(5)
     expect(harness.migrations[0]).toContain('VALUES (13)')
     expect(harness.migrations[0]).toContain('CREATE TABLE sciforge_collaboration.visible_recovery_actions')
     expect(harness.migrations[0]).not.toContain('integrity_verified')
@@ -140,20 +154,24 @@ describe('collaboration forward-only migration lineage', () => {
     expect(harness.migrations[0]).not.toContain('VALUES (12)')
     expect(harness.migrations[1]).toContain('VALUES (14)')
     expect(harness.migrations[2]).toContain('VALUES (15)')
+    expect(harness.migrations[3]).toContain('VALUES (16)')
+    expect(harness.migrations[4]).toContain('VALUES (17)')
   })
 
-  it('upgrades current v13 through only the v14 and v15 migrations', async () => {
+  it('upgrades current v13 through only the v14-v17 migrations', async () => {
     const harness = migrationHarness(facts(13, {
       managedContainers: true, remoteApprovals: true, oidcIdentities: true, devices: true,
       taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: true
     }))
     await runCollaborationMigrations(harness.pool, migrationRuntime(harness))
-    expect(harness.migrations).toHaveLength(2)
+    expect(harness.migrations).toHaveLength(4)
     expect(harness.migrations[0]).toContain('migration_0014_requires_v13')
     expect(harness.migrations[0]).toContain('VALUES (14)')
     expect(harness.migrations[0]).not.toContain('VALUES (13)')
     expect(harness.migrations[1]).toContain('migration_0015_requires_v14')
     expect(harness.migrations[1]).toContain('VALUES (15)')
+    expect(harness.migrations[2]).toContain('VALUES (16)')
+    expect(harness.migrations[3]).toContain('VALUES (17)')
   })
 
   it('normalizes retained Project creation inbox rows in the v15 migration', async () => {
@@ -162,22 +180,24 @@ describe('collaboration forward-only migration lineage', () => {
       taskResourceRefs: true, projectContentSpaceBindings: true, taskExecutions: true
     }))
     await runCollaborationMigrations(harness.pool, migrationRuntime(harness))
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(15)
-    expect(harness.migrations).toHaveLength(1)
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(17)
+    expect(harness.migrations).toHaveLength(3)
     expect(harness.migrations[0]).toContain('migration_0015_requires_v14')
     expect(harness.migrations[0]).toContain("message_type = 'collaboration.state.changed'")
     expect(harness.migrations[0]).toContain("'type', 'collaboration.state.changed'")
     expect(harness.migrations[0]).toContain("'type' = 'project.created'")
     expect(harness.migrations[0]).toContain('VALUES (15)')
+    expect(harness.migrations[1]).toContain('VALUES (16)')
+    expect(harness.migrations[2]).toContain('VALUES (17)')
   })
 
   it.each([
-    ['a-v11', 11, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['public-v5-v11'], 4],
-    ['a-v11', 11, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['staging-v9-v11'], 4],
-    ['current-v12', 12, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['public-v5-v12'], 3],
-    ['current-v12', 12, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['staging-v9-v12'], 3],
-    ['current-v13', 13, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['public-v5-v13'], 2],
-    ['current-v13', 13, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['staging-v9-v13'], 2]
+    ['a-v11', 11, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['public-v5-v11'], 6],
+    ['a-v11', 11, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['staging-v9-v11'], 6],
+    ['current-v12', 12, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['public-v5-v12'], 5],
+    ['current-v12', 12, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['staging-v9-v12'], 5],
+    ['current-v13', 13, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['public-v5-v13'], 4],
+    ['current-v13', 13, COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['staging-v9-v13'], 4]
   ] as const)('resumes the exact %s transition checkpoint', async (
     route, version, sourceFingerprint, expectedMigrations
   ) => {
@@ -640,6 +660,16 @@ function migrationHarness(initial: Facts): {
       }
       if (text.includes('VALUES (15)')) {
         current = { ...current, version: 15, managedContainers: true, remoteApprovals: true,
+          oidcIdentities: true, devices: true, taskResourceRefs: true,
+          projectContentSpaceBindings: true, taskExecutions: true }
+      }
+      if (text.includes('VALUES (16)')) {
+        current = { ...current, version: 16, managedContainers: true, remoteApprovals: true,
+          oidcIdentities: true, devices: true, taskResourceRefs: true,
+          projectContentSpaceBindings: true, taskExecutions: true }
+      }
+      if (text.includes('VALUES (17)')) {
+        current = { ...current, version: 17, managedContainers: true, remoteApprovals: true,
           oidcIdentities: true, devices: true, taskResourceRefs: true,
           projectContentSpaceBindings: true, taskExecutions: true }
       }

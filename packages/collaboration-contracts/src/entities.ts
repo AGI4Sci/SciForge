@@ -320,6 +320,8 @@ export const taskSchema = z.object({
   objective: nonEmptyTextSchema,
   completionCriteria: z.array(z.string().trim().min(1).max(2_000)).min(1).max(100),
   dependencyTaskIds: z.array(taskIdSchema).max(1_000).refine(uniqueStrings, 'Task dependencies must be unique'),
+  requiredCapabilityTags: z.array(z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u)).max(256)
+    .refine(uniqueStrings, 'Required capability tags must be unique.'),
   fileIntent: taskFileIntentSchema.nullable(),
   currentExecutionId: executionIdSchema.nullable(),
   currentExecutionState: taskExecutionStateSchema.nullable(),
@@ -345,11 +347,31 @@ export const taskSchema = z.object({
       message: 'Current execution identity and state must be projected together.'
     })
   }
-  if ((task.status === 'planned') !== (task.currentExecutionId === null && task.executionCount === 0)) {
+  if (task.status === 'planned' && (task.currentExecutionId !== null || task.executionCount !== 0)) {
     context.addIssue({
       code: 'custom',
       path: ['currentExecutionId'],
-      message: 'Only a planned Task has no execution; every offered Task preserves its current execution projection.'
+      message: 'A planned Task cannot have an execution attempt.'
+    })
+  }
+  if (task.status === 'offered' && task.currentExecutionId !== null) {
+    context.addIssue({
+      code: 'custom',
+      path: ['currentExecutionId'],
+      message: 'A User-targeted Task offer has no execution until one Worker Device claims it.'
+    })
+  }
+  if (
+    task.status !== 'planned' &&
+    task.status !== 'offered' &&
+    task.status !== 'revision_requested' &&
+    task.status !== 'cancelled' &&
+    task.currentExecutionId === null
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['currentExecutionId'],
+      message: 'This Task state requires an exact current execution projection.'
     })
   }
 })

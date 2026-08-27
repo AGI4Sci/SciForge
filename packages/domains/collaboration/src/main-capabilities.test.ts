@@ -149,9 +149,8 @@ test('global collaboration mutations satisfy the production broker contract with
       mode: 'automatic'
     },
     [COLLABORATION_CAPABILITY_IDS.taskOfferDecide]: {
-      executionId: TEST_IDS.executionId,
-      decision: 'reject',
-      reason: 'human_rejected'
+      taskOfferId: TEST_IDS.taskOfferId,
+      decision: 'dismiss'
     },
     [COLLABORATION_CAPABILITY_IDS.managedContainerInspect]: { action: 'refresh-status' },
     [COLLABORATION_CAPABILITY_IDS.managedContainerProvision]: {
@@ -268,9 +267,7 @@ test('the Collaboration entry publishes one Coordinator command service backed b
     type: 'task.offer.withdraw' as const,
     taskOfferId: TEST_IDS.taskOfferId,
     taskId: TEST_IDS.taskId,
-    executionId: TEST_IDS.executionId,
     expectedTaskRevision: 1,
-    expectedExecutionRevision: 1,
     expectedOfferRevision: 1,
     expectedCoordinatorAuthorityEpoch: 1,
     reason: 'Coordinator changed the synthetic assignment.'
