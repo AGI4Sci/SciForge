@@ -532,7 +532,6 @@ function providerCredentialError(
 ): DomainMainProviderCredentialError {
   const messages = {
     principal_unavailable: 'A current Host principal is required for provider credentials.',
-    principal_device_mismatch: 'The current Host principal does not belong to this execution node.',
     credential_unavailable: 'No provider credential is available for the current binding.',
     credential_binding_mismatch: 'The provider credential binding does not match the current Host context.',
     secure_storage_unavailable: 'The operating-system secure storage service is unavailable.',
