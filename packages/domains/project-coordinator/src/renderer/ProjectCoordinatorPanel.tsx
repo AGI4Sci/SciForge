@@ -1962,7 +1962,7 @@ export function ProjectCoordinatorPlanSection({
         <div className="space-y-2 rounded border border-amber-500/40 p-2" data-default-visible-card="plan-confirmation">
           <Status value="awaiting_confirmation" />
           <p className="text-[11px] text-ds-muted">{project.plan!.plan.rationale}</p>
-          <button type="button" disabled={busy} onClick={onConfirmActivate} className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50">
+          <button type="button" disabled={busy} onClick={onConfirmActivate} className="rounded bg-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50">
             {t('projectCoordinatorConfirmActivate')}
           </button>
         </div>
@@ -2048,7 +2048,7 @@ export function ProjectCoordinatorPlanSection({
             type="button"
             disabled={busy || draft.assignments.some(({ selectedAgentId }) => selectedAgentId === null)}
             onClick={onSubmitDraft}
-            className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+            className="rounded bg-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50"
           >
             {t('projectCoordinatorSubmitPlan')}
           </button>
@@ -2508,11 +2508,11 @@ export function ProjectCoordinatorDecisionSection({
               <textarea required name="answer" disabled={!canAnswer || busy} aria-label={t('projectCoordinatorHumanAnswer')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
               {request.confirmableAction ? (
                 <div className="flex gap-2">
-                  <button name="decision" value="approve" type="submit" disabled={!canAnswer || busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorApprove')}</button>
+                  <button name="decision" value="approve" type="submit" disabled={!canAnswer || busy} className="rounded bg-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorApprove')}</button>
                   <button name="decision" value="reject" type="submit" disabled={!canAnswer || busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorReject')}</button>
                 </div>
               ) : (
-                <button type="submit" disabled={!canAnswer || busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorSubmitHumanAnswer')}</button>
+                <button type="submit" disabled={!canAnswer || busy} className="rounded bg-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorSubmitHumanAnswer')}</button>
               )}
             </form>
           ))}
@@ -2597,7 +2597,7 @@ export function ProjectCoordinatorDecisionSection({
                 />
               ) : null}
               <div className="flex gap-2">
-                <button name="decision" value="accept" type="submit" disabled={busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorAcceptResult')}</button>
+                <button name="decision" value="accept" type="submit" disabled={busy} className="rounded bg-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorAcceptResult')}</button>
                 <button name="decision" value="request_revision" type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorRequestRevision')}</button>
               </div>
             </form>
@@ -2636,7 +2636,7 @@ export function ProjectCoordinatorDecisionSection({
               }}
             >
               <textarea required name="summary" aria-label={t('projectCoordinatorFinalSummary')} placeholder={t('projectCoordinatorFinalSummary')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
-              <button type="submit" disabled={busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorCompleteProject')}</button>
+              <button type="submit" disabled={busy} className="rounded bg-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorCompleteProject')}</button>
             </form>
           ) : null}
           {project.finalSummary ? (
@@ -2901,7 +2901,7 @@ export function ProjectCoordinatorProvisioningSection({
                           projectId: project.project.projectId,
                           recoveryActionId: taskRecoveryAction.recoveryActionId
                         })}
-                        className="rounded bg-ds-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                        className="rounded bg-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
                       >
                         {busy
                           ? t('projectCoordinatorWorking')
@@ -3011,7 +3011,7 @@ export function ProjectCoordinatorProvisioningSection({
                   <button
                     type="submit"
                     disabled={busy}
-                    className="rounded bg-ds-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                    className="rounded bg-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
                   >
                     {busy
                       ? t('projectCoordinatorWorking')
@@ -3034,7 +3034,7 @@ export function ProjectCoordinatorProvisioningSection({
                 type="button"
                 disabled={busy}
                 onClick={onPreview}
-                className="rounded bg-ds-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                className="rounded bg-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
               >
                 {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorPreviewProvisioning')}
               </button>
@@ -3071,7 +3071,7 @@ export function ProjectCoordinatorProvisioningSection({
                 type="button"
                 disabled={busy}
                 onClick={() => onApply(plan)}
-                className="rounded bg-ds-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                className="rounded bg-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
               >
                 {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorApplyProvisioning')}
               </button>

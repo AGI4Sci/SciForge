@@ -990,6 +990,8 @@ test('an awaiting-confirmation Plan renders its Owner action as a default-visibl
 
   assert.match(markup, /data-default-visible-card="plan-confirmation"/u)
   assert.match(markup, /projectCoordinatorConfirmActivate/u)
+  assert.match(markup, /bg-accent/u)
+  assert.doesNotMatch(markup, /bg-ds-accent/u)
 })
 
 test('a local Plan draft exposes full content editing before immutable submit', () => {
