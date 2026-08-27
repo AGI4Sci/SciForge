@@ -110,8 +110,10 @@ describe('domain package storage', () => {
       return { ownerRoot, content: await readFile(join(ownerRoot, 'secrets.enc.json'), 'utf8') }
     })
     expect(files.content).not.toContain(sensitiveValue)
-    expect((await stat(files.ownerRoot)).mode & 0o777).toBe(0o700)
-    expect((await stat(join(files.ownerRoot, 'secrets.enc.json'))).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') {
+      expect((await stat(files.ownerRoot)).mode & 0o777).toBe(0o700)
+      expect((await stat(join(files.ownerRoot, 'secrets.enc.json'))).mode & 0o777).toBe(0o600)
+    }
 
     await storage.secrets.remove('device.credential')
     await expect(storage.secrets.read('device.credential')).resolves.toBeNull()
