@@ -57,7 +57,7 @@ import { createIdentityAuthenticatedCloudTransport } from './authenticated-cloud
 import { createIdentityDeviceFactAttestationSigningService } from './device-fact-attestation-signing.js'
 import { createIdentityAgentCloudRuntime } from './agent-cloud-runtime.js'
 import { cloudInstallationId } from './device-service.js'
-import { createNativeIdentityPrivateVault } from './private-vault.js'
+import { createPlatformIdentityPrivateVault } from './private-vault.js'
 
 export { LocalCloudIdentityLinkService } from './cloud-link-service.js'
 
@@ -193,7 +193,10 @@ export function createDomainMainEntry(
   let invalidateAgentAuthority: (reason: string) => void = () => undefined
   const closedCloudRuntimes = new WeakSet<CloudIdentityRuntime>()
   const installationId = cloudInstallationId(requireDeviceId(host))
-  const privateVault = createNativeIdentityPrivateVault({ installationId })
+  const privateVault = createPlatformIdentityPrivateVault({
+    installationId,
+    packageSecrets: host.packageSecrets
+  })
   const getCloudRuntime = (): CloudIdentityRuntime => {
     if (!cloudRuntime) throw new Error('Cloud identity runtime is not active.')
     return cloudRuntime
