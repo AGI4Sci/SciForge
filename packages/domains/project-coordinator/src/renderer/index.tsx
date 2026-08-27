@@ -27,9 +27,7 @@ import {
 } from './messages.js'
 
 const ProjectCoordinatorPanel = lazy(() =>
-  import('./ProjectCoordinatorPanel.js').then((module) => ({
-    default: module.ProjectCoordinatorPanel
-  }))
+  import('./ProjectCoordinatorPanel.browser.js')
 )
 
 export type ProjectCoordinatorRightPanelContribution =

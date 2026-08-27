@@ -19,8 +19,13 @@ import {
   ProjectCoordinatorProvisioningSection,
   ProjectCoordinatorTransferSection,
   WorkersSection,
+  formatRelativeTime,
+  projectCoordinatorAgentOperationalState,
+  projectCoordinatorAttentionSummary,
   projectCoordinatorCompletionInput,
   projectCoordinatorCreatedSelection,
+  projectCoordinatorFlowStages,
+  projectCoordinatorMeetingPackageSummary,
   projectCoordinatorProvisioningApplyInput,
   projectCoordinatorResultReviewInput,
   projectCoordinatorTransferCandidates,
@@ -179,6 +184,116 @@ test('Worker HCI counts distinct online Users and exact Agents from the Cloud pr
   assert.match(markup, /data-project-visible-agents="3"/u)
   assert.match(markup, /projectCoordinatorOnlineMembers/u)
   assert.match(markup, /projectCoordinatorOnlineAgents/u)
+  assert.match(markup, /data-agent-state="blocked"/u)
+  assert.match(markup, /data-agent-online="true"/u)
+  assert.match(markup, /data-runtime-ready="true"/u)
+  assert.match(markup, /data-text-authority="false"/u)
+
+  assert.deepEqual(
+    projectCoordinatorWorkerPresenceSummary(
+      offlineMember,
+      '2026-08-25T03:00:00.000Z'
+    ),
+    {
+      onlineUsers: 0,
+      visibleUsers: 2,
+      onlineAgents: 0,
+      visibleAgents: 3
+    }
+  )
+})
+
+test('operational Agent state never collapses online presence into Project eligibility', () => {
+  const project = coordinatorTransferProjectFixture()
+  const agent = project.workerGroups[0]!.agents[0]!
+  const onlineWithoutAuthority = projectCoordinatorAgentOperationalState(agent)
+  assert.deepEqual(onlineWithoutAuthority, {
+    state: 'blocked',
+    online: true,
+    fresh: true,
+    runtimeReady: true,
+    acceptsNewOffers: true,
+    projectMember: true,
+    textAuthority: false,
+    fileAuthority: false,
+    contentReady: null
+  })
+
+  const eligibleAgent = {
+    ...agent,
+    projectAvailability: {
+      ...agent.projectAvailability,
+      taskAuthorities: [{ scope: 'text_tasks', state: 'eligible' }]
+    }
+  } as unknown as typeof agent
+  assert.equal(projectCoordinatorAgentOperationalState(eligibleAgent).state, 'ready')
+  assert.equal(projectCoordinatorAgentOperationalState({
+    ...eligibleAgent,
+    projectAvailability: {
+      ...eligibleAgent.projectAvailability,
+      availability: {
+        ...eligibleAgent.projectAvailability.availability,
+        acceptsNewOffers: false
+      }
+    }
+  } as never).state, 'busy')
+  assert.equal(projectCoordinatorAgentOperationalState(
+    eligibleAgent,
+    '2026-08-25T03:00:00.000Z'
+  ).state, 'offline')
+})
+
+test('workflow signal and attention derive only from canonical Project facts', () => {
+  const project = awaitingConfirmationProjectFixture() as ProjectCoordinatorProject
+  assert.deepEqual(projectCoordinatorAttentionSummary(project), {
+    planConfirmation: 1,
+    humanAnswers: 0,
+    resultReviews: 0,
+    recoveryActions: 0,
+    revisionTasks: 0,
+    total: 1
+  })
+  assert.deepEqual(projectCoordinatorFlowStages(project).map(({ id, state }) => ({ id, state })), [
+    { id: 'plan', state: 'attention' },
+    { id: 'dispatch', state: 'pending' },
+    { id: 'execute', state: 'pending' },
+    { id: 'review', state: 'pending' },
+    { id: 'record', state: 'pending' },
+    { id: 'complete', state: 'pending' }
+  ])
+  assert.notEqual(formatRelativeTime(
+    '2026-08-25T01:07:45.000Z',
+    Date.parse('2026-08-25T01:08:00.000Z'),
+    'en'
+  ), '—')
+})
+
+test('completed Project meeting package includes only accepted records and artifact refs', () => {
+  const base = decisionProjectFixture('completion')
+  const acceptedResultId = base.reviews[0]!.submission.resultSubmissionId
+  const acceptedArtifactRef = 'a'.repeat(64)
+  const completed = {
+    ...base,
+    project: { ...base.project, status: 'completed' },
+    finalSummary: {
+      acceptedResultSubmissionIds: [acceptedResultId],
+      summary: 'Final bounded summary.'
+    },
+    reviews: [{
+      ...base.reviews[0],
+      submission: {
+        ...base.reviews[0]!.submission,
+        outputs: [{ locatorDigest: acceptedArtifactRef }]
+      }
+    }],
+    records: [{ kind: 'observation' }, { kind: 'observation' }, { kind: 'decision' }]
+  } as unknown as ProjectCoordinatorProject
+  assert.deepEqual(projectCoordinatorMeetingPackageSummary(completed), {
+    acceptedResults: 1,
+    observations: 2,
+    decisions: 1,
+    artifactRefs: [acceptedArtifactRef]
+  })
 })
 
 test('command focuses an exact Project through the generic panel activation contract', () => {
