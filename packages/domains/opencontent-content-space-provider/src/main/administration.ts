@@ -63,7 +63,7 @@ const OPENCONTENT_ADMINISTRATION_OPERATION_STATES =
     CONTENT_SPACE_ADMINISTRATION_OPERATIONS.map((operation) => ({
       operation,
       readiness: 'poc_only' as const,
-      reasonCode: 'verification_profile_required' as const
+      reasonCode: 'runtime_authorization_required' as const
     }))
   )
 

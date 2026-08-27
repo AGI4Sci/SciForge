@@ -15,7 +15,6 @@ import {
 } from './bundled-assets.js'
 
 import {
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
   OpenContentConnectorError
 } from '../contract.js'
 import type {
@@ -32,11 +31,11 @@ const SOURCE_OVERLAY = OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.installation
 const SOURCE_ASSET_PACKAGE_RELATIVE_PATH =
   `${SOURCE_OVERLAY.overlayRoot}/packages/opencontent-skill-assets`
 
-export type OpenContentSkillRuntimeSession = Readonly<{
+export type OpenContentSupplierRuntimeSession = Readonly<{
   useSupplierTransport: NonNullable<OpenContentContentSpaceFacade['useSupplierTransport']>
 }>
 
-export function resolveOpenContentSkillRuntimeAssets(
+export function resolveOpenContentSupplierRuntimeAssets(
   host: Pick<DomainMainHost, 'getAppRoot' | 'isPackaged'>
 ): OpenContentSkillBundledAssetLocation | undefined {
   if (host.isPackaged?.() !== true) {
@@ -113,16 +112,17 @@ function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
  * only inside one ConnectionService session and is released when the callback
  * settles; Provider adapters receive an allowlisted command transport only.
  */
-export function createOpenContentSkillRuntimeSession(options: Readonly<{
+export function createOpenContentSupplierRuntimeSession(options: Readonly<{
+  providerInstanceRef: string
   connections: OpenContentConnectionService
   processPort: OpenContentCliProcessPort
   assets: OpenContentSkillBundledAssetLocation
   site: string
   assertAssetsCurrent?: () => void
-}>): OpenContentSkillRuntimeSession {
+}>): OpenContentSupplierRuntimeSession {
   return Object.freeze({
     useSupplierTransport: async (input, operation) => {
-      if (input.providerInstanceRef !== OPENCONTENT_PROVIDER_INSTANCE_REF) {
+      if (input.providerInstanceRef !== options.providerInstanceRef) {
         throw new OpenContentConnectorError(
           'invalid_input',
           'The selected OpenContent Provider Instance is unavailable.'

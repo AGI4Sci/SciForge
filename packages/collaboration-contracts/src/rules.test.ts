@@ -13,16 +13,17 @@ describe('frozen state machines', () => {
   it('allows only explicit Project, Task, and projection transitions', () => {
     expect(canTransition('project', 'draft', 'active')).toBe(true)
     expect(canTransition('project', 'completed', 'active')).toBe(false)
-    expect(canTransition('task', 'offered', 'accepted')).toBe(true)
-    expect(canTransition('task', 'offered', 'running')).toBe(false)
+    expect(canTransition('task', 'offered', 'in_progress')).toBe(true)
+    expect(canTransition('task', 'offered', 'awaiting_review')).toBe(false)
     expect(canTransition('projection', 'closed', 'active')).toBe(false)
   })
 
   it('supports needs-human resume but never terminal Task overwrite', () => {
-    expect(canTransition('task', 'running', 'needs_human')).toBe(true)
-    expect(canTransition('task', 'needs_human', 'running')).toBe(true)
-    expect(canTransition('task', 'succeeded', 'running')).toBe(false)
-    expect(canTransition('task', 'cancelled', 'succeeded')).toBe(false)
+    expect(canTransition('task_execution', 'running', 'needs_human')).toBe(true)
+    expect(canTransition('task_execution', 'needs_human', 'running')).toBe(true)
+    expect(canTransition('task_execution', 'completed', 'running')).toBe(false)
+    expect(canTransition('task', 'cancelled', 'completed')).toBe(false)
+    expect(canTransition('project_content_binding', 'degraded', 'provisioning')).toBe(false)
   })
 
   it('makes revoked identities and acknowledged inbox entries terminal', () => {

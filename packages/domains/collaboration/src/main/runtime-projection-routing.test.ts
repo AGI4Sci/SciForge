@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  remoteSessionProjectionSchema
+  remoteSessionProjectionSchema,
+  type AgentInboxMessage
 } from '@sciforge/collaboration-contracts'
 import {
   agentNodeFixture,
@@ -11,20 +12,21 @@ import {
 import type {
   DomainMainRuntimeLifecycleContext
 } from '@sciforge/domain-sdk/host'
-import type {
-  DomainMainPackageSecretStoreHost,
-  DomainMainPackageSettingsHost
-} from '@sciforge/domain-sdk/package-storage'
+import type { DomainMainPackageSettingsHost } from '@sciforge/domain-sdk/package-storage'
+import type { AuthenticatedCloudTransport } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import { localProjectionFromRemote } from './projection-coordinator.js'
 import {
   CollaborationRuntime,
-  activeProjectionBindingsForSession
+  activeProjectionBindingsForSession,
+  isCoordinatorProjectInboxPayload,
+  isWorkerTaskInboxPayload
 } from './runtime.js'
 import {
   EMPTY_COLLABORATION_LOCAL_STATE,
   type CollaborationLocalState,
   type CollaborationStateBackend
 } from './store.js'
+import { createTestAgentCloudRuntime } from './test-agent-cloud-runtime.js'
 
 test('a closed Topic history does not block outbound mirroring for the active Topic on the same Session', () => {
   const active = localProjectionFromRemote(remoteSessionProjectionFixture, {
@@ -49,6 +51,29 @@ test('a closed Topic history does not block outbound mirroring for the active To
   )
 })
 
+test('runtime routes durable exact-output recovery and abandonment to the Worker adapter', () => {
+  for (const type of ['task.recovery.output_linked', 'task.recovery.abandoned'] as const) {
+    assert.equal(isWorkerTaskInboxPayload({ type } as AgentInboxMessage['payload']), true)
+  }
+  assert.equal(isWorkerTaskInboxPayload({
+    type: 'human.answer.received'
+  } as AgentInboxMessage['payload']), false)
+})
+
+test('runtime reserves Coordinator transfer feedback for the single Project Coordinator Inbox owner', () => {
+  assert.equal(isCoordinatorProjectInboxPayload({
+    type: 'coordinator.transferred'
+  } as AgentInboxMessage['payload']), true)
+  assert.equal(isCoordinatorProjectInboxPayload({
+    type: 'human.answer.received',
+    answer: { context: { scope: 'coordinator_project' } }
+  } as AgentInboxMessage['payload']), true)
+  assert.equal(isCoordinatorProjectInboxPayload({
+    type: 'human.answer.received',
+    answer: { context: { scope: 'worker_execution' } }
+  } as AgentInboxMessage['payload']), false)
+})
+
 test('the active runtime mirrors completed assistant progress before after-turn finalization', async () => {
   const backend = new MemoryBackend({
     ...EMPTY_COLLABORATION_LOCAL_STATE,
@@ -65,21 +90,17 @@ test('the active runtime mirrors completed assistant progress before after-turn 
     write: async () => { throw new Error('Settings writes are not expected.') },
     clear: async () => { throw new Error('Settings writes are not expected.') }
   }
-  const secrets: DomainMainPackageSecretStoreHost = {
-    has: async () => false,
-    read: async () => null,
-    write: async () => { throw new Error('Secret writes are not expected.') },
-    remove: async () => undefined
-  }
   const runtime = new CollaborationRuntime({
     statePath: 'unused',
     packageSettings: settings,
-    packageSecrets: secrets,
+    authenticatedCloudTransport: unusedAuthenticatedCloudTransport(),
+    agentCloudRuntime: createTestAgentCloudRuntime({}),
     stateBackend: backend
   })
   const abortController = new AbortController()
   const context = {
     agentExecution: {
+      prepareSession: async () => ({ runtimeId: 'codex', threadId: 'unused-worker-thread' }),
       run: async () => { throw new Error('Transcript mirroring must not execute an Agent turn.') }
     },
     agentThreads: {
@@ -119,13 +140,18 @@ test('the active runtime mirrors completed assistant progress before after-turn 
   try {
     await waitFor(() => {
       const state = backend.snapshot()
-      return state.queue.length === 1 && state.outbox.length === 1
+      return state.queue.length === 1 && state.outbox.some((entry) => (
+        entry.body.type === 'projection.message.publish'
+      ))
     })
     const state = backend.snapshot()
+    const projectionOutbox = state.outbox.filter((entry) => (
+      entry.body.type === 'projection.message.publish'
+    ))
     assert.equal(state.queue[0]?.kind, 'assistant-progress')
     assert.equal(state.queue[0]?.text, '已完成第一阶段核查。')
-    assert.equal(state.outbox.length, 1)
-    assert.equal(state.outbox[0]?.body.kind, 'assistant_progress')
+    assert.equal(projectionOutbox.length, 1)
+    assert.equal(projectionOutbox[0]?.body.kind, 'assistant_progress')
   } finally {
     abortController.abort()
     await dispose()
@@ -206,21 +232,17 @@ test('startup reconciles only completed remote turns without an existing final r
     write: async () => { throw new Error('Settings writes are not expected.') },
     clear: async () => { throw new Error('Settings writes are not expected.') }
   }
-  const secrets: DomainMainPackageSecretStoreHost = {
-    has: async () => false,
-    read: async () => null,
-    write: async () => { throw new Error('Secret writes are not expected.') },
-    remove: async () => undefined
-  }
   const runtime = new CollaborationRuntime({
     statePath: 'unused',
     packageSettings: settings,
-    packageSecrets: secrets,
+    authenticatedCloudTransport: unusedAuthenticatedCloudTransport(),
+    agentCloudRuntime: createTestAgentCloudRuntime({}),
     stateBackend: backend
   })
   const abortController = new AbortController()
   const context = {
     agentExecution: {
+      prepareSession: async () => ({ runtimeId: 'codex', threadId: 'unused-worker-thread' }),
       run: async () => { throw new Error('Startup reconciliation must not execute an Agent turn.') }
     },
     agentThreads: {
@@ -300,6 +322,15 @@ async function waitFor(
 function waitForAbort(signal: AbortSignal | undefined): Promise<void> {
   if (!signal || signal.aborted) return Promise.resolve()
   return new Promise((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+}
+
+function unusedAuthenticatedCloudTransport(): AuthenticatedCloudTransport {
+  return {
+    status: () => ({ state: 'unavailable', reason: 'Collaboration is not configured in this test.' }),
+    execute: async () => {
+      throw new Error('Authenticated Cloud transport is not expected in this test.')
+    }
+  }
 }
 
 function canonicalTurn(turnId: string, text: string) {

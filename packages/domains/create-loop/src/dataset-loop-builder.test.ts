@@ -934,7 +934,10 @@ function runtimeContext(
       subscribeMessages: async function* () {},
       hasActiveTurns: () => false
     },
-    capabilities: { invoke: async () => { throw new Error('not used') } },
+    capabilities: {
+      invoke: async () => { throw new Error('not used') },
+      createApprovedBatch: () => { throw new Error('not used') }
+    },
     modelAccess: { textReasoner: async () => null },
     executionEvents: {
       publish: async (event) => domainExecutionEventSchema.parse({

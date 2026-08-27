@@ -55,6 +55,7 @@ import {
   listMainArtifactConsumers
 } from './runtime-contributions'
 import { createNonSecretPackageStorageForTest } from './domain-package-storage.test-helper'
+import { createUnavailablePortableResourcesForTest } from './domain-main-host.test-helper'
 
 const temporaryDirectories: string[] = []
 
@@ -459,6 +460,7 @@ async function createProductionCrashComposition(
   const catalog = createApplicationDomainCatalog({
     getUserDataDir: () => userDataDir,
     getDeviceId: () => 'device-crash-replay-test',
+    portableResourcesFor: createUnavailablePortableResourcesForTest(),
     getAppVersion: () => '0.1.0',
     textSanitizer: { sanitizeText: (value) => value },
     packageStorageFor: createNonSecretPackageStorageForTest(),
@@ -466,6 +468,10 @@ async function createProductionCrashComposition(
       invoke: (contract, input, options) => {
         if (!capabilityInvokers) throw new Error('Test capability broker is not ready.')
         return capabilityInvokers.forDomain(owner).invoke(contract, input, options)
+      },
+      createApprovedBatch: (plan) => {
+        if (!capabilityInvokers) throw new Error('Test capability broker is not ready.')
+        return capabilityInvokers.forDomain(owner).createApprovedBatch(plan)
       }
     })
   })
@@ -492,6 +498,10 @@ async function createProductionCrashComposition(
     appRoot: '/app',
     environment: Object.freeze({ NODE_ENV: 'test' }),
     agentExecution: {
+      prepareSession: async () => ({
+        runtimeId: 'codex',
+        threadId: CRASH_REPLAY_THREAD_ID
+      }),
       run: async () => {
         throw new Error('Agent execution is unavailable in this checkpoint-only test.')
       }

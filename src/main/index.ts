@@ -197,7 +197,10 @@ import {
   projectDomainAgentTurnMessages,
   subscribeDomainAgentTranscriptMessages
 } from './domain-agent-transcript'
-import { createDomainAgentExecutionHost } from './domain-agent-execution'
+import {
+  createDomainAgentExecutionHost,
+  resolveDomainAgentRuntimeReadiness
+} from './domain-agent-execution'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const HIDDEN_START_ARG = '--hidden'
@@ -1164,16 +1167,19 @@ app
         let scopedInvoker: ReturnType<
           ReturnType<typeof createMainSystemCapabilityInvokerFactory>['forDomain']
         > | null = null
-        return Object.freeze({
-          invoke: (contract, input, options) => {
-            if (!scopedInvoker) {
-              if (!domainSystemCapabilityInvokers) {
-                throw new Error('The Host capability broker is not ready.')
-              }
-              scopedInvoker = domainSystemCapabilityInvokers.forDomain(owner)
+        const getScopedInvoker = () => {
+          if (!scopedInvoker) {
+            if (!domainSystemCapabilityInvokers) {
+              throw new Error('The Host capability broker is not ready.')
             }
-            return scopedInvoker.invoke(contract, input, options)
+            scopedInvoker = domainSystemCapabilityInvokers.forDomain(owner)
           }
+          return scopedInvoker
+        }
+        return Object.freeze({
+          invoke: (contract, input, options) =>
+            getScopedInvoker().invoke(contract, input, options),
+          createApprovedBatch: (plan) => getScopedInvoker().createApprovedBatch(plan)
         })
       },
       packageStorageFor: (owner) => domainPackageStorage.forOwner(owner),
@@ -1191,6 +1197,12 @@ app
             throw new Error('Portable resource references are not ready.')
           }
           return portableResourceReferences.forOwner(owner).materialize(reference, options)
+        },
+        discard: (input) => {
+          if (!portableResourceReferences) {
+            throw new Error('Portable resource references are not ready.')
+          }
+          return portableResourceReferences.forOwner(owner).discard(input)
         },
         export: (input, options) => {
           if (!portableResourceReferences) {
@@ -1630,7 +1642,8 @@ app
       },
       agentExecution: createDomainAgentExecutionHost({
         runtime: agentRuntimeHost,
-        defaultRuntimeId: async () => getActiveAgentRuntime(await store.load())
+        defaultRuntimeId: async () => getActiveAgentRuntime(await store.load()),
+        runtimeReadiness: async () => resolveDomainAgentRuntimeReadiness(await store.load())
       }),
       remoteCapabilityApprovals: {
         subscribe: (listener) => agentRuntimeHost.subscribeRemoteCapabilityApprovals(listener),

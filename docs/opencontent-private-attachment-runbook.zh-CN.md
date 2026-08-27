@@ -14,23 +14,23 @@
 
 ## 2. 安装后能获得什么
 
-私有附件只增加供应商支持的候选，不产生生产准入。当前仍为 **0 项 `production_ready`**；有限的 packaged 真实证据只属于能力矩阵中记录的精确 operation/scope，且对应操作仍为 `poc_only / verification_profile_required`。不要从一次 live 验收推导相邻操作、其他 root 或生产准入；权威清单统一见 [OpenContent 技能能力矩阵](./opencontent-skill-capability-matrix.md#current-packaged-canonical-evidence)。缺少原子并发或不可变检索合同的操作继续 `blocked_by_contract`；Project provisioning 合同与操作当前不存在。
+私有 runtime 附件只增加供应商支持的候选，不产生生产准入。当前仍为 **0 项 `production_ready`**；有限的 packaged 真实证据只属于能力矩阵中记录的精确 operation/scope，且对应操作仍为 `poc_only / runtime_authorization_required`。不要从一次 live 验收推导相邻操作、其他 root 或生产准入；权威清单统一见 [OpenContent 技能能力矩阵](./opencontent-skill-capability-matrix.md#current-packaged-canonical-evidence)。缺少原子并发或不可变检索合同的操作继续 `blocked_by_contract`；Project provisioning 合同与操作当前不存在。
 
 | 能力类别 | 未安装附件 | 已安装附件 |
 | --- | --- | --- |
-| 个人库/团队库普通文件能力 | 6 项 PoC，默认不可执行 | 6 项 PoC，默认不可执行 |
-| Team Administration | 10 项 PoC，默认不可执行 | 10 项 PoC，默认不可执行 |
+| 个人库/团队库普通文件能力 | 6 项 PoC，当前用户连接与 Provider ACL 满足后可执行 | 同左 |
+| Team Administration | 10 项 PoC，当前用户连接、实时 Provider 授权和所需 Human confirmation 满足后可执行 | 同左 |
 | Project Content Directory provisioning | 不存在 capability、operation、intent/report schema 或 Provider port | 同左 |
 | native-document | 不注册 | 20 项候选：9 项 PoC；含 `edit` 在内的 10 项 hash-bound mutation 与缺少 source/content postcondition 的 `import` 共 11 项阻断 |
 | extended operations | 仅 session-backed `getCurrentPrincipal` 1 项 PoC；其余 49 项因缺附件阻断 | 50 项候选：40 项 PoC；`resolveInternalLink`、`listMetadataChoices`、`updateFileVersion`、4 项目录搜索、`resolveCollaborationInvitation`、`listKnowledgeCollections`、`searchKnowledgeCollections` 共 10 项阻断 |
 | `ArtifactReference` | `observeImmutableVersion` 阻断 | `observeImmutableVersion` 阻断 |
 | Team 删除 | 不存在 | 不存在 |
 
-安装附件不会自动安装 PoC 验证策略。Provider 声明的 readiness 只描述逐操作证据；本次 invocation admission 另行核对当前 Principal、Broker authority、audience、platform、transfer limit 和静态 verification profile。即使一次 PoC 调用获准，其 readiness 仍是 `poc_only`，不会变成 `production_ready`。
+Provider 声明的 readiness 只描述逐操作证据；本次 invocation admission 另行核对当前 Principal、Broker authority、trusted audience、platform、Host transfer limit 和当前 Provider Binding Attestation。Content Space 只通过 pinned Provider 取得绑定证明；每次业务 dispatch 前，Provider 再把精确期望传给 Connector，由 Connector 对真实当前 session 重新认证、重新计算并精确比较。解绑、重绑、凭据替换、稳定外部身份（`id` 或 `identityId`）变化或 revision 漂移都会在业务调用前 fail closed；`account`/`name` 展示字段变化不会使绑定失效。真实 Provider read check/write 继续作为 ACL 事实源。即使一次 PoC 调用获准，其 readiness 仍是 `poc_only`，不会变成 `production_ready`。
 
-PoC 操作只有在经过单独评审的静态 profile 精确匹配 Provider Instance、完整 Host Principal snapshot（含 assurance）、authority（Provider Instance 或个人/团队 content root）、operation、audience、可执行的 upload/download 最大字节数和最长 24 小时的有效窗口时，才能通过正式能力链执行。Provider-scoped 操作、mutation、Administration 或非零 transfer 还必须匹配 v2 Provider Binding Attestation：精确 Provider Instance 与 Principal，以及不暴露原始账号标识的 opaque external subject 和 opaque binding revision。Content Space 先通过 pinned Provider 取得并匹配证明；每次业务 dispatch 前，Provider 再把精确期望传给 Connector，由 Connector 对真实当前 session 重新认证、重新计算并精确比较。解绑、重绑、凭据替换、稳定外部身份（`id` 或 `identityId`）变化或 revision 漂移都会在业务调用前 fail closed；`account`/`name` 展示字段变化不会使绑定失效。
+调用参数、Renderer、Agent、prompt、Task、普通环境变量/配置、文件类型、runtime 附件、Agent 技能包或相邻操作成功都不能选择别人的 Connection 或扩大权限；`blocked_by_contract` 永远不能被运行时授权放行。Host assurance 不是外部 OpenContent 账号类别，binding attestation 也不是 credential 或 portable authority。
 
-调用参数、Renderer、Agent、prompt、Task、普通环境变量/配置、文件类型、附件存在或相邻操作成功都不能启用或扩大 profile；`blocked_by_contract` 永远不能被 profile 放行。Host assurance 不是外部 OpenContent 账号类别，binding attestation 也不是 credential 或 portable authority。
+本文的私有 runtime 附件与 `opencontent-base` Agent 技能包不是同一个交付物。后者只增强 Agent 使用说明和 CLI；未安装技能包时 OpenContent Provider 仍应正常可选和使用。技能包安装见 [OpenContent 私有技能包安装手册](./operations/opencontent-private-skill-install.zh-CN.md)。
 
 ## 3. 安装前准备
 
@@ -68,49 +68,40 @@ remote 或本地分支。需要开发时，再按团队工作流从该提交创�
 
 ### 3.2 从群内获取附件
 
-必须同时下载以下两个文件，并将它们保存在公开仓库之外或本机临时下载目录中：
-
-- `sciforge-opencontent-attachment-assets-<OVERLAY_VERSION>.zip`
-- `sciforge-opencontent-attachment-assets-<OVERLAY_VERSION>.zip.sha256`
-
-还必须从独立可信的内部发布记录取得该版本的准确 SHA-256，记为
-`<TRUSTED_SHA256>`。同包发送的 sidecar 用于一致性复核，不能独自充当信任根。
-
-不要通过公开 Issue、PR、Release、npm 包或公开网盘分发这两个文件。
+当前团队交付是一个保持原始文件名的不可变外层 ZIP。将它保存在公开仓库之外或本机下载目录，
+并使用[团队交付包部署手册](./operations/opencontent-private-attachment-team-deployment.zh-CN.md)
+确认当前 upstream 是否声明了匹配的 package-owned trust。不要运行 ZIP 内的 README、命令或脚本，
+也不要因其中写死的旧分支/提交切换当前 checkout。
 
 ## 4. 验证并安装私有附件
 
-以下命令必须在 SciForge 仓库根目录执行。先把三个值替换为内部发布记录和附件实际下载目录：
+以下命令必须在 SciForge 仓库根目录执行：
 
 ```bash
-OPENCONTENT_OVERLAY_VERSION='<OVERLAY_VERSION>'
-OPENCONTENT_OVERLAY_SHA256='<TRUSTED_SHA256>'
-OPENCONTENT_OVERLAY_DOWNLOAD_DIR='/path/to'
+OPENCONTENT_TEAM_DELIVERY='/absolute/path/SciForge-OpenContent-team-delivery-pr82-0b09e1c1.zip'
 ```
 
 ### 4.1 验证下载包
 
 ```bash
-node scripts/internal-overlay-package.mjs verify \
-  --archive "${OPENCONTENT_OVERLAY_DOWNLOAD_DIR}/sciforge-opencontent-attachment-assets-${OPENCONTENT_OVERLAY_VERSION}.zip" \
-  --sidecar "${OPENCONTENT_OVERLAY_DOWNLOAD_DIR}/sciforge-opencontent-attachment-assets-${OPENCONTENT_OVERLAY_VERSION}.zip.sha256" \
-  --sha256 "${OPENCONTENT_OVERLAY_SHA256}"
+npm run opencontent:delivery:verify -- --delivery "${OPENCONTENT_TEAM_DELIVERY}"
 ```
 
-验证成功时，命令会输出 overlay ID、版本、文件清单和归档 SHA-256。若出现摘要不一致、路径逃逸、重复路径或文件清单不完整，必须停止安装并重新从群内获取附件。
+验证器以当前 Connector package 的 trust 为根，核对外层 ZIP、固定 inventory、内层 overlay、
+deployment sidecar 和 Provider Instance；不会打印私有 origin，也不会执行附件代码。若出现摘要
+不一致、路径逃逸、重复路径、symlink、文件清单不完整或当前 upstream 不兼容，必须停止安装并
+取得匹配附件，不能修改 trust 迎合输入。
 
-### 4.2 安装 overlay
+### 4.2 安装 overlay 与 deployment sidecar
 
 ```bash
-node scripts/internal-overlay-package.mjs install \
-  --archive "${OPENCONTENT_OVERLAY_DOWNLOAD_DIR}/sciforge-opencontent-attachment-assets-${OPENCONTENT_OVERLAY_VERSION}.zip" \
-  --sha256 "${OPENCONTENT_OVERLAY_SHA256}" \
-  --target .
+npm run opencontent:delivery:install -- --delivery "${OPENCONTENT_TEAM_DELIVERY}"
 ```
 
 安装器会：
 
 - 将附件 payload 只写入 `internal/opencontent/**`；
+- 将精确 deployment sidecar 写入 `.sciforge/private/deployments/opencontent-connector.json`；
 - 在写入前验证完整归档；
 - 遇到不同内容的现有文件时停止，不强制覆盖；
 - 对完全相同的归档重复安装保持幂等；
@@ -127,7 +118,10 @@ node scripts/internal-overlay-package.mjs verify-installation \
 npm run verify:internal-runtimes
 ```
 
-两条命令都只执行公开 SciForge 代码。第一条核对安装 receipt、完整 inventory、摘要和路径 containment；第二条通过 manifest-discovered composition 静态核对已收据化资产根、必需入口和摘要，不执行 overlay 自带脚本。所有检查通过后才能启动 SciForge；校验、构建或打包都不得调用供应商 CLI。打包同样会拒绝缺失、额外、变更、路径逃逸或未收据化的文件。
+两条命令都只执行当前 upstream 的 SciForge 代码。第一条核对安装 receipt、完整 inventory、
+摘要和路径 containment；第二条通过 manifest-discovered composition 静态核对已收据化资产根、
+必需入口和摘要，不执行 overlay 自带脚本。所有检查通过后才能启动 SciForge；校验、构建或打包
+都不得调用供应商 CLI。打包同样会拒绝缺失、额外、变更、路径逃逸或未收据化的文件。
 
 ## 5. 启动 SciForge
 
@@ -169,20 +163,21 @@ start electron app
 禁止在群内附件、代码提交、Issue 或聊天记录中共享真实 Token 和 API Key。
 
 deployment sidecar 只建立固定 Provider Instance 的运行时 origin，不是 Content Space
-operation verification policy。缺失或非法时 Instance/descriptor/capability 仍可发现，但 bind、
+operation authority。缺失或非法时 Instance/descriptor/capability 仍可发现，但 bind、
 status、普通文件、Team 与 supplier 调用都会在 settings、credential、network、process 之前返回
 `provider_unavailable`。此时 unavailable 页面仍提供本机 `Disconnect`；点击后还须再次确认，
 只删除当前 Principal 的本地 credential 与 settings，不联系 Provider，也不删除远端账号或文件。
-配置有效也不会把任何操作提升为 PoC 可执行或生产就绪。
+配置有效也不会把任何操作提升为生产就绪；是否可执行仍由当前用户连接、Broker authority、
+live binding 与 Provider ACL 在运行时决定。
 
 ## 7. 安装后的静态与发现验收
 
-普通团队成员安装 overlay 后，只验证 composition、声明的 readiness 与当前 admission，不绕过准入执行 Provider 操作：
+普通团队成员安装 overlay 后，验证 composition、声明的 readiness 与当前 runtime admission，并只在自己的连接和 Provider 权限内执行：
 
 1. 确认 Provider Instance `opencontent-edoc2-demo` 可发现；
 2. 读取 Content Space capability description，分别核对声明的 readiness 与本次 admission；
 3. 核对普通文件 6 项和 Team Administration 10 项均为
-   `poc_only / verification_profile_required`；
+   `poc_only / runtime_authorization_required`；
 4. 已安装附件时，核对 native-document 共 20 项，其中 9 项 PoC、含 `edit` 在内
    10 项 hash-bound mutation 与 `import` 共 11 项阻断；extended operations 共 50 项，其中 40 项 PoC，
    按 catalog 顺序 `resolveInternalLink` / `listMetadataChoices` / `updateFileVersion` /
@@ -196,7 +191,7 @@ status、普通文件、Team 与 supplier 调用都会在 settings、credential�
 6. 核对 `observeImmutableVersion` 阻断、无 `ArtifactReference`；
 7. 核对不存在成员 role/owner transfer、Team 删除或任何 Project provisioning capability、operation、intent/report schema、Provider port。
 
-默认 composition 没有 active verification profile，因此 PoC readiness 保持可见而 admission 为 blocked 是预期结果。不要通过修改请求、Renderer 状态、环境变量、配置文件或 readiness 文本尝试启用它们。
+未连接、连接属于另一 Principal、Broker authority 不匹配或 Provider ACL 不允许时，PoC readiness 保持可见而 admission 为 blocked 是预期结果。不要通过修改请求、Renderer 状态、环境变量、配置文件、技能包或 readiness 文本尝试绕过当前用户授权。
 
 ## 8. 受控 packaged 真实验收
 
@@ -206,14 +201,14 @@ status、普通文件、Team 与 supplier 调用都会在 settings、credential�
 - 独立个人库和团队库测试根；
 - 最小权限的明确外部账号类别，以及权限/撤权负向测试账号；
 - 唯一命名、可清理或明确保留的测试资源；
-- 经评审并由可信 composition 安装的精确 verification policy；
-- 对 Provider-scoped、mutation、Administration 或非零 transfer，profile 中包含与当前 Connection 精确匹配的 opaque Provider Binding Attestation；
+- 当前验收用户自己的 SciForge Principal、Provider Connection 和最小权限 Provider ACL；
+- 由 pinned Provider 对该当前 Connection 返回、并在 dispatch 前由 Connector 重验的 opaque Provider Binding Attestation；
 - 当前 packaged SciForge 应用和已验证 overlay；
 - 写入限额、有效期、停止条件和凭据外的证据保存位置。
 
 验收必须只走 packaged 应用的唯一 Renderer/Agent → Broker → Content Space → pinned Provider → Connector 路径；native/extended 操作继续从 Provider-owned 语义适配器进入 Connector-owned supplier transport，再使用已验证 private overlay，不能形成第二条 Agent/鉴权路径。不得用直连 API/CLI、供应商脚本、source-only Electron、mock 或临时 `production_ready` 值代替。
 
-每个操作单独记录 build/commit、Provider Instance、完整当前 Principal snapshot、authority/root、operation、audience、profile 身份与有效期、实际 enforce 的 transfer limits、需要时的 opaque binding attestation、请求摘要、invocation/receipt、时间、结果和 postcondition。证据不得保存 credential、原始外部账号标识或敏感 root 标识。还必须证明 Connector 在业务 dispatch 前重新核对了同一 binding；一次成功只证明该 invocation，不会改写 readiness，也不能批量晋升相邻操作、另一 root 或另一 binding。
+每个操作单独记录 build/commit、Provider Instance、完整当前 Principal snapshot、authority/root、operation、audience、实际 enforce 的 transfer limits、opaque binding attestation、请求摘要、invocation/receipt、时间、结果和 postcondition。证据不得保存 credential、原始外部账号标识或敏感 root 标识。还必须证明 Connector 在业务 dispatch 前重新核对了同一 binding；一次成功只证明该 invocation，不会改写 readiness，也不能批量晋升相邻操作、另一 root 或另一 binding。
 
 Agent 创建共享 Content Container（OpenContent Team）时，输入只能包含 label，不能提交 owner 或 idempotency key。Broker 的 invocation envelope 管理调用身份，current Principal 注入 owner，Provider 必须证明它映射到当前认证的 OpenContent session；不能把 Agent、自填成员、Coordinator 或任意 Provider 用户当成 owner。这条普通 Administration 路径也不是 Project Content Directory provisioning。
 
@@ -295,11 +290,11 @@ npm run verify:internal-runtimes
 
 ### 9.9 PoC 操作返回 unavailable
 
-默认 composition 没有 active verification profile，这是预期的 fail-closed 行为。确认 capability 输出中 readiness 仍为 `poc_only`、admission 为 blocked；不要把 blocked admission 误写成 `blocked_by_contract`。普通用户不能通过设置环境变量、修改 capability 请求或重装附件来开启 PoC。只有验收负责人可以部署经过评审且精确限定的 trusted verification policy；如果该条件不具备，停止真实调用，仅完成静态与发现验收。
+确认 capability 输出中 readiness 仍为 `poc_only`、admission 为 blocked；不要把 blocked admission 误写成 `blocked_by_contract`。检查当前 Principal 是否登录、Provider deployment configuration 是否有效、当前用户 Connection 是否存在、Broker resource/audience 是否正确，以及 Provider ACL 是否允许该操作。设置环境变量、修改 capability 请求、重装 runtime 附件或安装 Agent 技能都不能替代这些事实。
 
 ### 9.10 调用在 admission 后报告 binding 不再匹配
 
-这通常表示 Connection 在准入与业务 dispatch 之间发生解绑、重绑、凭据替换、稳定外部身份（`id` 或 `identityId`）变化或 revision 漂移。`account`/`name` 展示字段变化不会触发重新认证。不要复用旧 invocation、旧 profile 或旧 Broker resource，也不要重试外部写入。先由当前 Principal 重新完成连接验收，再生成并评审新的短时静态 profile；原始账号标识和 credential 不得进入 profile 或故障记录。
+这通常表示 Connection 在准入与业务 dispatch 之间发生解绑、重绑、凭据替换、稳定外部身份（`id` 或 `identityId`）变化或 revision 漂移。`account`/`name` 展示字段变化不会触发重新认证。不要复用旧 invocation 或旧 Broker resource，也不要自动重试外部写入。先由当前 Principal 重新完成连接验收，再发起一次新的正式调用；原始账号标识和 credential 不得进入故障记录。
 
 ## 10. 更新附件版本
 

@@ -22,7 +22,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   OPENCONTENT_DEPLOYMENT_CONFIGURATION_DESCRIPTOR,
-  resolveOpenContentDeploymentConfiguration
+  resolveOpenContentDeploymentConfiguration as resolveInstalledDeploymentConfiguration
 } from './deployment-config.js'
 
 const sidecar = Object.freeze({
@@ -30,6 +30,17 @@ const sidecar = Object.freeze({
   providerInstanceRef: 'opencontent-edoc2-demo' as const,
   origin: 'https://tenant.example'
 })
+
+function resolveOpenContentDeploymentConfiguration(
+  host: Parameters<typeof resolveInstalledDeploymentConfiguration>[0],
+  fileOperations?: Parameters<typeof resolveInstalledDeploymentConfiguration>[2]
+) {
+  return resolveInstalledDeploymentConfiguration(
+    host,
+    sidecar.providerInstanceRef,
+    fileOperations
+  )
+}
 
 const tempRoots: string[] = []
 
@@ -41,14 +52,31 @@ afterEach(() => {
 })
 
 describe('OpenContent package-owned deployment configuration', () => {
-  it('keeps production and package documentation free of compiled demo endpoint channels', () => {
+  it('ships one public package-owned endpoint and no alternate environment channel', () => {
     const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
     const production = [
       readFileSync(join(packageRoot, 'README.md'), 'utf8'),
       ...readProductionSources(join(packageRoot, 'src'))
     ].join('\n')
+    const configured = JSON.parse(readFileSync(
+      resolve(
+        packageRoot,
+        '../../..',
+        OPENCONTENT_DEPLOYMENT_CONFIGURATION_DESCRIPTOR.sourceRelativePath
+      ),
+      'utf8'
+    ))
 
-    expect(production).not.toMatch(/test1\.edoc2\.com/u)
+    expect(OPENCONTENT_DEPLOYMENT_CONFIGURATION_DESCRIPTOR).toMatchObject({
+      sourceRelativePath:
+        'packages/domains/opencontent-connector/config/opencontent-connector.json',
+      publicRelease: 'allowed'
+    })
+    expect(configured).toEqual({
+      contractVersion: 1,
+      providerInstanceRef: 'opencontent-edoc2-demo',
+      origin: 'https://test1.edoc2.com'
+    })
     expect(production).not.toMatch(/SCIFORGE_OPENCONTENT(?:_BASE_URL)?/u)
   })
 
@@ -153,11 +181,11 @@ describe('OpenContent package-owned deployment configuration', () => {
 
   it('rejects a sidecar symlink even when its target is a valid contained file', () => {
     const root = tempRoot()
-    const realSidecar = join(root, '.sciforge', 'private', 'deployments', 'real.json')
     const configuredSidecar = join(
       root,
       OPENCONTENT_DEPLOYMENT_CONFIGURATION_DESCRIPTOR.sourceRelativePath
     )
+    const realSidecar = join(dirname(configuredSidecar), 'real.json')
     writeJson(realSidecar, sidecar)
     symlinkSync(realSidecar, configuredSidecar, 'file')
 
@@ -174,11 +202,14 @@ describe('OpenContent package-owned deployment configuration', () => {
     })).toBeUndefined()
 
     const root = tempRoot()
-    const realPrivateRoot = join(root, 'real-private')
-    mkdirSync(realPrivateRoot, { recursive: true })
-    mkdirSync(join(root, '.sciforge'), { recursive: true })
-    symlinkSync(realPrivateRoot, join(root, '.sciforge', 'private'), 'dir')
-    writeJson(join(realPrivateRoot, 'deployments', 'opencontent-connector.json'), sidecar)
+    const realPackagesRoot = join(root, 'real-packages')
+    mkdirSync(realPackagesRoot, { recursive: true })
+    symlinkSync(realPackagesRoot, join(root, 'packages'), 'dir')
+    writeJson(
+      join(realPackagesRoot, 'domains', 'opencontent-connector', 'config',
+        'opencontent-connector.json'),
+      sidecar
+    )
 
     expect(resolveOpenContentDeploymentConfiguration({
       getAppRoot: () => root,

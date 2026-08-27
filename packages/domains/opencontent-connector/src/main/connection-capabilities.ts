@@ -1,10 +1,8 @@
-import { DomainMainProviderCredentialError } from '@sciforge/domain-sdk/package-storage'
 import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import type { z } from 'zod'
 
 import {
   OPENCONTENT_CONNECTION_CAPABILITY_IDS,
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
   OpenContentConnectorError,
   openContentBindInputSchema,
   openContentConnectionTargetInputSchema,
@@ -13,6 +11,7 @@ import {
 } from '../contract.js'
 import { OPENCONTENT_CONNECTOR_DOMAIN_MODULE_ID } from '../definition.js'
 import type { OpenContentConnectionService } from './connection-service.js'
+import { OpenContentPrivateAccountError } from './private-account-runtime.js'
 
 type OpenContentCapabilityContext = Readonly<{
   caller: Readonly<{
@@ -43,7 +42,7 @@ type OpenContentCapabilityOptions = Readonly<{
     Promise<Readonly<{ output: unknown; changed?: boolean }>>
 }>
 
-type OpenContentCapabilityFactory<CapabilityDefinition = unknown> = Readonly<{
+export type OpenContentCapabilityFactoryContribution<CapabilityDefinition = unknown> = Readonly<{
   moduleId: typeof OPENCONTENT_CONNECTOR_DOMAIN_MODULE_ID
   policy: Readonly<{
     id: 'opencontent'
@@ -56,8 +55,9 @@ type OpenContentCapabilityFactory<CapabilityDefinition = unknown> = Readonly<{
 
 export function createOpenContentCapabilityFactory<CapabilityDefinition>(options: Readonly<{
   defineCapability(options: OpenContentCapabilityOptions): CapabilityDefinition
+  providerInstanceRef: string
   connections: OpenContentConnectionService
-}>): OpenContentCapabilityFactory<CapabilityDefinition> {
+}>): OpenContentCapabilityFactoryContribution<CapabilityDefinition> {
   const define = (
     input: Omit<OpenContentCapabilityOptions, 'version' | 'audiences' | 'scope'>
   ): CapabilityDefinition => options.defineCapability({
@@ -78,7 +78,7 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
       define({
         id: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
         title: 'Inspect OpenContent Connection',
-        description: 'Reads the current Local Account connection status for OpenContent.',
+        description: 'Reads the current Principal connection status for OpenContent.',
         effect: 'read',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
@@ -86,8 +86,11 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
         inputSchema: openContentConnectionTargetInputSchema,
         outputSchema: openContentConnectionResultSchema,
         handler: async (input, context) => {
-          const principal = requireLocalAccount(context)
-          const targetError = validateSelectedProviderInstance(input.providerInstanceRef)
+          const principal = requireConnectionPrincipal(context)
+          const targetError = validateSelectedProviderInstance(
+            input.providerInstanceRef,
+            options.providerInstanceRef
+          )
           if (targetError) return { output: targetError }
           return {
             output: await connectionCapabilityResult(() => options.connections.status({
@@ -102,23 +105,24 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
       define({
         id: OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind,
         title: 'Bind Existing OpenContent Account',
-        description: 'Validates and binds one existing OpenContent account to the current Local Account.',
+        description: 'Validates and binds one existing OpenContent account to the current Principal.',
         effect: 'external-write',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'required' },
-        tags: ['opencontent', 'provider-connection', 'sensitive-input'],
+        tags: ['opencontent', 'provider-connection', 'native-enrollment'],
         inputSchema: openContentBindInputSchema,
         outputSchema: openContentConnectionResultSchema,
         handler: async (input, context) => {
-          const principal = requireLocalAccount(context)
-          const targetError = validateSelectedProviderInstance(input.providerInstanceRef)
+          const principal = requireConnectionPrincipal(context)
+          const targetError = validateSelectedProviderInstance(
+            input.providerInstanceRef,
+            options.providerInstanceRef
+          )
           if (targetError) return { output: targetError }
           return {
-            output: await connectionCapabilityResult(() => options.connections.bindExistingAccount({
+            output: await connectionCapabilityResult(() => options.connections.enroll({
               principal,
               providerInstanceRef: input.providerInstanceRef,
-              username: input.username,
-              password: input.password,
               signal: context.signal,
               assertPrincipalCurrent: context.assertPrincipalCurrent
             }))
@@ -136,8 +140,11 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
         inputSchema: openContentConnectionTargetInputSchema,
         outputSchema: openContentUnbindOutputSchema,
         handler: async (input, context) => {
-          const principal = requireLocalAccount(context)
-          const targetError = validateSelectedProviderInstance(input.providerInstanceRef)
+          const principal = requireConnectionPrincipal(context)
+          const targetError = validateSelectedProviderInstance(
+            input.providerInstanceRef,
+            options.providerInstanceRef
+          )
           if (targetError) return { output: targetError }
           return {
             output: await unbindCapabilityResult(() => options.connections.unbind({
@@ -152,16 +159,25 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
   })
 }
 
-function requireLocalAccount(context: OpenContentCapabilityContext): PrincipalSnapshot {
-  if (context.caller.audience !== 'ui' || context.caller.principal?.assurance !== 'local-selection') {
-    throw new Error('A current Local Account is required for OpenContent connection management.')
+function requireConnectionPrincipal(context: OpenContentCapabilityContext): PrincipalSnapshot {
+  const principal = context.caller.principal
+  if (
+    context.caller.audience !== 'ui' ||
+    principal === undefined ||
+    (principal.assurance !== 'local-selection' &&
+      principal.assurance !== 'cloud-authenticated')
+  ) {
+    throw new Error('A current UI Principal is required for OpenContent connection management.')
   }
   context.assertPrincipalCurrent()
-  return context.caller.principal
+  return principal
 }
 
-function validateSelectedProviderInstance(providerInstanceRef: string) {
-  if (providerInstanceRef === OPENCONTENT_PROVIDER_INSTANCE_REF) return undefined
+function validateSelectedProviderInstance(
+  providerInstanceRef: string,
+  installedProviderInstanceRef: string
+) {
+  if (providerInstanceRef === installedProviderInstanceRef) return undefined
   return Object.freeze({
     outcome: 'error' as const,
     error: Object.freeze({
@@ -217,12 +233,25 @@ function toPublicEnrollmentError(error: unknown) {
       : undefined
     return result ? Object.freeze(result) : undefined
   }
-  if (error instanceof DomainMainProviderCredentialError &&
-    error.code.startsWith('secure_storage_')) {
-    return Object.freeze({
-      code: 'secure_storage_unavailable' as const,
-      action: 'repair_secure_storage' as const
-    })
+  if (error instanceof OpenContentPrivateAccountError) {
+    if (error.code === 'native_enrollment_unavailable') {
+      return Object.freeze({
+        code: 'native_enrollment_unavailable' as const,
+        action: 'install_native_support' as const
+      })
+    }
+    if (error.code === 'secure_storage_unavailable') {
+      return Object.freeze({
+        code: 'secure_storage_unavailable' as const,
+        action: 'repair_secure_storage' as const
+      })
+    }
+    if (error.code === 'cancelled') {
+      return Object.freeze({
+        code: 'cancelled' as const,
+        action: 'none' as const
+      })
+    }
   }
   return undefined
 }

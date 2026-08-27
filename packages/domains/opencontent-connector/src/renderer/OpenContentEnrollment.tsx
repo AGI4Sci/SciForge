@@ -2,8 +2,7 @@ import {
   useEffect,
   useId,
   useRef,
-  useState,
-  type FormEvent
+  useState
 } from 'react'
 import {
   Check,
@@ -27,7 +26,6 @@ import './OpenContentEnrollment.css'
 type EnrollmentNotice = Readonly<{
   message: string
   retry: boolean
-  fieldError?: boolean
 }>
 
 export type OpenContentEnrollmentProps = Readonly<{
@@ -83,8 +81,6 @@ export function OpenContentEnrollment({
   const cancelDisconnect = useRef<HTMLButtonElement | null>(null)
   const disconnectConfirmationId = useId()
   const [connection, setConnection] = useState<OpenContentConnectionStatus>()
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
   const [checking, setChecking] = useState(true)
   const [operation, setOperation] = useState<'bind' | 'unbind'>()
   const [notice, setNotice] = useState<EnrollmentNotice>()
@@ -95,8 +91,6 @@ export function OpenContentEnrollment({
     activeRequest.current?.abort()
     activeRequest.current = undefined
     setConnection(undefined)
-    setUsername('')
-    setPassword('')
     setNotice(undefined)
     setConfirmingDisconnect(false)
     setOperation(undefined)
@@ -118,9 +112,6 @@ export function OpenContentEnrollment({
     } else {
       setChecking(false)
       setConnection(viewState.result.status)
-      if (viewState.result.status.state !== 'disconnected') {
-        setUsername(viewState.result.status.externalAccount.account)
-      }
     }
 
     return () => {
@@ -134,10 +125,8 @@ export function OpenContentEnrollment({
     if (confirmingDisconnect) cancelDisconnect.current?.focus()
   }, [confirmingDisconnect])
 
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const account = username.trim()
-    if (!account || !password || operation) return
+  const connect = async () => {
+    if (operation) return
     const request = ++requestSequence.current
     activeRequest.current?.abort()
     const controller = new AbortController()
@@ -145,7 +134,7 @@ export function OpenContentEnrollment({
     setOperation('bind')
     setNotice(undefined)
     try {
-      const result = await client.bind(providerInstanceRef, account, password, {
+      const result = await client.bind(providerInstanceRef, {
         signal: controller.signal
       })
       if (request !== requestSequence.current) return
@@ -158,7 +147,6 @@ export function OpenContentEnrollment({
         setNotice(providerMismatchNotice)
         return
       }
-      setUsername(account)
       setConnection(result.status)
       setConfirmingDisconnect(false)
       onConnectionChanged()
@@ -167,10 +155,7 @@ export function OpenContentEnrollment({
       setNotice(genericMutationNotice)
     } finally {
       if (activeRequest.current === controller) activeRequest.current = undefined
-      if (request === requestSequence.current) {
-        setPassword('')
-        setOperation(undefined)
-      }
+      if (request === requestSequence.current) setOperation(undefined)
     }
   }
 
@@ -193,7 +178,6 @@ export function OpenContentEnrollment({
       }
       setConnection({ state: 'disconnected' })
       setConfirmingDisconnect(false)
-      setPassword('')
       onConnectionChanged()
     } catch {
       if (request !== requestSequence.current) return
@@ -329,55 +313,32 @@ export function OpenContentEnrollment({
   }
 
   return (
-    <CredentialForm
+    <EnrollmentAction
       className={rootClassName}
       reconnecting={connection.state === 'reauthentication_required'}
-      username={username}
-      password={password}
       operation={operation}
       notice={notice}
-      onUsernameChange={setUsername}
-      onPasswordChange={setPassword}
-      onSubmit={submit}
+      onConnect={connect}
     />
   )
 }
 
-type CredentialFormProps = Readonly<{
+type EnrollmentActionProps = Readonly<{
   className: string
   reconnecting: boolean
-  username: string
-  password: string
   operation: 'bind' | 'unbind' | undefined
   notice: EnrollmentNotice | undefined
-  onUsernameChange: (value: string) => void
-  onPasswordChange: (value: string) => void
-  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>
+  onConnect: () => Promise<void>
 }>
 
-function CredentialForm({
+function EnrollmentAction({
   className,
   reconnecting,
-  username,
-  password,
   operation,
   notice,
-  onUsernameChange,
-  onPasswordChange,
-  onSubmit
-}: CredentialFormProps) {
+  onConnect
+}: EnrollmentActionProps) {
   const submitLabel = reconnecting ? 'Reconnect account' : 'Connect account'
-  const fieldId = useId()
-  const accountId = `${fieldId}-account`
-  const passwordId = `${fieldId}-password`
-  const privacyId = `${fieldId}-privacy`
-  const noticeId = `${fieldId}-notice`
-  const passwordInput = useRef<HTMLInputElement | null>(null)
-  const describedBy = notice ? `${privacyId} ${noticeId}` : privacyId
-
-  useEffect(() => {
-    if (notice?.fieldError) passwordInput.current?.focus()
-  }, [notice])
 
   return (
     <section className={className}>
@@ -389,7 +350,7 @@ function CredentialForm({
           <h3>{reconnecting ? 'Reconnect OpenContent' : 'Connect OpenContent'}</h3>
           <p>
             {reconnecting
-              ? 'Update the credentials for the account already linked to this source.'
+              ? 'Re-authorize the account already linked to this source.'
               : 'Link an existing account to open its libraries in Content Space.'}
           </p>
         </div>
@@ -408,57 +369,26 @@ function CredentialForm({
         </div>
       ) : null}
 
-      <form className="opencontent-enrollment__form" onSubmit={(event) => void onSubmit(event)}>
-        <label htmlFor={accountId}>
-          <span>OpenContent account</span>
-          <input
-            id={accountId}
-            name="username"
-            autoComplete="username"
-            aria-describedby={describedBy}
-            aria-invalid={notice?.fieldError || undefined}
-            disabled={Boolean(operation)}
-            maxLength={256}
-            spellCheck="false"
-            value={username}
-            onChange={(event) => onUsernameChange(event.target.value)}
-          />
-        </label>
-        <label htmlFor={passwordId}>
-          <span>Password</span>
-          <input
-            ref={passwordInput}
-            id={passwordId}
-            name="password"
-            autoComplete="current-password"
-            aria-describedby={describedBy}
-            aria-invalid={notice?.fieldError || undefined}
-            disabled={Boolean(operation)}
-            maxLength={1024}
-            type="password"
-            value={password}
-            onChange={(event) => onPasswordChange(event.target.value)}
-          />
-        </label>
-
-        <p id={privacyId} className="opencontent-enrollment__privacy">
-          Your password is checked once. SciForge stores only an encrypted access token for this Local Account on this device.
+      <div className="opencontent-enrollment__enrollment-action">
+        <p className="opencontent-enrollment__privacy">
+          Account authentication is collected by the private operating-system prompt. Nothing is entered in this window.
         </p>
 
         {notice ? (
-          <p id={noticeId} className="opencontent-enrollment__error" role="alert">
+          <p className="opencontent-enrollment__error" role="alert">
             {notice.message}
           </p>
         ) : null}
 
         <button
-          type="submit"
+          type="button"
           className="opencontent-enrollment__button opencontent-enrollment__button--primary"
-          disabled={Boolean(operation) || !username.trim() || !password}
+          disabled={Boolean(operation)}
+          onClick={() => void onConnect()}
         >
           {operation === 'bind' ? 'Connecting…' : submitLabel}
         </button>
-      </form>
+      </div>
     </section>
   )
 }
@@ -506,9 +436,8 @@ function noticeFor(error: OpenContentEnrollmentError): EnrollmentNotice {
       })
     case 'invalid_credentials':
       return Object.freeze({
-        message: 'The OpenContent account or password was not accepted. Check both and try again.',
-        retry: true,
-        fieldError: true
+        message: 'OpenContent did not accept the account authentication. Try again.',
+        retry: true
       })
     case 'provider_unavailable':
       return Object.freeze({
@@ -529,6 +458,11 @@ function noticeFor(error: OpenContentEnrollmentError): EnrollmentNotice {
       return Object.freeze({
         message: 'Secure storage is unavailable on this device. Unlock or repair it, then try again.',
         retry: true
+      })
+    case 'native_enrollment_unavailable':
+      return Object.freeze({
+        message: 'Secure account enrollment is unavailable in this SciForge build.',
+        retry: false
       })
     case 'cancelled':
       return Object.freeze({

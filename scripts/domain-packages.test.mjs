@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import {
   discoverMainBundlePackageNames,
@@ -69,25 +70,30 @@ test('sorts packages by packageName and omits undeclared process imports', async
   )
 })
 
-test('generates the main bundle list from public TypeScript workspace dependency closure', async (context) => {
+test('generates the main bundle list from the public workspace source dependency closure', async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
   context.after(() => rm(root, { recursive: true, force: true }))
   await writeFile(path.join(root, 'package.json'), JSON.stringify({
     name: '@fixture/host',
     workspaces: [
       'packages/domains/*',
+      'packages/runtimes/compiled-leaf',
       'packages/runtimes/compiled-runtime',
       'packages/runtimes/host-runtime',
       'packages/runtimes/renderer-runtime',
       'packages/runtimes/transitive-runtime'
     ],
     dependencies: {
+      '@fixture/compiled-leaf': '1.0.0',
       '@fixture/host-runtime': '1.0.0',
       '@fixture/non-workspace-runtime': '1.0.0'
     }
   }))
   await createSourcePackage(root, 'host-runtime', '@fixture/host-runtime')
   await createSourcePackage(root, 'transitive-runtime', '@fixture/transitive-runtime')
+  await createSourcePackage(root, 'compiled-leaf', '@fixture/compiled-leaf', {
+    entrypoint: './dist/index.js'
+  })
   await createSourcePackage(root, 'compiled-runtime', '@fixture/compiled-runtime', {
     entrypoint: './dist/index.js',
     dependencies: { '@fixture/transitive-runtime': '1.0.0' }
@@ -118,6 +124,7 @@ test('generates the main bundle list from public TypeScript workspace dependency
   ]
 
   assert.deepEqual(mainBundlePackageNames, [
+    '@fixture/compiled-runtime',
     '@fixture/host-runtime',
     '@fixture/main-domain',
     '@fixture/transitive-runtime'
@@ -125,7 +132,8 @@ test('generates the main bundle list from public TypeScript workspace dependency
   assert.match(generated, /@fixture\/host-runtime/)
   assert.match(generated, /@fixture\/main-domain/)
   assert.match(generated, /@fixture\/transitive-runtime/)
-  assert.doesNotMatch(generated, /@fixture\/compiled-runtime/)
+  assert.match(generated, /@fixture\/compiled-runtime/)
+  assert.doesNotMatch(generated, /@fixture\/compiled-leaf/)
   assert.doesNotMatch(generated, /@fixture\/non-workspace-runtime/)
   assert.doesNotMatch(generated, /@fixture\/renderer-runtime/)
   assert.throws(
@@ -187,6 +195,106 @@ test('validates development fixtures without projecting them into production', a
     generated['src/main/modules/installed-domain-main.ts'],
     /@fixture\/production\/main/
   )
+})
+
+test('keeps the actual production Content Space path free of mocks and retired transfer entrypoints', async () => {
+  const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+  const mockPackageName = '@sciforge/domain-content-space-mock-provider'
+  const mockPackageRoot = 'packages/domains/content-space-mock-provider/'
+  const mockManifest = JSON.parse(await readFile(path.join(
+    repositoryRoot,
+    mockPackageRoot,
+    'sciforge.domain.json'
+  ), 'utf8'))
+  assert.equal(mockManifest.packageName, mockPackageName)
+  assert.equal(mockManifest.composition, 'development-only')
+
+  const generatedProductionFiles = [
+    'src/main/modules/installed-domain-main.ts',
+    'src/main/modules/installed-main-source-packages.ts',
+    'src/renderer/src/domain-modules/installed-domain-renderer.ts',
+    'packages/workers/workspace-host/src/generated/installed-domain-workspace-server.ts'
+  ]
+  for (const relativePath of generatedProductionFiles) {
+    const content = await readFile(path.join(repositoryRoot, relativePath), 'utf8')
+    assert.doesNotMatch(content, /content-space-mock-provider/u, relativePath)
+    assert.doesNotMatch(content, /sciforge\.content-space-mock-provider/u, relativePath)
+  }
+
+  const sourceRoots = ['src', 'packages/domains']
+  const sourceFiles = (await Promise.all(sourceRoots.map(async (sourceRoot) => {
+    const absoluteRoot = path.join(repositoryRoot, sourceRoot)
+    return (await readdir(absoluteRoot, { recursive: true }))
+      .filter((relativePath) => /\.(?:c|m)?(?:js|ts)x?$/u.test(relativePath))
+      .map((relativePath) => path.posix.join(sourceRoot, relativePath.split(path.sep).join('/')))
+  }))).flat()
+  const sources = await Promise.all(sourceFiles.map(async (relativePath) => ({
+    relativePath,
+    content: await readFile(path.join(repositoryRoot, relativePath), 'utf8')
+  })))
+  const externalMockImports = sources
+    .filter(({ relativePath }) => !relativePath.startsWith(mockPackageRoot))
+    .filter(({ content }) => content.includes(mockPackageName))
+    .map(({ relativePath }) => relativePath)
+  assert.deepEqual(externalMockImports.sort(), [
+    'packages/domains/content-space/src/main/provider-catalog.test.ts',
+    'src/main/capabilities/content-space-discovery.test.ts'
+  ])
+  assert.equal(externalMockImports.every((relativePath) => /\.test\.(?:c|m)?(?:js|ts)x?$/u.test(
+    relativePath
+  )), true)
+
+  const productionSources = sources.filter(({ relativePath }) => (
+    !relativePath.startsWith(mockPackageRoot) &&
+    !/\.test\.(?:c|m)?(?:js|ts)x?$/u.test(relativePath)
+  ))
+  const retiredSymbols = [
+    'productionMockContentSpace',
+    'MockContentSpacePort',
+    'resolveContentSpacePortableInvocationReference',
+    'resolveSystemPortableReference',
+    'portableResolver',
+    'mock-opencontent'
+  ]
+  for (const symbol of retiredSymbols) {
+    assert.deepEqual(
+      productionSources
+        .filter(({ content }) => content.includes(symbol))
+        .map(({ relativePath }) => relativePath),
+      [],
+      `retired production Content Space symbol: ${symbol}`
+    )
+  }
+
+  const contentContract = await readFile(path.join(
+    repositoryRoot,
+    'packages/domains/content-space/src/contract.ts'
+  ), 'utf8')
+  const contentMain = await readFile(path.join(
+    repositoryRoot,
+    'packages/domains/content-space/src/main/index.ts'
+  ), 'utf8')
+  const contentService = await readFile(path.join(
+    repositoryRoot,
+    'packages/domains/content-space/src/main/service.ts'
+  ), 'utf8')
+  const collaborationAdapter = await readFile(path.join(
+    repositoryRoot,
+    'packages/domains/collaboration/src/main/task-adapter.ts'
+  ), 'utf8')
+  const systemContracts = [
+    ['CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT', 'systemTransferPreflight'],
+    ['CONTENT_SPACE_SYSTEM_DOWNLOAD_CONTRACT', 'systemDownload'],
+    ['CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT', 'systemUploadNew']
+  ]
+  for (const [contractName, capabilityKey] of systemContracts) {
+    assert.equal(count(contentContract, `export const ${contractName}`), 1, contractName)
+    assert.equal(count(contentMain, `id: CONTENT_SPACE_CAPABILITY_IDS.${capabilityKey}`), 1, capabilityKey)
+    assert.equal(count(collaborationAdapter, contractName) > 0, true, contractName)
+  }
+  assert.equal(count(contentMain, 'portableResources.materialize(') >= 3, true)
+  assert.match(contentService, /provider\.authorizeDownload\(/u)
+  assert.match(contentService, /provider\.uploadNewFile\(/u)
 })
 
 test('projects only workspace-server process entries into the server composition', async (context) => {
@@ -554,6 +662,10 @@ test('fails closed for uninstalled, non-bundled, and cyclic runtime dependencies
     /Cyclic bundled domain runtime dependency/
   )
 })
+
+function count(content, fragment) {
+  return content.split(fragment).length - 1
+}
 
 async function createFixture(root, directoryName, options) {
   const packageRoot = path.join(root, 'packages/domains', directoryName)

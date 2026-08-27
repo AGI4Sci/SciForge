@@ -329,7 +329,7 @@
   white-space: nowrap;
 }
 
-.content-space-readiness-profile {
+.content-space-readiness-runtime-auth {
   flex: 0 0 auto;
   border-radius: 999px;
   padding: 2px 6px;
@@ -835,7 +835,7 @@
 @container (max-width: 360px) {
   .content-space-heading > span,
   .content-space-section-label > span,
-  .content-space-readiness-profile {
+  .content-space-readiness-runtime-auth {
     display: none;
   }
 

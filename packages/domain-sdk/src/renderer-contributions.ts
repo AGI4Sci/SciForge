@@ -116,6 +116,7 @@ const domainWorkbenchOpenResourceInputFields = {
   resource: z.object({
     resourceKind: z.string().trim().min(1).max(192),
     resourceId: z.string().trim().min(1).max(512),
+    resourceRef: z.string().trim().regex(/^res_[A-Za-z0-9_-]{20,}$/u).optional(),
     integrity: z.object({
       algorithm: z.literal('sha256'),
       expectedDigest: z.string().trim().toLowerCase()

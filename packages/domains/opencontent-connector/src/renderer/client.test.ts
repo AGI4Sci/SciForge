@@ -3,13 +3,14 @@ import type { DomainRendererCapabilityInvoker } from '@sciforge/domain-sdk/host'
 
 import {
   OPENCONTENT_CONNECTION_CAPABILITY_IDS,
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
   openContentBindInputSchema,
   openContentConnectionResultSchema,
   openContentConnectionTargetInputSchema,
   openContentUnbindOutputSchema
 } from '../contract.js'
 import { createOpenContentConnectionRendererClient } from './client.js'
+
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'test-opencontent-provider'
 
 describe('OpenContent connection renderer client', () => {
   it('targets the selected Provider Instance for status, bind, and unbind', async () => {
@@ -33,11 +34,7 @@ describe('OpenContent connection renderer client', () => {
     await client.status(OPENCONTENT_PROVIDER_INSTANCE_REF, {
       signal: controller.signal
     })
-    await client.bind(
-      OPENCONTENT_PROVIDER_INSTANCE_REF,
-      'scientist',
-      'fixture-password'
-    )
+    await client.bind(OPENCONTENT_PROVIDER_INSTANCE_REF)
     await client.unbind(OPENCONTENT_PROVIDER_INSTANCE_REF)
 
     expect(invoke).toHaveBeenNthCalledWith(1, {
@@ -53,11 +50,7 @@ describe('OpenContent connection renderer client', () => {
       effect: 'external-write',
       inputSchema: openContentBindInputSchema,
       outputSchema: openContentConnectionResultSchema
-    }, {
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      username: 'scientist',
-      password: 'fixture-password'
-    })
+    }, { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF })
     expect(invoke).toHaveBeenNthCalledWith(3, {
       actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.unbind,
       effect: 'external-write',
@@ -79,10 +72,14 @@ describe('OpenContent connection renderer client', () => {
       observe: vi.fn()
     } as unknown as DomainRendererCapabilityInvoker)
 
-    await expect(client.bind(
-      OPENCONTENT_PROVIDER_INSTANCE_REF,
-      'scientist',
-      'wrong-password'
-    )).resolves.toBe(failure)
+    await expect(client.bind(OPENCONTENT_PROVIDER_INSTANCE_REF)).resolves.toBe(failure)
+  })
+
+  it('rejects secret-shaped public bind inputs at the Renderer boundary', () => {
+    expect(openContentBindInputSchema.safeParse({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'must-not-cross',
+      password: 'must-not-cross'
+    }).success).toBe(false)
   })
 })

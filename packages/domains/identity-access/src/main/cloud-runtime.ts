@@ -1,10 +1,13 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { HttpCollaborationIdentityClient } from '@sciforge/collaboration-identity'
-import type {
-  DomainMainExternalNavigationHost,
-  DomainMainPackageSecretStoreHost
-} from '@sciforge/domain-sdk/host'
+import {
+  AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
+  AuthenticatedCloudTransportError,
+  type AuthenticatedCloudRequest,
+  type AuthenticatedCloudResponse,
+  type AuthenticatedCloudTransportStatus
+} from '../authenticated-cloud-transport.js'
+import type { DomainMainExternalNavigationHost } from '@sciforge/domain-sdk/host'
 import type {
   CloudIdentitySnapshot,
   DesktopDeviceActionResult,
@@ -14,12 +17,19 @@ import type {
 } from '../contract.js'
 import { LocalCloudIdentityLinkService } from './cloud-link-service.js'
 import {
-  createUnavailableCollaborationIdentityClient,
+  createUnavailableCloudIdentityClient,
   resolveDesktopIdentityRuntimeConfig
 } from './cloud-runtime-config.js'
+import { HttpCloudIdentityClient } from './cloud-identity-client.js'
 import { DesktopDeviceService } from './device-service.js'
 import { DesktopIdentityService } from './oidc-service.js'
-import { PackageDesktopIdentitySessionStore } from './session-store.js'
+import { PrivateVaultDesktopIdentitySessionStore } from './session-store.js'
+import type { IdentityPrivateVault } from './private-vault.js'
+import type {
+  DeviceFactSignatureMetadata,
+  DeviceFactSigningRequest
+} from '@sciforge/collaboration-contracts'
+import { restResponseSchema } from '@sciforge/collaboration-contracts'
 
 type CloudIdentityRuntimeError = NonNullable<CloudIdentitySnapshot['error']>
 
@@ -33,9 +43,11 @@ export type CloudIdentityRuntimeOptions = Readonly<{
   appRoot: string
   environment: Readonly<Record<string, string | undefined>>
   installationId: string
-  packageSecrets: DomainMainPackageSecretStoreHost
+  privateVault: IdentityPrivateVault
   externalNavigation?: DomainMainExternalNavigationHost
   appVersion?: string
+  fetchImpl?: typeof fetch
+  onAuthorityInvalidated?: (reason: string) => void
 }>
 
 export class CloudIdentityRuntime {
@@ -45,28 +57,51 @@ export class CloudIdentityRuntime {
   readonly #listeners = new Set<() => void>()
   readonly #disposeIdentitySubscription: () => void
   readonly #disposeDeviceSubscription: () => void
+  readonly #cloudBaseUrl: string | null
+  readonly #transportUnavailableReason: string | null
+  readonly #fetch: typeof fetch
+  readonly #onAuthorityInvalidated: (reason: string) => void
   #revision = 1
   #identityError: CloudIdentityRuntimeError | undefined
   #deviceError: CloudIdentityRuntimeError | undefined
   #runtimeError: CloudIdentityRuntimeError | undefined
   #closed = false
+  #authorityIdentityKey: string | null
+  #authorityUserId: string | null
 
   private constructor(input: Readonly<{
     identity: DesktopIdentityService
     device: DesktopDeviceService
     links: CloudIdentityLinks
+    cloudBaseUrl: string | null
+    transportUnavailableReason: string | null
+    fetchImpl: typeof fetch
+    onAuthorityInvalidated: (reason: string) => void
     runtimeError?: CloudIdentityRuntimeError
   }>) {
     this.#identity = input.identity
     this.#device = input.device
     this.#links = input.links
+    this.#cloudBaseUrl = input.cloudBaseUrl
+    this.#transportUnavailableReason = input.transportUnavailableReason
+    this.#fetch = input.fetchImpl
+    this.#onAuthorityInvalidated = input.onAuthorityInvalidated
     this.#runtimeError = input.runtimeError
+    this.#authorityIdentityKey = authorityIdentityKey(
+      this.#identity.getStatus(),
+      this.#device.getStatus()
+    )
+    this.#authorityUserId = authorityUserId(this.#identity.getStatus())
     this.#disposeIdentitySubscription = this.#identity.subscribe((status) => {
       this.#projectAuthenticatedUser(status)
+      this.#invalidateChangedUserAuthority(status)
       this.#publish()
     })
     this.#disposeDeviceSubscription = this.#device.subscribe((status) => {
       if (status.state !== 'active') this.#clearActiveDeviceAuthority()
+      if (authorityUserId(this.#identity.getStatus()) === this.#authorityUserId) {
+        this.#invalidateChangedAuthority('Desktop Device authority changed.')
+      }
       this.#publish()
     })
     this.#projectAuthenticatedUser(this.#identity.getStatus())
@@ -77,9 +112,15 @@ export class CloudIdentityRuntime {
       oidcIssuer: options.environment.SCIFORGE_OIDC_ISSUER,
       cloudBaseUrl: options.environment.SCIFORGE_CLOUD_BASE_URL
     })
+    const cloudBaseUrl = identityConfig.mode === 'http'
+      ? identityConfig.cloudBaseUrl.replace(/\/+$/u, '')
+      : null
     const identityClient = identityConfig.mode === 'http'
-      ? new HttpCollaborationIdentityClient({ baseUrl: identityConfig.cloudBaseUrl })
-      : createUnavailableCollaborationIdentityClient(identityConfig.error)
+      ? new HttpCloudIdentityClient({
+          baseUrl: cloudBaseUrl!,
+          ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {})
+        })
+      : createUnavailableCloudIdentityClient(identityConfig.error)
     const appVersion = options.appVersion ?? await readApplicationVersion(options.appRoot)
     const linkResult = createCloudIdentityLinks(options.userDataDir)
     const links = linkResult.links
@@ -106,7 +147,7 @@ export class CloudIdentityRuntime {
         clientId: 'sciforge-desktop',
         audience: 'sciforge-cloud-api',
         identityClient,
-        sessionStore: new PackageDesktopIdentitySessionStore(options.packageSecrets),
+        sessionStore: new PrivateVaultDesktopIdentitySessionStore(options.privateVault),
         linkAuthenticatedUser: (user) => {
           links.linkIdentity({
             cloudUserId: user.userId,
@@ -117,13 +158,14 @@ export class CloudIdentityRuntime {
           })
         },
         ...(configurationError ? { configurationError } : {}),
+        ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
         openExternal
       })
       device = new DesktopDeviceService({
         identity,
         client: identityClient,
         installationSeed: options.installationId,
-        secrets: options.packageSecrets,
+        vault: options.privateVault,
         appVersion,
         linkDevice: (cloudDevice) => {
           links.linkDevice(cloudDevice.userId, cloudDevice.deviceId, cloudDevice.status)
@@ -133,6 +175,10 @@ export class CloudIdentityRuntime {
         identity,
         device,
         links,
+        cloudBaseUrl,
+        transportUnavailableReason: configurationError || null,
+        fetchImpl: options.fetchImpl ?? fetch,
+        onAuthorityInvalidated: options.onAuthorityInvalidated ?? (() => undefined),
         ...(linkResult.error ? { runtimeError: linkResult.error } : {})
       })
     } catch (error) {
@@ -238,15 +284,140 @@ export class CloudIdentityRuntime {
     return this.snapshot()
   }
 
+  async revalidateCurrentDevice(): Promise<AuthenticatedCloudTransportStatus> {
+    this.#assertOpen()
+    if (this.#identity.getStatus().state !== 'signed-in') {
+      return this.authenticatedCloudTransportStatus()
+    }
+    this.#acceptDeviceResult(await this.#device.refresh())
+    return this.authenticatedCloudTransportStatus()
+  }
+
   async revokeDevice(deviceId: string): Promise<CloudIdentitySnapshot> {
     this.#assertOpen()
     this.#acceptDeviceResult(await this.#device.revoke(deviceId))
     return this.snapshot()
   }
 
+  async signDeviceFactAttestation(
+    request: DeviceFactSigningRequest
+  ): Promise<DeviceFactSignatureMetadata> {
+    this.#assertOpen()
+    return this.#device.signDeviceFactAttestation(request)
+  }
+
+  authenticatedCloudTransportStatus(): AuthenticatedCloudTransportStatus {
+    this.#assertOpen()
+    if (!this.#cloudBaseUrl) {
+      return {
+        state: 'unavailable',
+        reason: this.#transportUnavailableReason ?? 'SciForge Cloud is not configured.'
+      }
+    }
+    const identity = this.#identity.getStatus()
+    if (identity.state !== 'signed-in') {
+      return { state: 'identity_required', baseUrl: this.#cloudBaseUrl }
+    }
+    const device = this.#device.getStatus()
+    if (device.state === 'error') {
+      return {
+        state: 'unavailable',
+        reason: 'SciForge Cloud could not confirm this Desktop Device.'
+      }
+    }
+    if (device.state !== 'active') {
+      return {
+        state: 'device_required',
+        baseUrl: this.#cloudBaseUrl,
+        reason: device.state === 'revoked'
+          ? 'This Desktop Device has been revoked.'
+          : 'Register this Desktop Device before continuing.'
+      }
+    }
+    return {
+      state: 'ready',
+      baseUrl: this.#cloudBaseUrl,
+      userId: identity.user.userId,
+      deviceId: device.device.deviceId
+    }
+  }
+
+  async executeAuthenticatedCloud(
+    request: AuthenticatedCloudRequest,
+    options?: Readonly<{ signal?: AbortSignal }>
+  ): Promise<AuthenticatedCloudResponse> {
+    this.#assertOpen()
+    if (!this.#cloudBaseUrl) {
+      throw new AuthenticatedCloudTransportError(
+        'transport_unavailable',
+        this.#transportUnavailableReason ?? 'SciForge Cloud is not configured.'
+      )
+    }
+    if (request.operationId !== AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID) {
+      throw new AuthenticatedCloudTransportError(
+        'operation_not_allowed',
+        'The requested authenticated Cloud operation is not registered.'
+      )
+    }
+    const revalidated = await this.revalidateCurrentDevice()
+    if (revalidated.state !== 'ready') {
+      throw new AuthenticatedCloudTransportError(
+        revalidated.state === 'identity_required'
+          ? 'identity_required'
+          : revalidated.state === 'device_required'
+            ? 'device_required'
+            : 'cloud_unavailable',
+        revalidated.state === 'identity_required'
+          ? 'Sign in to SciForge Cloud before continuing.'
+          : revalidated.reason
+      )
+    }
+
+    let response: Response
+    try {
+      response = await this.#identity.useAccessToken((accessToken) => this.#fetch(
+        `${this.#cloudBaseUrl}/v1/commands`,
+        {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${accessToken}`,
+            accept: 'application/json',
+            'content-type': 'application/json',
+            ...authenticatedCloudIdempotencyHeader(request.payload)
+          },
+          body: JSON.stringify(request.payload),
+          ...(options?.signal ? { signal: options.signal } : {})
+        }
+      ))
+    } catch (error) {
+      if (error instanceof AuthenticatedCloudTransportError) throw error
+      if (this.#identity.getStatus().state !== 'signed-in') {
+        throw new AuthenticatedCloudTransportError(
+          'identity_required',
+          'Sign in to SciForge Cloud before continuing.',
+          { cause: error }
+        )
+      }
+      throw new AuthenticatedCloudTransportError(
+        'cloud_unavailable',
+        'SciForge Cloud is unavailable.',
+        { cause: error }
+      )
+    }
+
+    return {
+      contractVersion: 1,
+      status: response.status,
+      body: await readAuthenticatedCloudBody(response)
+    }
+  }
+
   close(): void {
     if (this.#closed) return
     this.#closed = true
+    this.#authorityIdentityKey = null
+    this.#authorityUserId = null
+    this.#onAuthorityInvalidated('Cloud identity runtime closed.')
     this.#disposeDeviceSubscription()
     this.#disposeIdentitySubscription()
     this.#device.close()
@@ -284,6 +455,25 @@ export class CloudIdentityRuntime {
     }
   }
 
+  #invalidateChangedAuthority(reason: string): void {
+    const next = authorityIdentityKey(this.#identity.getStatus(), this.#device.getStatus())
+    if (next === this.#authorityIdentityKey) return
+    this.#authorityIdentityKey = next
+    this.#onAuthorityInvalidated(reason)
+  }
+
+  #invalidateChangedUserAuthority(status: DesktopIdentityStatus): void {
+    const nextUserId = authorityUserId(status)
+    const nextIdentityKey = authorityIdentityKey(status, this.#device.getStatus())
+    const userChanged = nextUserId !== this.#authorityUserId
+    const authorityChanged = nextIdentityKey !== this.#authorityIdentityKey
+    this.#authorityUserId = nextUserId
+    this.#authorityIdentityKey = nextIdentityKey
+    if (userChanged && authorityChanged) {
+      this.#onAuthorityInvalidated('OIDC User authority changed.')
+    }
+  }
+
   #acceptIdentityResult(result: DesktopIdentityActionResult): void {
     this.#identityError = result.ok
       ? undefined
@@ -316,6 +506,60 @@ export class CloudIdentityRuntime {
 
   #assertOpen(): void {
     if (this.#closed) throw new Error('Cloud identity runtime is closed.')
+  }
+}
+
+function authorityIdentityKey(
+  identity: DesktopIdentityStatus,
+  device: DesktopDeviceStatus
+): string | null {
+  if (identity.state !== 'signed-in' || device.state !== 'active') return null
+  return `${identity.user.userId}\u0000${device.device.deviceId}`
+}
+
+function authorityUserId(identity: DesktopIdentityStatus): string | null {
+  return identity.state === 'signed-in' ? identity.user.userId : null
+}
+
+function authenticatedCloudIdempotencyHeader(
+  payload: AuthenticatedCloudRequest['payload']
+): Readonly<Record<string, string>> {
+  return 'idempotencyKey' in payload
+    ? { 'idempotency-key': payload.idempotencyKey }
+    : {}
+}
+
+const MAX_AUTHENTICATED_CLOUD_RESPONSE_BYTES = 1_048_576
+
+async function readAuthenticatedCloudBody(response: Response) {
+  const declaredLength = Number(response.headers.get('content-length'))
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_AUTHENTICATED_CLOUD_RESPONSE_BYTES) {
+    throw new AuthenticatedCloudTransportError(
+      'cloud_response_invalid',
+      'SciForge Cloud returned a response larger than 1 MiB.'
+    )
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer())
+  if (bytes.byteLength > MAX_AUTHENTICATED_CLOUD_RESPONSE_BYTES) {
+    throw new AuthenticatedCloudTransportError(
+      'cloud_response_invalid',
+      'SciForge Cloud returned a response larger than 1 MiB.'
+    )
+  }
+  if (bytes.byteLength === 0) {
+    throw new AuthenticatedCloudTransportError(
+      'cloud_response_invalid',
+      'SciForge Cloud returned an empty command response.'
+    )
+  }
+  try {
+    return restResponseSchema.parse(JSON.parse(new TextDecoder().decode(bytes)))
+  } catch (error) {
+    throw new AuthenticatedCloudTransportError(
+      'cloud_response_invalid',
+      'SciForge Cloud returned an invalid JSON response.',
+      { cause: error }
+    )
   }
 }
 

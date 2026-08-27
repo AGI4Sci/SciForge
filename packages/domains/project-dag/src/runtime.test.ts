@@ -184,6 +184,9 @@ test('manual update reads committed Evidence through its public capability and p
           pending: null,
           updatedAt: now
         } as TOutput
+      },
+      createApprovedBatch: () => {
+        throw new Error('Unexpected approved capability batch.')
       }
     }
   })
@@ -499,7 +502,10 @@ test('missing committed Evidence retries handoff triggers but remains terminal f
         committed: null,
         pending: null,
         updatedAt: now
-      }) as TOutput
+      }) as TOutput,
+      createApprovedBatch: () => {
+        throw new Error('Unexpected approved capability batch.')
+      }
     }
   })
   const deactivate = await runtime.activate(context)
@@ -576,7 +582,10 @@ test('artifact handoff survives restart, posts once, and never reposts an accept
         },
         pending: null,
         updatedAt: now
-      }) as TOutput
+      }) as TOutput,
+      createApprovedBatch: () => {
+        throw new Error('Unexpected approved capability batch.')
+      }
     }
   })
   try {
@@ -825,6 +834,9 @@ test('execution completion uses a Host-bound synthetic scope through the durable
           pending: null,
           updatedAt: now
         } as TOutput
+      },
+      createApprovedBatch: () => {
+        throw new Error('Unexpected approved capability batch.')
       }
     }
   })

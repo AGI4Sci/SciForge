@@ -9,6 +9,7 @@ import {
   domainRendererDownloadSelectionSchema,
   domainRendererPickDownloadDestinationInputSchema,
   domainRendererPickUploadSourceInputSchema,
+  domainSystemWorkspaceTransferAuthorizationSchema,
   domainRendererUploadSelectionSchema
 } from './file-transfer.js'
 
@@ -98,5 +99,37 @@ describe('Host-owned resource grant contracts', () => {
       expiresAt: '2026-08-16T10:01:00.000Z',
       callerId: 'renderer-forged'
     }))
+  })
+
+  it('limits system Workspace transfer authority to one Provider-neutral manifest grant', () => {
+    assert.deepEqual(domainSystemWorkspaceTransferAuthorizationSchema.parse({
+      requiredSystemCapabilityGrant: 'content-space.system-transfer'
+    }), {
+      requiredSystemCapabilityGrant: 'content-space.system-transfer'
+    })
+
+    for (const requiredSystemCapabilityGrant of [
+      '',
+      'transfer',
+      'Content-Space.system-transfer',
+      'content space.system-transfer'
+    ]) {
+      assert.throws(() => domainSystemWorkspaceTransferAuthorizationSchema.parse({
+        requiredSystemCapabilityGrant
+      }))
+    }
+
+    for (const forbidden of [
+      { workspaceRoot: '/private/tmp/workspace' },
+      { domainId: 'content-space' },
+      { actionId: 'content-space.system-download' },
+      { invocationId: 'caller-selected' },
+      { principal: { subject: 'caller-selected' } }
+    ]) {
+      assert.throws(() => domainSystemWorkspaceTransferAuthorizationSchema.parse({
+        requiredSystemCapabilityGrant: 'content-space.system-transfer',
+        ...forbidden
+      }))
+    }
   })
 })

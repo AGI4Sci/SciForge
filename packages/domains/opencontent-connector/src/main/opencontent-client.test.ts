@@ -955,7 +955,15 @@ describe('OpenContent client enrollment', () => {
       read: async ({ offset, length }) => bytes.slice(offset, offset + length),
       signal: new AbortController().signal,
       assertPrincipalCurrent: principalIsCurrent
-    })).resolves.toEqual({ fileGuid: 'uploaded-file-guid' })
+    })).resolves.toEqual({
+      fileGuid: 'uploaded-file-guid',
+      writeAfterObservation: {
+        parentFolderGuid: 'team-folder-guid',
+        fileGuid: 'uploaded-file-guid',
+        name: 'result.txt',
+        size: bytes.byteLength
+      }
+    })
   })
 
   it('does not dispatch another upload chunk after the Principal changes', async () => {
@@ -1066,6 +1074,50 @@ describe('OpenContent client enrollment', () => {
     ])
   })
 
+  it('returns unauthorized when the real upload write gate rejects the current member', async () => {
+    const requestedPaths: string[] = []
+    const read = vi.fn(async () => new Uint8Array())
+    const fetch = vi.fn(async (rawInput: string | URL | Request) => {
+      const url = new URL(String(rawInput))
+      requestedPaths.push(url.pathname)
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderByGuidOrId')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 1 }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/Transport/Upload/CheckAndCreateDocInfo')) {
+        return new Response(JSON.stringify({ result: 403 }), {
+          status: 403,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      throw new Error(`A rejected upload gate must stop request ${url.pathname}`)
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.uploadNewFile({
+      token: 'fixture-token-value',
+      parentFolderGuid: 'team-folder-guid',
+      name: 'result.txt',
+      size: 0,
+      read,
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+
+    expect(requestedPaths).toEqual([
+      '/flatsdk/api/services/DocList/GetFolderByGuidOrId',
+      '/flatsdk/api/services/DocList/GetFolderChildren',
+      '/flatsdk/api/services/Transport/Upload/CheckAndCreateDocInfo'
+    ])
+    expect(read).not.toHaveBeenCalled()
+  })
+
   it('refuses to claim an upload whose final file fact is outside the requested parent', async () => {
     const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(String(input))
@@ -1133,6 +1185,212 @@ describe('OpenContent client enrollment', () => {
     })).rejects.toMatchObject({ code: 'outcome_unknown' })
   })
 
+  it('observes one token-free file parent fact while retaining numeric IDs internally', async () => {
+    const requestedPaths: string[] = []
+    const fetch = vi.fn(async (rawUrl: string | URL | Request) => {
+      const url = new URL(String(rawUrl))
+      requestedPaths.push(url.pathname)
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFileByIdOrGuid')) {
+        expect(url.searchParams.get('fileIdOrGuid')).toBe('candidate-file-guid')
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: {
+            fileId: 7001,
+            fileGuid: 'candidate-file-guid',
+            fileName: 'candidate.txt',
+            fileSize: 19,
+            parentFolderId: 6001,
+            permission: 7
+          }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderInfoById')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: {
+            id: 6001,
+            folderGuid: 'parent-folder-guid',
+            parentFolderId: 5001,
+            folderType: 2,
+            teamId: 41,
+            permission: 7,
+            childFolderCount: 0,
+            childFileCount: 1
+          }
+        })
+      }
+      throw new Error(`Unexpected request ${url.pathname}`)
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.observeEntryParent({
+      token: 'fixture-token-value',
+      kind: 'file',
+      resourceGuid: 'candidate-file-guid',
+      assertPrincipalCurrent: principalIsCurrent
+    })).resolves.toEqual({
+      child: { kind: 'file', resourceGuid: 'candidate-file-guid' },
+      parent: { kind: 'container', resourceGuid: 'parent-folder-guid' }
+    })
+    expect(requestedPaths).toEqual([
+      '/flatsdk/api/services/DocList/GetFileByIdOrGuid',
+      '/flatsdk/api/services/DocList/GetFolderInfoById'
+    ])
+  })
+
+  it('distinguishes an observable Provider root without exposing its numeric parent sentinel', async () => {
+    const requestedPaths: string[] = []
+    const fetch = vi.fn(async (rawUrl: string | URL | Request) => {
+      const url = new URL(String(rawUrl))
+      requestedPaths.push(url.pathname)
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderByGuidOrId')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: {
+            id: 6001,
+            folderGuid: 'provider-root-guid',
+            name: 'Root',
+            permission: 7
+          }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderInfoById')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: {
+            id: 6001,
+            folderGuid: 'provider-root-guid',
+            parentFolderId: 0,
+            folderType: 2,
+            teamId: 41,
+            permission: 7,
+            childFolderCount: 1,
+            childFileCount: 0
+          }
+        })
+      }
+      throw new Error(`Unexpected request ${url.pathname}`)
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.observeEntryParent({
+      token: 'fixture-token-value',
+      kind: 'container',
+      resourceGuid: 'provider-root-guid',
+      assertPrincipalCurrent: principalIsCurrent
+    })).resolves.toEqual({
+      child: { kind: 'container', resourceGuid: 'provider-root-guid' }
+    })
+    expect(requestedPaths).toEqual([
+      '/flatsdk/api/services/DocList/GetFolderByGuidOrId',
+      '/flatsdk/api/services/DocList/GetFolderInfoById'
+    ])
+  })
+
+  it('fails closed when a file fact has no observable parent or uses a numeric public identity', async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      result: 0,
+      msg: '',
+      data: {
+        fileId: 7001,
+        fileGuid: 'orphan-file-guid',
+        fileName: 'orphan.txt',
+        fileSize: 19,
+        parentFolderId: 0,
+        permission: 7
+      }
+    }))
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.observeEntryParent({
+      token: 'fixture-token-value',
+      kind: 'file',
+      resourceGuid: 'orphan-file-guid',
+      assertPrincipalCurrent: principalIsCurrent
+    })).rejects.toMatchObject({ code: 'provider_contract_violation' })
+    await expect(client.observeEntryParent({
+      token: 'fixture-token-value',
+      kind: 'file',
+      resourceGuid: '7001',
+      assertPrincipalCurrent: principalIsCurrent
+    })).rejects.toMatchObject({ code: 'invalid_input' })
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('rejects metadata-visible content when the real DownloadCheck denies permission', async () => {
+    const requestedPaths: string[] = []
+    const fetch = vi.fn(async (rawInput: string | URL | Request) => {
+      const url = new URL(String(rawInput))
+      requestedPaths.push(url.pathname)
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFileByIdOrGuid')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: {
+            fileId: 7001,
+            fileGuid: 'metadata-visible-file-guid',
+            fileName: 'visible-but-denied.txt',
+            fileSize: 19,
+            parentFolderId: 6001,
+            permission: 1
+          }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/Transport/Download/DownloadCheck')) {
+        return jsonResponse({ result: 403 })
+      }
+      throw new Error(`A denied DownloadCheck must stop request ${url.pathname}`)
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.observeEntry({
+      token: 'fixture-token-value',
+      kind: 'file',
+      resourceGuid: 'metadata-visible-file-guid',
+      assertPrincipalCurrent: principalIsCurrent
+    })).resolves.toMatchObject({
+      kind: 'file',
+      fileGuid: 'metadata-visible-file-guid'
+    })
+    await expect(client.authorizeDownload({
+      token: 'fixture-token-value',
+      fileGuid: 'metadata-visible-file-guid',
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+
+    expect(requestedPaths).toEqual([
+      '/flatsdk/api/services/DocList/GetFileByIdOrGuid',
+      '/flatsdk/api/services/Transport/Download/DownloadCheck'
+    ])
+  })
+
+  it('rejects a malformed DownloadCheck transfer origin as a Provider contract violation', async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      result: 0,
+      data: {
+        regionId: 17,
+        regionType: 2,
+        regionHash: 'fixture-download-hash',
+        regionUrl: 'not-an-absolute-url'
+      }
+    }))
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    await expect(client.authorizeDownload({
+      token: 'fixture-token-value',
+      fileGuid: 'download-file-guid',
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
+    })).rejects.toMatchObject({ code: 'provider_contract_violation' })
+
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
   it('downloads one GUID through check then streams only response bytes', async () => {
     const bytes = new TextEncoder().encode('fixture download bytes')
     const writes: Uint8Array[] = []
@@ -1160,15 +1418,123 @@ describe('OpenContent client enrollment', () => {
     })
     const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
 
-    await expect(client.downloadFile({
+    const authorization = await client.authorizeDownload({
       token: 'fixture-token-value',
       fileGuid: 'download-file-guid',
-      write: async (chunk) => { writes.push(Uint8Array.from(chunk)) },
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
+    })
+    await expect(client.downloadAuthorizedFile({
+      token: 'fixture-token-value',
+      authorization,
+      write: async (chunk: Uint8Array) => { writes.push(Uint8Array.from(chunk)) },
       signal: new AbortController().signal,
       assertPrincipalCurrent: principalIsCurrent
     })).resolves.toEqual({ bytesWritten: bytes.byteLength })
     expect(Buffer.concat(writes)).toEqual(Buffer.from(bytes))
   })
+
+  it('cancels and unlocks the download reader with the primary destination error', async () => {
+    const primaryError = new Error('The Workspace destination rejected the chunk.')
+    const cancel = vi.fn<(reason?: unknown) => void>(() => {
+      throw new Error('The response cancellation cleanup also failed.')
+    })
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]))
+      },
+      cancel
+    })
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.endsWith('/flatsdk/api/services/Transport/Download/DownloadCheck')) {
+        return jsonResponse({
+          result: 0,
+          data: {
+            regionId: 1,
+            regionType: 1,
+            regionHash: 'fixture-download-hash',
+            regionUrl: ''
+          }
+        })
+      }
+      if (url.includes('/downLoad/index?')) return new Response(body, { status: 200 })
+      throw new Error(`Unexpected request ${url}`)
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    const authorization = await client.authorizeDownload({
+      token: 'fixture-token-value',
+      fileGuid: 'download-file-guid',
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
+    })
+    await expect(client.downloadAuthorizedFile({
+      token: 'fixture-token-value',
+      authorization,
+      write: async () => { throw primaryError },
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: principalIsCurrent
+    })).rejects.toBe(primaryError)
+
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(cancel).toHaveBeenCalledWith(primaryError)
+    expect(body.locked).toBe(false)
+  })
+
+  it.each([
+    ['malformed', 'not-a-decimal-length', 'provider_contract_violation'],
+    ['oversized', String(1024 * 1024 * 1024 + 1), 'bounds_exceeded']
+  ] as const)(
+    'cancels and unlocks the download reader for a %s declared body',
+    async (_label, contentLength, expectedCode) => {
+      const cancel = vi.fn<(reason?: unknown) => void>()
+      const body = new ReadableStream<Uint8Array>({ cancel })
+      const fetch = vi.fn(async (input: string | URL | Request) => {
+        const url = String(input)
+        if (url.endsWith('/flatsdk/api/services/Transport/Download/DownloadCheck')) {
+          return jsonResponse({
+            result: 0,
+            data: {
+              regionId: 1,
+              regionType: 1,
+              regionHash: 'fixture-download-hash',
+              regionUrl: ''
+            }
+          })
+        }
+        if (url.includes('/downLoad/index?')) {
+          return new Response(body, {
+            status: 200,
+            headers: { 'content-length': contentLength }
+          })
+        }
+        throw new Error(`Unexpected request ${url}`)
+      })
+      const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+      const write = vi.fn(async () => undefined)
+
+      const authorization = await client.authorizeDownload({
+        token: 'fixture-token-value',
+        fileGuid: 'download-file-guid',
+        signal: new AbortController().signal,
+        assertPrincipalCurrent: principalIsCurrent
+      })
+      const primaryError = await client.downloadAuthorizedFile({
+        token: 'fixture-token-value',
+        authorization,
+        write,
+        signal: new AbortController().signal,
+        assertPrincipalCurrent: principalIsCurrent
+      }).catch((error: unknown) => error)
+
+      expect(primaryError).toMatchObject({ code: expectedCode })
+      expect(cancel).toHaveBeenCalledOnce()
+      expect(cancel).toHaveBeenCalledWith(primaryError)
+      expect(body.locked).toBe(false)
+      expect(write).not.toHaveBeenCalled()
+    }
+  )
 
   it('does not dispatch the download transfer after the Principal changes during its check', async () => {
     let principalCurrent = true
@@ -1196,10 +1562,9 @@ describe('OpenContent client enrollment', () => {
     })
     const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
 
-    await expect(client.downloadFile({
+    await expect(client.authorizeDownload({
       token: 'fixture-token-value',
       fileGuid: 'download-file-guid',
-      write: async () => undefined,
       signal: new AbortController().signal,
       assertPrincipalCurrent
     })).rejects.toMatchObject({ code: 'unauthorized' })

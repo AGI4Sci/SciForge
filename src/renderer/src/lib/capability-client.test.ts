@@ -34,6 +34,11 @@ function transport(output: CapabilityJsonValue) {
   const observe = vi.fn(async (): Promise<CapabilityObservation> => {
     throw new Error('observe not configured')
   })
+  const bind = vi.fn(async () => ({
+    token: 'cap_boundabcdefghijklmnop',
+    semanticRevision: 'revision-bound',
+    expiresAt: '2026-08-26T03:00:00.000Z'
+  }))
   const invoke = vi.fn(async ({ request }: Parameters<SciForgeApi['capabilities']['invoke']>[0]) =>
     result(request.actionId, output, request.invocationId)
   )
@@ -51,6 +56,7 @@ function transport(output: CapabilityJsonValue) {
   return {
     readiness,
     observe,
+    bind,
     invoke,
     cancel,
     subscribe,
@@ -234,6 +240,24 @@ describe('RendererCapabilityClient', () => {
       transportRequestId: '123e4567-e89b-42d3-a456-426614174010',
       workspaceId: '/workspace',
       request: { resource }
+    })
+  })
+
+  it('binds a non-authorizing resource reference through the exact Host workspace', async () => {
+    const bridge = transport(null)
+    const client = new RendererCapabilityClient({ getTransport: () => bridge })
+
+    await expect(client.bind(
+      'res_abcdefghijklmnopqrst',
+      { workspaceId: '/workspace/review' }
+    )).resolves.toEqual({
+      token: 'cap_boundabcdefghijklmnop',
+      semanticRevision: 'revision-bound',
+      expiresAt: '2026-08-26T03:00:00.000Z'
+    })
+    expect(bridge.bind).toHaveBeenCalledWith({
+      workspaceId: '/workspace/review',
+      request: { resourceRef: 'res_abcdefghijklmnopqrst' }
     })
   })
 

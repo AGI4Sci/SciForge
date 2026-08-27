@@ -15,3 +15,39 @@ back to local selection.
 Each immutable local account UUID is the opaque local Principal subject;
 display-name and first-run preference edits do not change the authorization
 `identityVersion`.
+
+The main process publishes three owner-scoped, token-free internal services.
+The authenticated User Cloud transport is available only to its manifest
+allowlist. Its `2.0.0` contract accepts only the closed Collaboration
+`RestRequest`/`RestResponse` protocol, rejects credential-shaped portable
+resource identities, and excludes Agent credential lifecycle envelopes. The
+`sciforge.agent-cloud-runtime@2.0.0` owns bounded registration, rotation,
+revocation, command, pull, and WSS operations for Collaboration. Bootstrap is
+strictly ordered as current OIDC User, freshly revalidated ACTIVE Device, then
+configured canonical AgentRuntime. Registration callers cannot advertise
+capabilities; Identity derives the exact token-free Runtime/model-access tags
+from the Host readiness observation and sends those facts to Cloud. Missing or
+unexecutable Runtime configuration fails closed before Agent creation. The
+service performs bootstrap decryption and bearer injection without returning
+Agent authority. A local fence or
+revocation advances the exact Agent authority epoch synchronously, aborts
+in-flight HTTP, closes in-flight WSS, and rechecks the epoch before accepting a
+response. OIDC ownership changes, logout, Device revoke, and unconfirmed Device
+refresh invalidate in-flight Agent authority and stop Collaboration delivery;
+same-User token refresh preserves the existing binding. Only a newly committed
+replacement authority can reopen a locally fenced Agent. Cloud remains the
+authority enforcing at most one active Agent for each Device.
+The Device fact-attestation signer is available only to
+`sciforge.project-coordinator`, accepts the single
+`project-content-provisioning-attestation` fact envelope, revalidates the exact
+OIDC User and ACTIVE Device before every signature, and returns public
+verification metadata only. No renderer capability, arbitrary-byte signing
+surface, Token, Agent authority, or Device private key crosses any service
+contract.
+
+OIDC refresh material, the Device signing key, and per-Agent authority are
+stored by the Identity-owned in-process Node-API adapter in the macOS Keychain
+with `WhenUnlockedThisDeviceOnly` and non-synchronizable accessibility. Vault
+keys bind the installation and typed secret purpose. Missing native support
+fails closed; there is no environment, file, subprocess, Host storage, IPC, or
+renderer fallback.

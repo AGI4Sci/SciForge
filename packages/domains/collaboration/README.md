@@ -8,10 +8,40 @@ ledger 和 Task adapter；renderer 只通过 Capability Broker 调用公开 capa
 领域专用 IPC、MCP 或 Host 私有路径。
 
 本地高频状态写入 `<userData>/domains/collaboration/state.json`，使用 0600 原子替换。
-非敏感服务 URL 与稳定 installation ID 保存到 package-scoped settings；user/device
-credential 与短期 pairing poll secret 只保存到 main-only package secret store。状态页、
-日志和诊断不会返回这些 secret。
+非敏感 Cloud URL 保存到 package-scoped settings。User 请求只通过 identity-access
+提供的 token-free authenticated Cloud transport，OIDC Token 始终留在 Identity 私有边界。
+每台 ACTIVE Device 注册一个 active Agent；注册、轮换、撤销、Agent-authenticated HTTP/WSS
+以及私有 authority 的存取都由 identity-access 的 owner-scoped internal service 完成。本包只
+观察非秘密的 Agent facts、authority readiness 与 Cloud events，不接收 bootstrap key、Token、
+私有 authority 或任何通用秘密存储句柄。Agent 注册输入不含 capability；heartbeat 仅投影
+Identity 从当前可执行 AgentRuntime readiness 派生的 capability tags。OIDC、Device、Runtime
+或 Agent authority 丢失时连接 fail closed，先停止 outbox/WSS 并 fence 本地 execution，再允许
+显式恢复。
+
+Worker availability 只发布本机事实：它复用最近一次成功 heartbeat 返回的精确 Agent revision、
+last-seen 与完整 Runtime capability tags，并从 durable execution journal 计算 active Task count。
+offer 写入 journal 及 execution 进入 completed/rejected/failed/fenced/manual-recovery 时都会刷新该
+count。automatic preflight 还会直接观察 canonical AgentRuntime readiness；不可用或观察失败时在
+Cloud accept 前以 `runtime_not_ready` 拒绝。Provider identity、Project Membership 和 content
+readiness 不在本地伪造，而由 Cloud 的 Project-scoped availability view 从独立事实组合。
+
+Endpoint challenge 由当前 OIDC User 发起并绑定精确 provider/realm/providerUserId；`/bind`
+只证明 provider endpoint 事实，不创建 User、不签发第二种 User credential，也没有匿名 poll
+secret。Agent presence、WSS、Inbox 与 durable outbox 使用 Identity 持有的独立、可撤销
+Agent authority，不把 OIDC authority 或 Agent 私密材料复制到本包。
 
 远端个人消息始终通过 Host 提供的 thread-targeted `agentExecution` 进入明确 thread，并
 携带 durable `clientDirectiveId`。模型、workspace policy、工具、审批和审计仍由唯一的
-AgentRuntime/Capability Broker 路径负责。普通手机身份不会生成桌面批准。
+AgentRuntime/Capability Broker 路径负责。普通手机身份不会生成桌面批准。Worker 的手动/
+自动接单、本地 journal、execution fence 与重启恢复继续由本包拥有，不形成第二条 Cloud
+认证或 Task 执行路径。
+
+本包还发布唯一的 main-only `sciforge.collaboration.coordinator-cloud-command@2.0.0`
+internal service，仅授权 `sciforge.project-coordinator` 消费。其闭集包含 Plan/Offer、统一
+HumanNeeded、TaskResult review、Project decision 与 final summary 命令；不包含 Owner
+`human.answer`，调用者也不能传入 Agent、route、header 或 credential。服务把命令绑定到当前
+本机 Agent，并复用同一个 durable outbox 和 Identity Agent Cloud Runtime。它还提供唯一、
+严格的 Coordinator Agent Inbox package-owner subscription：`coordinator_project` HumanAnswer
+只投递给 Project Coordinator，`worker_execution` HumanAnswer 仍只进入 Worker adapter；没有
+owner 时 Inbox 处理 fail closed，消息不会被静默 ACK。严格 Cloud revision/fence 错误会随该
+outbox entry 持久化并幂等返回；非严格 upstream body 不会写入 journal。

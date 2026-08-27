@@ -4,7 +4,7 @@
       "realmUrl": "https://chat.example.invalid",
       "botEmail": "collaboration-bot@example.invalid",
       "credentialSecretReference": "zulip-bot-credential",
-      "pairingAssurance": "verified"
+      "endpointBindingAssurance": "verified"
     }
   }
 }

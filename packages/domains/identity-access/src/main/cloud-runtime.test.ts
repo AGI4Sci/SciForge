@@ -60,7 +60,7 @@ describe('CloudIdentityRuntime', () => {
       appVersion: '1.0.0',
       environment,
       installationId: 'installation-1',
-      packageSecrets: memorySecrets(),
+      privateVault: memoryVault(),
       externalNavigation: {
         issueTarget: vi.fn(() => ({
           handle: 'navigation-handle',
@@ -93,7 +93,7 @@ describe('CloudIdentityRuntime', () => {
       appVersion: '1.0.0',
       environment: {},
       installationId: 'installation-1',
-      packageSecrets: memorySecrets(),
+      privateVault: memoryVault(),
       externalNavigation: {
         issueTarget: vi.fn(() => ({
           handle: 'navigation-handle',
@@ -125,7 +125,7 @@ describe('CloudIdentityRuntime', () => {
       appVersion: '1.0.0',
       environment: {},
       installationId: 'installation-1',
-      packageSecrets: memorySecrets()
+      privateVault: memoryVault()
     })
 
     try {
@@ -155,7 +155,7 @@ describe('CloudIdentityRuntime', () => {
       appRoot: root,
       environment: {},
       installationId: 'installation-1',
-      packageSecrets: memorySecrets()
+      privateVault: memoryVault()
     })).rejects.toThrow()
 
     expect(openStore).not.toHaveBeenCalled()
@@ -171,7 +171,7 @@ describe('CloudIdentityRuntime', () => {
       appVersion: '9.8.7-packaged',
       environment: {},
       installationId: 'installation-1',
-      packageSecrets: memorySecrets()
+      privateVault: memoryVault()
     })
 
     try {
@@ -200,7 +200,7 @@ describe('CloudIdentityRuntime', () => {
       appVersion: '1.0.0',
       environment: {},
       installationId: 'installation-1',
-      packageSecrets: memorySecrets()
+      privateVault: memoryVault()
     })).rejects.toThrow('device subscription failed')
 
     expect(closeDevice).toHaveBeenCalledOnce()
@@ -209,16 +209,18 @@ describe('CloudIdentityRuntime', () => {
   })
 })
 
-function memorySecrets() {
+function memoryVault() {
   const values = new Map<string, string>()
+  const key = (ref: Readonly<{ kind: string; agentId?: string }>) =>
+    `${ref.kind}:${ref.agentId ?? ''}`
   return {
-    has: async (key: string) => values.has(key),
-    read: async (key: string) => values.get(key) ?? null,
-    write: async (key: string, value: string) => {
-      values.set(key, value)
+    has: async (ref: Readonly<{ kind: string; agentId?: string }>) => values.has(key(ref)),
+    read: async (ref: Readonly<{ kind: string; agentId?: string }>) => values.get(key(ref)) ?? null,
+    write: async (ref: Readonly<{ kind: string; agentId?: string }>, value: string) => {
+      values.set(key(ref), value)
     },
-    remove: async (key: string) => {
-      values.delete(key)
+    remove: async (ref: Readonly<{ kind: string; agentId?: string }>) => {
+      values.delete(key(ref))
     }
   }
 }

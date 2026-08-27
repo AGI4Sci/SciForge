@@ -2,11 +2,12 @@
 
 Owns existing-account enrollment, Principal-bound connection state, secure Token use, pinned OpenContent schemas, and main-process transport. It exposes no Content Space or Shared Documents business semantics.
 
-The package manifest declares one private deployment-configuration contract:
-contract version `1`, source path
-`.sciforge/private/deployments/opencontent-connector.json`, packaged Resources
-path `domain-deployments/opencontent-connector.json`, a `4096`-byte ceiling,
-and `publicRelease: forbidden`. The sidecar is strict JSON containing only
+The package manifest declares one public, package-owned deployment-configuration
+contract: contract version `1`, source path
+`packages/domains/opencontent-connector/config/opencontent-connector.json`,
+packaged Resources path `domain-deployments/opencontent-connector.json`, a
+`4096`-byte ceiling, and `publicRelease: allowed`. The configuration is strict
+JSON containing only
 `contractVersion`, the fixed `opencontent-edoc2-demo` Provider Instance, and an
 absolute HTTPS `origin`. Activation requests no-follow semantics where the
 platform exposes them and always binds the opened descriptor to the pre-open
@@ -23,14 +24,22 @@ definitions, and the internal service descriptor remain registered.
 There is no environment, argv, caller, renderer, package-setting,
 alternate-path, or fallback endpoint channel.
 
-Local and packaged-private builds use one generic domain-package deployment
-composition that preserves every manifest declaration and activates a copy only
-when its source exists. Electron Builder captures that immutable composition
+Source and packaged builds use one generic domain-package deployment
+composition that preserves every manifest declaration. Because this Provider
+configuration is public package data, a normal Git clone and package tarball
+contain it without an out-of-band install. Electron Builder captures that immutable composition
 once; after packing it requires each active target to match the captured size
 and SHA-256 receipt and each inactive target to be absent. Official public
 releases reject every active deployment configuration marked `forbidden`. The
-sidecar is outside the package's npm `files` allowlist and its isolated packaged
-namespace does not create a supplier overlay.
+public configuration is inside the package's npm `files` allowlist and its
+isolated packaged namespace does not create a supplier overlay.
+
+The public deployment configuration is not an Agent skill and is never supplied
+through a private team ZIP. For the normal source workflow, the only optional
+out-of-band OpenContent input is the user-provided `opencontent-base.zip` Agent
+skill, installed into a Workspace with the generic private-skill installer.
+Provider discovery, enrollment, ordinary file operations and Team operations do
+not read that ZIP.
 
 The Connector owns the SciForge-authored supplier wire contract, asset
 verification, isolated process transport, and runtime snapshot mechanism. Its
@@ -48,6 +57,16 @@ packaged mode resolves them only from
 `node_modules`, walks ancestors, or falls back to the other mode. Missing or
 invalid, changed, extra, unreceipted, or wrong-version assets fail closed before
 supplier dispatch.
+
+The supplier overlay is optional Provider functionality, not the Agent skill
+installation path. Ordinary personal/Team listing, observation, folder,
+upload/download and Team-administration calls use the public `OpenContentClient`
+and bound Team port without `useSupplierTransport`. Only native-document and
+supplier-backed extended features receive that optional port. Consequently a
+missing overlay removes those extra feature contributions but cannot hide the
+Provider, block enrollment, or disable ordinary/Team operations. Installing the
+raw ZIP under a Workspace's `.codex/skills` directory does not activate the
+Connector supplier transport.
 
 The pinned CLI characterization freezes 86 inventory commands and the exact
 50-command admitted adapter union. Inventory is not an execution allowlist or
@@ -88,6 +107,23 @@ replacement, stable external `id`/`identityId` change, or Connection-revision
 drift fails before the Provider operation or Connector-owned supplier
 subprocess. Account and display-name metadata may refresh without changing
 binding continuity.
+
+## V4 file-transfer boundary
+
+Hierarchy and entry observations are metadata facts only. A hierarchy proof is
+collected in one exact current session, is token-free outside the Connector,
+and grants no later read or write authority. A download performs the Provider's
+real `DownloadCheck` as a separate authorization step and returns only an
+opaque, one-use lease. Consuming that lease revalidates the Principal and
+binding, opens a fresh current session, performs the byte transfer, and then
+cannot be repeated. A denial during `DownloadCheck` fails before any destination
+write.
+
+`upload-new` first proves the destination name is absent, performs the real
+Provider upload without an overwrite fallback, and accepts success only after
+an exact write-after observation matches parent, file identity, name, and size.
+An indeterminate transport or mismatched observation is `outcome_unknown` and
+is never retried as a new mutation.
 
 See the [attachment distribution boundary](../../../docs/opencontent-attachment-distribution.md)
 for installation, integrity, packaging, and public-release rules, and the

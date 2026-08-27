@@ -209,19 +209,34 @@ export async function discoverMainBundlePackageNames(root, packages) {
       )
       .map((candidate) => candidate.packageJson)
   ]
-  const visited = new Set()
-  const bundled = new Set()
+  const reachable = new Set()
   const visit = (packageName) => {
-    if (visited.has(packageName)) return
-    visited.add(packageName)
+    if (reachable.has(packageName)) return
     const candidate = workspacePackages.get(packageName)
     if (!candidate) return
-    if (hasTypeScriptRuntimeEntrypoint(candidate.packageJson)) bundled.add(packageName)
+    reachable.add(packageName)
     for (const dependency of dependencyNames(candidate.packageJson)) visit(dependency)
   }
   for (const candidate of roots) {
     if (workspacePackages.has(candidate.name)) visit(candidate.name)
     for (const dependency of dependencyNames(candidate)) visit(dependency)
+  }
+  const bundled = new Set(
+    [...reachable].filter((packageName) =>
+      hasTypeScriptRuntimeEntrypoint(workspacePackages.get(packageName).packageJson)
+    )
+  )
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const packageName of reachable) {
+      if (bundled.has(packageName)) continue
+      const candidate = workspacePackages.get(packageName)
+      if (dependencyNames(candidate.packageJson).some((dependency) => bundled.has(dependency))) {
+        bundled.add(packageName)
+        changed = true
+      }
+    }
   }
   return Object.freeze([...bundled].sort())
 }

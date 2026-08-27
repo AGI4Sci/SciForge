@@ -17,14 +17,15 @@ import { domainPackageDefinition as domainPackageDefinition13 } from '@sciforge/
 import { domainPackageDefinition as domainPackageDefinition14 } from '@sciforge/domain-opencontent-connector/definition'
 import { domainPackageDefinition as domainPackageDefinition15 } from '@sciforge/domain-opencontent-content-space-provider/definition'
 import { domainPackageDefinition as domainPackageDefinition16 } from '@sciforge/domain-paper-radar/definition'
-import { domainPackageDefinition as domainPackageDefinition17 } from '@sciforge/domain-project-dag/definition'
-import { domainPackageDefinition as domainPackageDefinition18 } from '@sciforge/domain-remote-ssh/definition'
-import { domainPackageDefinition as domainPackageDefinition19 } from '@sciforge/domain-research-checkpoints/definition'
-import { domainPackageDefinition as domainPackageDefinition20 } from '@sciforge/domain-research-dossier/definition'
-import { domainPackageDefinition as domainPackageDefinition21 } from '@sciforge/domain-scientific-compute/definition'
-import { domainPackageDefinition as domainPackageDefinition22 } from '@sciforge/domain-scientific-plotting/definition'
-import { domainPackageDefinition as domainPackageDefinition23 } from '@sciforge/domain-terminal/definition'
-import { domainPackageDefinition as domainPackageDefinition24 } from '@sciforge/domain-visual-review/definition'
+import { domainPackageDefinition as domainPackageDefinition17 } from '@sciforge/domain-project-coordinator/definition'
+import { domainPackageDefinition as domainPackageDefinition18 } from '@sciforge/domain-project-dag/definition'
+import { domainPackageDefinition as domainPackageDefinition19 } from '@sciforge/domain-remote-ssh/definition'
+import { domainPackageDefinition as domainPackageDefinition20 } from '@sciforge/domain-research-checkpoints/definition'
+import { domainPackageDefinition as domainPackageDefinition21 } from '@sciforge/domain-research-dossier/definition'
+import { domainPackageDefinition as domainPackageDefinition22 } from '@sciforge/domain-scientific-compute/definition'
+import { domainPackageDefinition as domainPackageDefinition23 } from '@sciforge/domain-scientific-plotting/definition'
+import { domainPackageDefinition as domainPackageDefinition24 } from '@sciforge/domain-terminal/definition'
+import { domainPackageDefinition as domainPackageDefinition25 } from '@sciforge/domain-visual-review/definition'
 
 export const installedDomainPackages = defineInstalledDomainPackageSet([
   domainPackageDefinition0,
@@ -51,5 +52,6 @@ export const installedDomainPackages = defineInstalledDomainPackageSet([
   domainPackageDefinition21,
   domainPackageDefinition22,
   domainPackageDefinition23,
-  domainPackageDefinition24
+  domainPackageDefinition24,
+  domainPackageDefinition25
 ])

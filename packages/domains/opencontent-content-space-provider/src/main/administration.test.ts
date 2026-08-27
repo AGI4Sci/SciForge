@@ -10,8 +10,7 @@ import {
 } from '@sciforge/domain-content-space/contract'
 import type { ContentSpaceProviderOperationContext } from '@sciforge/domain-content-space/contract'
 import {
-  OpenContentConnectorError,
-  OPENCONTENT_PROVIDER_INSTANCE_REF
+  OpenContentConnectorError
 } from '@sciforge/domain-opencontent-connector/contract'
 import type { OpenContentContentSpaceFacade } from '@sciforge/domain-opencontent-connector/main-contract'
 import {
@@ -26,6 +25,7 @@ import {
   createOpenContentAdministrationFeature
 } from './administration.js'
 
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'test-opencontent-provider'
 const principal = Object.freeze({
   authority: 'sciforge.identity-access',
   subject: 'content-owner',
@@ -71,7 +71,7 @@ describe('OpenContent provider-neutral administration adapter', () => {
     expect(new Set(states.map(({ operation }) => operation)).size).toBe(states.length)
     expect(states).toHaveLength(10)
     expect(states.every(({ readiness, reasonCode }) => (
-      readiness === 'poc_only' && reasonCode === 'verification_profile_required'
+      readiness === 'poc_only' && reasonCode === 'runtime_authorization_required'
     ))).toBe(true)
     expect(states.some(({ readiness }) => readiness === 'production_ready')).toBe(false)
     expect(states.some(({ operation }) => operation.includes('delete'))).toBe(false)
@@ -1061,12 +1061,13 @@ function facadeFixture(
       bindingRevision: 'b'.repeat(64)
     }),
     useTeamAdministration,
+    useHierarchyProofSession: vi.fn(),
     listRootFolders: vi.fn(),
     listFolderEntries: vi.fn(),
     observeEntry: vi.fn(),
     createFolder: vi.fn(),
     uploadNewFile: vi.fn(),
-    downloadFile: vi.fn()
+    authorizeDownload: vi.fn()
   }
 }
 

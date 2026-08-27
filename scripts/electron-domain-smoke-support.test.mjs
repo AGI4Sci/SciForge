@@ -6,8 +6,10 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS,
+  COLLABORATION_SMOKE_CAPABILITY_IDS,
   CONTENT_SPACE_SMOKE_CAPABILITY_IDS,
   IDENTITY_SMOKE_CAPABILITY_IDS,
+  PROJECT_COORDINATOR_SMOKE_CAPABILITY_IDS,
   REQUIRED_CAPABILITY_IDS,
   cleanupElectronSmoke,
   createElectronSmokeTemporaryDirectory,
@@ -103,7 +105,7 @@ test('smoke exposes cleanup failure when no primary failure exists', async () =>
   })
 })
 
-test('domain smoke requires every Identity and Content Space capability exactly once', () => {
+test('domain smoke requires every Stage 2 collaboration capability exactly once', () => {
   assert.deepEqual(IDENTITY_SMOKE_CAPABILITY_IDS, [
     'identity.local.inspect',
     'identity.local.list-accounts',
@@ -136,11 +138,54 @@ test('domain smoke requires every Identity and Content Space capability exactly 
     'identity.cloud.refresh-devices',
     'identity.cloud.revoke-device'
   ])
+  assert.deepEqual(COLLABORATION_SMOKE_CAPABILITY_IDS, [
+    'collaboration.status.read',
+    'collaboration.connection.configure',
+    'collaboration.connection.connect',
+    'collaboration.endpoint.challenge.start',
+    'collaboration.endpoint.challenge.poll',
+    'collaboration.agent.register',
+    'collaboration.participant.primary-agent.select',
+    'collaboration.projection.link',
+    'collaboration.projection.update',
+    'collaboration.projection.share',
+    'collaboration.sync.retry',
+    'collaboration.task.list',
+    'collaboration.worker.acceptance-policy.update',
+    'collaboration.task.offer.decide',
+    'collaboration.managed-container.inspect',
+    'collaboration.managed-container.provision',
+    'collaboration.managed-container.archive'
+  ])
+  assert.deepEqual(PROJECT_COORDINATOR_SMOKE_CAPABILITY_IDS, [
+    'project-coordinator.workspace.read',
+    'project-coordinator.project.create',
+    'project-coordinator.plan-draft.read',
+    'project-coordinator.plan-draft.generate',
+    'project-coordinator.plan-draft.edit',
+    'project-coordinator.plan.submit',
+    'project-coordinator.plan.confirm-activate',
+    'project-coordinator.content-provisioning.plan',
+    'project-coordinator.content-provisioning.apply',
+    'project-coordinator.content-recovery.observe-link',
+    'project-coordinator.content-recovery.abandon',
+    'project-coordinator.content-recovery.retry-successor',
+    'project-coordinator.membership.add',
+    'project-coordinator.membership.remove',
+    'project-coordinator.human-needed.create',
+    'project-coordinator.human-needed.answer',
+    'project-coordinator.coordinator.transfer',
+    'project-coordinator.artifact-review.prepare',
+    'project-coordinator.result.review',
+    'project-coordinator.project.complete'
+  ])
   assert.equal(new Set(REQUIRED_CAPABILITY_IDS).size, REQUIRED_CAPABILITY_IDS.length)
   for (const capabilityId of [
     ...IDENTITY_SMOKE_CAPABILITY_IDS,
     ...CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS,
-    ...CONTENT_SPACE_SMOKE_CAPABILITY_IDS
+    ...CONTENT_SPACE_SMOKE_CAPABILITY_IDS,
+    ...COLLABORATION_SMOKE_CAPABILITY_IDS,
+    ...PROJECT_COORDINATOR_SMOKE_CAPABILITY_IDS
   ]) {
     assert.equal(REQUIRED_CAPABILITY_IDS.filter((candidate) => candidate === capabilityId).length, 1)
   }
@@ -154,6 +199,29 @@ test('Identity smoke account creation receives a fresh bounded invocation identi
   assert.equal(second, 'electron-smoke-identity-create-00000000-0000-4000-8000-000000000002')
   assert.notEqual(first, second)
   assert.match(first, /^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$/u)
+})
+
+test('smoke CLI requires one strict Cloud/OIDC deployment pair', () => {
+  assert.deepEqual(parseSmokeCliOptions([
+    '--expected-cloud-origin', 'https://cloud-test.sciforge.cn',
+    '--expected-oidc-issuer', 'https://login-test.sciforge.cn/realms/SciForge'
+  ]).expectedDeployment, {
+    cloudOrigin: 'https://cloud-test.sciforge.cn',
+    oidcIssuer: 'https://login-test.sciforge.cn/realms/SciForge'
+  })
+  assert.throws(
+    () => parseSmokeCliOptions([
+      '--expected-cloud-origin', 'https://cloud-test.sciforge.cn'
+    ]),
+    /must be supplied together/u
+  )
+  assert.throws(
+    () => parseSmokeCliOptions([
+      '--expected-cloud-origin', 'https://cloud-test.sciforge.cn/path',
+      '--expected-oidc-issuer', 'https://login-test.sciforge.cn/realms/SciForge'
+    ]),
+    /HTTPS origin/u
+  )
 })
 
 test('smoke result requires the selected Identity and a composed Content Space Provider', () => {
@@ -170,6 +238,51 @@ test('smoke result requires the selected Identity and a composed Content Space P
       expectedRendererUrl: valid.url
     }),
     /Content Space Provider Instance/u
+  )
+  assert.throws(
+    () => validateSmokeResult({ ...valid, collaborationConnectionState: 'connected' }, {
+      expectedRendererUrl: valid.url
+    }),
+    /Collaboration isolated profile/u
+  )
+  assert.throws(
+    () => validateSmokeResult({ ...valid, projectCoordinatorConnectionState: 'ready' }, {
+      expectedRendererUrl: valid.url
+    }),
+    /Project Coordinator did not preserve/u
+  )
+})
+
+test('deployment-aware smoke rejects endpoint drift and OIDC configuration failure', () => {
+  const valid = {
+    ...validSmokeResult(),
+    projectCoordinatorConnectionState: 'identity_required',
+    deploymentEnvironment: {
+      cloudOrigin: 'https://cloud-test.sciforge.cn',
+      oidcIssuer: 'https://login-test.sciforge.cn/realms/SciForge'
+    }
+  }
+  const options = {
+    expectedDeployment: valid.deploymentEnvironment,
+    expectedRendererUrl: valid.url
+  }
+  assert.doesNotThrow(() => validateSmokeResult(valid, options))
+  assert.throws(
+    () => validateSmokeResult({
+      ...valid,
+      deploymentEnvironment: {
+        ...valid.deploymentEnvironment,
+        cloudOrigin: 'https://wrong.example.test'
+      }
+    }, options),
+    /frozen Cloud\/OIDC endpoints/u
+  )
+  assert.throws(
+    () => validateSmokeResult({
+      ...valid,
+      cloudIdentityErrorCode: 'OIDC_CONFIGURATION_ERROR'
+    }, options),
+    /not ready/u
   )
 })
 
@@ -191,9 +304,19 @@ function validSmokeResult() {
     visualReviewActionId: 'visual-review.open',
     identityActionId: 'identity.local.create-account',
     identityAccountUsername: 'electron_smoke',
+    cloudIdentityActionId: 'identity.cloud.inspect',
+    cloudIdentityState: 'signed-out',
+    cloudDeviceState: 'signed-out',
+    cloudIdentityErrorCode: null,
     contentSpaceProviderActionId: 'content-space.list-provider-instances',
     contentSpaceProviderInstanceRef: 'installed-provider',
     contentSpaceProviderInstanceCount: 1,
+    collaborationActionId: 'collaboration.status.read',
+    collaborationConfigured: false,
+    collaborationConnectionState: 'unconfigured',
+    projectCoordinatorActionId: 'project-coordinator.workspace.read',
+    projectCoordinatorConnectionState: 'cloud_unavailable',
+    projectCoordinatorProjectCount: 0,
     nativeVisual: {
       toolNames: ['sciforge_look', 'sciforge_capture'],
       cropped: true,

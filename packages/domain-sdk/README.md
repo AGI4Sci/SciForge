@@ -199,6 +199,10 @@ operation:
   plus optional cancellation. A request either starts a thread (with or without a workspace) or
   names an exact runtime/thread pair. Retryable callers reuse one `clientDirectiveId`, which enters
   the same Host directive ledger as desktop messages instead of creating a second execution path.
+  The Host may also publish a strict token-free Runtime readiness observation containing only the
+  selected runtime ID and bounded capability tags. Consumers that require executable Agent work
+  fail closed when that observation is absent, unavailable, or not configured; endpoints, model
+  credentials, and provider responses never enter this contract.
 - `@sciforge/domain-sdk/package-storage` exposes package-owner-scoped non-secret settings with
   optimistic revisions and a main-process-only secret store. Generated composition binds both
   stores to the manifest owner; packages cannot choose another namespace. Renderer code changes
@@ -235,6 +239,23 @@ to request the provider-owned grant through its installed manifest; it is not a 
 consumer allowlist. Sandboxed or transport callers cannot request or carry these Host-issued grants.
 Packages that require lifecycle grants or resource navigation declare Host API `1.1.0` as their
 minimum; older Hosts reject those packages during catalog registration.
+
+Host API `1.7.0` adds one finite Human-confirmed batch primitive for trusted main packages. A
+package that holds the provider-owned system grant may call `createApprovedBatch` only while its
+exact outer capability invocation is actively covered by Human confirmation. The Host freezes at
+most 64 ordered operations, their inputs, logical invocation IDs, Workspace, revision string and
+fixed/earlier-output resource ancestry. It keeps each one-use operation proof in a process-local
+closure: packages receive no token, serializable authority or replayable handle. A standing system
+grant cannot invoke a batch-delegated capability by itself. Changed order, action/effect, input,
+resource revision/ancestry, Principal, Workspace, or outer invocation invalidates all remaining
+proofs; the same confirmation cannot create a corrected or replacement batch. `planDigest` is
+audit identity only and is never authority.
+
+Host API `1.8.0` additionally binds that complete canonical plan to the exact confirmation input.
+The outer confirmed capability input must carry the lowercase SHA-256 as `confirmedPlanDigest`;
+the Host recomputes it over the full parsed plan before minting any proof. A missing/mismatched
+digest consumes and rejects that confirmation, so a package cannot confirm plan A and capture
+plan B first, nor retry the originally confirmed plan after a replacement attempt.
 
 ## Execution provenance and reproducibility
 

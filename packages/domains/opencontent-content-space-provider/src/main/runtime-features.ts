@@ -84,7 +84,7 @@ const NATIVE_DOCUMENT_OPERATION_STATES = Object.freeze(
     : Object.freeze({
         operation,
         readiness: 'poc_only' as const,
-        reasonCode: 'verification_profile_required' as const
+        reasonCode: 'runtime_authorization_required' as const
       }))
 ) satisfies readonly ContentSpaceNativeDocumentOperationState[]
 const OPENCONTENT_EXTENDED_OPERATIONS = Object.freeze([
@@ -151,7 +151,7 @@ const EXTENDED_OPERATION_STATES = Object.freeze(
     : Object.freeze({
         operation,
         readiness: 'poc_only' as const,
-        reasonCode: 'verification_profile_required' as const
+        reasonCode: 'runtime_authorization_required' as const
       }))
 ) satisfies readonly ContentSpaceExtendedOperationState[]
 const SESSION_BACKED_EXTENDED_OPERATION_STATES = Object.freeze(
@@ -159,7 +159,7 @@ const SESSION_BACKED_EXTENDED_OPERATION_STATES = Object.freeze(
     ? Object.freeze({
         operation,
         readiness: 'poc_only' as const,
-        reasonCode: 'verification_profile_required' as const
+        reasonCode: 'runtime_authorization_required' as const
       })
     : Object.freeze({
         operation,

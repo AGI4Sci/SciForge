@@ -154,6 +154,16 @@ export type PortableResourceMaterializedReference = Readonly<{
   resourceKind: string
 }>
 
+export type PortableResourceMaterializationOptions = Readonly<{
+  signal?: AbortSignal
+  /**
+   * `forbid` creates a process-local resource with no portable export binding.
+   * This is required for execution-scoped system work whose durable envelope
+   * is a locator only, never reusable authority.
+   */
+  exportPolicy?: 'allow' | 'forbid'
+}>
+
 /**
  * A Host-created package-scoped facade. Export infers its trusted consumer
  * owner from composition; callers cannot supply or impersonate a consumer ID.
@@ -161,8 +171,10 @@ export type PortableResourceMaterializedReference = Readonly<{
 export type DomainMainPortableResourceReferencesHost = Readonly<{
   materialize(
     reference: string | PortableResourceReferenceEnvelope,
-    options?: Readonly<{ signal?: AbortSignal }>
+    options?: PortableResourceMaterializationOptions
   ): Promise<PortableResourceMaterializedReference>
+  /** Immediately retires one resource in the exact active invocation scope. */
+  discard(input: Readonly<{ resourceRef: string }>): Promise<void>
   export(
     input: Readonly<{ resourceRef: string }>,
     options?: Readonly<{ signal?: AbortSignal }>

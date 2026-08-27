@@ -101,6 +101,8 @@ async function compileTimeOwnerScopedFacadeChecks(
   await host.materialize(envelope, { audience: 'ui', callerId: 'forged' })
   // @ts-expect-error Consumer identity is injected by the owner-scoped Host facade.
   await host.export({ resourceRef, consumerId: 'forged.consumer' })
+  // @ts-expect-error Discard authority is also derived from the active Host invocation.
+  await host.discard({ resourceRef, callerId: 'forged' })
 }
 
 void compileTimeOwnerScopedFacadeChecks
@@ -360,12 +362,14 @@ describe('portable resource composition contracts', () => {
         resourceRef: `res_${'b'.repeat(24)}`,
         resourceKind
       }),
+      discard: async () => undefined,
       export: async () => envelope
     })
 
     const materialized = await host.materialize(envelope)
     assert.equal(materialized.resourceKind, resourceKind)
     assert.deepEqual(await host.export({ resourceRef: materialized.resourceRef }), envelope)
+    await host.discard({ resourceRef: materialized.resourceRef })
 
   })
 })

@@ -263,7 +263,10 @@ describe('IdentityRendererProjection', () => {
     expect(observedRevisions).not.toContain('mutation-response')
     expect(projection.getSnapshot()).toMatchObject({
       cloud: { revision: 'cloud-3' },
-      cloudResource: { token: inspectedResource.token, semanticRevision: 'cloud-3' },
+      cloudResource: {
+        token: inspectedResource.token,
+        semanticRevision: 'cloud-3'
+      },
       cloudLoading: false,
       error: null
     })

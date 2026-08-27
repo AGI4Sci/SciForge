@@ -29,9 +29,6 @@ import {
   OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR
 } from './bundled-assets.js'
 
-import {
-  OPENCONTENT_PROVIDER_INSTANCE_REF
-} from '../contract.js'
 import type {
   OpenContentContentSpaceFacade,
   OpenContentSupplierCommandTransport
@@ -40,9 +37,11 @@ import type { OpenContentConnectionService } from './connection-service.js'
 import { createDomainMainEntry } from './index.js'
 import { OPENCONTENT_DEPLOYMENT_CONFIGURATION_DESCRIPTOR } from './deployment-config.js'
 import {
-  createOpenContentSkillRuntimeSession,
-  resolveOpenContentSkillRuntimeAssets
+  createOpenContentSupplierRuntimeSession,
+  resolveOpenContentSupplierRuntimeAssets
 } from './skill-runtime.js'
+
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo'
 
 const principal = Object.freeze({
   authority: 'sciforge.identity-access',
@@ -66,7 +65,7 @@ describe('OpenContent main-only skill runtime session', () => {
       assetFixture.repositoryRoot,
       'node_modules/@sciforge-internal/opencontent-skill-assets'
     ))).toBe(true)
-    const sourceAssets = resolveOpenContentSkillRuntimeAssets({
+    const sourceAssets = resolveOpenContentSupplierRuntimeAssets({
       getAppRoot: () => assetFixture.repositoryRoot,
       isPackaged: () => false
     })
@@ -96,7 +95,7 @@ describe('OpenContent main-only skill runtime session', () => {
     const accessed = new Set<PropertyKey>()
     const untypedOptions = new Proxy({
       fetch: vi.fn(),
-      skillRuntime: {
+      supplierRuntime: {
         processPort: { run: vi.fn() },
         executablePath: '/untrusted/node',
         temporaryRoot: '/untrusted/tmp'
@@ -115,7 +114,7 @@ describe('OpenContent main-only skill runtime session', () => {
     createWithUntypedOptions(entry.host, untypedOptions)
 
     expect(accessed).not.toContain('fetch')
-    expect(accessed).not.toContain('skillRuntime')
+    expect(accessed).not.toContain('supplierRuntime')
     expect(entry.registeredService()?.useSupplierTransport).toBeTypeOf('function')
   })
 
@@ -160,7 +159,7 @@ describe('OpenContent main-only skill runtime session', () => {
   })
 
   it('leaves the optional source runtime disabled when the repository overlay is absent', () => {
-    expect(resolveOpenContentSkillRuntimeAssets({
+    expect(resolveOpenContentSupplierRuntimeAssets({
       getAppRoot: () => assetFixture.shadowOnlyRepositoryRoot,
       isPackaged: () => false
     })).toBeUndefined()
@@ -190,7 +189,7 @@ describe('OpenContent main-only skill runtime session', () => {
         'dir'
       )
 
-      expect(() => resolveOpenContentSkillRuntimeAssets({
+      expect(() => resolveOpenContentSupplierRuntimeAssets({
         getAppRoot: () => repositoryRoot,
         isPackaged: () => false
       })).toThrow()
@@ -200,7 +199,7 @@ describe('OpenContent main-only skill runtime session', () => {
   })
 
   it('fails source resolution closed when the fixed repository overlay is unreceipted', () => {
-    expect(() => resolveOpenContentSkillRuntimeAssets({
+    expect(() => resolveOpenContentSupplierRuntimeAssets({
       getAppRoot: () => assetFixture.unreceiptedRepositoryRoot,
       isPackaged: () => false
     })).toThrow(/receipt/u)
@@ -216,7 +215,7 @@ describe('OpenContent main-only skill runtime session', () => {
         'opencontent-base-1.0.1/cli/bin/oc.js'
       ), 'module.exports = { changed: true }\n', { mode: 0o644 })
 
-      expect(() => resolveOpenContentSkillRuntimeAssets({
+      expect(() => resolveOpenContentSupplierRuntimeAssets({
         getAppRoot: () => repositoryRoot,
         isPackaged: () => false
       })).toThrow(/changed file/u)
@@ -252,7 +251,7 @@ describe('OpenContent main-only skill runtime session', () => {
         { mode: 0o644 }
       )
 
-      expect(() => resolveOpenContentSkillRuntimeAssets({
+      expect(() => resolveOpenContentSupplierRuntimeAssets({
         getAppRoot: () => repositoryRoot,
         isPackaged: () => false
       })).toThrow(/unreceipted file/u)
@@ -267,7 +266,7 @@ describe('OpenContent main-only skill runtime session', () => {
       cpSync(assetFixture.repositoryRoot, repositoryRoot, { recursive: true })
       writeOverlayReceipt(repositoryRoot, '1.0.2')
 
-      expect(() => resolveOpenContentSkillRuntimeAssets({
+      expect(() => resolveOpenContentSupplierRuntimeAssets({
         getAppRoot: () => repositoryRoot,
         isPackaged: () => false
       })).toThrow(/package-owned provenance/u)
@@ -287,7 +286,7 @@ describe('OpenContent main-only skill runtime session', () => {
       ), 'module.exports = { rewritten: true }\n', { mode: 0o644 })
       writeOverlayReceipt(repositoryRoot, '1.0.1', 'f'.repeat(64))
 
-      expect(() => resolveOpenContentSkillRuntimeAssets({
+      expect(() => resolveOpenContentSupplierRuntimeAssets({
         getAppRoot: () => repositoryRoot,
         isPackaged: () => false
       })).toThrow(/provenance/u)
@@ -297,14 +296,14 @@ describe('OpenContent main-only skill runtime session', () => {
   })
 
   it('requires the Host-injected source repository root to be absolute', () => {
-    expect(() => resolveOpenContentSkillRuntimeAssets({
+    expect(() => resolveOpenContentSupplierRuntimeAssets({
       getAppRoot: () => 'relative/repository',
       isPackaged: () => false
     })).toThrow(/absolute repository root/u)
   })
 
   it('surfaces an incomplete source overlay to strict asset validation', () => {
-    const sourceAssets = resolveOpenContentSkillRuntimeAssets({
+    const sourceAssets = resolveOpenContentSupplierRuntimeAssets({
       getAppRoot: () => assetFixture.incompleteRepositoryRoot,
       isPackaged: () => false
     })
@@ -326,22 +325,22 @@ describe('OpenContent main-only skill runtime session', () => {
   })
 
   it('derives packaged assets only from the Host-injected Electron app root', () => {
-    expect(resolveOpenContentSkillRuntimeAssets({
+    expect(resolveOpenContentSupplierRuntimeAssets({
       getAppRoot: () => resolve(assetFixture.resourcesPath, 'app.asar'),
       isPackaged: () => true
     })).toEqual({
       mode: 'packaged',
       resourcesPath: assetFixture.resourcesPath
     })
-    expect(resolveOpenContentSkillRuntimeAssets({
+    expect(resolveOpenContentSupplierRuntimeAssets({
       getAppRoot: () => resolve(assetFixture.root, 'missing-resources', 'app.asar'),
       isPackaged: () => true
     })).toBeUndefined()
-    expect(resolveOpenContentSkillRuntimeAssets({
+    expect(resolveOpenContentSupplierRuntimeAssets({
       getAppRoot: () => resolve(assetFixture.repositoryRoot, 'app.asar'),
       isPackaged: () => true
     })).toBeUndefined()
-    expect(() => resolveOpenContentSkillRuntimeAssets({
+    expect(() => resolveOpenContentSupplierRuntimeAssets({
       getAppRoot: () => 'relative/app.asar',
       isPackaged: () => true
     })).toThrow(/absolute Electron app root/u)
@@ -351,7 +350,7 @@ describe('OpenContent main-only skill runtime session', () => {
     const resourcesPath = mkdtempSync(resolve(tmpdir(), 'sciforge-opencontent-packaged-residue-'))
     try {
       mkdirSync(resolve(resourcesPath, 'opencontent'), { recursive: true })
-      expect(() => resolveOpenContentSkillRuntimeAssets({
+      expect(() => resolveOpenContentSupplierRuntimeAssets({
         getAppRoot: () => resolve(resourcesPath, 'app.asar'),
         isPackaged: () => true
       })).toThrow('Bundled OpenContent assets are unavailable or invalid.')
@@ -362,7 +361,7 @@ describe('OpenContent main-only skill runtime session', () => {
         resolve(resourcesPath, 'opencontent'),
         'dir'
       )
-      expect(() => resolveOpenContentSkillRuntimeAssets({
+      expect(() => resolveOpenContentSupplierRuntimeAssets({
         getAppRoot: () => resolve(resourcesPath, 'app.asar'),
         isPackaged: () => true
       })).toThrow('Bundled OpenContent assets are unavailable or invalid.')
@@ -393,7 +392,8 @@ describe('OpenContent main-only skill runtime session', () => {
       managedDataFiles: []
     }))
     const connections = connectionService(tokenCanary)
-    const session = createOpenContentSkillRuntimeSession({
+    const session = createOpenContentSupplierRuntimeSession({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       connections,
       processPort: { run },
       assets: { mode: 'source', assetRoot: assetFixture.assetRoot },
@@ -440,7 +440,8 @@ describe('OpenContent main-only skill runtime session', () => {
 
   it('rejects another Provider Instance before opening the credential session', async () => {
     const connections = connectionService('token-canary')
-    const session = createOpenContentSkillRuntimeSession({
+    const session = createOpenContentSupplierRuntimeSession({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       connections,
       processPort: { run: vi.fn() },
       assets: { mode: 'source', assetRoot: assetFixture.assetRoot },
@@ -467,7 +468,8 @@ describe('OpenContent main-only skill runtime session', () => {
       structuredDeliveryItems: [],
       managedDataFiles: []
     }))
-    const session = createOpenContentSkillRuntimeSession({
+    const session = createOpenContentSupplierRuntimeSession({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       connections: connectionService('token-canary'),
       processPort: { run },
       assets: { mode: 'source', assetRoot: assetFixture.assetRoot },
@@ -512,7 +514,7 @@ function connectionService(token: string): OpenContentConnectionService {
   return {
     status: vi.fn(),
     attestExternalBinding: vi.fn(async () => bindingAttestation),
-    bindExistingAccount: vi.fn(),
+    enroll: vi.fn(),
     useCurrentSession: vi.fn(async (_input, operation) => operation({
       token,
       externalIdentityId: 42,

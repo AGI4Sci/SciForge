@@ -306,17 +306,38 @@ test('publishable domain packages resolve every public export from independent t
           `${packageJson.name} deployment source path must be declared`
         )
         const packedPaths = new Set(packed[0].files.map(({ path }) => path))
-        assert.equal(
-          packedPaths.has(deploymentConfiguration.sourceRelativePath),
-          false,
-          `${packageJson.name} tarball must exclude its private deployment sidecar`
-        )
-        assert.equal(
-          [...packedPaths].some((path) =>
-            path === '.sciforge' || path.startsWith('.sciforge/')),
-          false,
-          `${packageJson.name} tarball must exclude private deployment directories`
-        )
+        if (deploymentConfiguration.publicRelease === 'allowed') {
+          const absoluteSource = resolve(
+            repositoryRoot,
+            deploymentConfiguration.sourceRelativePath
+          )
+          const packageRelativeSource = relative(packageRoot, absoluteSource)
+            .split(process.platform === 'win32' ? '\\' : '/')
+            .join('/')
+          assert.equal(
+            packageRelativeSource === '..' || packageRelativeSource.startsWith('../') ||
+              isAbsolute(packageRelativeSource),
+            false,
+            `${packageJson.name} public deployment configuration must be package-owned`
+          )
+          assert.equal(
+            packedPaths.has(packageRelativeSource),
+            true,
+            `${packageJson.name} tarball must include its public deployment configuration`
+          )
+        } else {
+          assert.equal(
+            packedPaths.has(deploymentConfiguration.sourceRelativePath),
+            false,
+            `${packageJson.name} tarball must exclude its private deployment sidecar`
+          )
+          assert.equal(
+            [...packedPaths].some((path) =>
+              path === '.sciforge' || path.startsWith('.sciforge/')),
+            false,
+            `${packageJson.name} tarball must exclude private deployment directories`
+          )
+        }
       }
       archives.push(join(tarballs, packed[0].filename))
     }

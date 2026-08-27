@@ -259,7 +259,7 @@ export class ProviderRuntimeStore {
   async hasPendingChallenge(provider: string, realmId: string): Promise<boolean> {
     const result = await this.pool.query(
       `SELECT 1 FROM sciforge_collaboration.human_endpoint_challenges
-        WHERE provider=$1 AND realm_id=$2 AND verified_at IS NULL AND consumed_at IS NULL AND expires_at>$3
+        WHERE provider=$1 AND realm_id=$2 AND verified_at IS NULL AND expires_at>$3
         LIMIT 1`,
       [provider, realmId, this.timestamp()]
     )

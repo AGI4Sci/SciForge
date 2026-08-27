@@ -54,6 +54,12 @@ test('renderer client invokes only typed public collaboration capabilities', asy
       if (contract.actionId === COLLABORATION_CAPABILITY_IDS.projectionShare) {
         return { projection: projection() } as TOutput
       }
+      if (contract.actionId === COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate) {
+        return { agentId: 'agent-a', mode: 'automatic' } as TOutput
+      }
+      if (contract.actionId === COLLABORATION_CAPABILITY_IDS.taskOfferDecide) {
+        return { accepted: true } as TOutput
+      }
       throw new Error(`Unexpected capability ${contract.actionId}`)
     }
   }
@@ -66,6 +72,12 @@ test('renderer client invokes only typed public collaboration capabilities', asy
     projectionId: 'projection-1',
     allowUserIds: ['user-2'],
     expectedRevision: 2
+  })
+  await client.updateWorkerAcceptancePolicy({ agentId: 'agent-a', mode: 'automatic' })
+  await client.decideTaskOffer({
+    executionId: 'execution-task-1',
+    decision: 'reject',
+    reason: 'human_rejected'
   })
 
   assert.deepEqual(calls.map((call) => call.actionId === COLLABORATION_CAPABILITY_IDS.endpointChallengePoll
@@ -90,6 +102,22 @@ test('renderer client invokes only typed public collaboration capabilities', asy
         projectionId: 'projection-1',
         allowUserIds: ['user-2'],
         expectedRevision: 2
+      },
+      options: { approval: { mode: 'confirmation' } }
+    },
+    {
+      actionId: COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate,
+      effect: 'external-write',
+      input: { agentId: 'agent-a', mode: 'automatic' },
+      options: { approval: { mode: 'confirmation' } }
+    },
+    {
+      actionId: COLLABORATION_CAPABILITY_IDS.taskOfferDecide,
+      effect: 'external-write',
+      input: {
+        executionId: 'execution-task-1',
+        decision: 'reject',
+        reason: 'human_rejected'
       },
       options: { approval: { mode: 'confirmation' } }
     }

@@ -1157,4 +1157,181 @@ describe('portable resource export and owner facade', () => {
     })
     expect(result.output).toMatchObject({ resourceKind })
   })
+
+  it('binds process-local materialization to the exact Host system execution and discards it', async () => {
+    const registry = new CapabilityRegistry()
+    const broker = new CapabilityBroker(registry, {
+      resolveCurrentPrincipal: () => principalA
+    })
+    const resolver = fakeResolver()
+    const service = new PortableResourceReferenceService({
+      broker,
+      codecs: new PortableResourceCodecRegistry([ownedCodec()]),
+      resolvers: new PortableAuthorityResolverRegistry([ownedResolver(resolver)]),
+      currentPrincipal: () => principalA
+    })
+    const facade = service.forOwner(allowedConsumer)
+    const resultSchema = z.object({
+      resourceRef: z.string().nullable(),
+      usable: z.boolean(),
+      exportable: z.boolean()
+    }).strict()
+    registry.register(defineCapability({
+      id: 'fixture.portable.system-process-local',
+      version: '1.0.0',
+      title: 'Use one process-local portable resource',
+      description: 'Characterizes caller, Principal, Workspace, and execution binding.',
+      audiences: ['system'],
+      scope: 'workspace',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({
+        action: z.enum(['materialize', 'probe', 'discard']),
+        resourceRef: z.string().optional()
+      }).strict(),
+      outputSchema: resultSchema,
+      handler: async (input, context) => {
+        if (input.action === 'materialize') {
+          const materialized = await facade.materialize(envelope, {
+            exportPolicy: 'forbid'
+          })
+          let exportable = true
+          try {
+            await facade.export({ resourceRef: materialized.resourceRef })
+          } catch {
+            exportable = false
+          }
+          return {
+            output: {
+              resourceRef: materialized.resourceRef,
+              usable: true,
+              exportable
+            }
+          }
+        }
+        if (!input.resourceRef) throw new Error('A process-local resource reference is required.')
+        if (input.action === 'discard') {
+          await facade.discard({ resourceRef: input.resourceRef })
+        }
+        let usable = true
+        try {
+          broker.describeResourceRef(context.caller, input.resourceRef)
+        } catch {
+          usable = false
+        }
+        return {
+          output: {
+            resourceRef: input.resourceRef,
+            usable,
+            exportable: false
+          }
+        }
+      }
+    }))
+    let invocationSequence = 0
+    const invoke = async (
+      callerId: string,
+      executionId: string,
+      input: Readonly<{
+        action: 'materialize' | 'probe' | 'discard'
+        resourceRef?: string
+      }>
+    ) => broker.invokeHostSystem({
+      callerId,
+      workspaceId: 'workspace-alpha',
+      systemExecutionContext: {
+        contractVersion: 1,
+        projectId: 'project-alpha',
+        taskId: 'task-alpha',
+        executionId,
+        executionRevision: 3
+      }
+    }, {
+      actionId: 'fixture.portable.system-process-local',
+      invocationId: `fixture-portable-process-local-${++invocationSequence}`,
+      input
+    })
+
+    const issued = resultSchema.parse((await invoke(
+      'domain-runtime:fixture.collaboration',
+      'execution-alpha',
+      { action: 'materialize' }
+    )).output)
+    expect(issued.resourceRef).toMatch(/^res_/u)
+    expect(issued.exportable).toBe(false)
+
+    const sameExecution = resultSchema.parse((await invoke(
+      'domain-runtime:fixture.collaboration',
+      'execution-alpha',
+      { action: 'probe', resourceRef: issued.resourceRef! }
+    )).output)
+    expect(sameExecution.usable).toBe(true)
+
+    const otherExecution = resultSchema.parse((await invoke(
+      'domain-runtime:fixture.collaboration',
+      'execution-beta',
+      { action: 'probe', resourceRef: issued.resourceRef! }
+    )).output)
+    expect(otherExecution.usable).toBe(false)
+
+    const otherCaller = resultSchema.parse((await invoke(
+      'domain-runtime:fixture.other',
+      'execution-alpha',
+      { action: 'probe', resourceRef: issued.resourceRef! }
+    )).output)
+    expect(otherCaller.usable).toBe(false)
+
+    const discarded = resultSchema.parse((await invoke(
+      'domain-runtime:fixture.collaboration',
+      'execution-alpha',
+      { action: 'discard', resourceRef: issued.resourceRef! }
+    )).output)
+    expect(discarded.usable).toBe(false)
+  })
+
+  it('rejects a system materialization without Host-derived execution context before resolution', async () => {
+    const registry = new CapabilityRegistry()
+    const broker = new CapabilityBroker(registry, {
+      resolveCurrentPrincipal: () => principalA
+    })
+    const resolve = vi.fn(fakeResolver().resolve)
+    const resolver = fakeResolver({ resolve })
+    const issue = vi.spyOn(broker, 'issueResource')
+    const service = new PortableResourceReferenceService({
+      broker,
+      codecs: new PortableResourceCodecRegistry([ownedCodec()]),
+      resolvers: new PortableAuthorityResolverRegistry([ownedResolver(resolver)]),
+      currentPrincipal: () => principalA
+    })
+    const facade = service.forOwner(allowedConsumer)
+    registry.register(defineCapability({
+      id: 'fixture.portable.system-context-required',
+      version: '1.0.0',
+      title: 'Require one Host system execution context',
+      description: 'Rejects system materialization without Host-derived execution authority.',
+      audiences: ['system'],
+      scope: 'workspace',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.literal(true) }).strict(),
+      handler: async () => {
+        await facade.materialize(envelope, { exportPolicy: 'forbid' })
+        return { output: { ok: true as const } }
+      }
+    }))
+
+    await expect(broker.invokeHostSystem({
+      callerId: 'domain-runtime:fixture.collaboration',
+      workspaceId: 'workspace-alpha'
+    }, {
+      actionId: 'fixture.portable.system-context-required',
+      invocationId: 'fixture-portable-system-context-required',
+      input: {}
+    })).rejects.toMatchObject({ code: 'handler_failed' })
+    expect(resolve).not.toHaveBeenCalled()
+    expect(issue).not.toHaveBeenCalled()
+  })
 })

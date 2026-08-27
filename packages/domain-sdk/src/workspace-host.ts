@@ -1167,7 +1167,7 @@ export class WorkspaceHostOperationError extends Error {
     this.name = 'WorkspaceHostOperationError'
     this.code = parsed.code
     this.retryable = parsed.retryable
-    this.details = parsed.details
+    if (parsed.details !== undefined) this.details = parsed.details
   }
 }
 

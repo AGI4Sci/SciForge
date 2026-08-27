@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { deviceSchema, meResponseSchema, type Device } from '@sciforge/collaboration-contracts'
+import { AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID } from '../authenticated-cloud-transport.js'
 import { CloudIdentityRuntime } from './cloud-runtime.js'
 import { cloudInstallationId } from './device-service.js'
 import { IdentityService } from './service.js'
@@ -28,6 +29,8 @@ describe('CloudIdentityRuntime HTTP integration', () => {
     let revocationAccepted = false
     let revokedTokenRejected = false
     const requestFacts: Array<{ path: string; bearer: boolean }> = []
+    const commandPayloads: unknown[] = []
+    const commandIdempotencyKeys: Array<string | undefined> = []
     let issuer = ''
     let baseUrl = ''
 
@@ -134,6 +137,27 @@ describe('CloudIdentityRuntime HTTP integration', () => {
           })
           return
         }
+        if (url.pathname === '/v1/commands') {
+          const command = await readRequestJson(request) as Readonly<{
+            requestId: string
+            limit?: number
+          }>
+          commandIdempotencyKeys.push(
+            typeof request.headers['idempotency-key'] === 'string'
+              ? request.headers['idempotency-key']
+              : undefined
+          )
+          commandPayloads.push(command)
+          sendJson(response, 200, {
+            protocolVersion: '1.0',
+            type: 'rest.project_page',
+            requestId: command.requestId,
+            limit: command.limit ?? 50,
+            projects: [],
+            observedAt: '2026-08-18T12:00:00.000Z'
+          })
+          return
+        }
         if (url.pathname === '/v1/device-enrollments' && enrollmentFails) {
           sendJson(response, 503, {
             error: {
@@ -161,8 +185,8 @@ describe('CloudIdentityRuntime HTTP integration', () => {
     baseUrl = `http://127.0.0.1:${address.port}`
     issuer = `${baseUrl}/realms/SciForge`
 
-    const packageSecrets = memorySecrets({
-      'oidc.session': JSON.stringify({
+    const privateVault = memoryVault({
+      'oidc-session:': JSON.stringify({
         version: 1,
         issuer,
         clientId: 'sciforge-desktop',
@@ -176,6 +200,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
     const externalNavigation = { issueTarget, openTarget } as never
     const principal = new IdentityService(userDataDir, installationSeed)
     const principalSnapshots: PrincipalContextSnapshot[] = []
+    const authorityInvalidations: string[] = []
     const disposePrincipal = principal.subscribe((snapshot) => principalSnapshots.push(snapshot))
     const runtime = await CloudIdentityRuntime.create({
       userDataDir,
@@ -185,9 +210,10 @@ describe('CloudIdentityRuntime HTTP integration', () => {
         SCIFORGE_CLOUD_BASE_URL: baseUrl
       },
       installationId: installationSeed,
-      packageSecrets,
+      privateVault,
       externalNavigation,
-      appVersion: '0.2.17'
+      appVersion: '0.2.17',
+      onAuthorityInvalidated: (reason) => authorityInvalidations.push(reason)
     })
 
     try {
@@ -204,6 +230,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       expect(principal.current()?.deviceId).not.toBe(installationId)
       const principalBeforeRefresh = principal.snapshot()
       const principalPublicationCount = principalSnapshots.length
+      const invalidationsBeforeRefresh = authorityInvalidations.length
       const deviceStatesDuringRefresh: string[] = []
       const disposeRuntimeRefresh = runtime.subscribe(() => {
         deviceStatesDuringRefresh.push(runtime.snapshot().device.state)
@@ -217,8 +244,47 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       expect(refreshRotation).toBe(2)
       expect(principal.snapshot()).toEqual(principalBeforeRefresh)
       expect(principalSnapshots).toHaveLength(principalPublicationCount)
+      expect(authorityInvalidations).toHaveLength(invalidationsBeforeRefresh)
       expect(deviceStatesDuringRefresh.length).toBeGreaterThan(0)
       expect(new Set(deviceStatesDuringRefresh)).toEqual(new Set(['active']))
+      await expect(runtime.executeAuthenticatedCloud({
+        contractVersion: 1,
+        operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
+        payload: {
+          protocolVersion: '1.0',
+          requestId: 'req_IdentityTransport0001',
+          type: 'project.transition',
+          idempotencyKey: 'idem_IdentityTransport0001',
+          projectId: 'prj_IdentityTransport0001',
+          expectedRevision: 1,
+          expectedCoordinatorAuthorityEpoch: 1,
+          expectedExecutionAuthorityEpoch: 1,
+          status: 'paused'
+        }
+      })).resolves.toEqual({
+        contractVersion: 1,
+        status: 200,
+        body: {
+          protocolVersion: '1.0',
+          type: 'rest.project_page',
+          requestId: 'req_IdentityTransport0001',
+          limit: 50,
+          projects: [],
+          observedAt: '2026-08-18T12:00:00.000Z'
+        }
+      })
+      expect(commandPayloads).toEqual([{
+        protocolVersion: '1.0',
+        requestId: 'req_IdentityTransport0001',
+        type: 'project.transition',
+        idempotencyKey: 'idem_IdentityTransport0001',
+        projectId: 'prj_IdentityTransport0001',
+        expectedRevision: 1,
+        expectedCoordinatorAuthorityEpoch: 1,
+        expectedExecutionAuthorityEpoch: 1,
+        status: 'paused'
+      }])
+      expect(commandIdempotencyKeys).toEqual(['idem_IdentityTransport0001'])
       let principalVersion = expectLatestPrincipal(
         principalSnapshots,
         'cloud-authenticated',
@@ -230,7 +296,21 @@ describe('CloudIdentityRuntime HTTP integration', () => {
         identity: { state: 'signed-in' },
         device: { state: 'revoked' }
       })
+      expect(authorityInvalidations.slice(invalidationsBeforeRefresh)).toContain(
+        'Desktop Device authority changed.'
+      )
       expect(refreshRotation).toBe(3)
+      await expect(runtime.executeAuthenticatedCloud({
+        contractVersion: 1,
+        operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
+        payload: {
+          protocolVersion: '1.0',
+          requestId: 'req_IdentityTransport0002',
+          type: 'project.list',
+          limit: 50
+        }
+      })).rejects.toMatchObject({ code: 'device_required' })
+      expect(commandPayloads).toHaveLength(1)
       expect(principal.current()?.assurance).toBe('local-selection')
       principalVersion = expectLatestPrincipal(
         principalSnapshots,
@@ -324,12 +404,13 @@ describe('CloudIdentityRuntime HTTP integration', () => {
 
       const firstRotatedRefreshToken = currentRefreshToken
       expect(refreshRotation).toBe(3)
-      expect(packageSecrets.value('oidc.session')).toContain(firstRotatedRefreshToken)
+      expect(privateVault.value({ kind: 'oidc-session' })).toContain(firstRotatedRefreshToken)
       runtime.close()
       disposePrincipal()
       principal.close()
 
       const restartedPrincipal = new IdentityService(userDataDir, installationSeed)
+      const restartedAuthorityInvalidations: string[] = []
       const restartedRuntime = await CloudIdentityRuntime.create({
         userDataDir,
         appRoot: userDataDir,
@@ -338,9 +419,10 @@ describe('CloudIdentityRuntime HTTP integration', () => {
           SCIFORGE_CLOUD_BASE_URL: baseUrl
         },
         installationId: installationSeed,
-        packageSecrets,
+        privateVault,
         externalNavigation,
-        appVersion: '0.2.17'
+        appVersion: '0.2.17',
+        onAuthorityInvalidated: (reason) => restartedAuthorityInvalidations.push(reason)
       })
       try {
         await expect(restartedRuntime.initialize()).resolves.toMatchObject({
@@ -349,7 +431,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
         })
         expect(refreshRotation).toBe(4)
         expect(currentRefreshToken).not.toBe(firstRotatedRefreshToken)
-        expect(packageSecrets.value('oidc.session')).toContain(currentRefreshToken)
+        expect(privateVault.value({ kind: 'oidc-session' })).toContain(currentRefreshToken)
         expect(restartedPrincipal.current()?.assurance).toBe('cloud-authenticated')
 
         const revokedRefreshToken = currentRefreshToken
@@ -357,8 +439,9 @@ describe('CloudIdentityRuntime HTTP integration', () => {
           identity: { state: 'signed-out' },
           device: { state: 'signed-out' }
         })
+        expect(restartedAuthorityInvalidations).toContain('OIDC User authority changed.')
         expect(revocationAccepted).toBe(true)
-        expect(packageSecrets.value('oidc.session')).toBeNull()
+        expect(privateVault.value({ kind: 'oidc-session' })).toBeNull()
         expect(restartedPrincipal.current()?.assurance).toBe('local-selection')
         expect(issueTarget.mock.calls.some(([input]) => (
           input.url.startsWith(`${issuer}/protocol/openid-connect/logout?`) &&
@@ -367,7 +450,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
 
         restartedRuntime.close()
         restartedPrincipal.close()
-        await packageSecrets.write('oidc.session', JSON.stringify({
+        await privateVault.write({ kind: 'oidc-session' }, JSON.stringify({
           version: 1,
           issuer,
           clientId: 'sciforge-desktop',
@@ -383,7 +466,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
             SCIFORGE_CLOUD_BASE_URL: baseUrl
           },
           installationId: installationSeed,
-          packageSecrets,
+          privateVault,
           externalNavigation,
           appVersion: '0.2.17'
         })
@@ -394,7 +477,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
             error: { source: 'identity', code: 'OIDC_SESSION_EXPIRED' }
           })
           expect(revokedTokenRejected).toBe(true)
-          expect(packageSecrets.value('oidc.session')).toBeNull()
+          expect(privateVault.value({ kind: 'oidc-session' })).toBeNull()
           expect(rejectedPrincipal.current()?.assurance).toBe('local-selection')
         } finally {
           rejectedRuntime.close()
@@ -432,18 +515,20 @@ function expectLatestPrincipal(
   return latest!.identityVersion
 }
 
-function memorySecrets(initial: Readonly<Record<string, string>>) {
+function memoryVault(initial: Readonly<Record<string, string>>) {
   const values = new Map(Object.entries(initial))
+  const key = (ref: Readonly<{ kind: string; agentId?: string }>) =>
+    `${ref.kind}:${ref.agentId ?? ''}`
   return {
-    has: vi.fn(async (key: string) => values.has(key)),
-    read: vi.fn(async (key: string) => values.get(key) ?? null),
-    write: vi.fn(async (key: string, value: string) => {
-      values.set(key, value)
+    has: vi.fn(async (ref: Readonly<{ kind: string; agentId?: string }>) => values.has(key(ref))),
+    read: vi.fn(async (ref: Readonly<{ kind: string; agentId?: string }>) => values.get(key(ref)) ?? null),
+    write: vi.fn(async (ref: Readonly<{ kind: string; agentId?: string }>, value: string) => {
+      values.set(key(ref), value)
     }),
-    remove: vi.fn(async (key: string) => {
-      values.delete(key)
+    remove: vi.fn(async (ref: Readonly<{ kind: string; agentId?: string }>) => {
+      values.delete(key(ref))
     }),
-    value: (key: string) => values.get(key) ?? null
+    value: (ref: Readonly<{ kind: string; agentId?: string }>) => values.get(key(ref)) ?? null
   }
 }
 
@@ -523,4 +608,10 @@ async function readRequestForm(request: IncomingMessage): Promise<URLSearchParam
   const chunks: Buffer[] = []
   for await (const chunk of request) chunks.push(Buffer.from(chunk))
   return new URLSearchParams(Buffer.concat(chunks).toString('utf8'))
+}
+
+async function readRequestJson(request: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = []
+  for await (const chunk of request) chunks.push(Buffer.from(chunk))
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }

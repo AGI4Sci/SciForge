@@ -4,14 +4,18 @@ import test from 'node:test'
 import { WebSocket } from 'ws'
 
 import {
-  AuthenticationService,
   CollaborationService,
   CollaborationWebSocketHub,
   createCollaborationHttpServer
 } from '../packages/collaboration-server/src/index.ts'
 import {
+  createAgentCredentialBootstrap,
+  seedOidcUserDevice
+} from '../packages/collaboration-server/src/test-fixtures/collaboration-identity.ts'
+import {
   FakeClock,
-  FakeCollaborationRepository
+  FakeCollaborationRepository,
+  FakeCollaborationRequestActorResolver
 } from '../test-fixtures/collaboration/fake-adapters.mjs'
 
 const BASE_PATH = '/collaboration'
@@ -38,11 +42,13 @@ function commandBody(index) {
   return {
     protocolVersion: '1.0',
     requestId: `req_Transport${String(index).padStart(5, '0')}`,
-    type: 'pairing.begin',
-    idempotencyKey: `idem_transport_pairing_${String(index).padStart(2, '0')}`,
-    provider: 'fake-im',
-    realmId: 'fake-realm',
-    requestedDisplayName: `传输测试用户 ${index}`
+    type: 'endpoint.challenge.create',
+    idempotencyKey: `idem_transport_endpoint_${String(index).padStart(2, '0')}`,
+    expectedIdentity: {
+      provider: 'fake-im',
+      realmId: 'fake-realm',
+      providerUserId: `transport-provider-user-${index}`
+    }
   }
 }
 
@@ -54,26 +60,25 @@ async function postCommand(baseUrl, body, headers = {}) {
   })
 }
 
-async function bindUser(service, slot = 'websocket') {
-  const begun = await service.beginPairing({
-    provider: 'fake-im',
-    realmId: 'fake-realm',
-    requestedDisplayName: `${slot} 测试用户`,
-    idempotencyKey: `idem_${slot}_begin_user`
+function oidcToken(slot) {
+  return `header.${Buffer.from(`transport-${slot}`, 'utf8').toString('base64url')}.signature`
+}
+
+function oidcAuthentication(repository, clock, identities) {
+  return new FakeCollaborationRequestActorResolver({
+    repository,
+    now: clock.now,
+    oidcActors: identities
   })
-  await service.verifyPairingFromProvider({
-    provider: 'fake-im',
-    realmId: 'fake-realm',
-    providerUserId: `provider-${slot}-user`,
-    providerEventId: `provider-${slot}-event`,
-    challengeCode: begun.challengeCode,
-    assurance: 'strong'
-  })
-  const redeemed = await service.redeemPairing({
-    pollSecret: begun.pollSecret,
-    idempotencyKey: `idem_${slot}_redeem_user`
-  })
-  return { userId: redeemed.userId, credential: redeemed.userCredential }
+}
+
+function resolveToken(authentication, token) {
+  return authentication.resolveRequestActor({ headers: { authorization: `Bearer ${token}` } })
+}
+
+async function seedTransportIdentity(repository, clock, slot) {
+  const identity = await seedOidcUserDevice(repository, `${slot} 测试用户`, clock.now())
+  return { ...identity, token: oidcToken(slot) }
 }
 
 function nextMessage(webSocket) {
@@ -96,10 +101,11 @@ function closed(webSocket) {
   return new Promise((resolve) => webSocket.once('close', (code) => resolve(code)))
 }
 
-test('8.4 production HTTP boundary bounds command bodies, rate limits pairing and never echoes authorization material', async (t) => {
+test('8.4 production HTTP boundary bounds OIDC-only commands and never echoes authorization material', async (t) => {
   const clock = new FakeClock()
   const repository = new FakeCollaborationRepository()
-  const authentication = new AuthenticationService(repository, clock.now)
+  const identity = await seedTransportIdentity(repository, clock, 'http')
+  const authentication = oidcAuthentication(repository, clock, new Map([[identity.token, identity.user]]))
   const service = new CollaborationService({ repository, now: clock.now })
   const server = createCollaborationHttpServer({
     service,
@@ -111,24 +117,23 @@ test('8.4 production HTTP boundary bounds command bodies, rate limits pairing an
   })
   t.after(() => closeServer(server))
   const baseUrl = await listen(server)
+  const authorization = { authorization: `${['Bear', 'er'].join('')} ${identity.token}` }
 
   const oversized = commandBody(90)
-  oversized.requestedDisplayName = 'x'.repeat(1_200)
-  const oversizedResponse = await postCommand(baseUrl, oversized)
+  oversized.expectedIdentity.providerUserId = 'x'.repeat(1_200)
+  const oversizedResponse = await postCommand(baseUrl, oversized, authorization)
   assert.equal(oversizedResponse.status, 413)
   const oversizedText = await oversizedResponse.text()
   assert.equal(oversizedText.includes('x'.repeat(64)), false)
   assert.equal(JSON.parse(oversizedText).error.code, 'payload_too_large')
 
-  for (let index = 1; index <= 10; index += 1) {
-    const response = await postCommand(baseUrl, commandBody(index))
-    assert.equal(response.status, 200)
-  }
-  const limited = await postCommand(baseUrl, commandBody(11))
-  assert.equal(limited.status, 429)
-  const limitedBody = await limited.json()
-  assert.equal(limitedBody.type, 'rest.error')
-  assert.equal(limitedBody.error.code, 'rate_limited')
+  const authenticated = await postCommand(baseUrl, commandBody(1), authorization)
+  assert.equal(authenticated.status, 200)
+  assert.equal((await authenticated.json()).type, 'endpoint.challenge.created')
+
+  const unauthenticated = await postCommand(baseUrl, commandBody(2))
+  assert.equal(unauthenticated.status, 401)
+  assert.equal((await unauthenticated.json()).error.code, 'authentication_required')
 
   const authorizationMaterial = invalidTestOnlyValue('AUTHORIZATION')
   const protectedResponse = await postCommand(baseUrl, {
@@ -144,10 +149,20 @@ test('8.4 production HTTP boundary bounds command bodies, rate limits pairing an
 test('8.4 production WebSocket boundary enforces origin, authenticated routing, bounded frames and minimal notifications', async (t) => {
   const clock = new FakeClock()
   const repository = new FakeCollaborationRepository()
-  const authentication = new AuthenticationService(repository, clock.now)
+  const identity = await seedTransportIdentity(repository, clock, 'websocket')
+  const authentication = oidcAuthentication(repository, clock, new Map([[identity.token, identity.user]]))
   const hub = new CollaborationWebSocketHub()
   const service = new CollaborationService({ repository, notifier: hub, now: clock.now })
-  const participant = await bindUser(service)
+  const bootstrap = createAgentCredentialBootstrap()
+  const registered = await service.registerAgent(identity.user, {
+    deviceId: identity.deviceId,
+    displayName: 'WebSocket Device Agent',
+    nodeType: 'desktop',
+    capabilities: ['agent-runtime'],
+    credentialBootstrapPublicKey: bootstrap.publicKey,
+    idempotencyKey: 'idem_websocket_agent_register'
+  })
+  const agentCredential = bootstrap.open(registered.sealedCredential)
   const server = createCollaborationHttpServer({
     service,
     authentication,
@@ -170,7 +185,7 @@ test('8.4 production WebSocket boundary enforces origin, authenticated routing, 
 
   const webSocket = new WebSocket(`${webSocketUrl}/v1/events`, {
     origin: 'https://desktop.invalid',
-    headers: { authorization: `${['Bear', 'er'].join('')} ${participant.credential}` }
+    headers: { authorization: `${['Bear', 'er'].join('')} ${agentCredential}` }
   })
   const readyMessage = nextMessage(webSocket)
   await opened(webSocket)
@@ -188,11 +203,11 @@ test('8.4 production WebSocket boundary enforces origin, authenticated routing, 
   assert.equal(pong.nonce, 'bounded-ping')
 
   const availabilityMessage = nextMessage(webSocket)
-  hub.notifyInboxAvailable({ kind: 'user', id: participant.userId }, 7)
+  hub.notifyInboxAvailable({ kind: 'agent', id: registered.agent.agentId }, 7)
   assert.deepEqual(await availabilityMessage, {
     protocolVersion: '1.0',
     type: 'inbox.available',
-    recipientType: 'user',
+    recipientType: 'agent',
     highestSequence: 7
   })
 
@@ -202,7 +217,7 @@ test('8.4 production WebSocket boundary enforces origin, authenticated routing, 
 
   const blocked = new WebSocket(`${webSocketUrl}/v1/events`, {
     origin: 'https://untrusted.invalid',
-    headers: { authorization: `${['Bear', 'er'].join('')} ${participant.credential}` }
+    headers: { authorization: `${['Bear', 'er'].join('')} ${agentCredential}` }
   })
   const blockedStatus = await new Promise((resolve) => {
     blocked.once('unexpected-response', (_request, response) => {
@@ -214,22 +229,16 @@ test('8.4 production WebSocket boundary enforces origin, authenticated routing, 
   assert.equal(blockedStatus, 403)
 })
 
-test('2.5 production HTTP owner transfer rotates the Agent credential once and audits old-owner denial', async (t) => {
+test('2.5 production HTTP keeps Agent credentials sealed, Device-bound and rotatable only by its OIDC User', async (t) => {
   const clock = new FakeClock()
   const repository = new FakeCollaborationRepository()
-  const authentication = new AuthenticationService(repository, clock.now)
+  const a = await seedTransportIdentity(repository, clock, 'agent-a')
+  const b = await seedTransportIdentity(repository, clock, 'agent-b')
+  const authentication = oidcAuthentication(repository, clock, new Map([
+    [a.token, a.user],
+    [b.token, b.user]
+  ]))
   const service = new CollaborationService({ repository, now: clock.now })
-  const a = await bindUser(service, 'transfer-a')
-  const b = await bindUser(service, 'transfer-b')
-  const actorA = await authentication.resolveBearer(a.credential)
-  assert.equal(actorA.kind, 'user')
-  const registered = await service.registerAgent(actorA, {
-    installationId: 'ins_Transport0001',
-    displayName: '待转移 Agent',
-    nodeType: 'desktop',
-    capabilities: ['agent-runtime'],
-    idempotencyKey: 'idem_transport_register_agent'
-  })
   const server = createCollaborationHttpServer({
     service,
     authentication,
@@ -239,42 +248,69 @@ test('2.5 production HTTP owner transfer rotates the Agent credential once and a
   })
   t.after(() => closeServer(server))
   const baseUrl = await listen(server)
-  const transfer = {
+  const authorizationA = { authorization: `${['Bear', 'er'].join('')} ${a.token}` }
+  const registrationBootstrap = createAgentCredentialBootstrap()
+  const registration = {
     protocolVersion: '1.0',
-    requestId: 'req_TransferAgent1',
-    type: 'agent.owner.transfer',
-    idempotencyKey: 'idem_transport_agent_transfer',
-    agentId: registered.agent.agentId,
-    targetUserId: b.userId,
-    expectedRevision: registered.agent.revision
+    requestId: 'req_RegisterAgent001',
+    type: 'agent.register',
+    idempotencyKey: 'idem_transport_register_agent',
+    deviceId: a.deviceId,
+    displayName: 'Device-bound Agent',
+    nodeType: 'desktop',
+    capabilities: ['agent-runtime'],
+    credentialBootstrapPublicKey: registrationBootstrap.publicKey
   }
-  const authorization = `${['Bear', 'er'].join('')} ${a.credential}`
-  const response = await postCommand(baseUrl, transfer, { authorization })
+  const response = await postCommand(baseUrl, registration, authorizationA)
   assert.equal(response.status, 200)
-  const body = await response.json()
-  assert.equal(body.type, 'agent.owner_transferred')
-  assert.equal(body.agent.ownerUserId, b.userId)
-  assert.equal(body.agent.credentialVersion, registered.agent.credentialGeneration + 1)
-  const newDeviceActor = await authentication.resolveBearer(body.deviceCredential)
-  assert.equal(newDeviceActor.userId, b.userId)
-  assert.equal(newDeviceActor.agentId, registered.agent.agentId)
-  await assert.rejects(() => authentication.resolveBearer(registered.deviceCredential), { code: 'credential_revoked' })
+  const registrationText = await response.text()
+  const registered = JSON.parse(registrationText)
+  assert.equal(registered.type, 'agent.registered')
+  assert.equal(registered.agent.ownerUserId, a.userId)
+  assert.equal(registered.agent.deviceId, a.deviceId)
+  const initialCredential = registrationBootstrap.open(registered.sealedCredential)
+  assert.equal(registrationText.includes(initialCredential), false)
+  const agentActor = await resolveToken(authentication, initialCredential)
+  assert.equal(agentActor.userId, a.userId)
+  assert.equal(agentActor.deviceId, a.deviceId)
 
-  const replay = await postCommand(baseUrl, transfer, { authorization })
+  const replay = await postCommand(baseUrl, registration, authorizationA)
   assert.equal(replay.status, 409)
   const replayText = await replay.text()
-  assert.equal(replayText.includes(body.deviceCredential), false)
+  assert.equal(replayText.includes(initialCredential), false)
+  assert.equal(replayText.includes(registered.sealedCredential.ciphertext), false)
 
-  const oldOwnerAttempt = await postCommand(baseUrl, {
-    ...transfer,
-    requestId: 'req_TransferAgent2',
-    idempotencyKey: 'idem_transport_old_owner_retry',
-    expectedRevision: body.agent.revision
-  }, { authorization })
-  assert.equal(oldOwnerAttempt.status, 403)
+  const rotationBootstrap = createAgentCredentialBootstrap()
+  const rotation = {
+    protocolVersion: '1.0',
+    requestId: 'req_RotateAgent0001',
+    type: 'agent.rotate_credential',
+    idempotencyKey: 'idem_transport_rotate_agent',
+    agentId: registered.agent.agentId,
+    expectedRevision: registered.agent.revision,
+    credentialBootstrapPublicKey: rotationBootstrap.publicKey
+  }
+  const rotatedResponse = await postCommand(baseUrl, rotation, authorizationA)
+  assert.equal(rotatedResponse.status, 200)
+  const rotatedText = await rotatedResponse.text()
+  const rotated = JSON.parse(rotatedText)
+  assert.equal(rotated.type, 'agent.credential_rotated')
+  const rotatedCredential = rotationBootstrap.open(rotated.sealedCredential)
+  assert.equal(rotatedText.includes(rotatedCredential), false)
+  await assert.rejects(() => resolveToken(authentication, initialCredential), { code: 'credential_revoked' })
+  assert.equal((await resolveToken(authentication, rotatedCredential)).deviceId, a.deviceId)
+
+  const otherUserAttempt = await postCommand(baseUrl, {
+    ...rotation,
+    requestId: 'req_RotateAgent0002',
+    idempotencyKey: 'idem_transport_other_user_rotate',
+    expectedRevision: rotated.agent.revision,
+    credentialBootstrapPublicKey: createAgentCredentialBootstrap().publicKey
+  }, { authorization: `${['Bear', 'er'].join('')} ${b.token}` })
+  assert.equal(otherUserAttempt.status, 403)
   assert.ok(repository.state.auditEvents.some((event) => (
-    event.action === 'agent.owner.transfer' &&
-    event.actorUserId === a.userId &&
+    event.action === 'agent.credential.rotate' &&
+    event.actorUserId === b.userId &&
     event.outcome === 'rejected' &&
     event.metadata.errorCode === 'permission_denied'
   )))

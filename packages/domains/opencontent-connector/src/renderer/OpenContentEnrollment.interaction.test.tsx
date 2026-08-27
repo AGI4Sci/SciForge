@@ -5,7 +5,6 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
   type OpenContentConnectionResult
 } from '../contract.js'
 import {
@@ -16,6 +15,8 @@ import type {
   OpenContentConnectionRendererClient,
   OpenContentUnbindResult
 } from './client.js'
+
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'test-opencontent-provider'
 
 const mountedRoots = new Set<Readonly<{
   root: Root
@@ -48,7 +49,7 @@ describe('OpenContent enrollment fragment', () => {
     expect(status).not.toHaveBeenCalled()
   })
 
-  it('loads a disconnected account into an accessible, embedded credential form', async () => {
+  it('keeps account authentication out of the Renderer and opens only the native action', async () => {
     const client = connectionClient()
     const mounted = await mountEnrollment({ client })
 
@@ -57,15 +58,12 @@ describe('OpenContent enrollment fragment', () => {
     expect(mounted.container.querySelector('[role="status"]')?.textContent)
       .toContain('Ready to connect')
 
-    const username = inputByLabel(mounted.container, 'OpenContent account')
-    const password = inputByLabel(mounted.container, 'Password')
-    expect(username.autocomplete).toBe('username')
-    expect(password.autocomplete).toBe('current-password')
-    expect(password.type).toBe('password')
-    expect(buttonByText(mounted.container, 'Connect account').disabled).toBe(true)
+    expect(mounted.container.querySelectorAll('input')).toHaveLength(0)
+    expect(mounted.container.textContent).toContain('private operating-system prompt')
+    expect(buttonByText(mounted.container, 'Connect account').disabled).toBe(false)
   })
 
-  it('keeps the username, clears the password, and translates credential failure safely', async () => {
+  it('sends only the Provider Instance and translates authentication failure safely', async () => {
     const bind = vi.fn(async (): Promise<OpenContentConnectionResult> => ({
       outcome: 'error',
       error: { code: 'invalid_credentials', action: 'check_credentials' }
@@ -73,29 +71,16 @@ describe('OpenContent enrollment fragment', () => {
     const client = connectionClient({ bind })
     const mounted = await mountEnrollment({ client })
 
-    const username = inputByLabel(mounted.container, 'OpenContent account')
-    const password = inputByLabel(mounted.container, 'Password')
-    await setInputValue(username, 'scientist@example.org')
-    await setInputValue(password, 'wrong-password')
     await click(buttonByText(mounted.container, 'Connect account'))
 
     expect(bind).toHaveBeenCalledWith(
       OPENCONTENT_PROVIDER_INSTANCE_REF,
-      'scientist@example.org',
-      'wrong-password',
       { signal: expect.any(AbortSignal) }
     )
-    expect(username.value).toBe('scientist@example.org')
-    expect(password.value).toBe('')
-    expect(username.getAttribute('aria-invalid')).toBe('true')
-    expect(password.getAttribute('aria-invalid')).toBe('true')
-    expect(password.getAttribute('aria-describedby')).toContain('privacy')
-    expect(password.getAttribute('aria-describedby')).toContain('notice')
-    expect(document.activeElement).toBe(password)
     const alert = mounted.container.querySelector('[role="alert"]')
-    expect(alert?.textContent).toContain('account or password')
+    expect(alert?.textContent).toContain('did not accept')
     expect(alert?.textContent).not.toContain('invalid_credentials')
-    expect(alert?.textContent).not.toContain('wrong-password')
+    expect(mounted.container.querySelectorAll('input')).toHaveLength(0)
   })
 
   it('shows the connected external account and notifies Content Space after binding', async () => {
@@ -105,11 +90,6 @@ describe('OpenContent enrollment fragment', () => {
     })
     const mounted = await mountEnrollment({ client, onConnectionChanged })
 
-    await setInputValue(
-      inputByLabel(mounted.container, 'OpenContent account'),
-      'scientist'
-    )
-    await setInputValue(inputByLabel(mounted.container, 'Password'), 'correct-password')
     await click(buttonByText(mounted.container, 'Connect account'))
 
     expect(mounted.container.textContent).toContain('Account connected')
@@ -118,7 +98,7 @@ describe('OpenContent enrollment fragment', () => {
     expect(onConnectionChanged).toHaveBeenCalledTimes(1)
   })
 
-  it('prefills the account and presents the credential form when reauthentication is required', async () => {
+  it('presents a secret-free native reconnect action when reauthentication is required', async () => {
     const client = connectionClient()
     const mounted = await mountEnrollment({
       client,
@@ -132,8 +112,7 @@ describe('OpenContent enrollment fragment', () => {
     expect(mounted.container.textContent).toContain('Reconnect OpenContent')
     expect(mounted.container.querySelector('[role="alert"]')?.textContent)
       .toContain('sign in again')
-    expect(inputByLabel(mounted.container, 'OpenContent account').value)
-      .toBe('returning-scientist')
+    expect(mounted.container.querySelectorAll('input')).toHaveLength(0)
     expect(buttonByText(mounted.container, 'Reconnect account')).toBeTruthy()
   })
 
@@ -264,15 +243,13 @@ describe('OpenContent enrollment fragment', () => {
     const onConnectionChanged = vi.fn()
     let bindSignal: AbortSignal | undefined
     const client = connectionClient({
-      bind: vi.fn(async (_providerInstanceRef, _username, _password, options) => {
+      bind: vi.fn(async (_providerInstanceRef, options) => {
         bindSignal = options?.signal
         return pendingBind.promise
       })
     })
     const mounted = await mountEnrollment({ client, onConnectionChanged })
 
-    await setInputValue(inputByLabel(mounted.container, 'OpenContent account'), 'scientist')
-    await setInputValue(inputByLabel(mounted.container, 'Password'), 'correct-password')
     await clickWithoutSettling(buttonByText(mounted.container, 'Connect account'))
 
     await act(async () => {
@@ -374,30 +351,11 @@ async function mountEnrollment(
   return mounted
 }
 
-function inputByLabel(container: HTMLElement, text: string): HTMLInputElement {
-  const label = [...container.querySelectorAll('label')]
-    .find((candidate) => candidate.textContent?.includes(text))
-  const input = label?.querySelector('input')
-  expect(input, `Missing input: ${text}`).toBeInstanceOf(HTMLInputElement)
-  return input as HTMLInputElement
-}
-
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
   const button = [...container.querySelectorAll('button')]
     .find((candidate) => candidate.textContent?.trim() === text)
   expect(button, `Missing button: ${text}`).toBeInstanceOf(HTMLButtonElement)
   return button as HTMLButtonElement
-}
-
-async function setInputValue(input: HTMLInputElement, value: string): Promise<void> {
-  await act(async () => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-    expect(setter).toBeTypeOf('function')
-    setter?.call(input, value)
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-    input.dispatchEvent(new Event('change', { bubbles: true }))
-    await tick()
-  })
 }
 
 async function click(button: HTMLButtonElement): Promise<void> {

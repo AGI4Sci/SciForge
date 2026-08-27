@@ -4,9 +4,7 @@ import {
   TEST_HASH,
   TEST_IDS,
   TEST_TIMESTAMP,
-  agentNodeFixture,
   remoteSessionProjectionFixture,
-  taskFixture,
   userPrincipalFixture
 } from '@sciforge/collaboration-contracts/testing'
 import {
@@ -15,7 +13,7 @@ import {
   type CollaborationStateBackend
 } from './store.js'
 
-test('restart recovery reconciles in-flight projection, outbox, and Task identities', async () => {
+test('restart recovery only rewinds safely replayable local and outbox work', async () => {
   const state: CollaborationLocalState = {
     schemaVersion: 1,
     revision: 4,
@@ -24,7 +22,7 @@ test('restart recovery reconciles in-flight projection, outbox, and Task identit
     endpoints: [],
     endpointLocators: [],
     managedContainers: [],
-    agents: [agentNodeFixture],
+    agents: [],
     projections: [{
       projection: remoteSessionProjectionFixture,
       runtimeId: 'codex',
@@ -33,17 +31,9 @@ test('restart recovery reconciles in-flight projection, outbox, and Task identit
       nextSequence: 2
     }],
     projects: [],
-    tasks: [taskFixture],
-    taskRuns: [{
-      task: taskFixture,
-      state: 'running',
-      runtimeId: 'codex',
-      threadId: 'task-thread-1',
-      clientDirectiveId: 'collab-task-stable-1',
-      localTurnId: 'runtime-turn-1',
-      startedAt: TEST_TIMESTAMP,
-      updatedAt: TEST_TIMESTAMP
-    }],
+    tasks: [],
+    taskRuns: [],
+    workerAcceptancePolicies: [],
     queue: [{
       queueItemId: 'lqi_Queue00000001',
       projectionId: TEST_IDS.projectionId,
@@ -63,23 +53,12 @@ test('restart recovery reconciles in-flight projection, outbox, and Task identit
       createdAt: TEST_TIMESTAMP,
       updatedAt: TEST_TIMESTAMP
     }],
-    receipts: [{
-      receiptKey: 'provider:projection:message-1',
-      contentHash: TEST_HASH,
-      queueItemId: 'lqi_Queue00000001',
-      projectionId: TEST_IDS.projectionId,
-      status: 'processing',
-      providerMessageId: 'provider-message-1',
-      localItemId: TEST_IDS.localItemId,
-      attempts: 1,
-      createdAt: TEST_TIMESTAMP,
-      updatedAt: TEST_TIMESTAMP
-    }],
+    receipts: [],
     outbox: [{
       outboxId: 'obx_Outbox000001',
       idempotencyKey: 'idem_projection.test-1',
       kind: 'projection.message',
-      body: { type: 'fixture' },
+      body: {},
       state: 'sending',
       attempts: 1,
       createdAt: TEST_TIMESTAMP,
@@ -88,30 +67,16 @@ test('restart recovery reconciles in-flight projection, outbox, and Task identit
     diagnostics: [],
     remoteApprovals: []
   }
-  const backend = new MemoryBackend(state)
-  const store = new CollaborationLocalStore(backend)
+  const store = new CollaborationLocalStore(new MemoryBackend(state))
   const recovered = await store.open()
 
   assert.equal(recovered.queue[0]?.state, 'reconciling')
   assert.equal(recovered.outbox[0]?.state, 'reconciling')
-  assert.equal(recovered.taskRuns[0]?.state, 'reconciling')
-  assert.equal(recovered.queue[0]?.clientDirectiveId, 'collab-directive-stable-1')
-  assert.equal(recovered.taskRuns[0]?.clientDirectiveId, 'collab-task-stable-1')
   assert.equal(recovered.revision, 5)
-  assert.equal(backend.writes, 1)
 })
 
 class MemoryBackend implements CollaborationStateBackend {
-  writes = 0
-
   constructor(private value: unknown) {}
-
-  async read(): Promise<unknown> {
-    return structuredClone(this.value)
-  }
-
-  async write(value: CollaborationLocalState): Promise<void> {
-    this.writes += 1
-    this.value = structuredClone(value)
-  }
+  async read(): Promise<unknown> { return structuredClone(this.value) }
+  async write(value: CollaborationLocalState): Promise<void> { this.value = structuredClone(value) }
 }

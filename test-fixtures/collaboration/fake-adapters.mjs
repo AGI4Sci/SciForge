@@ -1,15 +1,147 @@
+import { createHash } from 'node:crypto'
+
+import { CollaborationServiceError } from '../../packages/collaboration-server/src/errors.ts'
+
 function copy(value) {
   return value === undefined ? undefined : structuredClone(value)
+}
+
+function credentialDigest(value) {
+  return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
+function authenticationFailure(code, message) {
+  throw new CollaborationServiceError(code, message)
+}
+
+/**
+ * Test-only implementation of the public request-actor resolver contract.
+ * It returns bounded actor facts while keeping fixture bearer values inside this
+ * network-boundary adapter. Production authentication remains server-owned.
+ */
+export class FakeCollaborationRequestActorResolver {
+  constructor({ repository, now = () => new Date(), oidcActors = new Map() }) {
+    this.repository = repository
+    this.now = now
+    this.oidcActors = new Map(oidcActors)
+  }
+
+  registerOidcActor(token, actor) {
+    this.oidcActors.set(token, copy(actor))
+  }
+
+  async resolveRequestActor(request) {
+    const header = Array.isArray(request.headers.authorization)
+      ? request.headers.authorization[0]
+      : request.headers.authorization
+    const token = typeof header === 'string' && header.startsWith('Bearer ')
+      ? header.slice('Bearer '.length)
+      : undefined
+    if (!token || token.length < 16 || token.length > 16 * 1024 || /\s/u.test(token)) {
+      return authenticationFailure('authentication_required', 'A valid bearer credential is required.')
+    }
+    const oidcActor = this.oidcActors.get(token)
+    if (oidcActor) {
+      const [user, identity] = await Promise.all([
+        this.repository.getUser(oidcActor.userId),
+        this.repository.getOidcIdentity(oidcActor.identityId)
+      ])
+      if (!user || user.status !== 'active' || !identity || identity.status !== 'active' ||
+          identity.userId !== user.userId) {
+        return authenticationFailure('credential_revoked', 'The OIDC fixture principal is not active.')
+      }
+      return copy(oidcActor)
+    }
+    if (token.length > 512) {
+      return authenticationFailure('authentication_required', 'The bearer credential is not recognized.')
+    }
+    const credential = await this.repository.getCredentialByDigest(credentialDigest(token))
+    if (!credential) {
+      return authenticationFailure('authentication_required', 'The bearer credential is not recognized.')
+    }
+    if (credential.revokedAt || (credential.expiresAt && credential.expiresAt <= this.now().toISOString())) {
+      return authenticationFailure('credential_revoked', 'The Agent credential has expired or was revoked.')
+    }
+    const agentId = credential.subjectAgentId
+    const [user, agent] = await Promise.all([
+      this.repository.getUser(credential.subjectUserId),
+      agentId ? this.repository.getAgent(agentId) : Promise.resolve(null)
+    ])
+    if (!user || user.status !== 'active' || !agent || agent.status !== 'active' ||
+        agent.ownerUserId !== user.userId || agent.credentialGeneration !== credential.generation) {
+      return authenticationFailure('credential_revoked', 'The Agent machine identity is not active.')
+    }
+    const device = await this.repository.getDevice(agent.deviceId)
+    if (!device || device.status !== 'active' || device.userId !== user.userId) {
+      return authenticationFailure('credential_revoked', 'The Agent Device is not active.')
+    }
+    return {
+      kind: 'agent_device',
+      actorKey: `agent:${agent.agentId}:credential:${credential.credentialId}`,
+      userId: user.userId,
+      agentId: agent.agentId,
+      deviceId: device.deviceId,
+      credentialId: credential.credentialId,
+      credentialGeneration: credential.generation,
+      assurance: 'device'
+    }
+  }
+}
+
+export function fakeAgentActor(agent) {
+  return {
+    kind: 'agent_device',
+    actorKey: `agent:${agent.agentId}:fixture:generation:${agent.credentialGeneration}`,
+    userId: agent.ownerUserId,
+    agentId: agent.agentId,
+    deviceId: agent.deviceId,
+    credentialId: `fixture-${agent.agentId}`,
+    credentialGeneration: agent.credentialGeneration,
+    assurance: 'device'
+  }
+}
+
+export function fakeHumanEndpointActor(endpoint) {
+  if (!endpoint || endpoint.status !== 'active' || endpoint.assurance === 'basic') {
+    return authenticationFailure('authentication_required', 'The provider endpoint is not actively verified.')
+  }
+  return {
+    kind: 'human_endpoint',
+    actorKey: `endpoint:${endpoint.humanEndpointId}:revision:${endpoint.revision}`,
+    userId: endpoint.userId,
+    humanEndpointId: endpoint.humanEndpointId,
+    assurance: endpoint.assurance
+  }
 }
 
 function recipientKey(recipient) {
   return `${recipient.kind}:${recipient.id}`
 }
 
+const sensitiveAuditKey = /(?:authorization|credential|secret|token|password|private.?key|challenge)/i
+function safeAuditMetadata(input) {
+  return Object.fromEntries(Object.entries(input).flatMap(([key, value]) => {
+    if (sensitiveAuditKey.test(key)) return []
+    if (typeof value === 'string') return [[key, value.slice(0, 500)]]
+    if (typeof value === 'number' || typeof value === 'boolean' || value === null) return [[key, value]]
+    return []
+  }))
+}
+
 function revisionUpdate(map, id, value, expectedRevision) {
   const current = map.get(id)
-  if (!current || current.revision !== expectedRevision) throw new Error('fake repository revision conflict')
+  if (!current || current.revision !== expectedRevision || value.revision !== expectedRevision + 1) {
+    throw new Error('fake repository revision conflict')
+  }
   map.set(id, copy(value))
+}
+
+function assertImmutableFields(current, next, fields, resource) {
+  for (const field of fields) {
+    if (JSON.stringify(current?.[field]) !== JSON.stringify(next[field])) {
+      throw new Error(`fake repository immutable ${resource} field changed: ${field}`)
+    }
+  }
 }
 
 export class FakeClock {
@@ -258,7 +390,11 @@ export class FakeCollaborationRepository {
   #emptyState() {
     return {
       users: new Map(),
+      oidcIdentities: new Map(),
+      deviceEnrollments: new Map(),
+      devices: new Map(),
       challenges: new Map(),
+      endpointChallengeRateWindows: new Map(),
       endpoints: new Map(),
       agents: new Map(),
       participants: new Map(),
@@ -272,7 +408,24 @@ export class FakeCollaborationRepository {
       remoteApprovals: new Map(),
       projects: new Map(),
       projectMembers: new Map(),
+      workerAvailability: new Map(),
+      providerDirectoryPrincipalFacts: new Map(),
+      projectProviderMembershipObservations: new Map(),
+      projectContentReadiness: new Map(),
+      taskAuthorities: new Map(),
+      projectContentProvisioningIntents: new Map(),
+      projectContentProvisioningAttestations: new Map(),
+      projectContentBindings: new Map(),
+      externalOperationJournal: new Map(),
+      visibleRecoveryActions: new Map(),
+      cloudResourceRefs: new Map(),
       tasks: new Map(),
+      taskExecutions: new Map(),
+      taskOffers: new Map(),
+      projectPlans: new Map(),
+      taskResultSubmissions: new Map(),
+      taskResultReviews: new Map(),
+      projectFinalSummaries: new Map(),
       projectRecords: new Map(),
       credentials: new Map(),
       receipts: new Map(),
@@ -298,9 +451,97 @@ export class FakeCollaborationRepository {
   }
 
   async lockIdempotency() {}
+  async lockOidcIdentity() {}
 
   async getUser(userId) {
     return copy(this.state.users.get(userId) ?? null)
+  }
+
+  async getUserForUpdate(userId) {
+    return this.getUser(userId)
+  }
+
+  async getOidcIdentity(identityId) {
+    return copy(this.state.oidcIdentities.get(identityId) ?? null)
+  }
+
+  async getOidcIdentityByIssuerSubject(issuer, subject) {
+    return copy([...this.state.oidcIdentities.values()].find((value) => (
+      value.issuer === issuer && value.subject === subject
+    )) ?? null)
+  }
+
+  async getOidcIdentityByIssuerSubjectForUpdate(issuer, subject) {
+    return this.getOidcIdentityByIssuerSubject(issuer, subject)
+  }
+
+  async insertOidcIdentity(identity) {
+    if (this.state.oidcIdentities.has(identity.identityId)) throw new Error('fake repository duplicate OIDC identity')
+    this.state.oidcIdentities.set(identity.identityId, copy(identity))
+  }
+
+  async getDeviceEnrollment(enrollmentId) {
+    return copy(this.state.deviceEnrollments.get(enrollmentId) ?? null)
+  }
+
+  async getDeviceEnrollmentForUpdate(enrollmentId) {
+    return this.getDeviceEnrollment(enrollmentId)
+  }
+
+  async insertDeviceEnrollment(enrollment) {
+    if (this.state.deviceEnrollments.has(enrollment.enrollmentId)) throw new Error('fake repository duplicate Device enrollment')
+    this.state.deviceEnrollments.set(enrollment.enrollmentId, copy(enrollment))
+  }
+
+  async consumeDeviceEnrollment(enrollmentId, consumedAt, expectedRevision) {
+    const enrollment = this.state.deviceEnrollments.get(enrollmentId)
+    if (!enrollment || enrollment.status !== 'pending' || enrollment.revision !== expectedRevision ||
+        enrollment.expiresAt <= consumedAt) return false
+    this.state.deviceEnrollments.set(enrollmentId, {
+      ...enrollment, status: 'consumed', consumedAt, revision: expectedRevision + 1, updatedAt: consumedAt
+    })
+    return true
+  }
+
+  async getDevice(deviceId) {
+    return copy(this.state.devices.get(deviceId) ?? null)
+  }
+
+  async getDeviceForUpdate(deviceId) {
+    return this.getDevice(deviceId)
+  }
+
+  async getAgentForUpdate(agentId) {
+    return this.getAgent(agentId)
+  }
+
+  async listAgentsForDeviceForUpdate(deviceId) {
+    return this.listAgentsForDevice(deviceId)
+  }
+
+  async getWorkerAvailabilityForUpdate(agentId) {
+    return this.getWorkerAvailability(agentId)
+  }
+
+  async listWorkerAvailabilityForDeviceForUpdate(deviceId) {
+    return copy([...this.state.workerAvailability.values()].filter((item) => item.deviceId === deviceId))
+  }
+
+  async getDeviceByInstallation(installationId) {
+    return copy([...this.state.devices.values()].find((value) => value.installationId === installationId) ?? null)
+  }
+
+  async listDevicesForUser(userId) {
+    return copy([...this.state.devices.values()].filter((value) => value.userId === userId))
+  }
+
+  async insertDevice(device) {
+    if (this.state.devices.has(device.deviceId)) throw new Error('fake repository duplicate Device')
+    this.state.devices.set(device.deviceId, copy(device))
+  }
+
+  async updateDevice(device, expectedRevision) {
+    revisionUpdate(this.state.devices, device.deviceId, device, expectedRevision)
   }
 
   async insertUser(user) {
@@ -321,25 +562,54 @@ export class FakeCollaborationRepository {
     return copy(this.state.challenges.get(challengeId) ?? null)
   }
 
-  async getChallengeByCodeDigest(challengeDigest) {
-    return copy([...this.state.challenges.values()].find((item) => item.challengeDigest === challengeDigest) ?? null)
+  async getEndpointChallengeRateWindow(userId, provider, realmId, windowStartedAt) {
+    return copy(this.state.endpointChallengeRateWindows.get(JSON.stringify([
+      userId, provider, realmId, windowStartedAt
+    ])) ?? null)
   }
 
-  async getChallengeByPollDigest(pollSecretDigest) {
-    return copy([...this.state.challenges.values()].find((item) => item.pollSecretDigest === pollSecretDigest) ?? null)
+  async consumeEndpointChallengeRateWindow(input) {
+    const key = JSON.stringify([input.userId, input.provider, input.realmId, input.windowStartedAt])
+    const current = this.state.endpointChallengeRateWindows.get(key)
+    if (!current) {
+      const window = {
+        userId: input.userId,
+        provider: input.provider,
+        realmId: input.realmId,
+        windowStartedAt: input.windowStartedAt,
+        expiresAt: input.expiresAt,
+        attemptCount: 1,
+        revision: 1,
+        updatedAt: input.updatedAt
+      }
+      this.state.endpointChallengeRateWindows.set(key, window)
+      return copy({ allowed: true, window })
+    }
+    if (current.attemptCount >= input.maxAttempts || current.expiresAt <= input.updatedAt) {
+      return copy({ allowed: false, window: current })
+    }
+    const window = {
+      ...current,
+      attemptCount: current.attemptCount + 1,
+      revision: current.revision + 1,
+      updatedAt: input.updatedAt
+    }
+    this.state.endpointChallengeRateWindows.set(key, window)
+    return copy({ allowed: true, window })
+  }
+
+  async getChallengeForUpdate(challengeId) {
+    return this.getChallenge(challengeId)
+  }
+
+  async getChallengeByCodeDigestForUpdate(challengeDigest) {
+    return copy([...this.state.challenges.values()].find((item) => item.challengeDigest === challengeDigest) ?? null)
   }
 
   async verifyChallenge(challengeId, userId, humanEndpointId, verifiedAt) {
     const challenge = this.state.challenges.get(challengeId)
-    if (!challenge || challenge.verifiedAt || challenge.consumedAt) return false
+    if (!challenge || challenge.verifiedAt) return false
     Object.assign(challenge, { verifiedUserId: userId, verifiedEndpointId: humanEndpointId, verifiedAt })
-    return true
-  }
-
-  async consumeChallenge(challengeId, consumedAt) {
-    const challenge = this.state.challenges.get(challengeId)
-    if (!challenge || challenge.consumedAt) return false
-    challenge.consumedAt = consumedAt
     return true
   }
 
@@ -366,8 +636,8 @@ export class FakeCollaborationRepository {
     return copy(this.state.agents.get(agentId) ?? null)
   }
 
-  async getAgentByInstallation(installationId) {
-    return copy([...this.state.agents.values()].find((item) => item.installationId === installationId) ?? null)
+  async listAgentsForDevice(deviceId) {
+    return copy([...this.state.agents.values()].filter((value) => value.deviceId === deviceId))
   }
 
   async insertAgent(agent) {
@@ -388,13 +658,27 @@ export class FakeCollaborationRepository {
     return copy([...this.state.credentials.values()].find((item) => item.tokenDigest === tokenDigest) ?? null)
   }
 
-  async revokeCredentials(kind, subjectId, revokedAt) {
+  async getCredential(credentialId) {
+    return copy(this.state.credentials.get(credentialId) ?? null)
+  }
+
+  async revokeAgentCredentials(agentId, revokedAt) {
     let updated = 0
     for (const credential of this.state.credentials.values()) {
-      const matches = credential.kind === kind && (
-        kind === 'user' ? credential.subjectUserId === subjectId : credential.subjectAgentId === subjectId
-      )
-      if (matches && !credential.revokedAt) {
+      if (credential.kind === 'agent_device' && credential.subjectAgentId === agentId && !credential.revokedAt) {
+        credential.revokedAt = revokedAt
+        updated += 1
+      }
+    }
+    return updated
+  }
+
+  async revokeAgentCredentialsForDevice(deviceId, revokedAt) {
+    const agentIds = new Set([...this.state.agents.values()].filter((value) => value.deviceId === deviceId)
+      .map((value) => value.agentId))
+    let updated = 0
+    for (const credential of this.state.credentials.values()) {
+      if (credential.kind === 'agent_device' && agentIds.has(credential.subjectAgentId) && !credential.revokedAt) {
         credential.revokedAt = revokedAt
         updated += 1
       }
@@ -550,6 +834,15 @@ export class FakeCollaborationRepository {
     return copy(this.state.humanRequests.get(humanRequestId) ?? null)
   }
 
+  async listHumanRequestsByProject(projectId, status, afterHumanRequestId, limit) {
+    return copy([...this.state.humanRequests.values()]
+      .filter((request) => request.projectId === projectId &&
+        (status === null || request.status === status) &&
+        (afterHumanRequestId === null || request.humanRequestId.localeCompare(afterHumanRequestId) > 0))
+      .sort((left, right) => left.humanRequestId.localeCompare(right.humanRequestId))
+      .slice(0, limit))
+  }
+
   async insertHumanRequest(request) {
     if (this.state.humanRequests.has(request.humanRequestId)) throw new Error('fake repository duplicate human request')
     this.state.humanRequests.set(request.humanRequestId, copy(request))
@@ -600,13 +893,31 @@ export class FakeCollaborationRepository {
     return copy(this.state.projects.get(projectId) ?? null)
   }
 
+  async listProjectsForUser(userId, afterProjectId, limit) {
+    return copy([...this.state.projects.values()]
+      .filter((project) => {
+        const membership = this.state.projectMembers.get(`${project.projectId}:${userId}`)
+        return (project.ownerUserId === userId ||
+          membership?.state === 'active' || membership?.state === 'membership_removal_pending') &&
+          (afterProjectId === null || project.projectId.localeCompare(afterProjectId) > 0)
+      })
+      .sort((left, right) => left.projectId.localeCompare(right.projectId))
+      .slice(0, limit))
+  }
+
+  async getProjectForUpdate(projectId) {
+    return this.getProject(projectId)
+  }
+
   async insertProject(project, members) {
     if (this.state.projects.has(project.projectId)) throw new Error('fake repository duplicate project')
     this.state.projects.set(project.projectId, copy(project))
-    for (const member of members) this.state.projectMembers.set(`${member.projectId}:${member.userId}`, copy(member))
+    for (const member of members) await this.insertProjectMember(member)
   }
 
   async updateProject(project, expectedRevision) {
+    assertImmutableFields(this.state.projects.get(project.projectId), project,
+      ['projectId', 'ownerUserId', 'createdAt'], 'Project')
     revisionUpdate(this.state.projects, project.projectId, project, expectedRevision)
   }
 
@@ -614,13 +925,427 @@ export class FakeCollaborationRepository {
     return copy(this.state.projectMembers.get(`${projectId}:${userId}`) ?? null)
   }
 
+  async getProjectMemberForUpdate(projectId, userId) {
+    return this.getProjectMember(projectId, userId)
+  }
+
+  async insertProjectMember(member) {
+    const key = `${member.projectId}:${member.userId}`
+    if (this.state.projectMembers.has(key)) throw new Error('fake repository duplicate project member')
+    this.state.projectMembers.set(key, copy(member))
+  }
+
+  async updateProjectMember(member, expectedRevision) {
+    const key = `${member.projectId}:${member.userId}`
+    assertImmutableFields(this.state.projectMembers.get(key), member,
+      ['projectMembershipId', 'projectId', 'userId', 'createdAt'], 'Project Membership')
+    revisionUpdate(this.state.projectMembers, key, member, expectedRevision)
+  }
+
   async listProjectMembers(projectId) {
     return copy([...this.state.projectMembers.values()].filter((item) => item.projectId === projectId))
+  }
+
+  async listActiveProjectMembersForUser(userId) {
+    return copy([...this.state.projectMembers.values()].filter((item) => (
+      item.userId === userId && item.state === 'active'
+    )))
+  }
+
+  async getWorkerAvailability(agentId) {
+    return copy(this.state.workerAvailability.get(agentId) ?? null)
+  }
+
+  async listWorkerAvailabilityForUser(userId, now) {
+    return copy([...this.state.workerAvailability.values()].filter((item) => (
+      item.userId === userId && item.expiresAt > now
+    )))
+  }
+
+  async listAvailableWorkers(now) {
+    return copy([...this.state.workerAvailability.values()].filter((item) => (
+      item.expiresAt > now && item.acceptsNewOffers
+    )))
+  }
+
+  async upsertWorkerAvailability(availability, expectedRevision) {
+    const current = this.state.workerAvailability.get(availability.agentId)
+    if (expectedRevision === null) {
+      if (current) throw new Error('fake repository duplicate Worker availability')
+    } else if (!current || current.revision !== expectedRevision ||
+        availability.revision !== expectedRevision + 1) {
+      throw new Error('fake repository Worker availability revision conflict')
+    }
+    if (current) {
+      assertImmutableFields(current, availability, ['agentId', 'userId', 'deviceId', 'createdAt'],
+        'Worker availability')
+    }
+    this.state.workerAvailability.set(availability.agentId, copy(availability))
+  }
+
+  async getProviderDirectoryPrincipalFact(providerPrincipalFactId) {
+    return copy(this.state.providerDirectoryPrincipalFacts.get(providerPrincipalFactId) ?? null)
+  }
+
+  #providerDirectoryPrincipalFactForSlot(userId, providerInstance) {
+    return [...this.state.providerDirectoryPrincipalFacts.values()].find((fact) => (
+      fact.userId === userId &&
+      fact.providerPrincipal.providerInstance.authority === providerInstance.authority &&
+      fact.providerPrincipal.providerInstance.instanceId === providerInstance.instanceId
+    )) ?? null
+  }
+
+  async getProviderDirectoryPrincipalFactForSlot(userId, providerInstance) {
+    return copy(this.#providerDirectoryPrincipalFactForSlot(userId, providerInstance))
+  }
+
+  async getProviderDirectoryPrincipalFactForUpdate(providerPrincipalFactId) {
+    return this.getProviderDirectoryPrincipalFact(providerPrincipalFactId)
+  }
+
+  async getProviderDirectoryPrincipalFactForSlotForUpdate(userId, providerInstance) {
+    return this.getProviderDirectoryPrincipalFactForSlot(userId, providerInstance)
+  }
+
+  async listProviderDirectoryPrincipalFacts(input) {
+    return copy([...this.state.providerDirectoryPrincipalFacts.values()]
+      .filter((fact) => input.userIds.includes(fact.userId))
+      .filter((fact) => input.providerInstance === null || (
+        fact.providerPrincipal.providerInstance.authority === input.providerInstance.authority &&
+        fact.providerPrincipal.providerInstance.instanceId === input.providerInstance.instanceId
+      ))
+      .filter((fact) => input.includeDegraded || fact.readiness === 'ready')
+      .filter((fact) => input.afterFactId === null || fact.providerPrincipalFactId > input.afterFactId)
+      .sort((left, right) => left.providerPrincipalFactId.localeCompare(right.providerPrincipalFactId))
+      .slice(0, input.limit))
+  }
+
+  async insertProviderDirectoryPrincipalFact(fact) {
+    if (this.state.providerDirectoryPrincipalFacts.has(fact.providerPrincipalFactId) ||
+        this.#providerDirectoryPrincipalFactForSlot(fact.userId, fact.providerPrincipal.providerInstance)) {
+      throw new Error('fake repository duplicate Provider directory principal fact')
+    }
+    this.state.providerDirectoryPrincipalFacts.set(fact.providerPrincipalFactId, copy(fact))
+  }
+
+  async updateProviderDirectoryPrincipalFact(fact, expectedRevision) {
+    const current = this.state.providerDirectoryPrincipalFacts.get(fact.providerPrincipalFactId)
+    if (!current || current.userId !== fact.userId ||
+        current.providerPrincipal.providerInstance.authority !== fact.providerPrincipal.providerInstance.authority ||
+        current.providerPrincipal.providerInstance.instanceId !== fact.providerPrincipal.providerInstance.instanceId) {
+      throw new Error('fake repository immutable Provider directory principal fact slot changed')
+    }
+    const slot = this.#providerDirectoryPrincipalFactForSlot(fact.userId, fact.providerPrincipal.providerInstance)
+    if (slot && slot.providerPrincipalFactId !== fact.providerPrincipalFactId) {
+      throw new Error('fake repository duplicate Provider directory principal fact slot')
+    }
+    revisionUpdate(
+      this.state.providerDirectoryPrincipalFacts,
+      fact.providerPrincipalFactId,
+      fact,
+      expectedRevision
+    )
+  }
+
+  async getProjectProviderMembershipObservation(providerObservationId) {
+    return copy(this.state.projectProviderMembershipObservations.get(providerObservationId) ?? null)
+  }
+
+  async listProjectProviderMembershipObservations(projectId, userId) {
+    return copy([...this.state.projectProviderMembershipObservations.values()].filter((item) => (
+      item.projectId === projectId && (userId === undefined || item.userId === userId)
+    )))
+  }
+
+  async insertProjectProviderMembershipObservation(observation) {
+    if (this.state.projectProviderMembershipObservations.has(observation.providerObservationId)) {
+      throw new Error('fake repository duplicate Provider membership observation')
+    }
+    this.state.projectProviderMembershipObservations.set(
+      observation.providerObservationId,
+      copy(observation)
+    )
+  }
+
+  async getProjectContentReadiness(projectId, userId) {
+    return copy(this.state.projectContentReadiness.get(`${projectId}:${userId}`) ?? null)
+  }
+
+  async getProjectContentReadinessForUpdate(projectId, userId) {
+    return this.getProjectContentReadiness(projectId, userId)
+  }
+
+  async listProjectContentReadiness(projectId) {
+    return copy([...this.state.projectContentReadiness.values()].filter((item) => item.projectId === projectId))
+  }
+
+  async upsertProjectContentReadiness(readiness, expectedRevision) {
+    const key = `${readiness.projectId}:${readiness.userId}`
+    const current = this.state.projectContentReadiness.get(key)
+    if (expectedRevision === null) {
+      if (current) throw new Error('fake repository duplicate content readiness')
+    } else if (!current || current.revision !== expectedRevision ||
+        readiness.revision !== expectedRevision + 1) {
+      throw new Error('fake repository content readiness revision conflict')
+    }
+    if (current) {
+      assertImmutableFields(current, readiness, ['projectId', 'userId', 'createdAt'], 'content readiness')
+    }
+    this.state.projectContentReadiness.set(key, copy(readiness))
+  }
+
+  async getTaskAuthority(projectId, userId, scope) {
+    return copy(this.state.taskAuthorities.get(`${projectId}:${userId}:${scope}`) ?? null)
+  }
+
+  async getTaskAuthorityForUpdate(projectId, userId, scope) {
+    return this.getTaskAuthority(projectId, userId, scope)
+  }
+
+  async listTaskAuthorities(projectId) {
+    return copy([...this.state.taskAuthorities.values()].filter((item) => item.projectId === projectId))
+  }
+
+  async listTaskAuthoritiesForUser(projectId, userId) {
+    return copy([...this.state.taskAuthorities.values()].filter((item) => (
+      item.projectId === projectId && item.userId === userId
+    )))
+  }
+
+  async listTaskAuthoritiesForUserForUpdate(projectId, userId) {
+    return this.listTaskAuthoritiesForUser(projectId, userId)
+  }
+
+  async upsertTaskAuthority(authority, expectedRevision) {
+    const key = `${authority.projectId}:${authority.userId}:${authority.scope}`
+    const current = this.state.taskAuthorities.get(key)
+    if (expectedRevision === null) {
+      if (current) throw new Error('fake repository duplicate Task authority')
+    } else if (!current || current.revision !== expectedRevision ||
+        authority.revision !== expectedRevision + 1) {
+      throw new Error('fake repository Task authority revision conflict')
+    }
+    if (current) {
+      assertImmutableFields(current, authority,
+        ['taskAuthorityId', 'projectId', 'userId', 'scope', 'createdAt'], 'Task authority')
+    }
+    this.state.taskAuthorities.set(key, copy(authority))
+  }
+
+  async getProjectContentProvisioningIntent(provisioningIntentId) {
+    return copy(this.state.projectContentProvisioningIntents.get(provisioningIntentId) ?? null)
+  }
+
+  async getProjectContentProvisioningIntentForUpdate(provisioningIntentId) {
+    return this.getProjectContentProvisioningIntent(provisioningIntentId)
+  }
+
+  async getLatestProjectContentProvisioningIntent(projectId) {
+    return copy([...this.state.projectContentProvisioningIntents.values()]
+      .filter((item) => item.projectId === projectId)
+      .sort((left, right) => right.provisioningRevision - left.provisioningRevision)[0] ?? null)
+  }
+
+  async listProjectContentProvisioningIntents(projectId) {
+    return copy([...this.state.projectContentProvisioningIntents.values()]
+      .filter((item) => item.projectId === projectId)
+      .sort((left, right) => left.provisioningRevision - right.provisioningRevision))
+  }
+
+  async insertProjectContentProvisioningIntent(intent) {
+    if (this.state.projectContentProvisioningIntents.has(intent.provisioningIntentId)) {
+      throw new Error('fake repository duplicate provisioning intent')
+    }
+    this.state.projectContentProvisioningIntents.set(intent.provisioningIntentId, copy(intent))
+  }
+
+  async updateProjectContentProvisioningIntent(intent, expectedRevision) {
+    const current = this.state.projectContentProvisioningIntents.get(intent.provisioningIntentId)
+    for (const key of [
+      'projectId', 'provisioningRevision', 'kind', 'createdByOwnerUserId', 'contentOwnerUserId',
+      'providerInstance', 'desiredMembers', 'containerDisplayName', 'currentRootLocator',
+      'currentBindingRevision', 'intentDigest', 'createdAt'
+    ]) {
+      if (JSON.stringify(current?.[key]) !== JSON.stringify(intent[key])) {
+        throw new Error(`fake repository immutable provisioning intent field changed: ${key}`)
+      }
+    }
+    revisionUpdate(
+      this.state.projectContentProvisioningIntents,
+      intent.provisioningIntentId,
+      intent,
+      expectedRevision
+    )
+  }
+
+  async getProjectContentProvisioningAttestation(provisioningAttestationId) {
+    return copy(this.state.projectContentProvisioningAttestations.get(provisioningAttestationId) ?? null)
+  }
+
+  async listProjectContentProvisioningAttestations(projectId) {
+    return copy([...this.state.projectContentProvisioningAttestations.values()]
+      .filter((item) => item.projectId === projectId))
+  }
+
+  async insertProjectContentProvisioningAttestation(attestation) {
+    if (this.state.projectContentProvisioningAttestations.has(attestation.provisioningAttestationId)) {
+      throw new Error('fake repository duplicate provisioning attestation')
+    }
+    this.state.projectContentProvisioningAttestations.set(attestation.provisioningAttestationId, copy(attestation))
+  }
+
+  async getProjectContentSpaceBinding(projectId) {
+    return copy(this.state.projectContentBindings.get(projectId) ?? null)
+  }
+
+  async getProjectContentSpaceBindingForUpdate(projectId) {
+    return this.getProjectContentSpaceBinding(projectId)
+  }
+
+  async upsertProjectContentSpaceBinding(binding, expectedRevision) {
+    const current = this.state.projectContentBindings.get(binding.projectId)
+    if (expectedRevision === null) {
+      if (current) throw new Error('fake repository duplicate Project content binding')
+    } else if (!current || current.revision !== expectedRevision ||
+        binding.revision !== expectedRevision + 1) {
+      throw new Error('fake repository Project content binding revision conflict')
+    }
+    if (current) {
+      assertImmutableFields(current, binding,
+        ['projectContentBindingId', 'projectId', 'createdAt'], 'Project content binding')
+    }
+    this.state.projectContentBindings.set(binding.projectId, copy(binding))
+  }
+
+  async getExternalOperationJournal(logicalInvocationId) {
+    return copy(this.state.externalOperationJournal.get(logicalInvocationId) ?? null)
+  }
+
+  async getExternalOperationJournalForUpdate(logicalInvocationId) {
+    return this.getExternalOperationJournal(logicalInvocationId)
+  }
+
+  async getExternalOperationJournalById(journalEntryId) {
+    return copy([...this.state.externalOperationJournal.values()].find((item) => (
+      item.contentRecoveryJournalEntryId === journalEntryId
+    )) ?? null)
+  }
+
+  async getExternalOperationJournalByIdForUpdate(journalEntryId) {
+    return this.getExternalOperationJournalById(journalEntryId)
+  }
+
+  async listExternalOperationJournal(projectId) {
+    return copy([...this.state.externalOperationJournal.values()].filter((item) => item.projectId === projectId))
+  }
+
+  async insertExternalOperationJournal(operation) {
+    if (this.state.externalOperationJournal.has(operation.logicalInvocationId)) {
+      throw new Error('fake repository duplicate external operation')
+    }
+    this.state.externalOperationJournal.set(operation.logicalInvocationId, copy(operation))
+  }
+
+  async updateExternalOperationJournal(operation, expectedRevision) {
+    const current = this.state.externalOperationJournal.get(operation.logicalInvocationId)
+    assertImmutableFields(current, operation, [
+      'contentRecoveryJournalEntryId', 'scope', 'logicalInvocationId', 'projectId', 'taskId',
+      'preparedTaskRevision', 'provisioningIntentId', 'provisioningRevision', 'executionId',
+      'preparedExecutionRevision', 'operation', 'requestDigest', 'preparedAt', 'createdAt'
+    ], 'external operation journal')
+    revisionUpdate(this.state.externalOperationJournal, operation.logicalInvocationId, operation, expectedRevision)
+  }
+
+  async getVisibleRecoveryAction(recoveryActionId) {
+    return copy(this.state.visibleRecoveryActions.get(recoveryActionId) ?? null)
+  }
+
+  async getVisibleRecoveryActionForUpdate(recoveryActionId) {
+    return this.getVisibleRecoveryAction(recoveryActionId)
+  }
+
+  async listVisibleRecoveryActionsByProject(projectId) {
+    return copy([...this.state.visibleRecoveryActions.values()]
+      .filter((item) => item.projectId === projectId)
+      .sort((left, right) => (
+        left.availableAt.localeCompare(right.availableAt) ||
+        left.recoveryActionId.localeCompare(right.recoveryActionId)
+      )))
+  }
+
+  async insertVisibleRecoveryAction(action) {
+    if (this.state.visibleRecoveryActions.has(action.recoveryActionId)) {
+      throw new Error('fake repository duplicate visible recovery action')
+    }
+    this.state.visibleRecoveryActions.set(action.recoveryActionId, copy(action))
+  }
+
+  async updateVisibleRecoveryAction(action, expectedRevision) {
+    const current = this.state.visibleRecoveryActions.get(action.recoveryActionId)
+    assertImmutableFields(current, action, [
+      'recoveryActionId', 'projectId', 'taskId', 'executionId', 'journalEntryId',
+      'audience', 'action', 'requiresFreshObservation', 'safeSummary', 'availableAt', 'createdAt'
+    ], 'visible recovery action')
+    revisionUpdate(this.state.visibleRecoveryActions, action.recoveryActionId, action, expectedRevision)
+  }
+
+  async getCloudResourceRef(resourceRefId) {
+    return copy(this.state.cloudResourceRefs.get(resourceRefId) ?? null)
+  }
+
+  async listCloudResourceRefs(taskId, executionId) {
+    return copy([...this.state.cloudResourceRefs.values()].filter((item) => (
+      item.taskId === taskId && item.executionId === executionId
+    )))
+  }
+
+  async insertCloudResourceRefs(resources) {
+    for (const resource of resources) {
+      if (this.state.cloudResourceRefs.has(resource.resourceRefId)) {
+        throw new Error('fake repository duplicate Cloud resource ref')
+      }
+      this.state.cloudResourceRefs.set(resource.resourceRefId, copy(resource))
+    }
+  }
+
+  async invalidateCloudResourceRefs(taskId, executionId, invalidatedAt) {
+    let count = 0
+    for (const resource of this.state.cloudResourceRefs.values()) {
+      if (resource.taskId === taskId && resource.executionId === executionId && resource.status === 'available') {
+        Object.assign(resource, { status: 'invalidated', invalidatedAt,
+          revision: resource.revision + 1, updatedAt: invalidatedAt })
+        count += 1
+      }
+    }
+    return count
+  }
+
+  async invalidateCloudResourceRefsForBinding(projectId, bindingRevision, invalidatedAt) {
+    let count = 0
+    for (const resource of this.state.cloudResourceRefs.values()) {
+      if (resource.projectId === projectId && resource.bindingRevision === bindingRevision &&
+          resource.status === 'available') {
+        Object.assign(resource, { status: 'invalidated', invalidatedAt,
+          revision: resource.revision + 1, updatedAt: invalidatedAt })
+        count += 1
+      }
+    }
+    return count
   }
 
   async countProjectTasks(projectId, coordinationRound) {
     return [...this.state.tasks.values()].filter((item) => (
       item.projectId === projectId && (coordinationRound === undefined || item.coordinationRound === coordinationRound)
+    )).length
+  }
+
+  async countOpenFileTasks(projectId) {
+    const open = new Set([
+      'offered', 'in_progress', 'needs_human', 'awaiting_review',
+      'revision_requested', 'manual_recovery_required'
+    ])
+    return [...this.state.tasks.values()].filter((item) => (
+      item.projectId === projectId && item.fileIntent !== null && open.has(item.status)
     )).length
   }
 
@@ -631,12 +1356,32 @@ export class FakeCollaborationRepository {
   }
 
   async listOpenTasksForAgent(agentId) {
-    const closed = new Set(['rejected', 'completed', 'failed', 'cancelled'])
-    return copy([...this.state.tasks.values()].filter((item) => item.assigneeAgentId === agentId && !closed.has(item.status)))
+    const open = new Set([
+      'offered', 'in_progress', 'needs_human', 'awaiting_review',
+      'revision_requested', 'manual_recovery_required'
+    ])
+    return copy([...this.state.tasks.values()].filter((task) => {
+      const execution = task.currentExecutionId === null
+        ? null
+        : this.state.taskExecutions.get(task.currentExecutionId)
+      return execution?.assigneeAgentId === agentId && open.has(task.status)
+    }))
   }
 
   async getTask(taskId) {
     return copy(this.state.tasks.get(taskId) ?? null)
+  }
+
+  async listTasksByProject(projectId, afterTaskId, limit) {
+    return copy([...this.state.tasks.values()]
+      .filter((task) => task.projectId === projectId &&
+        (afterTaskId === null || task.taskId.localeCompare(afterTaskId) > 0))
+      .sort((left, right) => left.taskId.localeCompare(right.taskId))
+      .slice(0, limit))
+  }
+
+  async getTaskForUpdate(taskId) {
+    return this.getTask(taskId)
   }
 
   async insertTask(task) {
@@ -645,7 +1390,219 @@ export class FakeCollaborationRepository {
   }
 
   async updateTask(task, expectedRevision) {
+    assertImmutableFields(this.state.tasks.get(task.taskId), task, [
+      'taskId', 'projectId', 'createdByCoordinatorAgentId', 'title', 'objective',
+      'completionCriteria', 'dependencyTaskIds', 'maxRetries', 'coordinationRound', 'createdAt'
+    ], 'Task')
     revisionUpdate(this.state.tasks, task.taskId, task, expectedRevision)
+  }
+
+  async getTaskExecution(executionId) {
+    return copy(this.state.taskExecutions.get(executionId) ?? null)
+  }
+
+  async listTaskExecutions(taskId) {
+    return copy([...this.state.taskExecutions.values()].filter((item) => item.taskId === taskId))
+  }
+
+  async listTaskExecutionsByProject(projectId, afterExecutionId, limit) {
+    return copy([...this.state.taskExecutions.values()]
+      .filter((execution) => execution.projectId === projectId &&
+        (afterExecutionId === null || execution.executionId.localeCompare(afterExecutionId) > 0))
+      .sort((left, right) => left.executionId.localeCompare(right.executionId))
+      .slice(0, limit))
+  }
+
+  #currentTaskExecutions(predicate) {
+    const live = new Set(['offered', 'accepted', 'running', 'needs_human'])
+    return [...this.state.taskExecutions.values()].filter((execution) => {
+      const task = this.state.tasks.get(execution.taskId)
+      return task?.currentExecutionId === execution.executionId && live.has(execution.state) && predicate(execution)
+    })
+  }
+
+  async listCurrentTaskExecutionsForAgent(agentId) {
+    return copy(this.#currentTaskExecutions((execution) => execution.assigneeAgentId === agentId))
+  }
+
+  async listCurrentTaskExecutionsForDevice(deviceId) {
+    return copy(this.#currentTaskExecutions((execution) => execution.assigneeDeviceId === deviceId))
+  }
+
+  async listCurrentTaskExecutionsForUser(userId) {
+    return copy(this.#currentTaskExecutions((execution) => execution.assigneeUserId === userId))
+  }
+
+  async listCurrentTaskExecutionsForAgentForUpdate(agentId) {
+    return this.listCurrentTaskExecutionsForAgent(agentId)
+  }
+
+  async listCurrentTaskExecutionsForDeviceForUpdate(deviceId) {
+    return this.listCurrentTaskExecutionsForDevice(deviceId)
+  }
+
+  async listCurrentTaskExecutionsForProjectUserForUpdate(projectId, userId) {
+    return copy(this.#currentTaskExecutions((execution) => (
+      execution.projectId === projectId && execution.assigneeUserId === userId
+    )))
+  }
+
+  async listCurrentTaskExecutionsForProjectForUpdate(projectId) {
+    return copy(this.#currentTaskExecutions((execution) => execution.projectId === projectId))
+  }
+
+  async insertTaskExecution(execution) {
+    if (this.state.taskExecutions.has(execution.executionId)) {
+      throw new Error('fake repository duplicate Task execution')
+    }
+    this.state.taskExecutions.set(execution.executionId, copy(execution))
+  }
+
+  async getTaskExecutionForUpdate(executionId) {
+    return this.getTaskExecution(executionId)
+  }
+
+  async updateTaskExecution(execution, expectedRevision) {
+    const current = this.state.taskExecutions.get(execution.executionId)
+    if (!current || current.stateRevision !== expectedRevision || execution.stateRevision !== expectedRevision + 1) {
+      throw new Error('fake repository Task execution state revision conflict')
+    }
+    assertImmutableFields(current, execution, [
+      'executionId', 'taskId', 'projectId', 'attempt', 'offeredByCoordinatorAgentId',
+      'assigneeUserId', 'assigneeAgentId', 'assigneeDeviceId', 'fileIntent', 'offeredAt', 'createdAt'
+    ], 'Task execution')
+    revisionUpdate(this.state.taskExecutions, execution.executionId, execution, expectedRevision)
+  }
+
+  async getTaskOffer(taskOfferId) {
+    return copy(this.state.taskOffers.get(taskOfferId) ?? null)
+  }
+
+  async getTaskOfferForUpdate(taskOfferId) {
+    return this.getTaskOffer(taskOfferId)
+  }
+
+  async listExpiredTaskOffers(now, limit) {
+    return copy([...this.state.taskOffers.values()]
+      .filter((offer) => {
+        const execution = this.state.taskExecutions.get(offer.executionId)
+        const task = this.state.tasks.get(offer.taskId)
+        return offer.state === 'pending' && offer.expiresAt <= now &&
+          execution?.state === 'offered' && execution.fence.status === 'open' &&
+          task?.currentExecutionId === execution.executionId
+      })
+      .sort((left, right) => left.expiresAt.localeCompare(right.expiresAt) ||
+        left.taskOfferId.localeCompare(right.taskOfferId))
+      .slice(0, limit))
+  }
+
+  async listTaskOffers(executionId) {
+    return copy([...this.state.taskOffers.values()].filter((offer) => offer.executionId === executionId))
+  }
+
+  async listTaskOffersByProject(projectId, afterTaskOfferId, limit) {
+    return copy([...this.state.taskOffers.values()]
+      .filter((offer) => offer.projectId === projectId &&
+        (afterTaskOfferId === null || offer.taskOfferId.localeCompare(afterTaskOfferId) > 0))
+      .sort((left, right) => left.taskOfferId.localeCompare(right.taskOfferId))
+      .slice(0, limit))
+  }
+
+  async insertTaskOffer(offer) {
+    if (this.state.taskOffers.has(offer.taskOfferId)) {
+      throw new Error('fake repository duplicate Task offer')
+    }
+    this.state.taskOffers.set(offer.taskOfferId, copy(offer))
+  }
+
+  async updateTaskOffer(offer, expectedRevision) {
+    assertImmutableFields(this.state.taskOffers.get(offer.taskOfferId), offer, [
+      'taskOfferId', 'executionId', 'taskId', 'projectId', 'assigneeUserId', 'assigneeAgentId',
+      'assigneeDeviceId', 'offeredAt', 'expiresAt', 'createdAt'
+    ], 'Task offer')
+    revisionUpdate(this.state.taskOffers, offer.taskOfferId, offer, expectedRevision)
+  }
+
+  async getProjectPlan(projectPlanId) {
+    return copy(this.state.projectPlans.get(projectPlanId) ?? null)
+  }
+
+  async getCurrentProjectPlan(projectId) {
+    return copy([...this.state.projectPlans.values()]
+      .filter((item) => item.projectId === projectId && item.state !== 'superseded')
+      .sort((left, right) => right.planRevision - left.planRevision)[0] ?? null)
+  }
+
+  async listProjectPlans(projectId) {
+    return copy([...this.state.projectPlans.values()].filter((item) => item.projectId === projectId))
+  }
+
+  async insertProjectPlan(plan) {
+    if (this.state.projectPlans.has(plan.projectPlanId)) throw new Error('fake repository duplicate Project plan')
+    this.state.projectPlans.set(plan.projectPlanId, copy(plan))
+  }
+
+  async updateProjectPlan(plan, expectedRevision) {
+    assertImmutableFields(this.state.projectPlans.get(plan.projectPlanId), plan, [
+      'projectPlanId', 'projectId', 'coordinatorAuthorityEpoch', 'planRevision',
+      'sourceInputLocators', 'tasks', 'rationale', 'runtimeProvenance', 'planDigest', 'createdAt'
+    ], 'Project plan')
+    revisionUpdate(this.state.projectPlans, plan.projectPlanId, plan, expectedRevision)
+  }
+
+  async getTaskResultSubmission(resultSubmissionId) {
+    return copy(this.state.taskResultSubmissions.get(resultSubmissionId) ?? null)
+  }
+
+  async listTaskResultSubmissions(taskId) {
+    return copy([...this.state.taskResultSubmissions.values()].filter((item) => item.taskId === taskId))
+  }
+
+  async listTaskResultSubmissionsByProject(projectId, afterResultSubmissionId, limit) {
+    return copy([...this.state.taskResultSubmissions.values()]
+      .filter((submission) => submission.projectId === projectId &&
+        (afterResultSubmissionId === null ||
+          submission.resultSubmissionId.localeCompare(afterResultSubmissionId) > 0))
+      .sort((left, right) => left.resultSubmissionId.localeCompare(right.resultSubmissionId))
+      .slice(0, limit))
+  }
+
+  async insertTaskResultSubmission(submission) {
+    if (this.state.taskResultSubmissions.has(submission.resultSubmissionId)) {
+      throw new Error('fake repository duplicate Task result submission')
+    }
+    this.state.taskResultSubmissions.set(submission.resultSubmissionId, copy(submission))
+  }
+
+  async listTaskResultReviews(resultSubmissionId) {
+    return copy([...this.state.taskResultReviews.values()]
+      .filter((item) => item.resultSubmissionId === resultSubmissionId))
+  }
+
+  async listTaskResultReviewsByProject(projectId, afterReviewDecisionId, limit) {
+    return copy([...this.state.taskResultReviews.values()]
+      .filter((review) => review.projectId === projectId &&
+        (afterReviewDecisionId === null || review.reviewDecisionId.localeCompare(afterReviewDecisionId) > 0))
+      .sort((left, right) => left.reviewDecisionId.localeCompare(right.reviewDecisionId))
+      .slice(0, limit))
+  }
+
+  async insertTaskResultReview(review) {
+    if (this.state.taskResultReviews.has(review.reviewDecisionId)) {
+      throw new Error('fake repository duplicate Task result review')
+    }
+    this.state.taskResultReviews.set(review.reviewDecisionId, copy(review))
+  }
+
+  async listProjectFinalSummaries(projectId) {
+    return copy([...this.state.projectFinalSummaries.values()].filter((item) => item.projectId === projectId))
+  }
+
+  async insertProjectFinalSummary(summary) {
+    if (this.state.projectFinalSummaries.has(summary.projectId)) {
+      throw new Error('fake repository duplicate Project final summary')
+    }
+    this.state.projectFinalSummaries.set(summary.projectId, copy(summary))
   }
 
   async getProjectRecord(projectRecordId) {
@@ -661,10 +1618,6 @@ export class FakeCollaborationRepository {
   async insertProjectRecord(record) {
     if (this.state.projectRecords.has(record.projectRecordId)) throw new Error('fake repository duplicate record')
     this.state.projectRecords.set(record.projectRecordId, copy(record))
-  }
-
-  async updateProjectRecord(record, expectedRevision) {
-    revisionUpdate(this.state.projectRecords, record.projectRecordId, record, expectedRevision)
   }
 
   async appendInbox(message) {
@@ -712,7 +1665,7 @@ export class FakeCollaborationRepository {
   }
 
   async insertAudit(event) {
-    this.state.auditEvents.push(copy(event))
+    this.state.auditEvents.push(copy({ ...event, metadata: safeAuditMetadata(event.metadata) }))
   }
 
   async pruneExpired(now) {

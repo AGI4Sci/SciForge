@@ -31,6 +31,10 @@ import {
   collaborationSynchronizationRetryResultSchema,
   collaborationTaskListInputSchema,
   collaborationTaskListResultSchema,
+  collaborationTaskOfferDecisionInputSchema,
+  collaborationTaskOfferDecisionResultSchema,
+  collaborationWorkerAcceptanceUpdateInputSchema,
+  collaborationWorkerAcceptanceUpdateResultSchema,
   type CollaborationAgentRegisterInput,
   type CollaborationConnectionConfigureInput,
   type CollaborationConnectionConnectInput,
@@ -43,7 +47,9 @@ import {
   type CollaborationProjectionUpdateInput,
   type CollaborationStatusSnapshot,
   type CollaborationSynchronizationRetryInput,
-  type CollaborationTaskListInput
+  type CollaborationTaskListInput,
+  type CollaborationTaskOfferDecisionInput,
+  type CollaborationWorkerAcceptanceUpdateInput
 } from '../contract.js'
 
 type AgentRegisterResult = z.infer<typeof collaborationAgentRegisterResultSchema>
@@ -57,6 +63,8 @@ type ProjectionUpdateResult = z.infer<typeof collaborationProjectionUpdateResult
 type ProjectionShareResult = z.infer<typeof collaborationProjectionShareResultSchema>
 type SynchronizationRetryResult = z.infer<typeof collaborationSynchronizationRetryResultSchema>
 type TaskListResult = z.infer<typeof collaborationTaskListResultSchema>
+type TaskOfferDecisionResult = z.infer<typeof collaborationTaskOfferDecisionResultSchema>
+type WorkerAcceptanceUpdateResult = z.infer<typeof collaborationWorkerAcceptanceUpdateResultSchema>
 type ManagedContainerManageResult = z.infer<typeof collaborationManagedContainerManageResultSchema>
 
 const contracts = Object.freeze({
@@ -132,6 +140,18 @@ const contracts = Object.freeze({
     inputSchema: collaborationTaskListInputSchema,
     outputSchema: collaborationTaskListResultSchema
   }),
+  workerAcceptanceUpdate: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate,
+    effect: 'external-write' as const,
+    inputSchema: collaborationWorkerAcceptanceUpdateInputSchema,
+    outputSchema: collaborationWorkerAcceptanceUpdateResultSchema
+  }),
+  taskOfferDecide: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.taskOfferDecide,
+    effect: 'external-write' as const,
+    inputSchema: collaborationTaskOfferDecisionInputSchema,
+    outputSchema: collaborationTaskOfferDecisionResultSchema
+  }),
   managedContainerInspect: Object.freeze({
     actionId: COLLABORATION_CAPABILITY_IDS.managedContainerInspect,
     effect: 'read' as const,
@@ -167,6 +187,10 @@ export type CollaborationRendererClient = Readonly<{
   shareProjection(input: CollaborationProjectionShareInput): Promise<ProjectionShareResult>
   retrySynchronization(input: CollaborationSynchronizationRetryInput): Promise<SynchronizationRetryResult>
   listTasks(input?: CollaborationTaskListInput): Promise<TaskListResult>
+  updateWorkerAcceptancePolicy(
+    input: CollaborationWorkerAcceptanceUpdateInput
+  ): Promise<WorkerAcceptanceUpdateResult>
+  decideTaskOffer(input: CollaborationTaskOfferDecisionInput): Promise<TaskOfferDecisionResult>
   manageContainer(input: CollaborationManagedContainerManageInput): Promise<ManagedContainerManageResult>
 }>
 
@@ -209,6 +233,12 @@ export function createCollaborationRendererClient(
       CONFIRMED
     ),
     listTasks: (input = {}) => invoker.invoke(contracts.taskList, input),
+    updateWorkerAcceptancePolicy: (input) => invoker.invoke(
+      contracts.workerAcceptanceUpdate,
+      input,
+      CONFIRMED
+    ),
+    decideTaskOffer: (input) => invoker.invoke(contracts.taskOfferDecide, input, CONFIRMED),
     manageContainer: (input) => {
       if (input.action === 'refresh-status' || input.action === 'refresh-locators') {
         return invoker.invoke(contracts.managedContainerInspect, input)

@@ -19,6 +19,7 @@ import { DefaultCollaborationProviderRuntime } from './provider-runtime.js'
 import { ProviderRuntimeStore } from './provider-runtime-store.js'
 import { CollaborationServiceError } from './errors.js'
 import { CollaborationService, providerIdentityInboxId } from './service.js'
+import { seedOidcUserDevice } from './test-fixtures/collaboration-identity.js'
 
 const LOCATOR = {
   type: 'provider_locator' as const,
@@ -432,10 +433,10 @@ describe('provider runtime', () => {
       store: ledger,
       authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
       repository: emptyRepository(),
-      pairingAssurance: { fake: 'strong' },
+      endpointBindingAssurance: { fake: 'strong' },
       service: {
         ...emptyService(),
-        verifyPairingFromProvider: async (input) => {
+        verifyEndpointChallengeFromProvider: async (input) => {
           verifications.push(input)
           return { challengeId: input.challengeId }
         },
@@ -465,6 +466,63 @@ describe('provider runtime', () => {
     }])
   })
 
+  it('authenticates a HumanAnswer candidate before invoking the one canonical answer service', async () => {
+    const event: ProviderEvent = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      provider: 'fake',
+      type: 'provider.human_answer.candidate',
+      eventId: 'event-human-answer-1',
+      eventCursor: 'cursor-human-answer-1',
+      occurredAt: '2026-08-15T00:00:00.000Z',
+      identity: {
+        type: 'provider_identity', provider: 'fake', realmId: 'realm-1', providerUserId: 'owner-provider-user'
+      },
+      locator: LOCATOR,
+      providerMessageId: 'provider-message-human-answer-1',
+      humanRequestId: 'hrq_abcdefghijkl',
+      requestRevision: 2,
+      answer: '采用已确认的 Coordinator 边界。'
+    }
+    const provider = new FakeProvider(event)
+    const ledger = new FakeRuntimeStore()
+    const calls: Array<Record<string, unknown>> = []
+    const endpointActor = {
+      kind: 'human_endpoint' as const,
+      actorKey: 'endpoint:hep_owner:revision:1',
+      userId: 'usr_owner',
+      humanEndpointId: 'hep_owner',
+      assurance: 'verified' as const
+    }
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider],
+      store: ledger,
+      authentication: { resolveProviderIdentity: async () => endpointActor },
+      repository: emptyRepository(),
+      service: {
+        ...emptyService(),
+        answerHumanNeeded: async (actor, input) => {
+          calls.push({ actor, input })
+          return {} as never
+        }
+      }
+    })
+
+    await runtime.start()
+    await waitUntil(() => ledger.cursor === event.eventCursor, 1_500)
+    await runtime.stop()
+
+    expect(calls).toEqual([{
+      actor: endpointActor,
+      input: expect.objectContaining({
+        type: 'human.answer',
+        humanRequestId: event.humanRequestId,
+        requestRevision: event.requestRevision,
+        answer: event.answer,
+        sourceLocator: LOCATOR
+      })
+    }])
+  })
+
   it('replies safely to a malformed private bind without invoking challenge verification', async () => {
     const event: ProviderEvent = {
       protocolVersion: CURRENT_PROTOCOL_VERSION,
@@ -488,7 +546,7 @@ describe('provider runtime', () => {
       authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
       service: {
         ...emptyService(),
-        verifyPairingFromProvider: async () => {
+        verifyEndpointChallengeFromProvider: async () => {
           verificationCount += 1
           return {}
         },
@@ -535,7 +593,7 @@ describe('provider runtime', () => {
       authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
       service: {
         ...emptyService(),
-        verifyPairingFromProvider: async () => {
+        verifyEndpointChallengeFromProvider: async () => {
           throw new CollaborationServiceError('not_found', 'sensitive challenge detail')
         },
         enqueueProviderCommandResult: async (input) => {
@@ -558,9 +616,11 @@ describe('provider runtime', () => {
 
   it('runs private challenge verification through binding and the durable direct outbox', async () => {
     const repository = new FakeCollaborationRepository()
-    const service = new CollaborationService({ repository, now: () => new Date('2026-08-15T00:00:00.000Z') })
-    const begun = await service.beginPairing({
-      provider: 'fake', realmId: 'realm-1', requestedDisplayName: 'Private bind user',
+    const at = new Date('2026-08-15T00:00:00.000Z')
+    const service = new CollaborationService({ repository, now: () => at })
+    const user = await seedOidcUserDevice(repository, 'private-bind-user', at)
+    const begun = await service.createEndpointChallenge(user.user, {
+      provider: 'fake', realmId: 'realm-1', expectedProviderUserId: 'remote-private-user',
       idempotencyKey: 'idem_private_bind_begin_1'
     })
     const identity = {
@@ -644,37 +704,6 @@ describe('provider runtime', () => {
 
     expect(changes).toEqual([{ previousLocator: LOCATOR, currentLocator, providerEventId: 'event-locator-1' }])
     expect(ledger.completedEvents).toEqual(['event-locator-1'])
-  })
-
-  it('authenticates a canonical provider HumanAnswer and checkpoints only after the answer transaction', async () => {
-    const event: ProviderEvent = { protocolVersion: CURRENT_PROTOCOL_VERSION, provider: 'fake',
-      type: 'provider.human_answer.responded', eventId: 'event-answer-1', eventCursor: 'cursor-answer-1',
-      occurredAt: '2026-08-15T00:00:00.000Z',
-      identity: { type: 'provider_identity', provider: 'fake', realmId: 'realm-1',
-        providerUserId: 'remote-user-1' },
-      locator: LOCATOR,
-      providerMessageId: 'provider-message-answer-1', humanRequestId: 'hrq_123456789012',
-      requestRevision: 1, answer: '继续执行' }
-    const provider = new FakeProvider(event)
-    const ledger = new FakeRuntimeStore()
-    const answers: Array<Record<string, unknown>> = []
-    const actor = { kind: 'human_endpoint' as const, actorKey: 'endpoint:hep_1:revision:1',
-      userId: 'usr_123456789012', humanEndpointId: 'hep_123456789012', assurance: 'verified' as const }
-    const runtime = new DefaultCollaborationProviderRuntime({ providers: [provider], store: ledger,
-      authentication: { resolveProviderIdentity: async () => actor }, repository: emptyRepository(),
-      service: { ...emptyService(), answerHumanNeeded: async (_actor, input) => {
-        answers.push({ actor: _actor, ...input })
-        return {} as never
-      } } })
-
-    await runtime.start()
-    await waitUntil(() => ledger.cursor === 'cursor-answer-1', 1_500)
-    await runtime.stop()
-
-    expect(answers).toEqual([{ actor, humanRequestId: 'hrq_123456789012', requestRevision: 1,
-      answer: '继续执行', sourceLocator: LOCATOR,
-      idempotencyKey: expect.stringMatching(/^idem_[a-f0-9]{64}$/u) }])
-    expect(ledger.completedEvents).toEqual(['event-answer-1'])
   })
 
   it('does not advance to a later event while a crashed claim is still in progress', async () => {
@@ -979,44 +1008,6 @@ describe('provider runtime', () => {
       expect.objectContaining({ clientMessageId: 'msg-direct-1', recipient }),
       expect.objectContaining({ clientMessageId: 'msg-direct-1', recipient })
     ])
-  })
-
-  it('bounds a HumanNeeded notification to provider limits without truncating its reply command', async () => {
-    const sent: ProviderSendResult = { protocolVersion: CURRENT_PROTOCOL_VERSION,
-      type: 'provider.send.succeeded', clientMessageId: 'msg-human-long',
-      providerMessageId: 'remote-human-long', sentAt: '2026-08-15T00:00:01.000Z' }
-    const provider = new FakeProvider([], [sent])
-    provider.contract.limits.maxTextLength = 120
-    const ledger = new FakeRuntimeStore()
-    let ackedSequence = 0
-    ledger.pendingEndpointIds = () => ackedSequence < 1 ? ['hep_1'] : []
-    const replyCommand = '\n\n回复命令：sciforge-answer hrq_123456789012 1 <answer>'
-    const message = inboxMessage(1, 'msg-human-long', 'provider.notification.outbound', {
-      protocolVersion: CURRENT_PROTOCOL_VERSION, type: 'provider.notification.outbound', locator: LOCATOR,
-      notificationKind: 'human_needed', resourceId: 'hrq_123456789012', text: `${'很长的提示'.repeat(100)}${replyCommand}`
-    })
-    const repository = {
-      getEndpoint: async () => ({ humanEndpointId: 'hep_1', userId: 'usr_1', provider: 'fake', realmId: 'realm-1',
-        providerUserId: 'remote-user-1', assurance: 'verified' as const, status: 'active' as const,
-        revision: 1, verifiedAt: '2026-08-15T00:00:00.000Z', updatedAt: '2026-08-15T00:00:00.000Z' }),
-      getInboxCursor: async () => ({ recipient: { kind: 'human_endpoint' as const, id: 'hep_1' },
-        nextSequence: 2, ackedSequence, updatedAt: '2026-08-15T00:00:00.000Z' })
-    }
-    const runtime = new DefaultCollaborationProviderRuntime({ providers: [provider], store: ledger, repository,
-      authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } }, outboxPollMs: 20,
-      service: { ...emptyService(), pullInbox: async () => ({ messages: ackedSequence ? [] : [message],
-        ackedSequence, nextSequence: 2 }), ackInboxMessage: async () => {
-        ackedSequence = 1
-        return { ackedSequence, nextSequence: 2 }
-      } } })
-
-    await runtime.start()
-    await waitUntil(() => ackedSequence === 1, 1_500)
-    await runtime.stop()
-
-    expect(provider.sendRequests).toHaveLength(1)
-    expect(provider.sendRequests[0]?.text.length).toBeLessThanOrEqual(120)
-    expect(provider.sendRequests[0]?.text.endsWith(replyCommand)).toBe(true)
   })
 
   it('retries a durable approval-card update and acknowledges it without replaying the decision', async () => {
@@ -1443,7 +1434,7 @@ function emptyRepository() {
 
 function emptyService() {
   return {
-    verifyPairingFromProvider: async () => ({}),
+    verifyEndpointChallengeFromProvider: async () => ({}),
     enqueueProviderCommandResult: async () => ({}),
     pullProviderIdentityInbox: async () => ({ messages: [], ackedSequence: 0, nextSequence: 1 }),
     ackProviderIdentityInboxMessage: async () => ({ ackedSequence: 0, nextSequence: 1 }),

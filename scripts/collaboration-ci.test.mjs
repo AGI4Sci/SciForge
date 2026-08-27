@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const workflowSource = await readFile(
@@ -57,5 +57,25 @@ test('runs the Host Content Space Broker integration and this routing contract',
   assert.match(
     workflowSource,
     /^\s+run: node --test scripts\/collaboration-ci\.test\.mjs$/m
+  )
+})
+
+test('does not retain the parallel collaboration identity Token package', async () => {
+  assert.equal(
+    packageJson.workspaces.includes('packages/collaboration-identity'),
+    false
+  )
+  assert.equal(
+    Object.hasOwn(packageJson.dependencies, '@sciforge/collaboration-identity'),
+    false
+  )
+  assert.doesNotMatch(
+    packageJson.scripts['build:collaboration-dependencies'],
+    /collaboration-identity/u
+  )
+  assert.doesNotMatch(workflowSource, /collaboration-identity/u)
+  await assert.rejects(
+    access(new URL('../packages/collaboration-identity', import.meta.url)),
+    { code: 'ENOENT' }
   )
 })

@@ -1,0 +1,46 @@
+{
+  "version": "sciforge.run0-meeting-fixture/1",
+  "projectDisplayName": "多用户协作设计评审会",
+  "users": [
+    {
+      "fixtureLabel": "U0",
+      "behavior": "owner_coordinator"
+    },
+    {
+      "fixtureLabel": "U1",
+      "behavior": "manual_worker"
+    },
+    {
+      "fixtureLabel": "U2",
+      "behavior": "automatic_worker_human_needed"
+    },
+    {
+      "fixtureLabel": "U3",
+      "behavior": "reject_worker"
+    },
+    {
+      "fixtureLabel": "U4",
+      "behavior": "replacement_worker"
+    }
+  ],
+  "inputs": [
+    "agenda.md",
+    "requirements.md",
+    "risk-constraints.md"
+  ],
+  "outputs": [
+    "architecture-review.md",
+    "meeting-minutes.md",
+    "risk-register.md"
+  ],
+  "scenarios": [
+    "plan_confirm_or_edit",
+    "manual_accept",
+    "automatic_accept_after_preflight",
+    "human_needed_owner_answer",
+    "reject_and_exact_agent_reassign",
+    "review_accept",
+    "review_request_revision",
+    "project_complete"
+  ]
+}

@@ -8,17 +8,22 @@ import {
 } from 'node:crypto'
 import { hostname, release } from 'node:os'
 import {
+  canonicalDeviceFactAttestationBytes,
   canonicalEnrollmentBytes,
+  deviceFactSignatureMetadataSchema,
+  deviceFactSigningRequestSchema,
   ed25519PublicJwkSchema,
   installationIdSchema,
   type Device,
+  type DeviceFactSignatureMetadata,
+  type DeviceFactSigningRequest,
   type Ed25519PublicJwk
 } from '@sciforge/collaboration-contracts'
 import type {
-  CollaborationIdentityClient,
-  IdentityAccessContext
-} from '@sciforge/collaboration-identity'
-import type { DomainMainPackageSecretStoreHost } from '@sciforge/domain-sdk/package-storage'
+  CloudIdentityAccessContext,
+  CloudIdentityClient
+} from './cloud-identity-client.js'
+import type { IdentityPrivateVault } from './private-vault.js'
 import type {
   DesktopDeviceActionResult,
   DesktopDeviceStatus,
@@ -26,12 +31,13 @@ import type {
   DesktopIdentityStatus
 } from '../contract.js'
 import type { DesktopIdentityService } from './oidc-service.js'
+import { DeviceFactAttestationSigningError } from '../device-fact-attestation-signing.js'
 
 export type DesktopDeviceServiceOptions = Readonly<{
   identity: Pick<DesktopIdentityService, 'getStatus' | 'getAccessToken' | 'subscribe'>
-  client: CollaborationIdentityClient
+  client: CloudIdentityClient
   installationSeed: string
-  secrets: DomainMainPackageSecretStoreHost
+  vault: IdentityPrivateVault
   appVersion: string
   platform?: NodeJS.Platform
   architecture?: string
@@ -39,6 +45,7 @@ export type DesktopDeviceServiceOptions = Readonly<{
   displayName?: string
   capabilities?: readonly string[]
   linkDevice?: (device: Device) => void
+  now?: () => number
 }>
 
 type StoredDeviceKey = Readonly<{
@@ -53,7 +60,7 @@ type IdentityLease = Readonly<{
   oidcIdentityId: string
   issuer: string
   subject: string
-  context: IdentityAccessContext
+  context: CloudIdentityAccessContext
 }>
 
 type IdentityAuthority = Pick<
@@ -72,23 +79,25 @@ type DeviceOperation = Readonly<{
   promise: Promise<DesktopDeviceActionResult>
 }>
 
-const DEVICE_KEY_SECRET = 'device.key'
+const DEVICE_KEY_SECRET = { kind: 'device-key' } as const
 
 export type DesktopDeviceStatusListener = (status: DesktopDeviceStatus) => void
 
 export class DesktopDeviceService {
   readonly #identity: DesktopDeviceServiceOptions['identity']
-  readonly #client: CollaborationIdentityClient
+  readonly #client: CloudIdentityClient
   readonly #installationId: string
-  readonly #secrets: DomainMainPackageSecretStoreHost
+  readonly #nativeSecretStore: IdentityPrivateVault
   readonly #platform: Device['platform']
   readonly #displayName: string
   readonly #capabilities: readonly string[]
   readonly #linkDevice: DesktopDeviceServiceOptions['linkDevice']
+  readonly #now: () => number
   readonly #listeners = new Set<DesktopDeviceStatusListener>()
   readonly #disposeIdentitySubscription: () => void
   #status: DesktopDeviceStatus
   #devices: DesktopDeviceSummary[] = []
+  #currentDevice: Device | null = null
   #operation: DeviceOperation | null = null
   #identityAuthority: IdentityAuthority | null
   #identityEpoch = 1
@@ -99,11 +108,12 @@ export class DesktopDeviceService {
     this.#identity = options.identity
     this.#client = options.client
     this.#installationId = cloudInstallationId(options.installationSeed)
-    this.#secrets = options.secrets
+    this.#nativeSecretStore = options.vault
     this.#platform = devicePlatform(options)
     this.#displayName = options.displayName?.trim() || hostname() || 'SciForge Desktop'
     this.#capabilities = options.capabilities ?? ['agent.execute', 'workspace.read']
     this.#linkDevice = options.linkDevice
+    this.#now = options.now ?? Date.now
     const initialIdentity = options.identity.getStatus()
     this.#identityAuthority = identityAuthority(initialIdentity)
     this.#status = initialIdentity.state === 'signed-in'
@@ -167,17 +177,116 @@ export class DesktopDeviceService {
     }
   }
 
+  async signDeviceFactAttestation(
+    rawRequest: DeviceFactSigningRequest
+  ): Promise<DeviceFactSignatureMetadata> {
+    const request = deviceFactSigningRequestSchema.parse(rawRequest)
+    const initialLease = this.#requireSigningIdentityLease()
+    const refreshed = await this.refresh()
+    if (!this.#isIdentityLeaseCurrent(initialLease)) {
+      throw new DeviceFactAttestationSigningError(
+        this.#identity.getStatus().state === 'signed-in'
+          ? 'device_revalidation_failed'
+          : 'identity_required',
+        'The current OIDC User changed while Device authority was being revalidated.'
+      )
+    }
+    if (!refreshed.ok) {
+      throw new DeviceFactAttestationSigningError(
+        refreshed.status.state === 'signed-out'
+          ? 'identity_required'
+          : 'device_revalidation_failed',
+        refreshed.message
+      )
+    }
+    if (refreshed.status.state === 'revoked') {
+      throw new DeviceFactAttestationSigningError(
+        'device_revoked',
+        'The exact Desktop Device has been revoked.'
+      )
+    }
+    if (refreshed.status.state !== 'active') {
+      throw new DeviceFactAttestationSigningError(
+        'device_required',
+        'An ACTIVE exact Desktop Device is required to sign an attested fact.'
+      )
+    }
+
+    const device = this.#currentDevice
+    if (!device || device.status !== 'active' ||
+      device.deviceId !== refreshed.status.device.deviceId ||
+      device.userId !== initialLease.userId ||
+      device.installationId !== this.#installationId) {
+      throw new DeviceFactAttestationSigningError(
+        'device_revalidation_failed',
+        'Cloud did not revalidate the exact Device for the current OIDC User.'
+      )
+    }
+    const operationSequence = this.#deviceOperationSequence
+    const key = await this.#loadExistingSigningKey(device)
+    if (!this.#isSigningAuthorityCurrent(initialLease, operationSequence, device)) {
+      throw new DeviceFactAttestationSigningError(
+        'device_revalidation_failed',
+        'Device authority changed before the attested fact could be signed.'
+      )
+    }
+
+    const issuedAt = new Date(this.#now()).toISOString()
+    if (Date.parse(request.observedAt) > Date.parse(issuedAt)) {
+      throw new DeviceFactAttestationSigningError(
+        'fact_observation_invalid',
+        'A Device cannot sign a fact observed after the signature issuance time.'
+      )
+    }
+    const unsigned = {
+      purpose: request.purpose,
+      userId: initialLease.userId,
+      deviceId: device.deviceId,
+      deviceKeyId: key.publicKey.kid,
+      deviceKeyRevision: device.revision,
+      canonicalPayloadDigest: request.factDigest,
+      factRevision: request.factRevision,
+      observedAt: request.observedAt,
+      issuedAt
+    }
+    let signature: string
+    try {
+      signature = sign(
+        null,
+        canonicalDeviceFactAttestationBytes(unsigned),
+        createPrivateKey({ key: key.privateKey, format: 'jwk' })
+      ).toString('base64url')
+    } catch {
+      throw new DeviceFactAttestationSigningError(
+        'device_key_unavailable',
+        'The enrolled Device signing key is unavailable.'
+      )
+    }
+    if (!this.#isSigningAuthorityCurrent(initialLease, operationSequence, device)) {
+      throw new DeviceFactAttestationSigningError(
+        'device_revalidation_failed',
+        'Device authority changed while the attested fact was being signed.'
+      )
+    }
+    return deviceFactSignatureMetadataSchema.parse({
+      ...unsigned,
+      signatureAlgorithm: 'Ed25519',
+      signature
+    })
+  }
+
   async #performRefresh(lease: DeviceOperationLease): Promise<DesktopDeviceActionResult> {
     try {
       const response = await this.#client.listDevices(lease.context)
       if (!this.#isOperationLeaseCurrent(lease)) return this.#staleResult()
       const devices = response.devices.map(toSummary)
-      const current = response.devices.find((device) => device.installationId === this.#installationId)
+      const current = this.#selectExactCurrentDevice(response.devices, lease)
       if (current) {
         if (!this.#identityLink(current, lease)) return this.#staleResult()
       }
       if (!this.#isOperationLeaseCurrent(lease)) return this.#staleResult()
       this.#devices = devices
+      this.#currentDevice = current ?? null
       this.#publish(current
         ? current.status === 'revoked'
           ? { state: 'revoked', device: toSummary(current) }
@@ -229,6 +338,7 @@ export class DesktopDeviceService {
     this.#operation = null
     this.#disposeIdentitySubscription()
     this.#devices = []
+    this.#currentDevice = null
     this.#status = { state: 'signed-out' }
     this.#listeners.clear()
   }
@@ -239,16 +349,18 @@ export class DesktopDeviceService {
       const listed = await this.#client.listDevices(lease.context)
       if (!this.#isOperationLeaseCurrent(lease)) return this.#staleResult()
       const devices = listed.devices.map(toSummary)
-      const existing = listed.devices.find((device) => device.installationId === this.#installationId)
+      const existing = this.#selectExactCurrentDevice(listed.devices, lease)
       if (existing?.status === 'active') {
         if (!this.#identityLink(existing, lease)) return this.#staleResult()
         this.#devices = devices
+        this.#currentDevice = existing
         this.#publish({ state: 'active', device: toSummary(existing) })
         return { ok: true, status: this.#status, devices: this.listDevices() as DesktopDeviceSummary[] }
       }
       if (existing?.status === 'revoked') {
         if (!this.#identityLink(existing, lease)) return this.#staleResult()
         this.#devices = devices
+        this.#currentDevice = existing
         this.#publish({ state: 'revoked', device: toSummary(existing) })
         return {
           ok: false,
@@ -259,6 +371,7 @@ export class DesktopDeviceService {
       }
 
       this.#devices = devices
+      this.#currentDevice = null
       this.#publish({ state: 'enrolling' })
       const key = await this.#loadOrCreateKey()
       if (!this.#isOperationLeaseCurrent(lease)) return this.#staleResult()
@@ -312,18 +425,36 @@ export class DesktopDeviceService {
     }
   }
 
-  async #loadOrCreateKey(): Promise<{ publicKey: Ed25519PublicJwk; privateKey: CryptoJsonWebKey }> {
-    const existing = await this.#secrets.read(DEVICE_KEY_SECRET)
-    if (existing) {
-      const stored = JSON.parse(existing) as StoredDeviceKey
-      if (stored.version !== 1) throw new Error('The stored Desktop key has an unsupported version.')
-      const publicKey = ed25519PublicJwkSchema.parse(stored.publicKey)
-      const privateKey = stored.privateKey
-      if (privateKey.kty !== 'OKP' || privateKey.crv !== 'Ed25519' || typeof privateKey.d !== 'string') {
-        throw new Error('The stored Desktop private key is invalid.')
-      }
-      return { publicKey, privateKey }
+  #selectExactCurrentDevice(devices: readonly Device[], lease: IdentityLease): Device | undefined {
+    if (devices.some((device) => device.userId !== lease.userId)) {
+      throw new Error('SciForge Cloud returned a Device belonging to another OIDC User.')
     }
+    const current = devices.filter((device) => device.installationId === this.#installationId)
+    if (current.length > 1) {
+      throw new Error('SciForge Cloud returned more than one record for the exact Desktop Device.')
+    }
+    return current[0]
+  }
+
+  #requireSigningIdentityLease(): IdentityLease {
+    try {
+      const lease = this.#captureIdentityLease()
+      if (lease) return lease
+    } catch {
+      throw new DeviceFactAttestationSigningError(
+        'identity_required',
+        'A current OIDC User is required to sign an attested fact.'
+      )
+    }
+    throw new DeviceFactAttestationSigningError(
+      'identity_required',
+      'A current OIDC User is required to sign an attested fact.'
+    )
+  }
+
+  async #loadOrCreateKey(): Promise<{ publicKey: Ed25519PublicJwk; privateKey: CryptoJsonWebKey }> {
+    const existing = await this.#nativeSecretStore.read(DEVICE_KEY_SECRET)
+    if (existing) return this.#parseStoredDeviceKey(existing)
 
     const pair = generateKeyPairSync('ed25519')
     const exportedPublic = pair.publicKey.export({ format: 'jwk' })
@@ -337,12 +468,59 @@ export class DesktopDeviceService {
       kid: `device-${createHash('sha256').update(x).digest('hex').slice(0, 16)}`,
       x
     })
-    await this.#secrets.write(DEVICE_KEY_SECRET, JSON.stringify({
+    await this.#nativeSecretStore.write(DEVICE_KEY_SECRET, JSON.stringify({
       version: 1,
       publicKey,
       privateKey
     } satisfies StoredDeviceKey))
     return { publicKey, privateKey }
+  }
+
+  async #loadExistingSigningKey(device: Device): Promise<StoredDeviceKey> {
+    let serialized: string | null
+    try {
+      serialized = await this.#nativeSecretStore.read(DEVICE_KEY_SECRET)
+    } catch {
+      throw new DeviceFactAttestationSigningError(
+        'device_key_unavailable',
+        'The enrolled Device signing key cannot be read from secure storage.'
+      )
+    }
+    if (!serialized) {
+      throw new DeviceFactAttestationSigningError(
+        'device_key_unavailable',
+        'The enrolled Device signing key is missing from secure storage.'
+      )
+    }
+    let key: StoredDeviceKey
+    try {
+      key = this.#parseStoredDeviceKey(serialized)
+      createPrivateKey({ key: key.privateKey, format: 'jwk' })
+    } catch {
+      throw new DeviceFactAttestationSigningError(
+        'device_key_unavailable',
+        'The enrolled Device signing key is invalid.'
+      )
+    }
+    if (!sameDevicePublicKey(key.publicKey, device.publicKeyJwk)) {
+      throw new DeviceFactAttestationSigningError(
+        'device_key_mismatch',
+        'The private Device key does not match the exact key registered by Cloud.'
+      )
+    }
+    return key
+  }
+
+  #parseStoredDeviceKey(serialized: string): StoredDeviceKey {
+    const stored = JSON.parse(serialized) as StoredDeviceKey
+    if (stored.version !== 1) throw new Error('The stored Desktop key has an unsupported version.')
+    const publicKey = ed25519PublicJwkSchema.parse(stored.publicKey)
+    const privateKey = stored.privateKey
+    if (privateKey.kty !== 'OKP' || privateKey.crv !== 'Ed25519' ||
+      typeof privateKey.d !== 'string' || privateKey.x !== publicKey.x) {
+      throw new Error('The stored Desktop private key is invalid.')
+    }
+    return { version: 1, publicKey, privateKey }
   }
 
   #handleIdentityStatus(status: DesktopIdentityStatus): void {
@@ -359,6 +537,7 @@ export class DesktopDeviceService {
     this.#operation = null
     if (this.#closed) return
     this.#devices = []
+    this.#currentDevice = null
     if (status.state === 'signed-out') {
       this.#publish({ state: 'signed-out' })
       return
@@ -374,6 +553,7 @@ export class DesktopDeviceService {
     if (lease && !this.#isOperationLeaseCurrent(lease)) return this.#staleResult()
     if (this.#closed) return this.#staleResult()
     const message = error instanceof Error ? error.message : 'Desktop device registration failed.'
+    this.#currentDevice = null
     this.#publish({ state: 'error', message })
     return { ok: false, status: this.#status, devices: this.listDevices() as DesktopDeviceSummary[], message }
   }
@@ -412,6 +592,19 @@ export class DesktopDeviceService {
       this.#isIdentityLeaseCurrent(lease)
   }
 
+  #isSigningAuthorityCurrent(
+    lease: IdentityLease,
+    operationSequence: number,
+    device: Device
+  ): boolean {
+    return operationSequence === this.#deviceOperationSequence &&
+      this.#isIdentityLeaseCurrent(lease) &&
+      this.#status.state === 'active' &&
+      this.#status.device.deviceId === device.deviceId &&
+      this.#currentDevice !== null &&
+      sameDeviceSigningAuthority(this.#currentDevice, device)
+  }
+
   #beginDeviceOperation(identityLease: IdentityLease): DeviceOperationLease {
     this.#deviceOperationSequence += 1
     return { ...identityLease, operationSequence: this.#deviceOperationSequence }
@@ -437,6 +630,7 @@ export class DesktopDeviceService {
   #signedOutResult(): DesktopDeviceActionResult {
     if (!this.#closed) {
       this.#devices = []
+      this.#currentDevice = null
       this.#publish({ state: 'signed-out' })
     }
     return {
@@ -480,6 +674,25 @@ function toSummary(device: Device): DesktopDeviceSummary {
     platform: device.platform,
     ...(device.revokedAt ? { revokedAt: device.revokedAt } : {})
   }
+}
+
+function sameDevicePublicKey(left: Ed25519PublicJwk, right: Ed25519PublicJwk): boolean {
+  return left.kty === right.kty &&
+    left.crv === right.crv &&
+    left.alg === right.alg &&
+    left.use === right.use &&
+    left.kid === right.kid &&
+    left.x === right.x
+}
+
+function sameDeviceSigningAuthority(left: Device, right: Device): boolean {
+  return left.deviceId === right.deviceId &&
+    left.userId === right.userId &&
+    left.installationId === right.installationId &&
+    left.status === 'active' &&
+    right.status === 'active' &&
+    left.revision === right.revision &&
+    sameDevicePublicKey(left.publicKeyJwk, right.publicKeyJwk)
 }
 
 function desktopIdempotencyKey(operation: string): string {

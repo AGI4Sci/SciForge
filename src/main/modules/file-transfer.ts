@@ -24,7 +24,8 @@ import {
   type DomainMainFileTransferHost,
   type DomainMainUploadSource,
   type DomainRendererDownloadSelection,
-  type DomainRendererUploadSelection
+  type DomainRendererUploadSelection,
+  type DomainSystemWorkspaceTransferAuthorization
 } from '@sciforge/domain-sdk/file-transfer'
 import {
   resolveOpenTargetPath,
@@ -34,8 +35,8 @@ import {
   assertActiveHostResourceGrantInvocationLease,
   boundedHostResourceGrantOwnerId,
   defineHostResourceGrantCaller,
-  requireActiveAgentWorkspaceResourceGrantCaller,
   requireActiveHostResourceGrantInvocationLease,
+  requireActiveWorkspaceResourceGrantCaller,
   type HostResourceGrantCaller,
   type HostResourceGrantInvocationLease,
   type HostResourceGrantInvocationProvider
@@ -248,8 +249,16 @@ export class HostFileTransferService {
         })
       },
       openWorkspaceUploadSource: async (input) => {
-        const context = activeAgentWorkspaceContext(currentInvocation, 'upload-source')
-        const assertInvocationCurrent = invocationAssertion(currentInvocation, context)
+        const context = activeWorkspaceContext(
+          currentInvocation,
+          'upload-source',
+          input.systemAuthorization
+        )
+        const assertLeaseCurrent = invocationAssertion(currentInvocation, context)
+        const assertInvocationCurrent = () => {
+          this.#assertCurrent(context)
+          assertLeaseCurrent()
+        }
         const relativePath = parseWorkspaceRelativePath(input.relativePath)
         let sourcePath: string
         try {
@@ -262,7 +271,7 @@ export class HostFileTransferService {
           if (error instanceof DomainFileTransferError) throw error
           throw new DomainFileTransferError(
             'source_unavailable',
-            'The Agent upload source is unavailable inside the active Workspace.',
+            'The upload source is unavailable inside the active Workspace.',
             { cause: error }
           )
         }
@@ -275,7 +284,7 @@ export class HostFileTransferService {
           assertInvocationCurrent
         }))
         if (selection.cancelled) {
-          throw new DomainFileTransferError('cancelled', 'The Agent upload was cancelled.')
+          throw new DomainFileTransferError('cancelled', 'The Workspace upload was cancelled.')
         }
         return this.#openUploadSourceForCaller({
           ownerId: owner,
@@ -287,8 +296,16 @@ export class HostFileTransferService {
         })
       },
       openWorkspaceDownloadDestination: async (input) => {
-        const context = activeAgentWorkspaceContext(currentInvocation, 'download-destination')
-        const assertInvocationCurrent = invocationAssertion(currentInvocation, context)
+        const context = activeWorkspaceContext(
+          currentInvocation,
+          'download-destination',
+          input.systemAuthorization
+        )
+        const assertLeaseCurrent = invocationAssertion(currentInvocation, context)
+        const assertInvocationCurrent = () => {
+          this.#assertCurrent(context)
+          assertLeaseCurrent()
+        }
         const relativePath = parseWorkspaceRelativePath(input.relativePath)
         let destinationTarget: Awaited<ReturnType<typeof resolveSafeWorkspaceWriteTarget>>
         try {
@@ -303,7 +320,7 @@ export class HostFileTransferService {
           if (error instanceof DomainFileTransferError) throw error
           throw new DomainFileTransferError(
             'destination_unavailable',
-            'The Agent download destination is unavailable inside the active Workspace.',
+            'The download destination is unavailable inside the active Workspace.',
             { cause: error }
           )
         }
@@ -319,7 +336,7 @@ export class HostFileTransferService {
           })
         }))
         if (selection.cancelled) {
-          throw new DomainFileTransferError('cancelled', 'The Agent download was cancelled.')
+          throw new DomainFileTransferError('cancelled', 'The Workspace download was cancelled.')
         }
         return this.#openDownloadDestinationForCaller({
           ownerId: owner,
@@ -1933,16 +1950,23 @@ function boundedAbsolutePath(value: string): string {
   return value
 }
 
-function activeAgentWorkspaceContext(
+function activeWorkspaceContext(
   currentInvocation: HostResourceGrantInvocationProvider,
-  direction: 'upload-source' | 'download-destination'
+  direction: 'upload-source' | 'download-destination',
+  systemAuthorization?: DomainSystemWorkspaceTransferAuthorization
 ) {
   try {
-    return requireActiveAgentWorkspaceResourceGrantCaller(currentInvocation, direction)
+    return requireActiveWorkspaceResourceGrantCaller(
+      currentInvocation,
+      direction,
+      systemAuthorization
+    )
   } catch (error) {
     throw new DomainFileTransferError(
-      'principal_changed',
-      'Agent Workspace transfers require an active Broker-authorized resource operation.',
+      systemAuthorization ? 'grant_unavailable' : 'principal_changed',
+      systemAuthorization
+        ? 'System Workspace transfers require an active Broker-authorized grant.'
+        : 'Agent Workspace transfers require an active Broker-authorized resource operation.',
       { cause: error }
     )
   }
@@ -1969,7 +1993,7 @@ function parseWorkspaceRelativePath(value: string): string {
   if (!parsed.success) {
     throw new DomainFileTransferError(
       'invalid_request',
-      'The Agent file path must be a safe Workspace-relative path.'
+      'The file path must be a safe Workspace-relative path.'
     )
   }
   return parsed.data

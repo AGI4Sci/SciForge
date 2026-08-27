@@ -23,12 +23,13 @@ import { createDomainMainEntry as createDomainMainEntry13 } from '@sciforge/doma
 import { createDomainMainEntry as createDomainMainEntry14 } from '@sciforge/domain-opencontent-connector/main'
 import { createDomainMainEntry as createDomainMainEntry15 } from '@sciforge/domain-opencontent-content-space-provider/main'
 import { createDomainMainEntry as createDomainMainEntry16 } from '@sciforge/domain-paper-radar/main'
-import { createDomainMainEntry as createDomainMainEntry17 } from '@sciforge/domain-project-dag/main'
-import { createDomainMainEntry as createDomainMainEntry18 } from '@sciforge/domain-remote-ssh/main'
-import { createDomainMainEntry as createDomainMainEntry19 } from '@sciforge/domain-research-checkpoints/main'
-import { createDomainMainEntry as createDomainMainEntry20 } from '@sciforge/domain-scientific-compute/main'
-import { createDomainMainEntry as createDomainMainEntry21 } from '@sciforge/domain-scientific-plotting/main'
-import { createDomainMainEntry as createDomainMainEntry22 } from '@sciforge/domain-visual-review/main'
+import { createDomainMainEntry as createDomainMainEntry17 } from '@sciforge/domain-project-coordinator/main'
+import { createDomainMainEntry as createDomainMainEntry18 } from '@sciforge/domain-project-dag/main'
+import { createDomainMainEntry as createDomainMainEntry19 } from '@sciforge/domain-remote-ssh/main'
+import { createDomainMainEntry as createDomainMainEntry20 } from '@sciforge/domain-research-checkpoints/main'
+import { createDomainMainEntry as createDomainMainEntry21 } from '@sciforge/domain-scientific-compute/main'
+import { createDomainMainEntry as createDomainMainEntry22 } from '@sciforge/domain-scientific-plotting/main'
+import { createDomainMainEntry as createDomainMainEntry23 } from '@sciforge/domain-visual-review/main'
 import type { z } from 'zod'
 import { installedDomainPackages } from '../../shared/installed-domain-packages'
 import { defineCapability, type DefineCapabilityOptions } from '../capabilities/registry'
@@ -106,12 +107,13 @@ export function createInstalledMainDomainEntries(host: InstalledMainDomainHost) 
       createDomainMainEntry14(domainHostFor("@sciforge/domain-opencontent-connector")),
       createDomainMainEntry15(domainHostFor("@sciforge/domain-opencontent-content-space-provider")),
       createDomainMainEntry16(domainHostFor("@sciforge/domain-paper-radar")),
-      createDomainMainEntry17(domainHostFor("@sciforge/domain-project-dag")),
-      createDomainMainEntry18(domainHostFor("@sciforge/domain-remote-ssh")),
-      createDomainMainEntry19(domainHostFor("@sciforge/domain-research-checkpoints")),
-      createDomainMainEntry20(domainHostFor("@sciforge/domain-scientific-compute")),
-      createDomainMainEntry21(domainHostFor("@sciforge/domain-scientific-plotting")),
-      createDomainMainEntry22(domainHostFor("@sciforge/domain-visual-review"))
+      createDomainMainEntry17(domainHostFor("@sciforge/domain-project-coordinator")),
+      createDomainMainEntry18(domainHostFor("@sciforge/domain-project-dag")),
+      createDomainMainEntry19(domainHostFor("@sciforge/domain-remote-ssh")),
+      createDomainMainEntry20(domainHostFor("@sciforge/domain-research-checkpoints")),
+      createDomainMainEntry21(domainHostFor("@sciforge/domain-scientific-compute")),
+      createDomainMainEntry22(domainHostFor("@sciforge/domain-scientific-plotting")),
+      createDomainMainEntry23(domainHostFor("@sciforge/domain-visual-review"))
     ]
   ).entries
 }

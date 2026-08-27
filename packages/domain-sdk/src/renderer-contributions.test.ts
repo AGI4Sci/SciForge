@@ -262,14 +262,16 @@ describe('renderer extension contribution contracts', () => {
       surfaceId: 'right-panel-surface-2',
       resource: {
         resourceKind: 'artifact-version',
-        resourceId: 'artifact-version:figure:2'
+        resourceId: 'artifact-version:figure:2',
+        resourceRef: 'res_materialized-artifact-review'
       }
     }), {
       sessionId: 'session-1',
       surfaceId: 'right-panel-surface-2',
       resource: {
         resourceKind: 'artifact-version',
-        resourceId: 'artifact-version:figure:2'
+        resourceId: 'artifact-version:figure:2',
+        resourceRef: 'res_materialized-artifact-review'
       }
     })
     assert.throws(() => domainWorkbenchOpenResourceInputSchema.parse({

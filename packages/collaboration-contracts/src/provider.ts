@@ -3,8 +3,8 @@ import {
   assuranceLevelSchema,
   challengeIdSchema,
   displayNameSchema,
-  humanEndpointIdSchema,
   humanRequestIdSchema,
+  humanEndpointIdSchema,
   nonEmptyTextSchema,
   protocolVersionSchema,
   providerCursorSchema,
@@ -189,18 +189,6 @@ export const providerChallengeInvalidEventSchema = z.object({
   identity: providerIdentitySchema
 }).strict()
 
-export const providerHumanAnswerRespondedEventSchema = z.object({
-  ...providerEventEnvelopeShape,
-  type: z.literal('provider.human_answer.responded'),
-  identity: providerIdentitySchema,
-  locator: providerLocatorSchema,
-  providerMessageId: providerMessageIdSchema,
-  humanRequestId: humanRequestIdSchema,
-  requestRevision: revisionSchema,
-  answer: nonEmptyTextSchema
-}).strict()
-export type ProviderHumanAnswerRespondedEvent = z.infer<typeof providerHumanAnswerRespondedEventSchema>
-
 export const providerRemoteApprovalRespondedEventSchema = z.object({
   ...providerEventEnvelopeShape,
   type: z.literal('provider.remote_approval.responded'),
@@ -213,6 +201,24 @@ export const providerRemoteApprovalRespondedEventSchema = z.object({
 export type ProviderRemoteApprovalRespondedEvent = z.infer<
   typeof providerRemoteApprovalRespondedEventSchema
 >
+
+/**
+ * A provider-authored candidate is not a HumanAnswer. Cloud must first resolve
+ * the Provider identity to one active verified Human Endpoint, match that
+ * endpoint to the current Project Owner and exact Project locator, and then run
+ * the canonical HumanAnswer service.
+ */
+export const providerHumanAnswerCandidateEventSchema = z.object({
+  ...providerEventEnvelopeShape,
+  type: z.literal('provider.human_answer.candidate'),
+  identity: providerIdentitySchema,
+  locator: providerLocatorSchema,
+  providerMessageId: providerMessageIdSchema,
+  humanRequestId: humanRequestIdSchema,
+  requestRevision: revisionSchema,
+  answer: nonEmptyTextSchema
+}).strict()
+export type ProviderHumanAnswerCandidateEvent = z.infer<typeof providerHumanAnswerCandidateEventSchema>
 
 export const providerLifecycleEventSchema = z.object({
   ...providerEventEnvelopeShape,
@@ -229,8 +235,8 @@ export const providerEventSchema = z.discriminatedUnion('type', [
   providerLocatorChangedEventSchema,
   providerChallengeRespondedEventSchema,
   providerChallengeInvalidEventSchema,
-  providerHumanAnswerRespondedEventSchema,
   providerRemoteApprovalRespondedEventSchema,
+  providerHumanAnswerCandidateEventSchema,
   providerLifecycleEventSchema
 ])
 export type ProviderEvent = z.infer<typeof providerEventSchema>
@@ -451,24 +457,6 @@ export interface HumanEndpointProvider {
   diagnose(): Promise<ProviderDiagnostic>
 }
 
-export interface HumanEndpointProviderSecretReader {
-  readSecret(secretReference: string): Promise<string>
-}
-
-export interface HumanEndpointProviderHttpRequest {
-  readonly url: string
-  readonly method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
-  readonly headers: Readonly<Record<string, string>>
-  readonly body?: string
-  readonly timeoutMs: number
-}
-
-export interface HumanEndpointProviderHttpResponse {
-  readonly status: number
-  readonly headers: Readonly<Record<string, string>>
-  readonly body: string
-}
-
 export interface HumanEndpointProviderServices {
   resolveLocator(input: Readonly<{
     provider: string
@@ -487,14 +475,14 @@ export interface HumanEndpointProviderServices {
   reconcileDelivery(request: ProviderSendRequest): Promise<ProviderSendResult | undefined>
   recordDelivery(clientMessageId: string, result: ProviderSendResult): Promise<void>
   verifyChallenge(request: ProviderVerifyIdentityRequest): Promise<ProviderVerifyIdentityResult>
-  http(request: HumanEndpointProviderHttpRequest): Promise<HumanEndpointProviderHttpResponse>
   reportDiagnostic(diagnostic: ProviderDiagnostic): void
 }
 
 export interface HumanEndpointProviderFactoryContext {
   readonly provider: string
   readonly configuration: Readonly<Record<string, string | number | boolean>>
-  readonly secretReader: HumanEndpointProviderSecretReader
+  /** Non-secret root containing provider-owned secret files named by configuration references. */
+  readonly secretFileDirectory: string
   readonly services: HumanEndpointProviderServices
   readonly now: () => string
 }

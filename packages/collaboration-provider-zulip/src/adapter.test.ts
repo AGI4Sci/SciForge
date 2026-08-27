@@ -1130,87 +1130,9 @@ describe('ZulipHumanEndpointProvider', () => {
     assert.equal(requests[0]?.get('topic'), null)
   })
 
-  it('emits a deduplicable HumanAnswer event from a strict bound-topic command', async () => {
-    let registerCount = 0
-    const provider = createZulipHumanEndpointProvider({
-      realmUrl: 'https://chat.example.invalid',
-      botEmail: 'service-bot@example.invalid'
-    }, {
-      resolveCredential: async () => ({ apiKey: randomUUID() }),
-      deliveryLedger: new MemoryLedger(),
-      reconcileDelivery: async () => ({ status: 'not_sent' }),
-      resolveLocator,
-      verifyIdentity: rejectIdentity,
-      now: () => new Date('2026-08-15T00:00:00.000Z'),
-      fetch: async () => {
-        registerCount += 1
-        return json({
-          result: 'success',
-          msg: '',
-          queue_id: `queue-human-answer-${registerCount}`,
-          last_event_id: 70,
-          events: [{
-            id: 71,
-            type: 'message',
-            message: rawMessage({
-              id: 1_100,
-              senderId: 42,
-              senderEmail: 'human@example.invalid',
-              senderName: '研究员甲',
-              content: 'sciforge-answer hrq_abcdefghijkl 3 继续执行\n优先处理样本甲'
-            })
-          }]
-        })
-      }
-    })
-
-    const first = await provider.registerEventQueue()
-    const replayed = await provider.registerEventQueue()
-
-    assert.equal(first.events.length, 1)
-    assert.equal(replayed.events.length, 1)
-    const event = first.events[0]
-    assert.equal(event?.type, 'provider.human_answer.responded')
-    if (event?.type !== 'provider.human_answer.responded') assert.fail('expected HumanAnswer event')
-    assert.deepEqual(event, {
-      protocolVersion: '1.0',
-      provider: 'zulip',
-      type: 'provider.human_answer.responded',
-      eventId: event.eventId,
-      eventCursor: event.eventCursor,
-      occurredAt: '2026-08-15T00:00:00.000Z',
-      identity: {
-        type: 'provider_identity',
-        provider: 'zulip',
-        realmId: provider.realmId,
-        providerUserId: '42',
-        displayName: '研究员甲'
-      },
-      locator: {
-        type: 'provider_locator',
-        provider: 'zulip',
-        realmId: provider.realmId,
-        containerId: '12',
-        topicId: 'stable-12-蛋白质结构',
-        containerDisplayName: '研究协作',
-        topicDisplayName: '蛋白质结构'
-      },
-      providerMessageId: '1100',
-      humanRequestId: 'hrq_abcdefghijkl',
-      requestRevision: 3,
-      answer: '继续执行\n优先处理样本甲'
-    })
-    assert.equal(replayed.events[0]?.eventId, event.eventId)
-    assert.equal(
-      replayed.events[0]?.type === 'provider.human_answer.responded'
-        ? replayed.events[0].providerMessageId
-        : undefined,
-      event.providerMessageId
-    )
-  })
-
-  it('keeps malformed HumanAnswer commands as ordinary messages and requires a unique locator for valid answers', async () => {
-    const malformed = [
+  it('emits only a non-authoritative HumanAnswer candidate and keeps malformed text ordinary', async () => {
+    const messages = [
+      'sciforge-answer hrq_abcdefghijkl 3 继续执行\n优先处理样本甲',
       'SCIFORGE-ANSWER hrq_abcdefghijkl 1 不应识别',
       'sciforge-answer hrq_abcdefghijkl 0 修订号无效',
       'sciforge-answer hrq_short 1 请求 ID 无效'
@@ -1227,9 +1149,9 @@ describe('ZulipHumanEndpointProvider', () => {
       fetch: async () => json({
         result: 'success',
         msg: '',
-        queue_id: 'queue-malformed-human-answer',
+        queue_id: 'queue-ordinary-topic-messages',
         last_event_id: 80,
-        events: malformed.map((content, index) => ({
+        events: messages.map((content, index) => ({
           id: 81 + index,
           type: 'message',
           message: rawMessage({
@@ -1243,42 +1165,28 @@ describe('ZulipHumanEndpointProvider', () => {
       })
     })
     const ordinary = await ordinaryProvider.registerEventQueue()
-    assert.equal(ordinary.events.length, malformed.length)
-    assert.ok(ordinary.events.every((event) => event.type === 'provider.message.created'))
-
-    const unboundProvider = createZulipHumanEndpointProvider({
-      realmUrl: 'https://chat.example.invalid',
-      botEmail: 'service-bot@example.invalid'
+    assert.equal(ordinary.events.length, messages.length)
+    const candidate = ordinary.events[0]
+    assert.equal(candidate?.type, 'provider.human_answer.candidate')
+    if (candidate?.type !== 'provider.human_answer.candidate') assert.fail('expected HumanAnswer candidate')
+    assert.deepEqual({
+      identity: candidate.identity,
+      locator: candidate.locator,
+      providerMessageId: candidate.providerMessageId,
+      humanRequestId: candidate.humanRequestId,
+      requestRevision: candidate.requestRevision,
+      answer: candidate.answer
     }, {
-      resolveCredential: async () => ({ apiKey: randomUUID() }),
-      deliveryLedger: new MemoryLedger(),
-      reconcileDelivery: async () => ({ status: 'not_sent' }),
-      resolveLocator: async () => {
-        throw new ZulipProviderError('locator_missing', 'answer source is unbound')
-      },
-      verifyIdentity: rejectIdentity,
-      fetch: async () => json({
-        result: 'success',
-        msg: '',
-        queue_id: 'queue-unbound-human-answer',
-        last_event_id: 90,
-        events: [{
-          id: 91,
-          type: 'message',
-          message: rawMessage({
-            id: 1_300,
-            senderId: 42,
-            senderEmail: 'human@example.invalid',
-            senderName: '研究员甲',
-            content: 'sciforge-answer hrq_abcdefghijkl 1 不得跨越未绑定 Topic'
-          })
-        }]
-      })
+      identity: { type: 'provider_identity', provider: 'zulip', realmId: ordinaryProvider.realmId,
+        providerUserId: '42', displayName: '研究员甲' },
+      locator: await resolveLocator({ provider: 'zulip', realmId: ordinaryProvider.realmId,
+        containerId: '12', topicDisplayName: '蛋白质结构' }),
+      providerMessageId: '1200', humanRequestId: 'hrq_abcdefghijkl', requestRevision: 3,
+      answer: '继续执行\n优先处理样本甲'
     })
-    await assert.rejects(
-      unboundProvider.registerEventQueue(),
-      (error) => error instanceof ZulipProviderError && error.code === 'locator_missing'
-    )
+    assert.deepEqual(ordinary.events.slice(1).map((event) => (
+      event.type === 'provider.message.created' ? event.text : undefined
+    )), messages.slice(1))
   })
 
   it('updates only the referenced Zulip Bot message through the provider-neutral update contract', async () => {

@@ -9,6 +9,8 @@ import {
   capabilityObservationSchema,
   capabilityObserveRequestSchema,
   capabilityResourceChangeEventSchema,
+  capabilityResourceBindRequestSchema,
+  capabilityResourceHandleSchema,
   capabilityReadinessRequestSchema,
   capabilityReadinessSchema,
   type CapabilityEffect,
@@ -48,7 +50,7 @@ export type RendererCapabilityObserveOptions = Readonly<{
 
 type CapabilityTransport = Pick<
   SciForgeApi['capabilities'],
-  'readiness' | 'observe' | 'invoke' | 'cancel' | 'subscribe' | 'unsubscribe' | 'onEvent'
+  'readiness' | 'observe' | 'bind' | 'invoke' | 'cancel' | 'subscribe' | 'unsubscribe' | 'onEvent'
 >
 
 export type RendererCapabilityClientOptions = Readonly<{
@@ -123,6 +125,20 @@ export class RendererCapabilityClient {
       observedAt: observation.observedAt,
       state: contract.stateSchema.parse(observation.state)
     }
+  }
+
+  async bind(
+    resourceRef: string,
+    options: RendererCapabilityObserveOptions = {}
+  ): Promise<DomainCapabilityResourceHandle> {
+    throwIfAborted(options.signal)
+    const request = capabilityResourceBindRequestSchema.parse({ resourceRef })
+    const rawHandle = await this.getTransport().bind({
+      ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+      request
+    })
+    throwIfAborted(options.signal)
+    return capabilityResourceHandleSchema.parse(rawHandle)
   }
 
   async invoke<TInput, TOutput>(

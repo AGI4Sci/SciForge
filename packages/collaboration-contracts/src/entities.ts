@@ -3,16 +3,19 @@ import {
   agentIdSchema,
   assuranceLevelSchema,
   challengeIdSchema,
+  confirmationIdSchema,
   credentialVersionSchema,
+  deviceIdSchema,
   displayNameSchema,
   entityMetadataShape,
+  executionIdSchema,
   humanAnswerIdSchema,
   humanEndpointIdSchema,
   humanRequestIdSchema,
-  installationIdSchema,
   localItemIdSchema,
   managedContainerIdSchema,
   nonEmptyTextSchema,
+  oidcIdentityIdSchema,
   participantIdSchema,
   projectIdSchema,
   projectEndpointBindingIdSchema,
@@ -20,13 +23,13 @@ import {
   projectRecordIdSchema,
   projectionIdSchema,
   providerMessageIdSchema,
+  resultSubmissionIdSchema,
   revisionSchema,
   runtimeIdSchema,
   sequenceSchema,
   taskIdSchema,
   threadIdSchema,
   timestampSchema,
-  turnIdSchema,
   userIdSchema
 } from './core.js'
 import {
@@ -35,6 +38,10 @@ import {
   providerManagedContainerPolicySchema,
   providerManagedContainerRefSchema
 } from './provider.js'
+import {
+  taskFileIntentSchema
+} from './content-space-task-io.js'
+import { taskExecutionStateSchema } from './task-execution.js'
 
 function uniqueStrings(values: readonly string[]): boolean {
   return new Set(values).size === values.length
@@ -105,7 +112,7 @@ export const managedProviderContainerSchema = z.object({
 }).strict()
 export type ManagedProviderContainer = z.infer<typeof managedProviderContainerSchema>
 
-export const endpointChallengeStatusSchema = z.enum(['pending', 'consumed', 'expired', 'cancelled'])
+export const endpointChallengeStatusSchema = z.enum(['pending', 'verified', 'expired'])
 export const endpointChallengeSchema = z.object({
   ...entityMetadataShape,
   type: z.literal('endpoint_challenge'),
@@ -114,10 +121,10 @@ export const endpointChallengeSchema = z.object({
   expectedIdentity: providerIdentitySchema,
   status: endpointChallengeStatusSchema,
   expiresAt: timestampSchema,
-  consumedAt: timestampSchema.optional()
+  verifiedAt: timestampSchema.optional()
 }).strict().superRefine((challenge, context) => {
-  if ((challenge.status === 'consumed') !== (challenge.consumedAt !== undefined)) {
-    context.addIssue({ code: 'custom', path: ['consumedAt'], message: 'Consumed challenge requires consumedAt exclusively' })
+  if ((challenge.status === 'verified') !== (challenge.verifiedAt !== undefined)) {
+    context.addIssue({ code: 'custom', path: ['verifiedAt'], message: 'Verified challenge requires verifiedAt exclusively' })
   }
 })
 export type EndpointChallenge = z.infer<typeof endpointChallengeSchema>
@@ -135,8 +142,8 @@ export const agentNodeSchema = z.object({
   ...entityMetadataShape,
   type: z.literal('agent_node'),
   agentId: agentIdSchema,
+  deviceId: deviceIdSchema,
   ownerUserId: userIdSchema,
-  installationId: installationIdSchema,
   displayName: displayNameSchema,
   nodeType: agentNodeTypeSchema,
   capabilities: z.array(agentCapabilitySchema).max(256).refine(uniqueStrings, 'Capabilities must be unique'),
@@ -240,7 +247,9 @@ export const projectInputSchema = z.object({
 export type ProjectInput = z.infer<typeof projectInputSchema>
 
 export const projectStatusSchema = z.enum(['draft', 'active', 'paused', 'completed', 'cancelled'])
+export const projectContentModeSchema = z.enum(['none', 'required'])
 export type ProjectStatus = z.infer<typeof projectStatusSchema>
+export type ProjectContentMode = z.infer<typeof projectContentModeSchema>
 
 export const projectBudgetSchema = z.object({
   maxTasks: z.number().int().min(1).max(10_000),
@@ -261,15 +270,13 @@ export const projectSchema = z.object({
   ownerUserId: userIdSchema,
   displayName: displayNameSchema,
   goal: nonEmptyTextSchema,
-  memberUserIds: z.array(userIdSchema).min(1).max(1_000).refine(uniqueStrings, 'Project members must be unique'),
   coordinatorAgentId: agentIdSchema,
+  coordinatorAuthorityEpoch: revisionSchema,
+  executionAuthorityEpoch: revisionSchema,
+  contentMode: projectContentModeSchema,
   status: projectStatusSchema,
   budget: projectBudgetSchema
-}).strict().superRefine((project, context) => {
-  if (!project.memberUserIds.includes(project.ownerUserId)) {
-    context.addIssue({ code: 'custom', path: ['memberUserIds'], message: 'Project owner must be a member' })
-  }
-})
+}).strict()
 export type Project = z.infer<typeof projectSchema>
 
 export const projectEndpointBindingStatusSchema = z.enum(['active', 'error', 'closed'])
@@ -290,12 +297,14 @@ export const projectEndpointBindingSchema = z.object({
 export type ProjectEndpointBinding = z.infer<typeof projectEndpointBindingSchema>
 
 export const taskStatusSchema = z.enum([
+  'planned',
   'offered',
-  'accepted',
-  'rejected',
-  'running',
+  'in_progress',
   'needs_human',
-  'succeeded',
+  'awaiting_review',
+  'revision_requested',
+  'manual_recovery_required',
+  'completed',
   'failed',
   'cancelled'
 ])
@@ -307,32 +316,47 @@ export const taskSchema = z.object({
   taskId: taskIdSchema,
   projectId: projectIdSchema,
   createdByCoordinatorAgentId: agentIdSchema,
-  assigneeAgentId: agentIdSchema,
   title: displayNameSchema,
   objective: nonEmptyTextSchema,
   completionCriteria: z.array(z.string().trim().min(1).max(2_000)).min(1).max(100),
   dependencyTaskIds: z.array(taskIdSchema).max(1_000).refine(uniqueStrings, 'Task dependencies must be unique'),
+  fileIntent: taskFileIntentSchema.nullable(),
+  currentExecutionId: executionIdSchema.nullable(),
+  currentExecutionState: taskExecutionStateSchema.nullable(),
   status: taskStatusSchema,
-  attempt: z.number().int().min(0).max(100),
+  executionCount: z.number().int().min(0).max(101),
   maxRetries: z.number().int().min(0).max(100),
-  activeTurnId: turnIdSchema.optional(),
-  completedAt: timestampSchema.optional()
+  completedAt: timestampSchema.nullable()
 }).strict().superRefine((task, context) => {
   if (task.dependencyTaskIds.includes(task.taskId)) {
     context.addIssue({ code: 'custom', path: ['dependencyTaskIds'], message: 'Task cannot depend on itself' })
   }
-  if (task.attempt > task.maxRetries + 1) {
-    context.addIssue({ code: 'custom', path: ['attempt'], message: 'Task attempt exceeds retry budget' })
+  if (task.executionCount > task.maxRetries + 1) {
+    context.addIssue({ code: 'custom', path: ['executionCount'], message: 'Task execution count exceeds retry budget' })
   }
-  const terminal = task.status === 'rejected' || task.status === 'succeeded' || task.status === 'failed' || task.status === 'cancelled'
-  if (terminal !== (task.completedAt !== undefined)) {
+  const terminal = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled'
+  if (terminal !== (task.completedAt !== null)) {
     context.addIssue({ code: 'custom', path: ['completedAt'], message: 'Terminal Task requires completedAt exclusively' })
+  }
+  if ((task.currentExecutionId === null) !== (task.currentExecutionState === null)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['currentExecutionState'],
+      message: 'Current execution identity and state must be projected together.'
+    })
+  }
+  if ((task.status === 'planned') !== (task.currentExecutionId === null && task.executionCount === 0)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['currentExecutionId'],
+      message: 'Only a planned Task has no execution; every offered Task preserves its current execution projection.'
+    })
   }
 })
 export type Task = z.infer<typeof taskSchema>
 
-export const projectRecordKindSchema = z.enum(['observation', 'proposal', 'decision', 'summary', 'task_result'])
-export const projectRecordStatusSchema = z.enum(['proposed', 'accepted', 'rejected'])
+export const projectRecordKindSchema = z.enum(['observation', 'decision', 'summary'])
+export const projectRecordStatusSchema = z.literal('accepted')
 export type ProjectRecordKind = z.infer<typeof projectRecordKindSchema>
 export type ProjectRecordStatus = z.infer<typeof projectRecordStatusSchema>
 
@@ -345,38 +369,107 @@ export const projectRecordSchema = z.object({
   status: projectRecordStatusSchema,
   body: nonEmptyTextSchema,
   authorUserId: userIdSchema,
-  authorAgentId: agentIdSchema.nullable(),
+  authorAgentId: agentIdSchema,
   sourceTaskId: taskIdSchema.nullable(),
+  sourceResultSubmissionId: resultSubmissionIdSchema.nullable(),
+  sourceHumanAnswerId: humanAnswerIdSchema.nullable(),
   sourceRevision: revisionSchema,
-  acceptedByUserId: userIdSchema.nullable(),
-  acceptedByAgentId: agentIdSchema.nullable(),
-  acceptedAt: timestampSchema.nullable()
+  acceptedByUserId: userIdSchema,
+  acceptedByAgentId: agentIdSchema,
+  acceptedAt: timestampSchema
 }).strict().superRefine((record, context) => {
-  const hasAcceptance = record.acceptedByUserId !== null || record.acceptedByAgentId !== null
-  if (record.status === 'accepted' && (!hasAcceptance || record.acceptedAt === null)) {
-    context.addIssue({ code: 'custom', path: ['acceptedAt'], message: 'Accepted record requires accepter and time' })
+  if (
+    record.authorUserId !== record.acceptedByUserId ||
+    record.authorAgentId !== record.acceptedByAgentId
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['acceptedByAgentId'],
+      message: 'The Coordinator Agent that authors an official ProjectRecord must be its accepting writer.'
+    })
   }
-  if (record.status !== 'accepted' && (hasAcceptance || record.acceptedAt !== null)) {
-    context.addIssue({ code: 'custom', path: ['acceptedAt'], message: 'Only accepted record may identify accepter' })
+  if (
+    record.kind === 'observation' &&
+    (record.sourceTaskId === null || record.sourceResultSubmissionId === null || record.sourceHumanAnswerId !== null)
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['sourceResultSubmissionId'],
+      message: 'An observation must cite exactly one accepted TaskResult and no HumanAnswer.'
+    })
+  }
+  if (
+    record.kind === 'decision' &&
+    (record.sourceResultSubmissionId !== null || record.sourceHumanAnswerId === null)
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['sourceHumanAnswerId'],
+      message: 'A decision must cite exactly one HumanAnswer and no TaskResult.'
+    })
+  }
+  if (
+    record.kind === 'summary' &&
+    (record.sourceTaskId !== null || record.sourceResultSubmissionId !== null || record.sourceHumanAnswerId !== null)
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['sourceTaskId'],
+      message: 'A summary is derived from the accepted Project results rather than one TaskResult or HumanAnswer.'
+    })
   }
 })
 export type ProjectRecord = z.infer<typeof projectRecordSchema>
 
 export const humanNeededStatusSchema = z.enum(['pending', 'answered', 'expired', 'cancelled'])
+export const humanNeededContextSchema = z.discriminatedUnion('scope', [
+  z.object({
+    scope: z.literal('worker_execution'),
+    taskId: taskIdSchema,
+    executionId: executionIdSchema
+  }).strict(),
+  z.object({
+    scope: z.literal('coordinator_project'),
+    coordinatorAuthorityEpoch: revisionSchema
+  }).strict()
+])
+export type HumanNeededContext = z.infer<typeof humanNeededContextSchema>
+
+export const confirmableHumanActionSchema = z.object({
+  actionType: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u),
+  safeSummary: z.string().trim().min(1).max(500),
+  effect: z.enum(['workspace-write', 'external-write', 'destructive']),
+  actionDigest: z.string().regex(/^[a-f0-9]{64}$/u)
+}).strict()
+export type ConfirmableHumanAction = z.infer<typeof confirmableHumanActionSchema>
+
 export const humanNeededSchema = z.object({
   ...entityMetadataShape,
   type: z.literal('human_needed'),
   humanRequestId: humanRequestIdSchema,
   projectId: projectIdSchema,
-  taskId: taskIdSchema,
+  context: humanNeededContextSchema,
   targetUserId: userIdSchema,
   requestedByAgentId: agentIdSchema,
   requiredAssurance: assuranceLevelSchema,
   prompt: nonEmptyTextSchema,
+  confirmableAction: confirmableHumanActionSchema.nullable(),
   status: humanNeededStatusSchema,
   expiresAt: timestampSchema
 }).strict()
 export type HumanNeeded = z.infer<typeof humanNeededSchema>
+
+export const humanAnswerSourceSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('oidc_user'),
+    oidcIdentityId: oidcIdentityIdSchema
+  }).strict(),
+  z.object({
+    type: z.literal('human_endpoint'),
+    humanEndpointId: humanEndpointIdSchema
+  }).strict()
+])
+export type HumanAnswerSource = z.infer<typeof humanAnswerSourceSchema>
 
 export const humanAnswerSchema = z.object({
   ...entityMetadataShape,
@@ -384,14 +477,20 @@ export const humanAnswerSchema = z.object({
   humanAnswerId: humanAnswerIdSchema,
   humanRequestId: humanRequestIdSchema,
   projectId: projectIdSchema,
-  taskId: taskIdSchema,
+  context: humanNeededContextSchema,
   requestRevision: revisionSchema,
   answeredByUserId: userIdSchema,
-  answeredFromHumanEndpointId: humanEndpointIdSchema,
+  answeredFrom: humanAnswerSourceSchema,
   assurance: assuranceLevelSchema,
   answer: nonEmptyTextSchema,
+  decision: z.enum(['approve', 'reject']).nullable(),
+  confirmationId: confirmationIdSchema.nullable(),
   answeredAt: timestampSchema
-}).strict()
+}).strict().superRefine((answer, context) => {
+  if ((answer.decision === null) !== (answer.confirmationId === null)) {
+    context.addIssue({ code: 'custom', path: ['confirmationId'], message: 'A confirmable decision requires a confirmation ID' })
+  }
+})
 export type HumanAnswer = z.infer<typeof humanAnswerSchema>
 
 export const orderedProjectionItemSchema = z.object({

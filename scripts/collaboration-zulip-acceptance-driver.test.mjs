@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 import {
@@ -50,5 +51,28 @@ test('real Zulip acceptance adapter exposes the complete driver contract without
 test('environment contract publishes names and placeholders only', () => {
   const serialized = JSON.stringify(acceptanceEnvironmentContract)
   assert.match(serialized, /<SLOT>/u)
+  assert.match(serialized, /OIDC_ACCESS_TOKEN/u)
+  assert.match(serialized, /DEVICE_ID/u)
+  assert.match(serialized, /AGENT_CREDENTIAL/u)
+  assert.doesNotMatch(serialized, /USER_CREDENTIAL|DEVICE_CREDENTIAL/u)
   assert.doesNotMatch(serialized, /Bearer\s+|Basic\s+|-----BEGIN/u)
+})
+
+test('acceptance driver uses only the final plan, offer, execution and result command path', async () => {
+  const source = await readFile(new URL('./collaboration-zulip-acceptance-driver.mjs', import.meta.url), 'utf8')
+  for (const requiredCommand of [
+    'project.plan.submit',
+    'project.plan.confirm',
+    'project.transition',
+    'worker.availability.publish',
+    'task.offer.create',
+    'task.offer.accept',
+    'task.execution.preflight.get',
+    'task.execution.start',
+    'task.result.submit',
+    'task.result.review'
+  ]) {
+    assert.ok(source.includes(`type: '${requiredCommand}'`), `missing final command ${requiredCommand}`)
+  }
+  assert.doesNotMatch(source, /memberUserIds|type: 'task\.create'|type: 'task\.transition'|executionFence/u)
 })
