@@ -1,12 +1,12 @@
-# 故障排查
+# 附录 C 故障排查
 
 ## 快速定位
 
 先确认三个状态：
 
 1. **GUI**：应用是否启动，当前工作目录是否正确。
-2. **Runtime**：Settings → Agents 的选中 runtime、命令、sandbox 和审批策略是否正确。
-3. **Model Router**：Settings → Model Router 的 `/health`、text reasoner profile、public alias 和 key 是否完整。
+2. **Runtime**：检查 **设置 → AI 助手** 中选中的 runtime、命令、sandbox 和审批策略是否正确。
+3. **模型接入**：检查 **设置 → 通用 → 模型接入** 中的接入方式和模型配置是否完整；使用模型 API 时，再检查本地 Router 的 `/health`、text reasoner profile、public alias 和 key。
 
 ## 常见问题
 
