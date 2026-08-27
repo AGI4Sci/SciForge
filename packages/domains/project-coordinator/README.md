@@ -68,12 +68,14 @@ Worker offer in another Project.
 Coordinator Agent Plan submission, HumanNeeded, result review, decision, and
 final completion acquire Collaboration's versioned, main-only command service.
 Collaboration binds the active local Agent and owns durable delivery plus the
-single Coordinator Agent Inbox subscription; this package cannot provide an
+single Coordinator Agent Inbox subscription. Project creation is announced on
+that boundary with the direct `project.started` payload; this package cannot provide an
 Agent identity, route, header, or credential. A `coordinator_project`
 HumanAnswer is consumed here and becomes a Coordinator-authored decision with a
 stable idempotency key. `coordinator.transferred` is durably consumed through
 the same single Inbox owner and projected as default-visible transferred-in or
-transferred-out feedback before ACK. The OIDC Owner answer itself uses
+transferred-out feedback before ACK. HumanNeeded creation selects one exact
+active Project member User, and only that target User may answer. The OIDC answer uses
 Identity's token-free User transport and never becomes a second ProjectRecord
 writer. OIDC material never enters this package. Local Plan drafts are
 non-secret package settings guarded by revision compare-and-set. Plan generation
@@ -121,6 +123,13 @@ and atomic final completion. Pending confirmation, provisioning, HumanNeeded,
 review, completion, Coordinator fencing, membership fences, and root recovery
 cards are default-visible. There is no renderer transport, HTTP client,
 Provider adapter, or second Cloud DTO.
+
+Plan generation exposes Worker identity only at User level while preserving
+anonymous per-Runtime profiles that keep capability tags paired with that same
+Runtime's eligible Task scopes. It never unions facts across a User's devices.
+Generation, assignment edits, and a fresh pre-submit read each require one
+currently eligible Runtime to satisfy the complete Task profile; Cloud
+revalidates the same facts again during offer creation and claim.
 
 Owner confirmation activates the Project and dispatches each dependency-free
 initial Plan item through the canonical Coordinator Agent command service. Main

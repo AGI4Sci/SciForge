@@ -30,6 +30,7 @@ import {
   projectPlanTaskSchema,
   projectRecordSchema,
   projectSchema,
+  projectUserLabelFactSchema,
   projectWorkerAvailabilityViewSchema,
   workerAvailabilityProjectionSchema,
   taskExecutionSchema,
@@ -288,6 +289,7 @@ export const projectCoordinatorMembershipRemoveInputSchema = z.object({
 
 export const projectCoordinatorHumanNeededCreateInputSchema = z.object({
   projectId: humanNeededCreateCommandSchema.shape.projectId,
+  targetUserId: humanNeededCreateCommandSchema.shape.targetUserId,
   expectedProjectRevision: projectSchema.shape.revision,
   expectedCoordinatorAuthorityEpoch: projectSchema.shape.coordinatorAuthorityEpoch,
   requiredAssurance: humanNeededCreateCommandSchema.shape.requiredAssurance.exclude(['basic']),
@@ -497,6 +499,7 @@ export const projectCoordinatorProjectSchema = z.object({
   project: projectSchema,
   coordinatorTransferFeedback: projectCoordinatorTransferFeedbackSchema.nullable().default(null),
   plan: projectCoordinatorPlanViewSchema.nullable(),
+  memberUsers: z.array(projectUserLabelFactSchema).max(1_000),
   workerGroups: z.array(projectCoordinatorWorkerGroupSchema).max(1_000),
   tasks: z.array(projectCoordinatorTaskViewSchema).max(10_000),
   offers: z.array(taskOfferSchema).max(10_000),
@@ -522,6 +525,16 @@ export const projectCoordinatorProjectSchema = z.object({
   }
   if (view.plan && view.plan.plan.projectId !== projectId) {
     context.addIssue({ code: 'custom', path: ['plan'], message: 'Plan must belong to this Project.' })
+  }
+  const memberUserIds = view.memberUsers.map(({ userId }) => userId)
+  if (new Set(memberUserIds).size !== memberUserIds.length || view.memberUsers.some((member) => (
+    member.projectId !== projectId
+  ))) {
+    context.addIssue({
+      code: 'custom',
+      path: ['memberUsers'],
+      message: 'Project member User labels must be unique and belong to this Project.'
+    })
   }
   const userIds = view.workerGroups.map(({ userId }) => userId)
   if (new Set(userIds).size !== userIds.length) {
@@ -573,11 +586,11 @@ export const projectCoordinatorProjectSchema = z.object({
     context.addIssue({ code: 'custom', path: ['reviews', index], message: 'Review must belong to this Project.' })
   })
   view.pendingHumanNeeded.forEach((request, index) => {
-    if (request.projectId === projectId && request.targetUserId === view.project.ownerUserId) return
+    if (request.projectId === projectId && memberUserIds.includes(request.targetUserId)) return
     context.addIssue({
       code: 'custom',
       path: ['pendingHumanNeeded', index],
-      message: 'Pending HumanNeeded must belong to this Project Owner.'
+      message: 'Pending HumanNeeded must target one visible Project member User.'
     })
   })
   view.records.forEach((record, index) => {

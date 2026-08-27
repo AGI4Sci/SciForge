@@ -108,7 +108,7 @@ export function authorize(facts: PermissionFacts): void {
       return
     case 'human_answer':
       if ((actor.kind !== 'user' && actor.kind !== 'human_endpoint') || actor.userId !== facts.targetUserId) {
-        fail('permission_denied', 'A HumanNeeded request may only be answered by its authenticated Project Owner.')
+        fail('permission_denied', 'A HumanNeeded request may only be answered by its authenticated target User.')
       }
       return
     case 'capability_approval':

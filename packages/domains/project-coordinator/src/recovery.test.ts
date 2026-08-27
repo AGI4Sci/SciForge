@@ -511,6 +511,7 @@ function recoveryWorkspace(
         updatedAt: now
       },
       plan: null,
+      memberUsers: [],
       workerGroups: recoveryWorkerGroups(),
       tasks: [{ task, executions: [execution] }],
       offers: [taskOfferSchema.parse({

@@ -127,6 +127,10 @@ test('current Device Agent Project create returns a workspace focused on the exa
 
   assert.equal(result.createdProjectId, project.projectId)
   assert.equal(result.workspace.focusedProjectId, project.projectId)
+  assert.deepEqual(result.workspace.projects[1]?.memberUsers.map(({ userId }) => userId), [
+    'usr_Owner0000001',
+    'usr_Worker000001'
+  ])
   assert.deepEqual(
     result.workspace.projects.map(({ project }) => project.projectId),
     [existing.projectId, project.projectId]
@@ -384,7 +388,7 @@ test('Project read selects the one non-superseded Plan instead of relying on pag
   assert.equal(workspace.projects[0]?.plan?.plan.projectPlanId, currentPlan.projectPlanId)
 })
 
-test('Project read projects pending Owner HumanNeeded and accepted Coordinator decisions', async () => {
+test('Project read projects pending member-targeted HumanNeeded and accepted Coordinator decisions', async () => {
   const project = {
     ...projectFixture('prj_ProjectCreated01', 'Created meeting'),
     status: 'active' as const
@@ -429,6 +433,10 @@ test('Project read projects pending Owner HumanNeeded and accepted Coordinator d
       project,
       observedAt: updatedAt,
       pages: [{
+        collection: 'user_label_facts',
+        limit: 250,
+        items: [userLabelFixture(project.ownerUserId, 'Project Owner')]
+      }, {
         collection: 'pending_human_needed',
         limit: 250,
         items: [humanNeeded]
@@ -790,6 +798,7 @@ function planFixture(input: Readonly<{
 
 function expectProjectCollections() {
   return [
+    'user_label_facts',
     'memberships',
     'task_authorities',
     'provider_principal_facts',

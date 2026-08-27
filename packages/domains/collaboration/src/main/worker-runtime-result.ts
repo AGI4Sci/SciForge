@@ -66,15 +66,15 @@ export function workerTaskPrompt(task: WorkerPromptTask): string {
     '',
     'Return exactly one JSON object and no Markdown fence.',
     'If the task is complete: {"schemaVersion":1,"outcome":"completed","summary":"bounded result summary"}',
-    'If Project Owner input is required: {"schemaVersion":1,"outcome":"needs_human","question":"one bounded question","requiredAssurance":"verified"}'
+    'If the authenticated Worker User input is required: {"schemaVersion":1,"outcome":"needs_human","question":"one bounded question","requiredAssurance":"verified"}'
   ].join('\n')
 }
 
 export function workerHumanAnswerPrompt(answer: string): string {
   const bounded = answer.trim().slice(0, 32_000)
-  if (!bounded) throw new Error('Project Owner answer is empty.')
+  if (!bounded) throw new Error('Worker User answer is empty.')
   return [
-    'The authenticated Project Owner answered the pending HumanNeeded request:',
+    'The authenticated Worker User answered the pending HumanNeeded request:',
     '',
     bounded,
     '',

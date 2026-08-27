@@ -34,6 +34,7 @@ const created: ProjectCoordinatorProjectCreateResult = {
       project: projectFixture,
       coordinatorTransferFeedback: null,
       plan: null,
+      memberUsers: [],
       workerGroups: [],
       tasks: [],
       offers: [],

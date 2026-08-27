@@ -1547,7 +1547,12 @@ export class CollaborationService {
       : confirmableHumanActionSchema.parse(input.confirmableAction)
     return this.commit(actor, 'human.needed.create', input.idempotencyKey, input, async (tx, at) => {
       const project = required(await tx.getProjectForUpdate(input.projectId), 'Project')
-      const targetUserId = project.ownerUserId
+      const targetUserId = input.targetUserId
+      const targetUser = required(await tx.getUserForUpdate(targetUserId), 'HumanNeeded target User')
+      const targetMembership = await tx.getProjectMemberForUpdate(project.projectId, targetUserId)
+      if (targetUser.status !== 'active' || targetMembership?.state !== 'active') {
+        fail('permission_denied', 'HumanNeeded must target an active Project member User.')
+      }
       if (new Date(input.expiresAt).getTime() <= new Date(at).getTime()) fail('request_expired', 'HumanNeeded expiry must be in the future.')
       let context: StoredHumanRequest['context']
       let workerContext: Readonly<{ task: StoredTask; execution: StoredTaskExecution }> | null = null
@@ -1659,15 +1664,21 @@ export class CollaborationService {
       authorize({ actor, operation: 'human_answer', targetUserId: request.targetUserId,
         requiredAssurance: request.requiredAssurance })
       const project = required(await tx.getProject(request.projectId), 'Project')
-      if (request.targetUserId !== project.ownerUserId || actor.userId !== project.ownerUserId) {
-        fail('permission_denied', 'HumanNeeded authority belongs to the current Project Owner.')
+      const targetUser = required(await tx.getUserForUpdate(request.targetUserId), 'HumanNeeded target User')
+      const targetMembership = await tx.getProjectMemberForUpdate(project.projectId, request.targetUserId)
+      if (
+        actor.userId !== request.targetUserId ||
+        targetUser.status !== 'active' ||
+        targetMembership?.state !== 'active'
+      ) {
+        fail('permission_denied', 'HumanNeeded authority belongs to its active target Project member User.')
       }
       if (actor.kind === 'human_endpoint') {
         const endpoint = required(await tx.getEndpoint(actor.humanEndpointId), 'Human endpoint')
         const binding = required(await tx.getProjectEndpointBinding(project.projectId), 'Project endpoint binding')
         if (
           endpoint.status !== 'active' ||
-          endpoint.userId !== project.ownerUserId ||
+          endpoint.userId !== request.targetUserId ||
           endpoint.assurance === 'basic' ||
           input.sourceLocator === undefined ||
           binding.status !== 'active' ||
@@ -1675,7 +1686,7 @@ export class CollaborationService {
           endpoint.provider !== input.sourceLocator.provider ||
           endpoint.realmId !== input.sourceLocator.realmId
         ) {
-          fail('permission_denied', 'The Human Endpoint is not the verified Owner endpoint for this Project location.')
+          fail('permission_denied', 'The Human Endpoint is not the verified target User endpoint for this Project location.')
         }
       }
       expectRevision(request.revision, input.requestRevision)
@@ -2133,26 +2144,12 @@ export class CollaborationService {
       const message = await this.appendInbox(
         tx,
         { kind: 'agent', id: coordinator.agentId },
-        'collaboration.state.changed',
+        'project.started',
         agentInboxPayloadSchema.parse({
           protocolVersion: '1.0',
-          type: 'collaboration.state.changed',
-          event: cloudStateEventSchema.parse({
-            protocolVersion: '1.0',
-            eventId: newId('evt'),
-            causedByRequestId: input.requestId,
-            occurredAt: at,
-            type: 'project.created',
-            projectId,
-            ownerUserId: actor.userId,
-            coordinatorAgentId: coordinator.agentId,
-            coordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
-            executionAuthorityEpoch: project.executionAuthorityEpoch,
-            status: 'paused',
-            contentMode: project.contentMode,
-            provisioningIntentId: provisioningIntent?.provisioningIntentId ?? null,
-            revision: project.revision
-          })
+          type: 'project.started',
+          projectId,
+          revision: project.revision
         }),
         at
       )
@@ -5159,10 +5156,9 @@ export class CollaborationService {
         answer.humanRequestId !== request.humanRequestId ||
         stableDigest(answer.context) !== stableDigest(request.context) ||
         request.status !== 'answered' ||
-        request.targetUserId !== project.ownerUserId ||
-        answer.answeredByUserId !== project.ownerUserId
+        request.targetUserId !== answer.answeredByUserId
       ) {
-        fail('revision_conflict', 'The decision must cite the exact current Owner HumanAnswer for this Project.')
+        fail('revision_conflict', 'The decision must cite the exact current target User HumanAnswer for this Project.')
       }
       if ((await tx.listProjectRecords(project.projectId, true)).some((record) => (
         record.sourceHumanAnswerId === answer.humanAnswerId
@@ -6922,7 +6918,7 @@ function toHumanNeededEntity(request: StoredHumanRequest): Record<string, unknow
 }
 
 function humanNeededProviderText(request: StoredHumanRequest): string {
-  const instruction = `\n\nProject Owner 可在已登录 OIDC 的 SciForge Desktop 中回答；已绑定的 verified Human Endpoint 可回复：sciforge-answer ${request.humanRequestId} ${request.revision} <答案>。`
+  const instruction = `\n\n被指定的 Project 成员 User 可在已登录 OIDC 的 SciForge Desktop 中回答；该 User 已绑定的 verified Human Endpoint 可回复：sciforge-answer ${request.humanRequestId} ${request.revision} <答案>。`
   const summary = request.confirmableAction ? `\n${request.confirmableAction.safeSummary}` : ''
   return `${request.prompt.slice(0, Math.max(0, 32_000 - summary.length - instruction.length))}${summary}${instruction}`
 }

@@ -69,7 +69,7 @@ describe('strict collaboration entities', () => {
 })
 
 describe('identity and ownership invariants', () => {
-  it('requires one authenticated Owner provenance for HumanAnswer and couples decisions to confirmations', () => {
+  it('requires one authenticated target User provenance for HumanAnswer and couples decisions to confirmations', () => {
     expect(humanAnswerSchema.safeParse({
       ...humanAnswerFixture,
       answeredFrom: { type: 'oidc_user', oidcIdentityId: 'oid_TargetIdentity01' }

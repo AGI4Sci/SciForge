@@ -587,6 +587,7 @@ export const humanNeededCreateCommandSchema = z.object({
   ...writeCommandShape,
   type: z.literal('human.needed.create'),
   projectId: projectIdSchema,
+  targetUserId: userIdSchema,
   context: humanNeededCreateContextSchema,
   requiredAssurance: assuranceLevelSchema,
   prompt: nonEmptyTextSchema,

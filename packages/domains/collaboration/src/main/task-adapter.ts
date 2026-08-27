@@ -1556,6 +1556,7 @@ export class CollaborationTaskAdapter {
     const expiresAt = new Date(this.now().getTime() + 7 * 24 * 60 * 60 * 1_000).toISOString()
     const requestFacts = {
       projectId: run.offer.projectId,
+      targetUserId: requireExecution(run).assigneeUserId,
       context: {
         scope: 'worker_execution' as const,
         taskId: run.offer.taskId,

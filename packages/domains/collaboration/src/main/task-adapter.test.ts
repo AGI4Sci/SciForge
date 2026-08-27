@@ -167,7 +167,7 @@ test('automatic text execution journals before Agent and uses explicit vNext com
   assert.equal(directives.length, 1, 'duplicate offer must not replay a completed execution')
 })
 
-test('Worker HumanNeeded resumes the same execution and Runtime Session after the Owner answer', async () => {
+test('Worker HumanNeeded targets its Worker User and resumes the same execution and Runtime Session', async () => {
   const cloud = new FakeWorkerCloud()
   const initial = emptyState()
   initial.workerAcceptancePolicies = [{
@@ -201,7 +201,7 @@ test('Worker HumanNeeded resumes the same execution and Runtime Session after th
       }
       assert.equal(request.runtimeId, 'codex')
       assert.equal(request.threadId, 'worker-human-thread')
-      assert.match(request.prompt, /authenticated Project Owner/u)
+      assert.match(request.prompt, /authenticated Worker User/u)
       assert.match(request.prompt, new RegExp(humanAnswerFixture.answer, 'u'))
       return {
         runtimeId: 'codex',
@@ -211,7 +211,7 @@ test('Worker HumanNeeded resumes the same execution and Runtime Session after th
         text: JSON.stringify({
           schemaVersion: 1,
           outcome: 'completed',
-          summary: 'The Owner-confirmed analysis is complete.'
+        summary: 'The Worker-User-confirmed analysis is complete.'
         })
       }
     }
@@ -233,7 +233,7 @@ test('Worker HumanNeeded resumes the same execution and Runtime Session after th
     expectedTaskRevision: 3,
     expectedExecutionRevision: 2
   })
-  assert.equal(Object.hasOwn(humanRequest, 'targetUserId'), false)
+  assert.equal(humanRequest.targetUserId, TEST_IDS.userId)
   assert.equal(humanRequest.confirmableAction, null)
 
   await created.store.transact((draft) => {
@@ -275,7 +275,7 @@ test('Worker HumanNeeded resumes the same execution and Runtime Session after th
 
   const completed = created.store.snapshot().taskRuns[0]
   assert.equal(completed?.state, 'completed')
-  assert.equal(completed?.resultSummary, 'The Owner-confirmed analysis is complete.')
+  assert.equal(completed?.resultSummary, 'The Worker-User-confirmed analysis is complete.')
   assert.equal(runtimeRequests.length, 2)
   assert.notEqual(runtimeRequests[0]?.clientDirectiveId, runtimeRequests[1]?.clientDirectiveId)
   assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [

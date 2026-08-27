@@ -91,6 +91,7 @@ const fixture = {
         recommendationReason: 'The User has an eligible Runtime advertising the required capability.'
       }]
     },
+    memberUsers: [],
     workerGroups: [{
       userId: 'usr_Worker000001',
       displayName: 'Worker User',

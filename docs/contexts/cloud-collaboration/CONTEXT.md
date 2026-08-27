@@ -91,7 +91,7 @@ A strict non-secret Task description of Project input references, output constra
 _Avoid_: file credential, Workspace mount, Provider request, portable authority
 
 **HumanNeeded**:
-A durable execution question addressed to one exact SciForge User; Run-0 addresses it to the Project Owner. It is answered by an authenticated Human, not by a Reviewer system role or another Agent.
+A durable execution question addressed to one exact active Project-member SciForge User. A Worker execution addresses its owning Worker User by default; a Coordinator question selects the target member explicitly. It is answered only by that target User's authenticated Human identity, not by a Reviewer system role or another Agent.
 _Avoid_: tool approval, broadcast chat, Reviewer role
 
 **Project Record**:

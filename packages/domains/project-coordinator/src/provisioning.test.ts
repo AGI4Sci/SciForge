@@ -485,6 +485,7 @@ function workspaceFixture(input: Readonly<{
         updatedAt: now
       },
       plan: null,
+      memberUsers: [],
       workerGroups: [],
       tasks: [],
       offers: [],

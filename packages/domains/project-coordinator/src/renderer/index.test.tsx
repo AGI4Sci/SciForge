@@ -638,6 +638,7 @@ test('renderer decision HCI invokes only the four governed canonical actions', a
 
   await client.createHumanNeeded({
     projectId: 'prj_ProjectCreated01',
+    targetUserId: 'usr_Owner0000001',
     expectedProjectRevision: 2,
     expectedCoordinatorAuthorityEpoch: 1,
     requiredAssurance: 'verified',
@@ -1062,7 +1063,7 @@ test('a local Plan draft exposes full content editing before immutable submit', 
 test('pending HumanNeeded, result review, and eligible completion are default-visible decision cards', () => {
   const pendingMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: decisionProjectFixture('pending-human'),
-    canAnswer: true,
+    currentUserId: 'usr_Owner0000001',
     busy: false,
     onCreateHumanNeeded: () => undefined,
     onAnswerHumanNeeded: () => undefined,
@@ -1074,7 +1075,7 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
 
   const reviewMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: decisionProjectFixture('review'),
-    canAnswer: true,
+    currentUserId: 'usr_Owner0000001',
     busy: false,
     onCreateHumanNeeded: () => undefined,
     onAnswerHumanNeeded: () => undefined,
@@ -1104,7 +1105,7 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   })
   const artifactMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: artifactProject,
-    canAnswer: true,
+    currentUserId: 'usr_Owner0000001',
     busy: false,
     onCreateHumanNeeded: () => undefined,
     onAnswerHumanNeeded: () => undefined,
@@ -1120,7 +1121,7 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
       ...decisionProjectFixture('completion'),
       records: []
     } as never,
-    canAnswer: true,
+    currentUserId: 'usr_Owner0000001',
     busy: false,
     onCreateHumanNeeded: () => undefined,
     onAnswerHumanNeeded: () => undefined,
@@ -1128,11 +1129,13 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
     onComplete: () => undefined
   }))
   assert.match(askMarkup, /data-default-visible-card="human-needed-create"/u)
-  assert.match(askMarkup, /projectCoordinatorAskOwner/u)
+  assert.match(askMarkup, /name="target-user"/u)
+  assert.match(askMarkup, /value="usr_ProjectMember01"/u)
+  assert.match(askMarkup, /projectCoordinatorAskMember/u)
 
   const completionMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: decisionProjectFixture('completion'),
-    canAnswer: true,
+    currentUserId: 'usr_Owner0000001',
     busy: false,
     onCreateHumanNeeded: () => undefined,
     onAnswerHumanNeeded: () => undefined,
@@ -1496,6 +1499,25 @@ function awaitingConfirmationProjectFixture() {
       },
       assignments: []
     },
+    memberUsers: [{
+      schemaVersion: 1 as const,
+      type: 'project_user_label_fact' as const,
+      projectId: 'prj_ProjectCreated01',
+      userId: 'usr_Owner0000001',
+      displayName: 'Project Owner',
+      status: 'active' as const,
+      revision: 1,
+      observedAt: updatedAt
+    }, {
+      schemaVersion: 1 as const,
+      type: 'project_user_label_fact' as const,
+      projectId: 'prj_ProjectCreated01',
+      userId: 'usr_ProjectMember01',
+      displayName: 'Project Member',
+      status: 'active' as const,
+      revision: 1,
+      observedAt: updatedAt
+    }],
     workerGroups: [],
     tasks: [],
     offers: [],
@@ -1508,7 +1530,37 @@ function awaitingConfirmationProjectFixture() {
       intent: null,
       attestation: null,
       binding: null,
-      memberships: [],
+      memberships: [{
+        schemaVersion: 1 as const,
+        type: 'project_membership' as const,
+        projectMembershipId: 'pmb_ProjectOwner001',
+        projectId: 'prj_ProjectCreated01',
+        userId: 'usr_Owner0000001',
+        state: 'active' as const,
+        authorityEpoch: 1,
+        activatedAt: createdAt,
+        removalRequestedAt: null,
+        removalRequestedByUserId: null,
+        removedAt: null,
+        revision: 1,
+        createdAt,
+        updatedAt
+      }, {
+        schemaVersion: 1 as const,
+        type: 'project_membership' as const,
+        projectMembershipId: 'pmb_ProjectMember001',
+        projectId: 'prj_ProjectCreated01',
+        userId: 'usr_ProjectMember01',
+        state: 'active' as const,
+        authorityEpoch: 1,
+        activatedAt: createdAt,
+        removalRequestedAt: null,
+        removalRequestedByUserId: null,
+        removedAt: null,
+        revision: 1,
+        createdAt,
+        updatedAt
+      }],
       providerPrincipalFacts: [],
       contentReadiness: [],
       providerMembershipObservations: [],

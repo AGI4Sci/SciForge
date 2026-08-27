@@ -1013,8 +1013,9 @@ export function ProjectCoordinatorPanel({
             {activeView === 'reviews' ? (
               <ProjectCoordinatorDecisionSection
                 project={project}
-                canAnswer={workspace?.connection.state === 'ready' &&
-                  workspace.connection.userId === project?.project.ownerUserId}
+                currentUserId={workspace?.connection.state === 'ready'
+                  ? workspace.connection.userId
+                  : null}
                 busy={Boolean(busyAction && !busyAction.startsWith('plan-'))}
                 onCreateHumanNeeded={createHumanNeeded}
                 onAnswerHumanNeeded={answerHumanNeeded}
@@ -2293,7 +2294,7 @@ function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProjec
 
 export function ProjectCoordinatorDecisionSection({
   project,
-  canAnswer,
+  currentUserId,
   busy,
   onCreateHumanNeeded,
   onAnswerHumanNeeded,
@@ -2302,7 +2303,7 @@ export function ProjectCoordinatorDecisionSection({
   onComplete
 }: Readonly<{
   project?: ProjectCoordinatorProject
-  canAnswer: boolean
+  currentUserId: string | null
   busy: boolean
   onCreateHumanNeeded(input: ProjectCoordinatorHumanNeededCreateInput): void
   onAnswerHumanNeeded(input: ProjectCoordinatorHumanAnswerInput): void
@@ -2313,17 +2314,24 @@ export function ProjectCoordinatorDecisionSection({
   const { t } = useTranslation('common')
   const pendingReviews = project?.reviews.filter(({ decision }) => decision === null) ?? []
   const acceptedCurrentResults = project ? acceptedCurrentResultIds(project) : null
-  const mayAskOwner = project?.project.status === 'active' &&
+  const targetUsers = project?.memberUsers.filter((user) => (
+    user.status === 'active' && project.provisioning.memberships.some((membership) => (
+      membership.userId === user.userId && membership.state === 'active'
+    ))
+  )) ?? []
+  const mayAskMember = project?.project.status === 'active' &&
     acceptedCurrentResults !== null &&
     !project.records.some(({ kind }) => kind === 'decision') &&
-    project.pendingHumanNeeded.length === 0
+    project.pendingHumanNeeded.length === 0 &&
+    targetUsers.length > 0
   const completionInput = project ? projectCoordinatorCompletionInput(project, '') : null
   return (
     <Section id="reviews" title={t('projectCoordinatorReviews')} icon={<ClipboardCheck className="h-4 w-4" />}>
       {!project ? <Empty /> : (
         <div className="space-y-2 text-xs">
-          {project.pendingHumanNeeded.map((request) => (
-            <form
+          {project.pendingHumanNeeded.map((request) => {
+            const canAnswer = request.targetUserId === currentUserId
+            return <form
               key={request.humanRequestId}
               className="space-y-2 rounded border border-amber-500/40 p-2"
               data-default-visible-card="human-needed"
@@ -2352,7 +2360,7 @@ export function ProjectCoordinatorDecisionSection({
                 <button type="submit" disabled={!canAnswer || busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorSubmitHumanAnswer')}</button>
               )}
             </form>
-          ))}
+          })}
           {pendingReviews.map((review) => (
             <form
               key={review.submission.resultSubmissionId}
@@ -2437,7 +2445,7 @@ export function ProjectCoordinatorDecisionSection({
               </div>
             </form>
           ))}
-          {mayAskOwner ? (
+          {mayAskMember ? (
             <form
               className="space-y-2 rounded border border-ds-border p-2"
               data-default-visible-card="human-needed-create"
@@ -2446,6 +2454,7 @@ export function ProjectCoordinatorDecisionSection({
                 const values = new FormData(event.currentTarget)
                 onCreateHumanNeeded({
                   projectId: project.project.projectId,
+                  targetUserId: String(values.get('target-user') ?? ''),
                   expectedProjectRevision: project.project.revision,
                   expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
                   requiredAssurance: 'verified',
@@ -2454,9 +2463,15 @@ export function ProjectCoordinatorDecisionSection({
                 })
               }}
             >
+              <select required name="target-user" defaultValue="" aria-label={t('projectCoordinatorHumanTargetUser')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs">
+                <option value="">{t('projectCoordinatorChooseHumanTargetUser')}</option>
+                {targetUsers.map((user) => (
+                  <option key={user.userId} value={user.userId}>{user.displayName}</option>
+                ))}
+              </select>
               <textarea required name="prompt" aria-label={t('projectCoordinatorHumanPrompt')} placeholder={t('projectCoordinatorHumanPrompt')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
               <input required name="expires-at" aria-label={t('projectCoordinatorHumanExpiresAt')} placeholder="2026-08-26T01:08:00.000Z" className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
-              <button type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorAskOwner')}</button>
+              <button type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorAskMember')}</button>
             </form>
           ) : null}
           {completionInput ? (
@@ -2481,7 +2496,7 @@ export function ProjectCoordinatorDecisionSection({
             </div>
           ) : null}
           {project.pendingHumanNeeded.length === 0 && pendingReviews.length === 0 &&
-            !mayAskOwner && !completionInput && !project.finalSummary ? (
+            !mayAskMember && !completionInput && !project.finalSummary ? (
               <Empty message={t('projectCoordinatorNoReviews')} />
             ) : null}
         </div>

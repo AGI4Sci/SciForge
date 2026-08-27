@@ -170,7 +170,7 @@ describe('Project plan, result review and final summary', () => {
     expect(projectFinalSummarySubmitCommandSchema.safeParse({ ...command, integrityVerified: true }).success).toBe(false)
   })
 
-  it('binds a Coordinator decision to one exact Owner HumanAnswer revision', () => {
+  it('binds a Coordinator decision to one exact target User HumanAnswer revision', () => {
     const command = {
       protocolVersion: '1.0',
       requestId: TEST_IDS.requestId,

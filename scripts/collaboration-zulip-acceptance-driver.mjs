@@ -1198,7 +1198,6 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     const requester = stateFor(participant)
     const targetState = stateFor(target)
     const projectState = projectStateFor(project)
-    if (targetState !== projectState.owner) fail('HUMAN_TARGET_REQUIRED')
     const decisionTask = await createTaskWithWorkerUser(
       projectState.coordinator,
       projectState,
@@ -1225,6 +1224,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     const response = await collaborationCommand(requester.agentCredential, {
       type: 'human.needed.create',
       projectId: project.projectId,
+      targetUserId: targetState.public.userId,
       context: {
         scope: 'worker_execution',
         taskId: runningTask.taskId,
@@ -1249,7 +1249,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       execution: runningExecution,
       sourceTask: task,
       prompt: text,
-      notificationText: `${text}\n\n请由 Project Owner 在已登录 OIDC 的 SciForge Desktop 中回答。`,
+      notificationText: `${text}\n\n请由指定的 Project 成员 User 在已登录 OIDC 的 SciForge Desktop 中回答。`,
       answerMessage: null
     })
     safeReport(report, 'human.needed.created')

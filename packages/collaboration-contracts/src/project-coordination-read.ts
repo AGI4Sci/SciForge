@@ -915,11 +915,18 @@ export const restProjectCoordinationResponseSchema = z.object({
   }
 
   for (const [index, humanNeeded] of pendingHumanNeeded.entries()) {
-    if (humanNeeded.targetUserId !== response.project.ownerUserId) {
+    const targetMembership = membershipsByUserId.get(humanNeeded.targetUserId)
+    requireCompleteReference(
+      'memberships',
+      targetMembership,
+      ['pages', index, 'targetUserId'],
+      'HumanNeeded target User must resolve to one Project Membership fact.'
+    )
+    if (targetMembership !== undefined && targetMembership.state !== 'active') {
       context.addIssue({
         code: 'custom',
         path: ['pages', index, 'targetUserId'],
-        message: 'Run-0 HumanNeeded is addressed only to the exact Project Owner User.'
+        message: 'HumanNeeded must target an active Project member User.'
       })
     }
     if (humanNeeded.context.scope === 'coordinator_project') {

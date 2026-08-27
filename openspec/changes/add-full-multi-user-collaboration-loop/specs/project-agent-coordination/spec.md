@@ -44,6 +44,12 @@ Cloud SHALL 为 Coordinator 提供包含 Agent/Device active 状态、online/off
 - **AND** HCI SHALL 不显示 Agent 数、Agent ID、Device ID 或 availability revision，使同一 User 的多个 Device 不会虚增或泄漏选择维度
 - **AND** 所有候选与计数 SHALL 直接派生自本次 Cloud projection，不得使用 Project Member 列表、本地窗口、轮询旁路或猜测的 heartbeat 统计。
 
+#### Scenario: 同一 Worker User 的多个 Runtime 具有不同 capability
+
+- **WHEN** 同一 User 的两个在线 Runtime 分别发布不相交的 capability tags
+- **THEN** Coordinator planner SHALL 以匿名的逐 Runtime profiles 传递候选事实，并在同一个 profile entry 内保留该 Runtime 的 capability tags 与 eligible Task scopes，不得把两个 Runtime 的事实合并成一个虚构能力集合
+- **AND** draft generation、assignment edit 与 fresh pre-submit validation SHALL 各自要求至少一个同属所选 User 的当前合格 Runtime 单独满足该 Task 的完整 capability、authority 与 content-readiness 条件。
+
 ### Requirement: 接单策略是每 Agent Device 的本地持久策略
 
 每个 Agent Device SHALL 本地持久化 `manual` 或 `automatic` Task acceptance policy。Cloud Task 合同 SHALL NOT 包含 `acceptancePolicy`，策略 SHALL NOT 跨 Device 同步。自动与手动接单 SHALL 在 claim 前共享本机 Runtime、精确 Task 与 Provider/content preflight；Cloud SHALL 在唯一原子 claim 路径权威检查 Device/Agent、Project Membership、Task Authority、capability、并发与当前 revision。手动模式 SHALL 要求 Human 选择 claim 或 local dismiss。local dismiss 只影响当前 Device，不得产生 Cloud User-level reject。
@@ -102,17 +108,17 @@ Coordinator 的 Project plan 与 Worker 的 Task transformation SHALL 通过 run
 - **AND** Cloud SHALL 在创建 Offer 时确认该 User 至少有一个当前合格运行时，并将 Task 的 required capability tags 作为权威事实保存
 - **AND** 每台 Device SHALL 在 claim 事务中重验当前 User/Device/Agent authority、online/ready、接单状态、Task capability 与 content readiness；任一事实过期或不合格 SHALL fail closed。
 
-### Requirement: HumanNeeded 使用统一 scope 合同且权威回答者是 Project Owner
+### Requirement: HumanNeeded 使用统一 scope 合同且权威回答者是显式目标 Project 成员 User
 
-`HumanNeeded` SHALL 使用一套带显式 scope discriminator 的严格合同。`worker_execution` SHALL 绑定一个当前、未 fenced 的 Task/execution 及其 expected revisions；`coordinator_project` SHALL 只绑定 Project、当前 Coordinator Agent 和 expected Coordinator authority epoch，不得伪造 Task/execution。两种 scope 都 SHALL 定向当前 Project Owner。Cloud SHALL 持久化 question、scope、targetUserId、expiry 和 answer receipt；HumanAnswer SHALL 由当前 Project Owner 的 OIDC 操作提交，或由 Cloud 将 verified Human Endpoint 精确解析到同一个已存在 OIDC Owner 且核验当前 Project endpoint 后提交。Pairing SHALL 只绑定 endpoint，不得创建 User；未经验证的 IM 文本 SHALL NOT 直接生成 HumanAnswer。
+`HumanNeeded` SHALL 使用一套带显式 scope discriminator 与必填 `targetUserId` 的严格合同。`worker_execution` SHALL 绑定一个当前、未 fenced 的 Task/execution 及其 expected revisions，并默认定向该 execution 的 Worker User；`coordinator_project` SHALL 只绑定 Project、当前 Coordinator Agent 和 expected Coordinator authority epoch，由 Coordinator 显式选择一个 active Project member User，不得伪造 Task/execution。Cloud SHALL 持久化 question、scope、targetUserId、expiry 和 answer receipt；HumanAnswer SHALL 只由该 target User 的 OIDC 操作提交，或由 Cloud 将 verified Human Endpoint 精确解析到同一个已存在 target User 且核验当前 Project endpoint 后提交。Pairing SHALL 只绑定 endpoint，不得创建 User；未经验证的 IM 文本 SHALL NOT 直接生成 HumanAnswer。
 
 Cloud SHALL 把持久化后的 HumanAnswer 投递到当前 Coordinator Agent Inbox；`worker_execution` 还 SHALL 通知对应的当前 Worker execution。只有当前 Coordinator Agent 可把精确 HumanAnswer 写成正式 `decision`，并在后续写 `summary` 和完成 Project；Owner HCI、Human Endpoint 与 Worker 均不得成为第二条 ProjectRecord 写路径。
 
 #### Scenario: Coordinator 在复审结果后请求 Project 决策
 
-- **WHEN** 当前 Coordinator Agent 使用 `coordinator_project` 在已接受结果后向 Owner 提交 HumanNeeded
+- **WHEN** 当前 Coordinator Agent 使用 `coordinator_project` 在已接受结果后向一个 active Project member User 提交 HumanNeeded
 - **THEN** Cloud SHALL 校验 Project revision 和 Coordinator authority epoch，并持久化一个不含 Task/execution 的请求
-- **AND** Owner 的精确 HumanAnswer SHALL 进入当前 Coordinator Agent Inbox，且只有该 Coordinator 可据此写 decision。
+- **AND** 目标 User 的精确 HumanAnswer SHALL 进入当前 Coordinator Agent Inbox，且只有该 Coordinator 可据此写 decision。
 
 #### Scenario: Worker execution 请求 Human 判断
 
@@ -122,13 +128,13 @@ Cloud SHALL 把持久化后的 HumanAnswer 投递到当前 Coordinator Agent Inb
 
 #### Scenario: 非 Owner 尝试回答
 
-- **WHEN** 其他 Member 或 Agent 对一个 pending HumanNeeded 提交答案
+- **WHEN** 非目标 User 或任意 Agent 对一个 pending HumanNeeded 提交答案
 - **THEN** Cloud SHALL 拒绝该请求而不改变 question 状态
 - **AND** Owner HCI SHALL 保持该问题可见且不默认折叠隐藏。
 
 #### Scenario: 未绑定 IM 文本尝试回答
 
-- **WHEN** Provider 收到包含 HumanAnswer 形态文本、但发送者不能解析为当前 Owner 的 active verified Human Endpoint，或消息不属于精确 Project endpoint
+- **WHEN** Provider 收到包含 HumanAnswer 形态文本、但发送者不能解析为目标 User 的 active verified Human Endpoint，或消息不属于精确 Project endpoint
 - **THEN** Cloud SHALL 不创建 HumanAnswer，也 SHALL 不改变 HumanNeeded 状态
 - **AND** Provider event MAY 作为普通消息处理或被拒绝，但不得绕过统一 HumanAnswer 服务。
 

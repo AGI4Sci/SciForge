@@ -195,9 +195,11 @@ Identity 为当前 OIDC User 的 Active Desktop Device 自动 ensure 一个 Devi
 
 个人 Topic 绑定到固定 projection 与 Agent，顺序 inbox/outbox、receipt 和 provider cursor 都持久化在 PostgreSQL。Topic 整体重命名或移动时，provider adapter 保留稳定 topic identity，云端先排入 revision 更新通知，再继续同一个桌面 Session；歧义、部分移动、冲突或旧 revision 都会 fail closed。
 
-HumanNeeded 请求只允许当前 Project Owner 通过 OIDC 已认证的 SciForge Desktop
-回答。Provider 消息端点仅用于通知和讨论，不产生权威 Human answer；云端会重新
-核对 Owner、Project、Task execution、request revision 与 TTL。
+HumanNeeded 请求必须显式指定一个 active Project member User；Worker execution 默认
+指定其 assignee User，Coordinator 可指定其他 active member。只有该 target User 可通过
+OIDC 已认证的 SciForge Desktop 回答；若 verified Human Endpoint 可精确解析为同一 target
+User 且匹配 Project endpoint，也可提交权威回答。云端会重新核对 target User membership、
+Project、Task execution、request revision、assurance 与 TTL。
 
 ## 测试、构建与打包
 

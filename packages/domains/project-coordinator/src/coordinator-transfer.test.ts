@@ -148,6 +148,7 @@ function transferWorkspace(transferred: boolean) {
     projects: [{
       project,
       plan: null,
+      memberUsers: [],
       workerGroups: [
         workerGroup(projectFixture.ownerUserId, TEST_IDS.secondAgentId, 7),
         workerGroup(TEST_IDS.secondUserId, 'agt_MemberAgent001', 9)

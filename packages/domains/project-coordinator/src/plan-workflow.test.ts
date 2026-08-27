@@ -23,6 +23,21 @@ import { ProjectCoordinatorStateStore } from './state.js'
 test('local Coordinator Runtime creates an editable durable Plan draft with Worker User assignment', async () => {
   const settings = inMemorySettings()
   const prompts: string[] = []
+  const workspace = workspaceFixture()
+  const firstAgent = workspace.projects[0]!.workerGroups[0]!.agents[0]!
+  workspace.projects[0]!.workerGroups[0]!.agents.push({
+    displayName: 'Worker Desktop B',
+    projectAvailability: {
+      ...firstAgent.projectAvailability,
+      agentId: 'agt_WorkerAgent002',
+      availability: {
+        ...firstAgent.projectAvailability.availability,
+        agentId: 'agt_WorkerAgent002',
+        deviceId: 'dev_WorkerDevice02',
+        runtimeCapabilityTags: ['document.write']
+      }
+    }
+  })
   const agentExecution: DomainMainAgentExecutionHost = {
     run: async (request) => {
       prompts.push(request.prompt)
@@ -49,7 +64,7 @@ test('local Coordinator Runtime creates an editable durable Plan draft with Work
   const options = {
     settings,
     workspace: defineProjectCoordinatorWorkspacePort({
-      readWorkspace: async () => workspaceFixture()
+      readWorkspace: async () => workspace
     }),
     getAgentExecution: () => agentExecution,
     now: () => new Date('2026-08-25T01:06:00.000Z')
@@ -65,7 +80,8 @@ test('local Coordinator Runtime creates an editable durable Plan draft with Work
   assert.equal(generated.draftRevision, 1)
   assert.equal(generated.runtimeProvenance.generatedByCoordinatorAgentId, 'agt_Coordinator01')
   assert.equal(generated.assignments[0]?.workerUserId, null)
-  assert.match(prompts[0] ?? '', /Created meeting.*meeting\.review/su)
+  assert.match(prompts[0] ?? '', /Created meeting.*runtimeProfiles.*eligibleTaskScopes.*text_tasks.*capabilityTags.*meeting\.review.*document\.write/su)
+  assert.doesNotMatch(prompts[0] ?? '', /runtimeCapabilityTags/u)
 
   const edited = await port.editDraft({
     projectId: generated.projectId,
@@ -81,6 +97,18 @@ test('local Coordinator Runtime creates an editable durable Plan draft with Work
   })
   assert.equal(edited.draftRevision, 2)
   assert.equal(edited.assignments[0]?.workerUserId, 'usr_Worker000001')
+
+  await assert.rejects(() => port.editDraft({
+    projectId: edited.projectId,
+    draftId: edited.draftId,
+    expectedDraftRevision: edited.draftRevision,
+    tasks: edited.tasks.map((task) => ({
+      ...task,
+      requiredCapabilityTags: ['meeting.review', 'document.write']
+    })),
+    rationale: edited.rationale,
+    assignments: edited.assignments
+  }), /one online eligible Runtime/u)
 
   const reloaded = createProjectCoordinatorPlanPort(options)
   assert.deepEqual(await reloaded.readDraft({ projectId: generated.projectId }), edited)
@@ -315,6 +343,7 @@ function workspaceFixture() {
         }
       },
       plan: null,
+      memberUsers: [],
       workerGroups: [{
         userId: 'usr_Worker000001',
         displayName: 'Worker User',

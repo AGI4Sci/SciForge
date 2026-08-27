@@ -76488,6 +76488,65 @@ Executes only the exact Human-confirmed full plan, journals ordinary Provider op
                 }
               ]
             },
+            "memberUsers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_user_label_fact",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "projectId",
+                  "userId",
+                  "displayName",
+                  "status",
+                  "revision",
+                  "observedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
             "offers": {
               "items": {
                 "additionalProperties": false,
@@ -81598,6 +81657,7 @@ Executes only the exact Human-confirmed full plan, journals ordinary Provider op
             "project",
             "coordinatorTransferFeedback",
             "plan",
+            "memberUsers",
             "workerGroups",
             "tasks",
             "offers",
@@ -82270,6 +82330,65 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                 }
               ]
             },
+            "memberUsers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_user_label_fact",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "projectId",
+                  "userId",
+                  "displayName",
+                  "status",
+                  "revision",
+                  "observedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
             "offers": {
               "items": {
                 "additionalProperties": false,
@@ -87380,6 +87499,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
             "project",
             "coordinatorTransferFeedback",
             "plan",
+            "memberUsers",
             "workerGroups",
             "tasks",
             "offers",
@@ -87775,6 +87895,65 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                 }
               ]
             },
+            "memberUsers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_user_label_fact",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "projectId",
+                  "userId",
+                  "displayName",
+                  "status",
+                  "revision",
+                  "observedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
             "offers": {
               "items": {
                 "additionalProperties": false,
@@ -92885,6 +93064,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
             "project",
             "coordinatorTransferFeedback",
             "plan",
+            "memberUsers",
             "workerGroups",
             "tasks",
             "offers",
@@ -93297,6 +93477,65 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                 }
               ]
             },
+            "memberUsers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_user_label_fact",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "projectId",
+                  "userId",
+                  "displayName",
+                  "status",
+                  "revision",
+                  "observedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
             "offers": {
               "items": {
                 "additionalProperties": false,
@@ -98407,6 +98646,7 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
             "project",
             "coordinatorTransferFeedback",
             "plan",
+            "memberUsers",
             "workerGroups",
             "tasks",
             "offers",
@@ -98802,6 +99042,65 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                 }
               ]
             },
+            "memberUsers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_user_label_fact",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "projectId",
+                  "userId",
+                  "displayName",
+                  "status",
+                  "revision",
+                  "observedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
             "offers": {
               "items": {
                 "additionalProperties": false,
@@ -103912,6 +104211,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
             "project",
             "coordinatorTransferFeedback",
             "plan",
+            "memberUsers",
             "workerGroups",
             "tasks",
             "offers",
@@ -103950,7 +104250,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
 
 ## `project-coordinator.human-needed.answer`
 
-Submits the current Project Owner answer through the OIDC User path.
+Submits the exact target Project member User answer through the OIDC User path.
 
 - Version: `1.0.0`
 - Audiences: ui
@@ -104326,6 +104626,65 @@ Submits the current Project Owner answer through the OIDC User path.
                 }
               ]
             },
+            "memberUsers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_user_label_fact",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "projectId",
+                  "userId",
+                  "displayName",
+                  "status",
+                  "revision",
+                  "observedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
             "offers": {
               "items": {
                 "additionalProperties": false,
@@ -109436,6 +109795,7 @@ Submits the current Project Owner answer through the OIDC User path.
             "project",
             "coordinatorTransferFeedback",
             "plan",
+            "memberUsers",
             "workerGroups",
             "tasks",
             "offers",
@@ -109463,7 +109823,7 @@ Submits the current Project Owner answer through the OIDC User path.
   "resourceKinds": [],
   "tags": [
     "project",
-    "owner",
+    "human",
     "human-answer"
   ],
   "title": "Answer Project HumanNeeded"
@@ -109472,7 +109832,7 @@ Submits the current Project Owner answer through the OIDC User path.
 
 ## `project-coordinator.human-needed.create`
 
-Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
+Creates one Project-scoped HumanNeeded for an explicit active member User through the current Coordinator Agent.
 
 - Version: `1.0.0`
 - Audiences: ui
@@ -109523,11 +109883,16 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
           "strong"
         ],
         "type": "string"
+      },
+      "targetUserId": {
+        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
       }
     },
     "readOnly": true,
     "required": [
       "projectId",
+      "targetUserId",
       "expectedProjectRevision",
       "expectedCoordinatorAuthorityEpoch",
       "requiredAssurance",
@@ -109856,6 +110221,65 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
                 }
               ]
             },
+            "memberUsers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_user_label_fact",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "projectId",
+                  "userId",
+                  "displayName",
+                  "status",
+                  "revision",
+                  "observedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
             "offers": {
               "items": {
                 "additionalProperties": false,
@@ -114966,6 +115390,7 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
             "project",
             "coordinatorTransferFeedback",
             "plan",
+            "memberUsers",
             "workerGroups",
             "tasks",
             "offers",
@@ -114996,7 +115421,7 @@ Creates one Project-scoped HumanNeeded through the current Coordinator Agent.
     "coordinator",
     "human-needed"
   ],
-  "title": "Ask the Project Owner"
+  "title": "Ask a Project member User"
 }
 ```
 
@@ -115390,6 +115815,65 @@ Adds the exact User and Provider fact to Cloud; content-required membership rema
                 }
               ]
             },
+            "memberUsers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_user_label_fact",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "projectId",
+                  "userId",
+                  "displayName",
+                  "status",
+                  "revision",
+                  "observedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
             "offers": {
               "items": {
                 "additionalProperties": false,
@@ -120500,6 +120984,7 @@ Adds the exact User and Provider fact to Cloud; content-required membership rema
             "project",
             "coordinatorTransferFeedback",
             "plan",
+            "memberUsers",
             "workerGroups",
             "tasks",
             "offers",
@@ -120906,6 +121391,65 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                 }
               ]
             },
+            "memberUsers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_user_label_fact",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "projectId",
+                  "userId",
+                  "displayName",
+                  "status",
+                  "revision",
+                  "observedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
             "offers": {
               "items": {
                 "additionalProperties": false,
@@ -126016,6 +126560,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
             "project",
             "coordinatorTransferFeedback",
             "plan",
+            "memberUsers",
             "workerGroups",
             "tasks",
             "offers",
@@ -128326,6 +128871,65 @@ Confirms the exact immutable Plan as the Coordinator Human and activates from fr
                 }
               ]
             },
+            "memberUsers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_user_label_fact",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "projectId",
+                  "userId",
+                  "displayName",
+                  "status",
+                  "revision",
+                  "observedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
             "offers": {
               "items": {
                 "additionalProperties": false,
@@ -133436,6 +134040,7 @@ Confirms the exact immutable Plan as the Coordinator Human and activates from fr
             "project",
             "coordinatorTransferFeedback",
             "plan",
+            "memberUsers",
             "workerGroups",
             "tasks",
             "offers",
@@ -134265,6 +134870,65 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                     }
                   ]
                 },
+                "memberUsers": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "displayName": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "observedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "revision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "status": {
+                        "enum": [
+                          "active",
+                          "suspended",
+                          "revoked"
+                        ],
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "project_user_label_fact",
+                        "type": "string"
+                      },
+                      "userId": {
+                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "type",
+                      "projectId",
+                      "userId",
+                      "displayName",
+                      "status",
+                      "revision",
+                      "observedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 1000,
+                  "type": "array"
+                },
                 "offers": {
                   "items": {
                     "additionalProperties": false,
@@ -139375,6 +140039,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                 "project",
                 "coordinatorTransferFeedback",
                 "plan",
+                "memberUsers",
                 "workerGroups",
                 "tasks",
                 "offers",
@@ -139815,6 +140480,65 @@ Submits the Coordinator final summary and atomically completes the Project.
                   "type": "null"
                 }
               ]
+            },
+            "memberUsers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_user_label_fact",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "projectId",
+                  "userId",
+                  "displayName",
+                  "status",
+                  "revision",
+                  "observedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
             },
             "offers": {
               "items": {
@@ -144926,6 +145650,7 @@ Submits the Coordinator final summary and atomically completes the Project.
             "project",
             "coordinatorTransferFeedback",
             "plan",
+            "memberUsers",
             "workerGroups",
             "tasks",
             "offers",
@@ -145478,6 +146203,65 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                       "type": "null"
                     }
                   ]
+                },
+                "memberUsers": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "displayName": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "observedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "revision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "status": {
+                        "enum": [
+                          "active",
+                          "suspended",
+                          "revoked"
+                        ],
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "project_user_label_fact",
+                        "type": "string"
+                      },
+                      "userId": {
+                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "type",
+                      "projectId",
+                      "userId",
+                      "displayName",
+                      "status",
+                      "revision",
+                      "observedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 1000,
+                  "type": "array"
                 },
                 "offers": {
                   "items": {
@@ -150589,6 +151373,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                 "project",
                 "coordinatorTransferFeedback",
                 "plan",
+                "memberUsers",
                 "workerGroups",
                 "tasks",
                 "offers",
@@ -151268,6 +152053,65 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                 }
               ]
             },
+            "memberUsers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_user_label_fact",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "projectId",
+                  "userId",
+                  "displayName",
+                  "status",
+                  "revision",
+                  "observedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
             "offers": {
               "items": {
                 "additionalProperties": false,
@@ -156378,6 +157222,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
             "project",
             "coordinatorTransferFeedback",
             "plan",
+            "memberUsers",
             "workerGroups",
             "tasks",
             "offers",
@@ -156763,6 +157608,65 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                 }
               ]
             },
+            "memberUsers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_user_label_fact",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "projectId",
+                  "userId",
+                  "displayName",
+                  "status",
+                  "revision",
+                  "observedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
             "offers": {
               "items": {
                 "additionalProperties": false,
@@ -161873,6 +162777,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
             "project",
             "coordinatorTransferFeedback",
             "plan",
+            "memberUsers",
             "workerGroups",
             "tasks",
             "offers",

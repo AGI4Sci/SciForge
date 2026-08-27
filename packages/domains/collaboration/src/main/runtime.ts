@@ -82,7 +82,8 @@ export function isWorkerTaskInboxPayload(payload: AgentInboxMessage['payload']):
 export function isCoordinatorProjectInboxPayload(
   payload: AgentInboxMessage['payload']
 ): boolean {
-  return payload.type === 'coordinator.transferred' || (
+  return payload.type === 'project.started' ||
+    payload.type === 'coordinator.transferred' || (
     payload.type === 'human.answer.received' &&
     payload.answer.context.scope === 'coordinator_project'
   )

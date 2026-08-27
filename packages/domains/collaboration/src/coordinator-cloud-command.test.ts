@@ -148,6 +148,7 @@ test('Coordinator Agent allowlist owns HumanNeeded, review, decision, and final 
     idempotencyKey: 'idem_human.needed.create-01',
     type: 'human.needed.create' as const,
     projectId: TEST_IDS.projectId,
+    targetUserId: TEST_IDS.secondUserId,
     context: {
       scope: 'coordinator_project' as const,
       expectedProjectRevision: 5,
@@ -214,7 +215,7 @@ test('Coordinator Agent allowlist owns HumanNeeded, review, decision, and final 
     type: 'human.answer',
     humanRequestId: TEST_IDS.humanRequestId,
     requestRevision: 1,
-    answer: 'Owner-only OIDC answer.'
+    answer: 'Target-member OIDC answer.'
   }).success, false)
 })
 

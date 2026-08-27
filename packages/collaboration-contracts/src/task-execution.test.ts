@@ -309,6 +309,7 @@ describe('Coordinator authority epoch', () => {
       requestId: TEST_IDS.requestId,
       idempotencyKey: 'idem_human_needed_0001',
       projectId: TEST_IDS.projectId,
+      targetUserId: TEST_IDS.secondUserId,
       context: {
         scope: 'worker_execution',
         taskId: TEST_IDS.taskId,
@@ -321,6 +322,10 @@ describe('Coordinator authority epoch', () => {
       expiresAt: TEST_LATER_TIMESTAMP
     }
     expect(restRequestSchema.safeParse(humanNeeded).success).toBe(true)
+    expect(restRequestSchema.safeParse({
+      ...humanNeeded,
+      targetUserId: undefined
+    }).success).toBe(false)
     expect(restRequestSchema.safeParse({
       ...humanNeeded,
       context: { ...humanNeeded.context, expectedExecutionRevision: undefined }

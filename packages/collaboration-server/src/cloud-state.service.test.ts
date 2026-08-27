@@ -917,22 +917,9 @@ describe('vNext Cloud application service', () => {
       recipientAgentId: coordinator.agentId,
       payload: {
         protocolVersion: '1.0',
-        type: 'collaboration.state.changed',
-        event: {
-          protocolVersion: '1.0',
-          type: 'project.created',
-          causedByRequestId: requestId,
-          occurredAt: at.toISOString(),
-          projectId: created.project.projectId,
-          ownerUserId: owner.userId,
-          coordinatorAgentId: coordinator.agentId,
-          coordinatorAuthorityEpoch: 1,
-          executionAuthorityEpoch: 1,
-          status: 'paused',
-          contentMode: 'none',
-          provisioningIntentId: null,
-          revision: 1
-        }
+        type: 'project.started',
+        projectId: created.project.projectId,
+        revision: 1
       }
     })
   })
@@ -3207,6 +3194,7 @@ describe('vNext Cloud application service', () => {
       requestId: 'req_device_revoke_late_human_needed',
       idempotencyKey: 'idem_device_revoke_late_human_needed',
       projectId: fixture.activeProject.projectId,
+      targetUserId: fixture.firstWorkerAgent.userId,
       context: {
         scope: 'worker_execution',
         taskId: revokedTask.taskId,
@@ -3500,6 +3488,7 @@ describe('vNext Cloud application service', () => {
     const service = new CollaborationService({ repository, now })
     const owner = await seedOidcUserDevice(repository, 'meeting-owner', at)
     const worker = await seedOidcUserDevice(repository, 'meeting-worker', at)
+    const outsider = await seedOidcUserDevice(repository, 'meeting-outsider', at)
     const endpointChallenge = await service.createEndpointChallenge(owner.user, {
       provider: 'zulip', realmId: 'realm-meeting', expectedProviderUserId: 'owner-zulip-user',
       idempotencyKey: 'idem_meeting_owner_endpoint_challenge'
@@ -3599,25 +3588,33 @@ describe('vNext Cloud application service', () => {
       executionId: accepted.execution.executionId, expectedTaskRevision: accepted.task.revision,
       expectedExecutionRevision: accepted.execution.revision, startedAt: at.toISOString()
     })
-    const workerRequest = await service.createHumanNeeded(workerAgent, {
+    const workerRequestCommand = {
       protocolVersion: '1.0', type: 'human.needed.create', requestId: 'req_worker_human_needed_1',
       idempotencyKey: 'idem_worker_human_needed_1', projectId: activeProject.projectId,
+      targetUserId: worker.userId,
       context: {
         scope: 'worker_execution', taskId: running.task.taskId, executionId: running.execution.executionId,
         expectedTaskRevision: running.task.revision, expectedExecutionRevision: running.execution.revision
       },
       requiredAssurance: 'verified', prompt: 'Confirm the ambiguous input interpretation.',
       confirmableAction: null, expiresAt: new Date(at.getTime() + 60_000).toISOString()
-    })
+    } satisfies Extract<import('@sciforge/collaboration-contracts').RestRequest, { type: 'human.needed.create' }>
+    await expect(service.createHumanNeeded(workerAgent, {
+      ...workerRequestCommand,
+      requestId: 'req_worker_human_needed_outsider',
+      idempotencyKey: 'idem_worker_human_needed_outsider',
+      targetUserId: outsider.userId
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+    const workerRequest = await service.createHumanNeeded(workerAgent, workerRequestCommand)
     expect(workerRequest.context).toEqual({
       scope: 'worker_execution', taskId: running.task.taskId, executionId: running.execution.executionId
     })
-    await expect(service.answerHumanNeeded(worker.user, {
-      protocolVersion: '1.0', type: 'human.answer', requestId: 'req_worker_human_answer_non_owner',
-      idempotencyKey: 'idem_worker_human_answer_non_owner',
+    await expect(service.answerHumanNeeded(owner.user, {
+      protocolVersion: '1.0', type: 'human.answer', requestId: 'req_worker_human_answer_wrong_user',
+      idempotencyKey: 'idem_worker_human_answer_wrong_user',
       humanRequestId: workerRequest.humanRequestId,
       requestRevision: workerRequest.revision,
-      answer: 'A non-Owner must not answer this request.'
+      answer: 'A non-target User must not answer this request.'
     })).rejects.toMatchObject({ code: 'permission_denied' })
     const stillPending = await service.readProjectCoordination(owner.user, {
       protocolVersion: '1.0', type: 'project.coordination.read', requestId: 'req_worker_human_pending_read',
@@ -3627,7 +3624,7 @@ describe('vNext Cloud application service', () => {
     expect(stillPending.pages.flatMap((page) => (
       page.collection === 'pending_human_needed' ? page.items : []
     ))).toEqual([expect.objectContaining({ humanRequestId: workerRequest.humanRequestId })])
-    const workerAnswer = await service.answerHumanNeeded(owner.user, {
+    const workerAnswer = await service.answerHumanNeeded(worker.user, {
       protocolVersion: '1.0', type: 'human.answer', requestId: 'req_worker_human_answer_1',
       idempotencyKey: 'idem_worker_human_answer_1', humanRequestId: workerRequest.humanRequestId,
       requestRevision: workerRequest.revision, answer: 'Interpret it using the frozen baseline.'
@@ -3695,6 +3692,7 @@ describe('vNext Cloud application service', () => {
     const coordinatorRequestCommand = {
       protocolVersion: '1.0', type: 'human.needed.create', requestId: 'req_human_needed_001',
       idempotencyKey: 'idem_human_needed_001', projectId: activeProject.projectId,
+      targetUserId: worker.userId,
       context: {
         scope: 'coordinator_project', expectedProjectRevision: projectAfterReview.revision,
         expectedCoordinatorAuthorityEpoch: projectAfterReview.coordinatorAuthorityEpoch
@@ -3708,14 +3706,13 @@ describe('vNext Cloud application service', () => {
     })).rejects.toMatchObject({ code: 'permission_denied' })
     const humanRequest = await service.createHumanNeeded(coordinator, coordinatorRequestCommand)
     expect(humanRequest.context).toEqual({ scope: 'coordinator_project', coordinatorAuthorityEpoch: 1 })
-    const humanAnswer = await service.answerHumanNeeded(ownerEndpoint, {
+    const humanAnswer = await service.answerHumanNeeded(worker.user, {
       protocolVersion: '1.0', type: 'human.answer', requestId: 'req_human_answer_001',
       idempotencyKey: 'idem_human_answer_001', humanRequestId: humanRequest.humanRequestId,
-      requestRevision: humanRequest.revision, answer: 'Lead with the frozen role boundary.',
-      sourceLocator: projectLocator
+      requestRevision: humanRequest.revision, answer: 'Lead with the frozen role boundary.'
     })
     expect(humanAnswer.context).toEqual({ scope: 'coordinator_project', coordinatorAuthorityEpoch: 1 })
-    expect(humanAnswer.answeredFrom).toEqual({ type: 'human_endpoint', humanEndpointId: ownerEndpointId })
+    expect(humanAnswer.answeredFrom).toEqual(expect.objectContaining({ type: 'oidc_user' }))
     const coordinatorInbox = await service.pullInbox(coordinator, { afterSequence: 0, limit: 200 })
     expect(coordinatorInbox.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({

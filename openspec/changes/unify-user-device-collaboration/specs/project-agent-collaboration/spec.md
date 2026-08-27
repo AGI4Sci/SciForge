@@ -68,7 +68,7 @@ PoC SHALL 限制每 Project Task 数、每轮新增 Task、重试次数和协调
 
 ### Requirement: HumanNeeded 定向到用户并恢复 Project
 
-Agent 无法可靠继续时 SHALL 创建绑定 Project/Task 和 `targetUserId` 的 HumanNeeded。有效 HumanAnswer SHALL 记录回答 endpoint 和 assurance，并通知 Coordinator；无关用户的回答 SHALL 被拒绝。
+Agent 无法可靠继续时 SHALL 创建绑定 Project/Task 和必填 `targetUserId` 的 HumanNeeded；该 User SHALL 是 active Project member，Worker execution 默认选择其 assignee User，Coordinator 可显式选择其他 active member。有效 HumanAnswer SHALL 记录回答 endpoint 和 assurance，并通知 Coordinator；非目标 User 的回答 SHALL 被拒绝。
 
 #### Scenario: B 回答自己的问题
 

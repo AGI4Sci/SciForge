@@ -743,7 +743,7 @@ describe('Project Coordinator authoritative read protocol', () => {
     }).success).toBe(false)
   })
 
-  it('exposes only pending HumanNeeded facts bound to the exact execution and Project Owner', () => {
+  it('exposes pending HumanNeeded facts only for active Project member target Users', () => {
     const membership = {
       schemaVersion: 1,
       type: 'project_membership',
@@ -759,6 +759,11 @@ describe('Project Coordinator authoritative read protocol', () => {
       revision: 1,
       createdAt: TEST_TIMESTAMP,
       updatedAt: TEST_TIMESTAMP
+    } as const
+    const secondMembership = {
+      ...membership,
+      projectMembershipId: 'pmb_ProjectMember02',
+      userId: TEST_IDS.secondUserId
     } as const
     const agentLabel = {
       schemaVersion: 1,
@@ -824,7 +829,7 @@ describe('Project Coordinator authoritative read protocol', () => {
       project: projectFixture,
       observedAt: TEST_TIMESTAMP,
       pages: [
-        { collection: 'memberships', limit: 10, items: [membership] },
+        { collection: 'memberships', limit: 10, items: [membership, secondMembership] },
         { collection: 'agent_label_facts', limit: 10, items: [agentLabel] },
         { collection: 'tasks', limit: 10, items: [task] },
         { collection: 'executions', limit: 10, items: [execution] },
@@ -847,6 +852,12 @@ describe('Project Coordinator authoritative read protocol', () => {
       ...response,
       pages: response.pages.map((page) => page.collection === 'pending_human_needed'
         ? { ...page, items: [{ ...humanNeededFixture, targetUserId: TEST_IDS.secondUserId }] }
+        : page)
+    }).success).toBe(true)
+    expect(restResponseSchema.safeParse({
+      ...response,
+      pages: response.pages.map((page) => page.collection === 'pending_human_needed'
+        ? { ...page, items: [{ ...humanNeededFixture, targetUserId: 'usr_User00000003' }] }
         : page)
     }).success).toBe(false)
     expect(restResponseSchema.safeParse({

@@ -23,6 +23,7 @@ import {
   type ProjectFinalSummary,
   type ProjectMembership,
   type ProjectPlan,
+  type ProjectPlanTask,
   type ProjectRecord,
   type ProjectWorkerAvailabilityView,
   type ProviderDirectoryPrincipalFact,
@@ -90,8 +91,7 @@ import type { ProjectCoordinatorRecoveryPort } from './recovery.js'
 import type { ProjectCoordinatorArtifactReviewPort } from './artifact-review.js'
 
 const PROJECT_COORDINATOR_PROJECT_FACT_COLLECTIONS = PROJECT_COORDINATION_COLLECTIONS.filter(
-  (collection) => collection !== 'user_label_facts' &&
-    collection !== 'agent_label_facts' &&
+  (collection) => collection !== 'agent_label_facts' &&
     collection !== 'worker_availability'
 )
 
@@ -293,6 +293,96 @@ const generatedPlanContentSchema = z.object({
   rationale: projectCoordinatorPlanDraftSchema.unwrap().shape.rationale
 }).strict().readonly()
 
+function isOnlineEligibleRuntime(
+  projectAvailability: ProjectWorkerAvailabilityView,
+  observedAt: string
+): boolean {
+  const { availability } = projectAvailability
+  return projectAvailability.membership?.state === 'active' &&
+    availability.agentActive &&
+    availability.deviceActive &&
+    availability.connectionStatus === 'online' &&
+    availability.runtimeReadiness === 'ready' &&
+    availability.acceptsNewOffers &&
+    availability.expiresAt > observedAt
+}
+
+function workerRuntimeCanAcceptTask(
+  project: ProjectCoordinatorProject,
+  projectAvailability: ProjectWorkerAvailabilityView,
+  task: ProjectPlanTask,
+  observedAt: string
+): boolean {
+  if (!isOnlineEligibleRuntime(projectAvailability, observedAt)) return false
+  const scope = task.fileIntent === null ? 'text_tasks' : 'file_tasks'
+  if (!projectAvailability.taskAuthorities.some((authority) => (
+    authority.scope === scope && authority.state === 'eligible'
+  ))) return false
+  if (task.requiredCapabilityTags.some((tag) => (
+    !projectAvailability.availability.runtimeCapabilityTags.includes(tag)
+  ))) return false
+  if (task.fileIntent === null) return true
+  const binding = project.provisioning.binding
+  const readiness = projectAvailability.contentReadiness
+  const principal = projectAvailability.providerPrincipalFact
+  return project.project.contentMode === 'required' &&
+    binding?.status === 'active' &&
+    binding.rootLocator !== null &&
+    binding.rootLocatorDigest !== null &&
+    binding.revision === task.fileIntent.bindingRevision &&
+    readiness?.state === 'ready' &&
+    readiness.bindingRevision === binding.revision &&
+    readiness.providerPrincipalFactId !== null &&
+    readiness.snapshottedFactRevision !== null &&
+    projectAvailability.providerPrincipalSnapshotStatus === 'match' &&
+    principal?.readiness === 'ready'
+}
+
+function workerGroupCanAcceptTask(
+  project: ProjectCoordinatorProject,
+  group: ProjectCoordinatorProject['workerGroups'][number],
+  task: ProjectPlanTask,
+  observedAt: string
+): boolean {
+  return group.agents.some(({ projectAvailability }) => (
+    workerRuntimeCanAcceptTask(project, projectAvailability, task, observedAt)
+  ))
+}
+
+function assertTasksHaveEligibleWorker(
+  project: ProjectCoordinatorProject,
+  tasks: readonly ProjectPlanTask[],
+  observedAt: string
+): void {
+  for (const task of tasks) {
+    if (project.workerGroups.some((group) => (
+      workerGroupCanAcceptTask(project, group, task, observedAt)
+    ))) continue
+    throw new Error(`Plan item ${task.planItemId} has no online eligible Runtime with one complete capability profile.`)
+  }
+}
+
+function assertAssignmentsHaveEligibleRuntime(
+  project: ProjectCoordinatorProject,
+  tasks: readonly ProjectPlanTask[],
+  assignments: readonly ProjectCoordinatorPlanAssignment[],
+  observedAt: string
+): void {
+  const tasksById = new Map(tasks.map((task) => [task.planItemId, task]))
+  const groupsByUserId = new Map(project.workerGroups.map((group) => [group.userId, group]))
+  for (const assignment of assignments) {
+    if (assignment.workerUserId === null) continue
+    const task = tasksById.get(assignment.planItemId)
+    const group = groupsByUserId.get(assignment.workerUserId)
+    if (!task || !group) {
+      throw new Error('A Plan assignment must select an active Project member User.')
+    }
+    if (!workerGroupCanAcceptTask(project, group, task, observedAt)) {
+      throw new Error(`Plan item ${task.planItemId} requires one online eligible Runtime owned by the selected Worker User.`)
+    }
+  }
+}
+
 export function createProjectCoordinatorPlanPort(options: Readonly<{
   settings: DomainMainPackageSettingsHost
   state?: ProjectCoordinatorStateStore
@@ -315,26 +405,37 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
     }
     const project = workspace.projects.find((candidate) => candidate.project.projectId === projectId)
     if (!project) throw new Error('The exact Project is not visible to the current OIDC User.')
-    return project
+    return { project, observedAt: workspace.observedAt }
   }
 
   return Object.freeze({
     generateDraft: async (rawInput) => {
       const input = projectCoordinatorPlanDraftGenerateInputSchema.parse(rawInput)
-      const project = await readProject(input.projectId)
+      const { project, observedAt } = await readProject(input.projectId)
       const agentExecution = options.getAgentExecution()
       if (!agentExecution) throw new Error('The local Agent Runtime is unavailable.')
       const candidates = project.workerGroups
-        .filter((group) => group.agents.some(({ projectAvailability }) => (
-          projectAvailability.membership?.state === 'active'
-        )))
-        .map((group) => ({
-          userId: group.userId,
-          displayName: group.displayName,
-          runtimeCapabilityTags: [...new Set(group.agents.flatMap(({ projectAvailability }) => (
-            projectAvailability.availability.runtimeCapabilityTags
-          )))].sort()
-        }))
+        .map((group) => {
+          const eligibleAgents = group.agents.filter(({ projectAvailability }) => (
+            isOnlineEligibleRuntime(projectAvailability, observedAt)
+          ))
+          const profiles = new Map(eligibleAgents.map(({ projectAvailability }) => {
+            const profile = {
+              eligibleTaskScopes: projectAvailability.taskAuthorities
+                .filter(({ state }) => state === 'eligible')
+                .map(({ scope }) => scope)
+                .sort(),
+              capabilityTags: [...projectAvailability.availability.runtimeCapabilityTags].sort()
+            }
+            return [JSON.stringify(profile), profile] as const
+          }))
+          return {
+            userId: group.userId,
+            displayName: group.displayName,
+            runtimeProfiles: [...profiles.values()]
+          }
+        })
+        .filter(({ runtimeProfiles }) => runtimeProfiles.length > 0)
       const generated = await agentExecution.run({
         clientDirectiveId: `project-plan:${project.project.projectId}:${project.project.revision}`,
         prompt: [
@@ -343,6 +444,7 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
           `Owner instruction: ${input.instruction}`,
           `Budget: ${JSON.stringify(project.project.budget)}`,
           `Worker User candidates: ${JSON.stringify(candidates)}`,
+          'Each Task must match one runtimeProfiles entry: fileIntent null requires text_tasks, a fileIntent requires file_tasks, and requiredCapabilityTags must be a subset of that same entry capabilityTags. Never combine fields across Runtime profiles.',
           'Return only strict JSON with {tasks,rationale}. Each task must use a stable item_* ID and canonical Project Plan Task fields.'
         ].join('\n'),
         ...(input.modelId ? { model: input.modelId } : {}),
@@ -359,6 +461,7 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
         throw new Error('Local Plan Runtime returned non-JSON output.', { cause })
       }
       const content = generatedPlanContentSchema.parse(decoded)
+      assertTasksHaveEligibleWorker(project, content.tasks, observedAt)
       const timestamp = now().toISOString()
       const next = projectCoordinatorPlanDraftSchema.parse({
         draftId: draftId(),
@@ -397,17 +500,13 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       if (current.draftRevision !== input.expectedDraftRevision) {
         throw new Error('Plan draft revision conflict.')
       }
-      const project = await readProject(input.projectId)
-      const projectMemberUserIds = new Set(project.workerGroups
-        .filter((group) => group.agents.some(({ projectAvailability }) => (
-          projectAvailability.membership?.state === 'active'
-        )))
-        .map(({ userId }) => userId))
-      if (input.assignments.some(({ workerUserId }) => (
-        workerUserId !== null && !projectMemberUserIds.has(workerUserId)
-      ))) {
-        throw new Error('A Plan assignment must select an active Project member User.')
-      }
+      const { project, observedAt } = await readProject(input.projectId)
+      assertAssignmentsHaveEligibleRuntime(
+        project,
+        input.tasks,
+        input.assignments,
+        observedAt
+      )
       const next = projectCoordinatorPlanDraftSchema.parse({
         ...current,
         draftRevision: current.draftRevision + 1,
@@ -428,6 +527,13 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       if (draft.assignments.some(({ workerUserId }) => workerUserId === null)) {
         throw new Error('Every Plan item requires a Worker User before submit.')
       }
+      const { project, observedAt } = await readProject(input.projectId)
+      assertAssignmentsHaveEligibleRuntime(
+        project,
+        draft.tasks,
+        draft.assignments,
+        observedAt
+      )
       if (!options.coordinatorCloudCommands) {
         throw new Error('Coordinator Agent Cloud command mediation is unavailable.')
       }
@@ -744,6 +850,7 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
         type: 'human.needed.create',
         idempotencyKey,
         projectId: input.projectId,
+        targetUserId: input.targetUserId,
         context: {
           scope: 'coordinator_project',
           expectedProjectRevision: input.expectedProjectRevision,
@@ -763,6 +870,7 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
       const needed = humanNeededSchema.parse(response.entity)
       if (
         needed.projectId !== input.projectId ||
+        needed.targetUserId !== input.targetUserId ||
         needed.context.scope !== 'coordinator_project' ||
         needed.context.coordinatorAuthorityEpoch !== input.expectedCoordinatorAuthorityEpoch
       ) {
@@ -868,6 +976,18 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
     },
     handleInbox: async (rawMessage) => {
       const message = agentInboxMessageSchema.parse(rawMessage)
+      if (message.payload.type === 'project.started') {
+        const started = message.payload
+        const workspace = await options.workspace.readWorkspace({ projectId: started.projectId })
+        const project = requireReadyProject(workspace, started.projectId)
+        if (
+          message.recipientAgentId !== project.project.coordinatorAgentId ||
+          project.project.revision < started.revision
+        ) {
+          throw new Error('Project start notification does not match current Cloud authority.')
+        }
+        return
+      }
       if (message.payload.type === 'coordinator.transferred') {
         const transfer = message.payload
         if (
@@ -914,9 +1034,14 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
       }
       const workspace = await options.workspace.readWorkspace({ projectId: answer.projectId })
       const project = requireReadyProject(workspace, answer.projectId)
+      const answerMembership = project.provisioning.memberships.find(({ userId }) => (
+        userId === answer.answeredByUserId
+      ))
+      const answerMember = project.memberUsers.find(({ userId }) => userId === answer.answeredByUserId)
       if (
         message.recipientAgentId !== project.project.coordinatorAgentId ||
-        answer.answeredByUserId !== project.project.ownerUserId ||
+        answerMembership?.state !== 'active' ||
+        answerMember?.status !== 'active' ||
         answer.context.coordinatorAuthorityEpoch !== project.project.coordinatorAuthorityEpoch
       ) {
         throw new Error('HumanAnswer does not match the current Project Coordinator authority.')
@@ -1147,6 +1272,7 @@ function projectCoordinatorProjectView(
     project,
     coordinatorTransferFeedback: null,
     plan: plan ? { plan, assignments: [] } : null,
+    memberUsers: factItems(snapshot, 'user_label_facts'),
     workerGroups: projectWorkerGroups(project, snapshot, workerDirectory),
     tasks: factItems<ProjectCoordinatorProject['tasks'][number]['task']>(snapshot, 'tasks')
       .map((task) => ({

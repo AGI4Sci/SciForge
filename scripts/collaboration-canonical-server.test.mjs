@@ -468,6 +468,7 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
   await rig.service.createHumanNeeded(agentB.actor, {
     protocolVersion: '1.0', type: 'human.needed.create', requestId: 'req_human_needed_ledger_b',
     projectId: project.projectId,
+    targetUserId: b.userId,
     context: {
       scope: 'worker_execution',
       taskId: runningB.task.taskId,
@@ -475,18 +476,18 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
       expectedTaskRevision: runningB.task.revision,
       expectedExecutionRevision: runningB.execution.revision
     },
-    requiredAssurance: 'verified', prompt: 'Worker B 需要 Project Owner 的明确输入', confirmableAction: null,
+    requiredAssurance: 'verified', prompt: 'Worker B 需要其 User 的明确输入', confirmableAction: null,
     expiresAt: new Date(rig.clock.now().getTime() + 60_000).toISOString(),
     idempotencyKey: 'idem_human_needed_ledger_b'
   })
   const waitingB = await rig.repository.getTask(runningB.task.taskId)
   assert.equal(waitingB.status, 'needs_human')
-  const humanInbox = await rig.service.pullInbox(a.actor, { afterSequence: 0, limit: 20 })
+  const humanInbox = await rig.service.pullInbox(b.actor, { afterSequence: 0, limit: 20 })
   assert.ok(humanInbox.messages.some((message) => (
-    message.messageType === 'human.needed' && message.payload.request?.targetUserId === a.userId
+    message.messageType === 'human.needed' && message.payload.request?.targetUserId === b.userId
   )))
-  const bInbox = await rig.service.pullInbox(b.actor, { afterSequence: 0, limit: 20 })
-  assert.ok(!bInbox.messages.some((message) => message.messageType === 'human.needed'))
+  const ownerInbox = await rig.service.pullInbox(a.actor, { afterSequence: 0, limit: 20 })
+  assert.ok(!ownerInbox.messages.some((message) => message.messageType === 'human.needed'))
 
   project = await rig.repository.getProject(project.projectId)
   const offeredC = await createOffer(rig, { coordinator: agentA, project, plan: active.plan,
@@ -611,7 +612,7 @@ test('8.4 canonical service bounds payloads and blocks sensitive Project Record 
   }))
 })
 
-test('8.3 and 10.2 canonical human routes bind provider input and verified Owner endpoint answers', async () => {
+test('8.3 and 10.2 canonical human routes bind provider input and verified target User endpoint answers', async () => {
   const rig = createServiceRig()
   const a = await bindUser(rig, 'A')
   const b = await bindUser(rig, 'B')
@@ -743,6 +744,7 @@ test('8.3 and 10.2 canonical human routes bind provider input and verified Owner
   const needed = await rig.service.createHumanNeeded(agentB.actor, {
     protocolVersion: '1.0', type: 'human.needed.create', requestId: 'req_human_needed_b',
     projectId: project.projectId,
+    targetUserId: b.userId,
     context: {
       scope: 'worker_execution',
       taskId: runningB.task.taskId,
@@ -751,51 +753,49 @@ test('8.3 and 10.2 canonical human routes bind provider input and verified Owner
       expectedExecutionRevision: runningB.execution.revision
     },
     requiredAssurance: 'verified',
-    prompt: '只由 Project Owner A 回答',
+    prompt: '只由目标 Project 成员 B 回答',
     confirmableAction: null,
     expiresAt: new Date(rig.clock.now().getTime() + 60_000).toISOString(),
     idempotencyKey: 'idem_human_needed_b'
   })
-  const inboxA = await rig.service.pullInbox(a.actor, { afterSequence: 0, limit: 20 })
-  assert.ok(inboxA.messages.some((message) => message.payload.request?.targetUserId === a.userId))
   const inboxB = await rig.service.pullInbox(b.actor, { afterSequence: 0, limit: 20 })
-  assert.ok(!inboxB.messages.some((message) => message.messageType === 'human.needed'))
-  await expectCode('permission_denied', () => rig.service.answerHumanNeeded(b.actor, {
+  assert.ok(inboxB.messages.some((message) => message.payload.request?.targetUserId === b.userId))
+  await expectCode('permission_denied', () => rig.service.answerHumanNeeded(a.actor, {
     protocolVersion: '1.0', type: 'human.answer', requestId: 'req_proxy_human_answer_b',
     humanRequestId: needed.humanRequestId,
     requestRevision: needed.revision,
-    answer: 'B 不得代答',
-    idempotencyKey: 'proxy-human-answer-B'
+    answer: 'A 不得代答',
+    idempotencyKey: 'proxy-human-answer-A'
   }))
-  await expectCode('permission_denied', () => rig.service.answerHumanNeeded(endpointB, {
+  await expectCode('permission_denied', () => rig.service.answerHumanNeeded(endpointA, {
     protocolVersion: '1.0', type: 'human.answer', requestId: 'req_wrong_endpoint_human_answer_b',
     humanRequestId: needed.humanRequestId,
     requestRevision: needed.revision,
-    answer: 'B 的 Endpoint 也不得代答',
+    answer: 'A 的 Endpoint 也不得代答',
     sourceLocator: projectLocator,
     idempotencyKey: 'wrong-endpoint-human-answer-B'
   }))
-  const answerA = await rig.service.answerHumanNeeded(endpointA, {
-    protocolVersion: '1.0', type: 'human.answer', requestId: 'req_human_answer_a',
+  const answerB = await rig.service.answerHumanNeeded(endpointB, {
+    protocolVersion: '1.0', type: 'human.answer', requestId: 'req_human_answer_b',
     humanRequestId: needed.humanRequestId,
     requestRevision: needed.revision,
-    answer: 'A 的 verified Human Endpoint 唯一回答',
+    answer: 'B 的 verified Human Endpoint 唯一回答',
     sourceLocator: projectLocator,
-    idempotencyKey: 'human-answer-A'
+    idempotencyKey: 'human-answer-B'
   })
-  assert.equal(answerA.answeredByUserId, a.userId)
-  assert.deepEqual(answerA.answeredFrom, {
+  assert.equal(answerB.answeredByUserId, b.userId)
+  assert.deepEqual(answerB.answeredFrom, {
     type: 'human_endpoint',
-    humanEndpointId: a.endpointId
+    humanEndpointId: b.endpointId
   })
-  assert.equal((await rig.service.answerHumanNeeded(endpointA, {
-    protocolVersion: '1.0', type: 'human.answer', requestId: 'req_human_answer_a',
+  assert.equal((await rig.service.answerHumanNeeded(endpointB, {
+    protocolVersion: '1.0', type: 'human.answer', requestId: 'req_human_answer_b',
     humanRequestId: needed.humanRequestId,
     requestRevision: needed.revision,
-    answer: 'A 的 verified Human Endpoint 唯一回答',
+    answer: 'B 的 verified Human Endpoint 唯一回答',
     sourceLocator: projectLocator,
-    idempotencyKey: 'human-answer-A'
-  })).humanAnswerId, answerA.humanAnswerId)
+    idempotencyKey: 'human-answer-B'
+  })).humanAnswerId, answerB.humanAnswerId)
 
   await expectCode('permission_denied', () => rig.service.publishProjectionMessage(agentB.actor, {
     projectionId: projection.projectionId,

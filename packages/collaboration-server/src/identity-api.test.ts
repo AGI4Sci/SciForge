@@ -172,6 +172,12 @@ describe('production HTTP identity security boundary', () => {
         maxTaskRetries: 1, maxCoordinationRounds: 2 }, coordinationRound: 1,
       revision: 1, createdAt: timestamp, updatedAt: timestamp
     })
+    repository.state.projectMembers.set(`${projectId}:${actor.userId}`, {
+      projectMembershipId: 'pmb_ApprovalMember01', projectId, userId: actor.userId,
+      state: 'active', authorityEpoch: 1, activatedAt: timestamp,
+      removalRequestedAt: null, removalRequestedByUserId: null, removedAt: null,
+      revision: 1, createdAt: timestamp, updatedAt: timestamp
+    })
     repository.state.tasks.set(taskId, {
       taskId, projectId, createdByCoordinatorAgentId: agentId, title: 'Approval task',
       objective: 'Await decision', completionCriteria: ['decision'], dependencyTaskIds: [],
