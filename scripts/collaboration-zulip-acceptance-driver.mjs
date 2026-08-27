@@ -620,22 +620,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
           agent.lifecycleStatus === 'active')) {
       fail('EXISTING_BINDING_MISMATCH')
     }
-    let participant = snapshot.participant
-    if (participant.primaryHumanEndpointId !== endpointId || participant.primaryAgentId !== agentId) {
-      const selected = await collaborationCommand(common.oidcAccessToken, {
-        type: 'participant.update_primary',
-        userId: common.userId,
-        expectedRevision: participant.revision,
-        primaryHumanEndpointId: required(endpointId),
-        primaryAgentId: required(agentId),
-        idempotencyKey: idempotency('participant_primary')
-      })
-      if (selected.type !== 'rest.entity' || selected.entity.type !== 'participant_profile' || selected.entity.status !== 'active') {
-        fail('COLLABORATION_RESPONSE_INVALID')
-      }
-      participant = selected.entity
-    }
-    if (participant.status !== 'active') fail('EXISTING_BINDING_MISMATCH')
+    if (snapshot.participant.status !== 'active') fail('EXISTING_BINDING_MISMATCH')
     const endpoint = snapshot.humanEndpoints.find((item) => item.humanEndpointId === endpointId)
     const providerUserId = await verifyZulipAccount(common, endpoint)
     const agent = snapshot.agents.find((item) => item.agentId === agentId)
@@ -684,36 +669,26 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     }
     if (!verified || verified.userId !== common.userId) fail('PAIRING_TIMEOUT')
     const bootstrap = createAgentCredentialBootstrap()
-    const registered = await collaborationCommand(common.oidcAccessToken, {
-      type: 'agent.register',
+    const ensured = await collaborationCommand(common.oidcAccessToken, {
+      type: 'agent.ensure',
       deviceId: common.deviceId,
-      displayName: `验收 Agent ${slot}`,
-      nodeType: 'desktop',
       capabilities: ['collaboration.acceptance'],
       credentialBootstrapPublicKey: bootstrap.publicKey,
-      idempotencyKey: idempotency('agent_register')
+      idempotencyKey: idempotency('agent_ensure')
     })
-    if (registered.type !== 'agent.registered' || registered.agent.deviceId !== common.deviceId ||
-        registered.agent.ownerUserId !== common.userId ||
-        registered.sealedCredential.agentId !== registered.agent.agentId ||
-        registered.sealedCredential.deviceId !== common.deviceId) {
+    if (ensured.type !== 'agent.ensured' || ensured.agent.deviceId !== common.deviceId ||
+        ensured.agent.ownerUserId !== common.userId || !ensured.sealedCredential ||
+        ensured.sealedCredential.agentId !== ensured.agent.agentId ||
+        ensured.sealedCredential.deviceId !== common.deviceId) {
       fail('COLLABORATION_RESPONSE_INVALID')
     }
-    const agentCredential = bootstrap.open(registered.sealedCredential)
+    const agentCredential = bootstrap.open(ensured.sealedCredential)
     const snapshot = await collaborationCommand(common.oidcAccessToken, {
       type: 'participant.get',
       userId: common.userId
     })
     if (snapshot.type !== 'participant.snapshot') fail('COLLABORATION_RESPONSE_INVALID')
-    const selected = await collaborationCommand(common.oidcAccessToken, {
-      type: 'participant.update_primary',
-      userId: common.userId,
-      expectedRevision: snapshot.participant.revision,
-      primaryHumanEndpointId: verified.humanEndpointId,
-      primaryAgentId: registered.agent.agentId,
-      idempotencyKey: idempotency('participant_primary')
-    })
-    if (selected.type !== 'rest.entity' || selected.entity.type !== 'participant_profile' || selected.entity.status !== 'active') {
+    if (snapshot.participant.status !== 'active') {
       fail('COLLABORATION_RESPONSE_INVALID')
     }
     const endpoint = snapshot.humanEndpoints.find((item) => item.humanEndpointId === verified.humanEndpointId)
@@ -722,13 +697,13 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       ...common,
       agentCredential,
       providerUserId,
-      agentRevision: registered.agent.revision,
+      agentRevision: ensured.agent.revision,
       activeTaskCount: 0,
       public: Object.freeze({
         slot,
         userId: common.userId,
         endpointId: verified.humanEndpointId,
-        agentId: registered.agent.agentId
+        agentId: ensured.agent.agentId
       })
     }
   }

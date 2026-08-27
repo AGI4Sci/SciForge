@@ -16,7 +16,7 @@ export const AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID = 'sciforge.cloud.command'
 
 const publicAuthenticatedCloudCommandSchema = restRequestSchema.superRefine(
   (request, context) => {
-    if (request.type === 'agent.register' || request.type === 'agent.rotate_credential' ||
+    if (request.type === 'agent.ensure' || request.type === 'agent.rotate_credential' ||
         request.type === 'agent.revoke') {
       context.addIssue({
         code: 'custom',
@@ -30,7 +30,7 @@ const publicAuthenticatedCloudCommandSchema = restRequestSchema.superRefine(
 
 const publicAuthenticatedCloudResponseSchema = restResponseSchema.superRefine(
   (response, context) => {
-    if (response.type === 'agent.registered' || response.type === 'agent.credential_rotated') {
+    if (response.type === 'agent.ensured' || response.type === 'agent.credential_rotated') {
       context.addIssue({
         code: 'custom',
         path: ['type'],

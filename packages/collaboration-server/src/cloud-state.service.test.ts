@@ -31,13 +31,11 @@ async function registeredAgent(
   deviceId: string,
   label: string
 ): Promise<AgentActor> {
-  const result = await service.registerAgent(user, {
+  const result = await service.ensureAgent(user, {
     deviceId,
-    displayName: `${label} Agent`,
-    nodeType: 'desktop',
     capabilities: RUNTIME_CAPABILITY_TAGS,
     credentialBootstrapPublicKey: createAgentCredentialBootstrap().publicKey,
-    idempotencyKey: `idem_agent_register_${label}`
+    idempotencyKey: `idem_agent_ensure_${label}`
   })
   return {
     kind: 'agent_device',

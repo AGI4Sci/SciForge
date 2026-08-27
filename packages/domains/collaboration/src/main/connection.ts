@@ -22,7 +22,6 @@ import {
   type AuthenticatedCloudTransport
 } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import type {
-  CollaborationAgentRegisterInput,
   CollaborationConnectionConnectInput,
   CollaborationEndpointChallengePollInput,
   CollaborationEndpointChallengeStartInput,
@@ -132,7 +131,7 @@ export class CollaborationConnection {
     this.connectionState = {
       state: 'error',
       lastConnectedAt: this.connectionState.lastConnectedAt,
-      lastError: 'This collaboration Agent registration was revoked.'
+      lastError: 'This Desktop Agent was revoked.'
     }
   }
 
@@ -148,11 +147,12 @@ export class CollaborationConnection {
           normalizeCollaborationBaseUrl(identityStatus.baseUrl)) {
       throw new Error('Collaboration Cloud settings do not match the active Identity Cloud endpoint.')
     }
-    await this.refreshProviderCatalog().catch((error) => this.recordError(error, false))
-    const cachedUser = this.options.store.snapshot().user
-    if (cachedUser && this.options.authenticatedCloudTransport.status().state === 'ready') {
+    let activationFailed = false
+    if (identityStatus.state === 'ready') {
       try {
-        const snapshot = await this.refreshParticipant(cachedUser.userId)
+        await this.refreshProviderCatalog()
+        const agent = await this.ensureLocalAgent()
+        const snapshot = await this.refreshParticipant(agent.ownerUserId)
         for (const endpoint of snapshot.humanEndpoints) {
           if (endpoint.status === 'active') {
             await this.refreshEndpointLocators(endpoint.humanEndpointId)
@@ -165,6 +165,7 @@ export class CollaborationConnection {
         // Cached collaboration state remains usable while offline. A later
         // explicit recovery/restart repeats this canonical cloud refresh.
         this.recordError(error, true)
+        activationFailed = true
       }
     }
     const localAgentId = await this.localAgentId()
@@ -174,7 +175,7 @@ export class CollaborationConnection {
       // durable inbox/outbox and projection recovery remain available, and the
       // explicit recover action retries the same canonical connection path.
       await this.connect().catch(() => undefined)
-    } else {
+    } else if (!activationFailed) {
       this.connectionState = { state: 'disconnected' }
     }
   }
@@ -192,6 +193,8 @@ export class CollaborationConnection {
     await this.options.settings.configure(status.baseUrl)
     this.connectionState = { state: 'disconnected' }
     await this.refreshProviderCatalog()
+    const agent = await this.ensureLocalAgent()
+    await this.refreshParticipant(agent.ownerUserId)
   }
 
   async applyConnectionAction(input: CollaborationConnectionConnectInput): Promise<void> {
@@ -209,6 +212,8 @@ export class CollaborationConnection {
     if (input.action === 'recover') {
       this.options.outbox.wake()
     }
+    const agent = await this.ensureLocalAgent()
+    await this.refreshParticipant(agent.ownerUserId)
     await this.connect()
   }
 
@@ -301,108 +306,20 @@ export class CollaborationConnection {
     }
   }
 
-  async registerAgent(input: CollaborationAgentRegisterInput): Promise<AgentNode> {
+  async ensureLocalAgent(): Promise<AgentNode> {
     const identity = this.requireIdentityReady()
     const state = this.options.store.snapshot()
     if (state.user && state.user.userId !== identity.userId) {
       throw new Error('Cached collaboration state belongs to another OIDC User.')
     }
-    const registrationIntent = {
-      deviceId: identity.deviceId,
-      ownerUserId: identity.userId,
-      displayName: input.displayName.trim(),
-      nodeType: input.nodeType
-    }
-    let agent: AgentNode | undefined
-    let recoverExisting = false
-    try {
-      agent = await this.options.agentCloudRuntime.registerAgent({
-        idempotencyKey: `idem_agent.register.${digest(JSON.stringify(registrationIntent)).slice(0, 48)}`,
-        displayName: registrationIntent.displayName,
-        nodeType: registrationIntent.nodeType
-      })
-    } catch (error) {
-      recoverExisting = error instanceof AgentCloudRuntimeError &&
-        error.cloudCode === 'idempotency_conflict'
-      if (!recoverExisting) throw error
-    }
-    if (recoverExisting) {
-      const snapshot = await this.refreshParticipant(identity.userId)
-      const existing = snapshot.agents.find((agent) => (
-        agent.deviceId === identity.deviceId
-        && agent.ownerUserId === identity.userId
-        && agent.lifecycleStatus === 'active'
-      ))
-      if (!existing) {
-        agent = undefined
-      } else {
-        // Authority rotation invalidates the active Identity-owned Agent
-        // transport. Stop the loops first so connect() starts one replacement.
-        await this.disconnect()
-        agent = await this.options.agentCloudRuntime.rotateAgent({
-          idempotencyKey: `idem_agent.rotate_credential.${digest([
-            existing.agentId,
-            String(existing.revision),
-            String(this.now().getTime())
-          ].join('\u0000')).slice(0, 48)}`,
-          agentId: existing.agentId,
-          expectedRevision: existing.revision
-        })
-      }
-    }
-    if (!agent) {
-      throw new Error('Agent registration recovery could not find an active Agent for this Device.')
-    }
+    const agent = await this.options.agentCloudRuntime.ensureAgent()
     if (agent.deviceId !== identity.deviceId || agent.ownerUserId !== identity.userId) {
-      throw new Error('Agent registration does not match the current User and Device.')
+      throw new Error('The ensured Agent does not match the current User and Device.')
     }
     await this.options.store.transact((draft) => {
       draft.agents = replaceBy(draft.agents, agent, (item) => item.agentId)
     })
-    // Registration can atomically promote the first Agent to participant
-    // primary and advance the participant revision. Refresh through the OIDC
-    // transport before connecting through Identity-owned Agent authority.
-    await this.refreshParticipant(identity.userId)
-    await this.connect()
     return agent
-  }
-
-  async selectPrimaryAgent(
-    agentId: string,
-    expectedParticipantRevision: number
-  ): Promise<ParticipantProfile> {
-    const state = this.options.store.snapshot()
-    const user = state.user
-    const participant = state.participant
-    if (!user || !participant) throw new Error('Participant binding is incomplete.')
-    const agent = state.agents.find((candidate) => candidate.agentId === agentId)
-    if (!agent || agent.ownerUserId !== user.userId || agent.lifecycleStatus !== 'active') {
-      throw new Error('Primary Agent must be an active Agent owned by the current user.')
-    }
-    if (participant.revision !== expectedParticipantRevision) {
-      throw new Error('Participant revision is stale.')
-    }
-    const response = await this.executeAsUser(restRequestSchema.parse({
-      protocolVersion: '1.0',
-      requestId: collaborationRequestId(),
-      type: 'participant.update_primary',
-      idempotencyKey: `idem_participant.primary.${digest([
-        participant.participantId,
-        agentId,
-        String(expectedParticipantRevision)
-      ].join('\u0000')).slice(0, 48)}`,
-      userId: user.userId,
-      expectedRevision: expectedParticipantRevision,
-      primaryHumanEndpointId: participant.primaryHumanEndpointId,
-      primaryAgentId: agentId
-    }))
-    if (response.type === 'rest.error') throw new Error(response.error.message)
-    if (response.type !== 'rest.entity' || response.entity.type !== 'participant_profile') {
-      throw new Error(`Primary Agent update returned unexpected ${response.type}.`)
-    }
-    const participantEntity = response.entity
-    await this.options.store.transact((draft) => { draft.participant = participantEntity })
-    return participantEntity
   }
 
   async refreshParticipant(userId?: string): Promise<Readonly<{
@@ -581,7 +498,7 @@ export class CollaborationConnection {
       candidate.agentId === localAgentId
     ))
     if (!agent || agent.lifecycleStatus !== 'active') {
-      throw new Error('This installation has no active collaboration Agent registration.')
+      throw new Error('This installation has no active Desktop Agent.')
     }
     const authority = await this.options.agentCloudRuntime.authorityStatus(agent.agentId)
     if (authority.state !== 'ready') throw authorityStatusError(authority)
@@ -708,7 +625,7 @@ export class CollaborationConnection {
 
   private async requireLocalAgentId(): Promise<string> {
     const agentId = await this.localAgentId()
-    if (!agentId) throw new Error('This installation has no active collaboration Agent registration.')
+    if (!agentId) throw new Error('This installation has no active Desktop Agent.')
     return agentId
   }
 

@@ -57,19 +57,17 @@ async function onboard(
   }
 }
 
-async function registerAgent(
+async function ensureAgent(
   service: CollaborationService,
   user: UserActor,
   label: string
 ) {
   const bootstrap = createAgentCredentialBootstrap()
-  const registered = await service.registerAgent(user, {
+  const registered = await service.ensureAgent(user, {
     deviceId: `dev_${user.userId.slice(4)}`,
-    displayName: `${label} desktop`,
-    nodeType: 'desktop',
     capabilities: ['research.execute'],
     credentialBootstrapPublicKey: bootstrap.publicKey,
-    idempotencyKey: `idem_agent_register_${label}`
+    idempotencyKey: `idem_agent_ensure_${label}`
   })
   if (!registered.sealedCredential) throw new Error('Expected one-time sealed Agent credential')
   return { ...registered, openedCredential: bootstrap.open(registered.sealedCredential) }
@@ -118,7 +116,7 @@ describe('remote capability approval security boundary', () => {
     const authentication = new AuthenticationService(repository, now)
     const owner = await onboard(repository, service, authentication, 'approval-owner', 'provider-owner')
     const intruder = await onboard(repository, service, authentication, 'approval-intruder', 'provider-intruder')
-    const registered = await registerAgent(service, owner.user, 'approvalagent')
+    const registered = await ensureAgent(service, owner.user, 'approvalagent')
     await activateManagedContainer(repository, owner, 'private-channel')
     const device = await authentication.resolveBearer(registered.openedCredential)
     if (device.kind !== 'agent_device') throw new Error('Expected Agent actor')

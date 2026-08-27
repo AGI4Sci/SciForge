@@ -21,9 +21,7 @@ import type {
   CollaborationConnectionConnectInput,
   CollaborationEndpointChallengePollInput,
   CollaborationEndpointChallengeStartInput,
-  CollaborationAgentRegisterInput,
   CollaborationManagedContainerManageInput,
-  CollaborationPrimaryAgentSelectInput,
   CollaborationProjectionLinkInput,
   CollaborationProjectionShareInput,
   CollaborationProjectionUpdateInput,
@@ -265,6 +263,7 @@ export class CollaborationRuntime {
     await projections.recover()
     this.syncTranscriptSubscriptions()
     await connection.activate()
+    this.localAgentIdentity = await connection.localAgentId()
     // Task reconciliation consults canonical cloud state before executing. Run
     // it only after the connection has initialized; an offline activation keeps
     // the runs durable in reconciling state until an explicit recovery/restart.
@@ -323,9 +322,6 @@ export class CollaborationRuntime {
           ...(state.participant.primaryHumanEndpointId
             ? { primaryHumanEndpointId: state.participant.primaryHumanEndpointId }
             : {}),
-          ...(state.participant.primaryAgentId
-            ? { primaryAgentId: state.participant.primaryAgentId }
-            : {}),
           endpoints: state.endpoints.map((endpoint) => ({
             humanEndpointId: endpoint.humanEndpointId,
             providerKey: endpoint.identity.provider,
@@ -346,7 +342,6 @@ export class CollaborationRuntime {
             status: agent.lifecycleStatus === 'revoked' ? 'revoked' as const : agent.connectionStatus,
             capabilities: agent.capabilities,
             ...(agent.lastSeenAt ? { lastSeenAt: agent.lastSeenAt } : {}),
-            primary: state.participant?.primaryAgentId === agent.agentId,
             ...(agent.agentId === localAgentId
               ? { workerAcceptanceMode: this.requireTasks().acceptanceMode(agent.agentId) }
               : {})
@@ -404,11 +399,13 @@ export class CollaborationRuntime {
 
   async configureConnection(baseUrl: string): Promise<CollaborationStatusSnapshot['connection']> {
     await this.requireConnection().configure(baseUrl)
+    this.localAgentIdentity = await this.requireConnection().localAgentId()
     return (await this.status()).connection
   }
 
   async changeConnection(input: CollaborationConnectionConnectInput): Promise<CollaborationStatusSnapshot['connection']> {
     await this.requireConnection().applyConnectionAction(input)
+    this.localAgentIdentity = await this.requireConnection().localAgentId()
     return (await this.status()).connection
   }
 
@@ -418,22 +415,6 @@ export class CollaborationRuntime {
 
   pollChallenge(input: CollaborationEndpointChallengePollInput) {
     return this.requireConnection().pollChallenge(input)
-  }
-
-  async registerAgent(input: CollaborationAgentRegisterInput) {
-    const agent = await this.requireConnection().registerAgent(input)
-    this.localAgentIdentity = agent.agentId
-    return (await this.status()).participant!.agents.find((candidate) => (
-      candidate.agentId === agent.agentId
-    ))!
-  }
-
-  async selectPrimaryAgent(input: CollaborationPrimaryAgentSelectInput) {
-    await this.requireConnection().selectPrimaryAgent(
-      input.agentId,
-      input.expectedParticipantRevision
-    )
-    return (await this.status()).participant!
   }
 
   async linkProjection(input: CollaborationProjectionLinkInput): Promise<CollaborationProjectionView> {

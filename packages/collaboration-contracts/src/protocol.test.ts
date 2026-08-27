@@ -30,7 +30,7 @@ import {
 import {
   TEST_IDS,
   TEST_TIMESTAMP,
-  agentRegisteredResponseFixture,
+  agentEnsuredResponseFixture,
   agentInboxMessageFixture,
   chineseProviderLocatorFixture,
   collaborationFixtures,
@@ -387,21 +387,34 @@ describe('canonical pairing and bidirectional Session commands', () => {
     expect(restRequestSchema.safeParse({ ...base, kind: 'stream_delta' }).success).toBe(false)
   })
 
-  it('requires a Device and public bootstrap key, then returns only a sealed Agent credential', () => {
+  it('ensures a Device-owned Agent without accepting a renderer display name', () => {
     expect(restRequestSchema.safeParse({
       protocolVersion: '1.0',
       requestId: TEST_IDS.requestId,
-      type: 'agent.register',
-      idempotencyKey: 'idem_agent_register_01',
+      type: 'agent.ensure',
+      idempotencyKey: 'idem_agent_ensure_01',
       deviceId: TEST_IDS.deviceId,
-      displayName: 'Desktop Agent',
-      nodeType: 'desktop',
       capabilities: ['agent.execute'],
       credentialBootstrapPublicKey: { kty: 'OKP', crv: 'X25519',
         x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }
     }).success).toBe(true)
-    expect(restResponseSchema.safeParse(agentRegisteredResponseFixture).success).toBe(true)
-    expect(JSON.stringify(agentRegisteredResponseFixture)).not.toMatch(/deviceCredential|userCredential|privateKey/u)
+    expect(restRequestSchema.safeParse({
+      protocolVersion: '1.0',
+      requestId: TEST_IDS.requestId,
+      type: 'agent.ensure',
+      idempotencyKey: 'idem_agent_ensure_02',
+      deviceId: TEST_IDS.deviceId,
+      displayName: 'Renderer-controlled name',
+      capabilities: ['agent.execute'],
+      credentialBootstrapPublicKey: { kty: 'OKP', crv: 'X25519',
+        x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }
+    }).success).toBe(false)
+    expect(restResponseSchema.safeParse(agentEnsuredResponseFixture).success).toBe(true)
+    expect(restResponseSchema.safeParse({
+      ...agentEnsuredResponseFixture,
+      sealedCredential: undefined
+    }).success).toBe(true)
+    expect(JSON.stringify(agentEnsuredResponseFixture)).not.toMatch(/deviceCredential|userCredential|privateKey/u)
   })
 })
 

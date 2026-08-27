@@ -96,16 +96,6 @@ test('global collaboration mutations satisfy the production broker contract with
       expiresAt: '2026-08-15T09:00:00.000Z',
       instruction: 'Send the command.'
     }),
-    registerAgent: async () => ({
-      agentId: TEST_IDS.agentId,
-      ownerUserId: TEST_IDS.userId,
-      displayName: 'Desktop',
-      nodeType: 'desktop',
-      status: 'offline',
-      capabilities: [],
-      primary: false
-    }),
-    selectPrimaryAgent: async () => participant,
     linkProjection: async () => projection,
     updateProjection: async () => projection,
     shareProjection: async () => projection,
@@ -133,14 +123,6 @@ test('global collaboration mutations satisfy the production broker contract with
         realmId: 'research-lab',
         providerUserId: 'zulip-user-42'
       }
-    },
-    [COLLABORATION_CAPABILITY_IDS.agentRegister]: {
-      displayName: 'Desktop',
-      nodeType: 'desktop'
-    },
-    [COLLABORATION_CAPABILITY_IDS.primaryAgentSelect]: {
-      agentId: TEST_IDS.agentId,
-      expectedParticipantRevision: 1
     },
     [COLLABORATION_CAPABILITY_IDS.projectionLink]: {
       mode: 'existing',
@@ -181,7 +163,11 @@ test('global collaboration mutations satisfy the production broker contract with
   }
   const mutations = definitions.filter((definition) => definition.effect === 'external-write')
 
-  assert.equal(mutations.length, 12)
+  assert.equal(mutations.length, 10)
+  assert.equal(definitions.some(({ id }) => id === 'collaboration.agent.register'), false)
+  assert.equal(definitions.some(({ id }) => (
+    id === 'collaboration.participant.primary-agent.select'
+  )), false)
   for (const definition of mutations) {
     assert.equal(definition.scope, 'global')
     assert.equal(Object.hasOwn(inputs, definition.id), true, `missing input fixture for ${definition.id}`)

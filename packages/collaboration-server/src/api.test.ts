@@ -354,13 +354,11 @@ describe('production HTTP OIDC-only boundary', () => {
     const identity = await seedOidcUserDevice(repository, 'http-worker-availability', now())
     const bootstrap = createAgentCredentialBootstrap()
     const capabilities = ['agent-runtime.codex', 'model-access.coding-plan']
-    const registered = await service.registerAgent(identity.user, {
+    const registered = await service.ensureAgent(identity.user, {
       deviceId: identity.deviceId,
-      displayName: 'HTTP Worker',
-      nodeType: 'desktop',
       capabilities,
       credentialBootstrapPublicKey: bootstrap.publicKey,
-      idempotencyKey: 'idem_http_worker_agent_register'
+      idempotencyKey: 'idem_http_worker_agent_ensure'
     })
     const agentCredential = bootstrap.open(registered.sealedCredential!)
     const server = createCollaborationHttpServer({
@@ -433,8 +431,8 @@ describe('production HTTP OIDC-only boundary', () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
     const identity = await seedOidcUserDevice(repository, 'http-cloud-owner', now())
-    const coordinator = await service.registerAgent(identity.user, {
-      deviceId: identity.deviceId, displayName: 'HTTP Coordinator', nodeType: 'desktop',
+    const coordinator = await service.ensureAgent(identity.user, {
+      deviceId: identity.deviceId,
       capabilities: ['project.coordinate'],
       credentialBootstrapPublicKey: createAgentCredentialBootstrap().publicKey,
       idempotencyKey: 'idem_http_cloud_coordinator'

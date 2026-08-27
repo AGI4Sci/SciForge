@@ -16,13 +16,14 @@ domain ID。
 本地高频状态写入 `<userData>/domains/collaboration/state.json`，使用 0600 原子替换。
 非敏感 Cloud URL 保存到 package-scoped settings。User 请求只通过 identity-access
 提供的 token-free authenticated Cloud transport，OIDC Token 始终留在 Identity 私有边界。
-每台 ACTIVE Device 注册一个 active Agent；注册、轮换、撤销、Agent-authenticated HTTP/WSS
+每台 ACTIVE Device 由 Identity 自动确保一个以 Device 名称显示的 active Agent；ensure、轮换、撤销、Agent-authenticated HTTP/WSS
 以及私有 authority 的存取都由 identity-access 的 owner-scoped internal service 完成。本包只
 观察非秘密的 Agent facts、authority readiness 与 Cloud events，不接收 bootstrap key、Token、
-私有 authority 或任何通用秘密存储句柄。Agent 注册输入不含 capability；heartbeat 仅投影
+私有 authority 或任何通用秘密存储句柄。renderer 不提供 Agent 注册、命名、权限恢复或 primary
+选择入口；个人 Session 始终使用当前 Device 的本机 Agent。heartbeat 仅投影
 Identity 从当前可执行 AgentRuntime readiness 派生的 capability tags。OIDC、Device、Runtime
 或 Agent authority 丢失时连接 fail closed，先停止 outbox/WSS 并 fence 本地 execution，再允许
-显式恢复。
+连接恢复；Agent authority 缺失或过期由 Identity 的同一 ensure 路径自动恢复。
 
 Worker availability 只发布本机事实：它复用最近一次成功 heartbeat 返回的精确 Agent revision、
 last-seen 与完整 Runtime capability tags，并从 durable execution journal 计算 active Task count。

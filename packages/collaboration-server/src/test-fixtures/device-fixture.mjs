@@ -62,16 +62,13 @@ export function createDeviceFixture(overrides = {}) {
     verifySignature(candidate = signature, candidatePayload = payload) {
       return verifyBytes(null, candidatePayload, publicKey, Buffer.from(candidate, 'base64url'))
     },
-    agentRegister(deviceId = 'dev_identity_test_0001') {
+    agentEnsure(deviceId = 'dev_identity_test_0001') {
       return {
         protocolVersion: '1.0',
         requestId: 'req_identity_agent_0001',
-        type: 'agent.register',
+        type: 'agent.ensure',
         idempotencyKey: 'idem_identity_agent_0001',
-        ownerUserId: enrollment.userId,
         deviceId,
-        displayName: 'Identity Test Agent',
-        nodeType: 'desktop',
         capabilities: [...deviceRequest.capabilitySummary]
       }
     }

@@ -903,55 +903,115 @@ export class CollaborationService {
     }).then(responseEntity<StoredEndpoint>)
   }
 
-  async registerAgent(actor: UserActor, input: {
+  async ensureAgent(actor: UserActor, input: {
     deviceId: string
-    displayName: string
-    nodeType: string
     capabilities: string[]
     credentialBootstrapPublicKey: AgentCredentialBootstrapPublicKey
     idempotencyKey: string
   }): Promise<{ agent: StoredAgent; sealedCredential?: AgentCredentialEnvelope; replayed?: boolean }> {
-    assertText(input.displayName, 'displayName', 1, 200)
-    assertText(input.nodeType, 'nodeType', 1, 100)
-    const capabilities = uniqueTexts(input.capabilities, 100, 200)
-    return this.commit(actor, 'agent.register', input.idempotencyKey, { ...input, capabilities }, async (tx, at) => {
+    const capabilities = uniqueTexts(input.capabilities, 256, 128)
+    return this.commit(actor, 'agent.ensure', input.idempotencyKey, { ...input, capabilities }, async (tx, at) => {
       const device = required(await tx.getDeviceForUpdate(input.deviceId), 'Device')
       if (device.userId !== actor.userId || device.status !== 'active') {
         fail('permission_denied', 'The Agent Device is not active for this User.')
       }
-      const existing = (await tx.listAgentsForDevice(device.deviceId)).find((agent) => (
+      const activeAgents = (await tx.listAgentsForDeviceForUpdate(device.deviceId)).filter((agent) => (
         agent.status === 'active'
       ))
+      if (activeAgents.length > 1) {
+        fail('identity_conflict', 'This Device owns more than one active Agent identity.')
+      }
+      const existing = activeAgents[0]
       if (existing) {
-        fail('identity_conflict', 'This Device already owns its single Agent identity.')
+        if (existing.ownerUserId !== actor.userId) {
+          fail('identity_conflict', 'The Device Agent belongs to another User.')
+        }
+        const changed = existing.displayName !== device.displayName ||
+          existing.nodeType !== 'desktop' ||
+          JSON.stringify(existing.capabilities) !== JSON.stringify(capabilities)
+        const agent: StoredAgent = changed
+          ? {
+              ...existing,
+              displayName: device.displayName,
+              nodeType: 'desktop',
+              capabilities,
+              revision: existing.revision + 1,
+              updatedAt: at
+            }
+          : existing
+        if (changed) await tx.updateAgent(agent, existing.revision)
+        const participant = await tx.getParticipant(actor.userId)
+        if (!participant || !participant.primaryAgentId) {
+          const updatedParticipant = completeParticipant({
+            userId: actor.userId,
+            primaryHumanEndpointId: participant?.primaryHumanEndpointId,
+            primaryAgentId: agent.agentId,
+            status: 'incomplete',
+            revision: (participant?.revision ?? 0) + 1,
+            updatedAt: at
+          })
+          await tx.upsertParticipant(updatedParticipant, participant?.revision ?? null)
+        }
+        return {
+          response: { protocolVersion: '1.0', type: 'agent.ensured', agent },
+          receiptResponse: { protocolVersion: '1.0', type: 'agent.ensured', agent, replayed: true },
+          resourceKind: 'agent',
+          resourceId: agent.agentId
+        }
       }
       const agent: StoredAgent = {
-        agentId: newId('agt'), deviceId: device.deviceId, ownerUserId: actor.userId,
-        displayName: input.displayName, nodeType: input.nodeType, capabilities, status: 'active',
-        connectionStatus: 'offline', credentialGeneration: 1, revision: 1, updatedAt: at
+        agentId: newId('agt'),
+        deviceId: device.deviceId,
+        ownerUserId: actor.userId,
+        displayName: device.displayName,
+        nodeType: 'desktop',
+        capabilities,
+        status: 'active',
+        connectionStatus: 'offline',
+        credentialGeneration: 1,
+        revision: 1,
+        updatedAt: at
       }
       const deviceCredential = issueSecret('agent')
       let sealedCredential: AgentCredentialEnvelope
       try {
-        sealedCredential = sealAgentCredential({ credential: deviceCredential,
-          recipientPublicKey: input.credentialBootstrapPublicKey, agentId: agent.agentId,
-          deviceId: device.deviceId, credentialGeneration: agent.credentialGeneration, issuedAt: at })
+        sealedCredential = sealAgentCredential({
+          credential: deviceCredential,
+          recipientPublicKey: input.credentialBootstrapPublicKey,
+          agentId: agent.agentId,
+          deviceId: device.deviceId,
+          credentialGeneration: agent.credentialGeneration,
+          issuedAt: at
+        })
       } catch {
         fail('validation_failed', 'The Agent credential bootstrap public key is invalid.')
       }
       await tx.insertAgent(agent)
-      await tx.insertCredential({ credentialId: newId('credential'), kind: 'agent_device', subjectUserId: actor.userId,
-        subjectAgentId: agent.agentId, tokenDigest: digestSecret(deviceCredential), assurance: 'device', generation: 1, createdAt: at })
+      await tx.insertCredential({
+        credentialId: newId('credential'),
+        kind: 'agent_device',
+        subjectUserId: actor.userId,
+        subjectAgentId: agent.agentId,
+        tokenDigest: digestSecret(deviceCredential),
+        assurance: 'device',
+        generation: 1,
+        createdAt: at
+      })
       const participant = await tx.getParticipant(actor.userId)
-      const changed = completeParticipant({ userId: actor.userId,
+      const updatedParticipant = completeParticipant({
+        userId: actor.userId,
         primaryHumanEndpointId: participant?.primaryHumanEndpointId,
         primaryAgentId: participant?.primaryAgentId ?? agent.agentId,
-        status: 'incomplete', revision: (participant?.revision ?? 0) + 1, updatedAt: at })
-      await tx.upsertParticipant(changed, participant?.revision ?? null)
+        status: 'incomplete',
+        revision: (participant?.revision ?? 0) + 1,
+        updatedAt: at
+      })
+      await tx.upsertParticipant(updatedParticipant, participant?.revision ?? null)
       return {
-        response: { protocolVersion: '1.0', type: 'agent.registered', agent, sealedCredential },
-        receiptResponse: { protocolVersion: '1.0', type: 'agent.registered', agent, replayed: true },
-        resourceKind: 'agent', resourceId: agent.agentId
+        response: { protocolVersion: '1.0', type: 'agent.ensured', agent, sealedCredential },
+        receiptResponse: { protocolVersion: '1.0', type: 'agent.ensured', agent, replayed: true },
+        resourceKind: 'agent',
+        resourceId: agent.agentId
       }
     }).then((response) => ({
       agent: response.agent as StoredAgent,
@@ -1064,35 +1124,6 @@ export class CollaborationService {
       .then(() => this.notifier?.disconnectAgentAuthority?.(updated.agentId))
       .catch(() => undefined)
     return updated
-  }
-
-  async selectPrimary(actor: UserActor, input: {
-    primaryHumanEndpointId?: string | null
-    primaryAgentId?: string | null
-    expectedRevision: number | null
-    idempotencyKey: string
-  }): Promise<StoredParticipant> {
-    return this.commit(actor, 'participant.primary.select', input.idempotencyKey, input, async (tx, at) => {
-      const existing = await tx.getParticipant(actor.userId)
-      if ((existing?.revision ?? null) !== input.expectedRevision) {
-        fail('revision_conflict', 'The Participant profile revision changed.', { details: { currentRevision: existing?.revision ?? null } })
-      }
-      const endpointId = input.primaryHumanEndpointId === null ? undefined
-        : input.primaryHumanEndpointId ?? existing?.primaryHumanEndpointId
-      const agentId = input.primaryAgentId === null ? undefined : input.primaryAgentId ?? existing?.primaryAgentId
-      if (endpointId) {
-        const endpoint = required(await tx.getEndpoint(endpointId), 'Human endpoint')
-        if (endpoint.userId !== actor.userId || endpoint.status !== 'active') fail('permission_denied', 'Primary endpoint must be active and owned by the user.')
-      }
-      if (agentId) {
-        const agent = required(await tx.getAgent(agentId), 'Agent')
-        if (agent.ownerUserId !== actor.userId || agent.status !== 'active') fail('permission_denied', 'Primary Agent must be active and owned by the user.')
-      }
-      const participant = completeParticipant({ userId: actor.userId, primaryHumanEndpointId: endpointId,
-        primaryAgentId: agentId, status: 'incomplete', revision: (existing?.revision ?? 0) + 1, updatedAt: at })
-      await tx.upsertParticipant(participant, existing?.revision ?? null)
-      return { response: entityResponse('participant.updated', participant), resourceKind: 'participant', resourceId: actor.userId }
-    }).then(responseEntity<StoredParticipant>)
   }
 
   async getParticipantSnapshot(actor: AuthContext, userId: string): Promise<{

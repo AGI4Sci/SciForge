@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  agentRegisteredResponseFixture,
+  agentEnsuredResponseFixture,
   invalidTestOnlyValue,
   TEST_HASH,
   TEST_IDS,
@@ -69,7 +69,7 @@ describe('authenticated Cloud transport contract', () => {
     expect(authenticatedCloudResponseSchema.safeParse({
       contractVersion: 1,
       status: 200,
-      body: agentRegisteredResponseFixture
+      body: agentEnsuredResponseFixture
     }).success).toBe(false)
     expect(authenticatedCloudRequestSchema.safeParse({
       ...valid,

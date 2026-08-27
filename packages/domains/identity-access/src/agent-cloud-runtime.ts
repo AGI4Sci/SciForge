@@ -19,17 +19,11 @@ import {
 } from '@sciforge/collaboration-contracts'
 
 export const AGENT_CLOUD_RUNTIME_SERVICE_ID = 'sciforge.agent-cloud-runtime' as const
-export const AGENT_CLOUD_RUNTIME_CONTRACT_VERSION = '2.0.0' as const
+export const AGENT_CLOUD_RUNTIME_CONTRACT_VERSION = '3.0.0' as const
 
 const capabilityTagsSchema = z.array(
   z.string().regex(/^[a-z][a-z0-9_.-]{0,127}$/u)
 ).max(256).transform((values) => [...new Set(values)].sort()).readonly()
-
-export const agentCloudRegisterInputSchema = z.object({
-  displayName: z.string().trim().min(1).max(200),
-  nodeType: z.enum(['desktop', 'server']),
-  idempotencyKey: idempotencyKeySchema
-}).strict().readonly()
 
 export const agentCloudRotateInputSchema = z.object({
   agentId: agentIdSchema,
@@ -66,7 +60,7 @@ export const agentCloudExecuteInputSchema = z.object({
   agentId: agentIdSchema,
   request: restRequestSchema
 }).strict().superRefine(({ request }, context) => {
-  if (request.type === 'agent.register' || request.type === 'agent.rotate_credential' ||
+  if (request.type === 'agent.ensure' || request.type === 'agent.rotate_credential' ||
       request.type === 'agent.revoke' || request.type === 'inbox.pull') {
     context.addIssue({
       code: 'custom',
@@ -87,7 +81,6 @@ export const agentCloudInboxPageSchema = z.object({
   nextSequence: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
 }).strict().readonly()
 
-export type AgentCloudRegisterInput = z.input<typeof agentCloudRegisterInputSchema>
 export type AgentCloudRotateInput = z.input<typeof agentCloudRotateInputSchema>
 export type AgentCloudRevokeInput = z.input<typeof agentCloudRevokeInputSchema>
 export type AgentCloudAuthorityStatus = z.infer<typeof agentCloudAuthorityStatusSchema>
@@ -95,7 +88,7 @@ export type AgentCloudInboxPage = z.infer<typeof agentCloudInboxPageSchema>
 
 export type AgentCloudRuntime = Readonly<{
   authorityStatus(agentId: string): Promise<AgentCloudAuthorityStatus>
-  registerAgent(input: AgentCloudRegisterInput): Promise<AgentNode>
+  ensureAgent(): Promise<AgentNode>
   rotateAgent(input: AgentCloudRotateInput): Promise<AgentNode>
   revokeAgent(input: AgentCloudRevokeInput): Promise<AgentNode>
   fenceAgent(agentId: string): Promise<void>
@@ -143,7 +136,7 @@ export function defineAgentCloudRuntime(input: AgentCloudRuntime): AgentCloudRun
   }
   for (const method of [
     'authorityStatus',
-    'registerAgent',
+    'ensureAgent',
     'rotateAgent',
     'revokeAgent',
     'fenceAgent',
@@ -159,9 +152,7 @@ export function defineAgentCloudRuntime(input: AgentCloudRuntime): AgentCloudRun
     authorityStatus: async (agentId) => agentCloudAuthorityStatusSchema.parse(
       await input.authorityStatus(agentIdSchema.parse(agentId))
     ),
-    registerAgent: async (value) => agentNodeSchema.parse(
-      await input.registerAgent(agentCloudRegisterInputSchema.parse(value))
-    ),
+    ensureAgent: async () => agentNodeSchema.parse(await input.ensureAgent()),
     rotateAgent: async (value) => agentNodeSchema.parse(
       await input.rotateAgent(agentCloudRotateInputSchema.parse(value))
     ),

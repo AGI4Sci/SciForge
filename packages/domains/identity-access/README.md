@@ -21,11 +21,12 @@ The authenticated User Cloud transport is available only to its manifest
 allowlist. Its `2.0.0` contract accepts only the closed Collaboration
 `RestRequest`/`RestResponse` protocol, rejects credential-shaped portable
 resource identities, and excludes Agent credential lifecycle envelopes. The
-`sciforge.agent-cloud-runtime@2.0.0` owns bounded registration, rotation,
+`sciforge.agent-cloud-runtime@3.0.0` owns bounded Device Agent ensure, rotation,
 revocation, command, pull, and WSS operations for Collaboration. Bootstrap is
 strictly ordered as current OIDC User, freshly revalidated ACTIVE Device, then
-configured canonical AgentRuntime. Registration callers cannot advertise
-capabilities; Identity derives the exact token-free Runtime/model-access tags
+configured canonical AgentRuntime. No renderer or consuming domain supplies an
+Agent name, node type, capability, bootstrap key, or idempotency key. Identity
+derives the Device-bound display name through Cloud and the exact token-free Runtime/model-access tags
 from the Host readiness observation and sends those facts to Cloud. Missing or
 unexecutable Runtime configuration fails closed before Agent creation. The
 service performs bootstrap decryption and bearer injection without returning
@@ -35,8 +36,10 @@ in-flight HTTP, closes in-flight WSS, and rechecks the epoch before accepting a
 response. OIDC ownership changes, logout, Device revoke, and unconfirmed Device
 refresh invalidate in-flight Agent authority and stop Collaboration delivery;
 same-User token refresh preserves the existing binding. Only a newly committed
-replacement authority can reopen a locally fenced Agent. Cloud remains the
-authority enforcing at most one active Agent for each Device.
+replacement authority can reopen a locally fenced Agent. At startup Identity
+reuses a matching encrypted local authority or performs the bounded rotation
+itself. Cloud remains the authority enforcing at most one active, Device-named
+Agent for each Device.
 The Device fact-attestation signer is available only to
 `sciforge.project-coordinator`, accepts the single
 `project-content-provisioning-attestation` fact envelope, revalidates the exact

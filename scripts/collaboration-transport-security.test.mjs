@@ -154,13 +154,11 @@ test('8.4 production WebSocket boundary enforces origin, authenticated routing, 
   const hub = new CollaborationWebSocketHub()
   const service = new CollaborationService({ repository, notifier: hub, now: clock.now })
   const bootstrap = createAgentCredentialBootstrap()
-  const registered = await service.registerAgent(identity.user, {
+  const registered = await service.ensureAgent(identity.user, {
     deviceId: identity.deviceId,
-    displayName: 'WebSocket Device Agent',
-    nodeType: 'desktop',
     capabilities: ['agent-runtime'],
     credentialBootstrapPublicKey: bootstrap.publicKey,
-    idempotencyKey: 'idem_websocket_agent_register'
+    idempotencyKey: 'idem_websocket_agent_ensure'
   })
   const agentCredential = bootstrap.open(registered.sealedCredential)
   const server = createCollaborationHttpServer({
@@ -249,35 +247,34 @@ test('2.5 production HTTP keeps Agent credentials sealed, Device-bound and rotat
   t.after(() => closeServer(server))
   const baseUrl = await listen(server)
   const authorizationA = { authorization: `${['Bear', 'er'].join('')} ${a.token}` }
-  const registrationBootstrap = createAgentCredentialBootstrap()
-  const registration = {
+  const ensureBootstrap = createAgentCredentialBootstrap()
+  const ensure = {
     protocolVersion: '1.0',
     requestId: 'req_RegisterAgent001',
-    type: 'agent.register',
-    idempotencyKey: 'idem_transport_register_agent',
+    type: 'agent.ensure',
+    idempotencyKey: 'idem_transport_ensure_agent',
     deviceId: a.deviceId,
-    displayName: 'Device-bound Agent',
-    nodeType: 'desktop',
     capabilities: ['agent-runtime'],
-    credentialBootstrapPublicKey: registrationBootstrap.publicKey
+    credentialBootstrapPublicKey: ensureBootstrap.publicKey
   }
-  const response = await postCommand(baseUrl, registration, authorizationA)
+  const response = await postCommand(baseUrl, ensure, authorizationA)
   assert.equal(response.status, 200)
   const registrationText = await response.text()
   const registered = JSON.parse(registrationText)
-  assert.equal(registered.type, 'agent.registered')
+  assert.equal(registered.type, 'agent.ensured')
   assert.equal(registered.agent.ownerUserId, a.userId)
   assert.equal(registered.agent.deviceId, a.deviceId)
-  const initialCredential = registrationBootstrap.open(registered.sealedCredential)
+  const initialCredential = ensureBootstrap.open(registered.sealedCredential)
   assert.equal(registrationText.includes(initialCredential), false)
   const agentActor = await resolveToken(authentication, initialCredential)
   assert.equal(agentActor.userId, a.userId)
   assert.equal(agentActor.deviceId, a.deviceId)
 
-  const replay = await postCommand(baseUrl, registration, authorizationA)
-  assert.equal(replay.status, 409)
+  const replay = await postCommand(baseUrl, ensure, authorizationA)
+  assert.equal(replay.status, 200)
   const replayText = await replay.text()
   assert.equal(replayText.includes(initialCredential), false)
+  assert.equal(JSON.parse(replayText).sealedCredential, undefined)
   assert.equal(replayText.includes(registered.sealedCredential.ciphertext), false)
 
   const rotationBootstrap = createAgentCredentialBootstrap()
