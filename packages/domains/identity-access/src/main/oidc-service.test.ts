@@ -2,7 +2,10 @@ import { createServer } from 'node:http'
 import { webcrypto } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DesktopIdentityService } from './oidc-service.js'
-import type { StoredDesktopIdentitySession } from './session-store.js'
+import {
+  DesktopIdentitySessionStoreError,
+  type StoredDesktopIdentitySession
+} from './session-store.js'
 
 const issuer = 'http://127.0.0.1:8080/realms/SciForge'
 const clientId = 'sciforge-desktop'
@@ -580,6 +583,34 @@ describe('DesktopIdentityService', () => {
     expect(sessionStore.current()).toMatchObject({
       refreshToken: 'refresh-token-after-restart'
     })
+  })
+
+  it('clears an unreadable saved session and returns to a stable signed-out state', async () => {
+    const sessionStore = memorySessionStore()
+    sessionStore.load.mockRejectedValueOnce(new DesktopIdentitySessionStoreError(
+      'The saved login session is invalid or cannot be read from secure storage.'
+    ))
+    const fetchImpl = vi.fn() as unknown as typeof fetch
+    const openExternal = vi.fn()
+    const service = new DesktopIdentityService({
+      issuer,
+      clientId,
+      audience,
+      identityClient,
+      sessionStore,
+      fetchImpl,
+      openExternal
+    })
+
+    await expect(service.initialize()).resolves.toEqual({
+      ok: true,
+      status: { state: 'signed-out' }
+    })
+    expect(service.getStatus()).toEqual({ state: 'signed-out' })
+    expect(sessionStore.clear).toHaveBeenCalledOnce()
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(openExternal).not.toHaveBeenCalled()
+    service.close()
   })
 
   it('coalesces concurrent logout calls without cancelling remote revocation or end-session', async () => {

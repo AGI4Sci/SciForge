@@ -7,7 +7,12 @@ const nativeSourceUrl = new URL(
   import.meta.url
 )
 const loaderSourceUrl = new URL('./private-vault/native-binding.ts', import.meta.url)
-const stageSourceUrl = new URL('./private-vault/native/stage-addon.mjs', import.meta.url)
+const packageJsonUrl = new URL('../../package.json', import.meta.url)
+const electronViteConfigUrl = new URL('../../../../../electron.vite.config.ts', import.meta.url)
+const genericStagerUrl = new URL(
+  '../../../../../scripts/domain-main-native-addons.mjs',
+  import.meta.url
+)
 
 describe('Identity native private-vault boundary', () => {
   it('uses in-process stable Node-API and the device-only Keychain class', async () => {
@@ -50,18 +55,33 @@ describe('Identity native private-vault boundary', () => {
   })
 
   it('stages the addon at the one URL retained by the Electron main bundle', async () => {
-    const [loaderSource, stageSource] = await Promise.all([
+    const [loaderSource, packageSource, configSource, stagerSource] = await Promise.all([
       readFile(loaderSourceUrl, 'utf8'),
-      readFile(stageSourceUrl, 'utf8')
+      readFile(packageJsonUrl, 'utf8'),
+      readFile(electronViteConfigUrl, 'utf8'),
+      readFile(genericStagerUrl, 'utf8')
     ])
+    const packageJson = JSON.parse(packageSource) as Readonly<{
+      sciforgeMainNativeAddons: Readonly<{
+        artifacts: readonly Readonly<{ bundleRelativePath: string }>[]
+      }>
+    }>
 
     expect(loaderSource).toContain(
       "'./native/build/Release/identity_private_vault.node'"
     )
-    expect(stageSource).toContain(
-      "'out', 'main', 'native', 'build', 'Release'"
+    expect(packageJson.sciforgeMainNativeAddons.artifacts).toEqual([
+      expect.objectContaining({
+        bundleRelativePath: 'native/build/Release/identity_private_vault.node'
+      })
+    ])
+    expect(configSource).toContain(
+      "name: 'sciforge:stage-domain-main-native-addons'"
     )
-    expect(stageSource).not.toContain('process.env')
-    expect(stageSource).not.toContain('child_process')
+    expect(configSource).toContain('async writeBundle(outputOptions)')
+    expect(stagerSource).not.toContain('identity_private_vault')
+    expect(stagerSource).not.toContain('@sciforge/domain-identity-access')
+    expect(stagerSource).not.toContain('process.env')
+    expect(stagerSource).not.toContain('child_process')
   })
 })

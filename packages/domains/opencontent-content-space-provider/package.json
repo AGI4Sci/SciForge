@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-opencontent-content-space-provider",
-  "version": "5.0.1",
+  "version": "5.0.2",
   "license": "MIT",
   "type": "module",
   "private": false,

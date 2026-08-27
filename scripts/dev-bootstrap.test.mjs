@@ -1,14 +1,52 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { readFile } from 'node:fs/promises'
 import process from 'node:process'
 import { test } from 'node:test'
 
 import {
+  DEV_PREPARATION_SCRIPTS,
   DEV_FORWARD_SIGNALS,
   devChildSpawnOptions,
-  forwardSignalToDevChild
+  forwardSignalToDevChild,
+  mergeDevelopmentEnvironment
 } from './dev-bootstrap.mjs'
+
+test('development startup prepares secure domain runtimes before agent support', () => {
+  assert.deepEqual(DEV_PREPARATION_SCRIPTS, [
+    'build:domain-native-addons',
+    'build:agent-support'
+  ])
+})
+
+test('versioned development deployment values fill only missing environment entries', () => {
+  assert.deepEqual(mergeDevelopmentEnvironment(
+    'SCIFORGE_OIDC_ISSUER=https://identity.example.test/realms/SciForge\n' +
+      'SCIFORGE_CLOUD_BASE_URL=https://cloud.example.test\n',
+    {
+      SCIFORGE_CLOUD_BASE_URL: 'https://explicit-cloud.example.test',
+      PRESERVED_VALUE: 'yes'
+    }
+  ), {
+    SCIFORGE_OIDC_ISSUER: 'https://identity.example.test/realms/SciForge',
+    SCIFORGE_CLOUD_BASE_URL: 'https://explicit-cloud.example.test',
+    PRESERVED_VALUE: 'yes'
+  })
+})
+
+test('fresh clones include the public Cloud Identity development deployment', async () => {
+  const source = await readFile(
+    new URL('../deployments/development/sciforge.env', import.meta.url),
+    'utf8'
+  )
+  const environment = mergeDevelopmentEnvironment(source, {})
+  assert.equal(
+    environment.SCIFORGE_OIDC_ISSUER,
+    'https://login-test.sciforge.cn/realms/SciForge'
+  )
+  assert.equal(environment.SCIFORGE_CLOUD_BASE_URL, 'https://cloud-test.sciforge.cn')
+})
 
 test('development children use an independent process group only on POSIX', () => {
   assert.deepEqual(devChildSpawnOptions('darwin'), { detached: true })

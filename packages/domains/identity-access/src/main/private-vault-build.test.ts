@@ -8,11 +8,12 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
+import { stageDomainMainNativeAddons } from '../../../../../scripts/domain-main-native-addons.mjs'
+
 const testRoot = dirname(fileURLToPath(import.meta.url))
 const workspaceRoot = resolve(testRoot, '../../../../..')
 const nativeRoot = join(testRoot, 'private-vault', 'native')
 const buildScript = join(nativeRoot, 'build-addon.mjs')
-const stageScript = join(nativeRoot, 'stage-addon.mjs')
 const binaryName = 'identity_private_vault.node'
 const sourceBinary = join(nativeRoot, 'build', 'Release', binaryName)
 const stagedBinary = join(
@@ -27,20 +28,13 @@ const stagedBinary = join(
 
 describe('Identity native private-vault fresh build', () => {
   it('requires an explicit skip on unsupported platforms', async () => {
-    const [buildSource, stageSource] = await Promise.all([
-      readFile(buildScript, 'utf8'),
-      readFile(stageScript, 'utf8')
-    ])
-    for (const source of [buildSource, stageSource]) {
-      expect(source).toContain("process.platform !== 'darwin'")
-      expect(source).toContain("includes('--skip-unsupported')")
-    }
+    const buildSource = await readFile(buildScript, 'utf8')
+    expect(buildSource).toContain("process.platform !== 'darwin'")
+    expect(buildSource).toContain("includes('--skip-unsupported')")
 
     if (process.platform === 'darwin') return
     expect(runNodeScript(buildScript, ['--skip-unsupported']).status).toBe(0)
-    expect(runNodeScript(stageScript, ['--skip-unsupported']).status).toBe(0)
     expect(runNodeScript(buildScript).status).not.toBe(0)
-    expect(runNodeScript(stageScript).status).not.toBe(0)
   })
 
   it('compiles, stages, loads, and completes an exact Keychain round-trip on macOS', async () => {
@@ -60,7 +54,14 @@ describe('Identity native private-vault fresh build', () => {
       stdio: ['ignore', 'pipe', 'pipe']
     }).status).toBe(0)
 
-    expect(runNodeScript(stageScript, ['--skip-unsupported']).status).toBe(0)
+    await expect(stageDomainMainNativeAddons({
+      repositoryRoot: workspaceRoot,
+      mainOutputDirectory: join(workspaceRoot, 'out', 'main'),
+      platform: process.platform
+    })).resolves.toEqual([{
+      packageName: '@sciforge/domain-identity-access',
+      bundleRelativePath: 'native/build/Release/identity_private_vault.node'
+    }])
     const [sourceDigest, stagedDigest] = await Promise.all([
       fileDigest(sourceBinary),
       fileDigest(stagedBinary)
@@ -100,24 +101,38 @@ describe('Identity native private-vault fresh build', () => {
     expect(builder.asarUnpack).toContain('**/out/main/**/*')
   })
 
-  it('keeps the root native-addon path scoped to the Identity private vault', async () => {
+  it('uses package metadata and electron-vite as the only native-addon staging path', async () => {
     const rootPackage = JSON.parse(await readFile(
       join(workspaceRoot, 'package.json'),
       'utf8'
     )) as Readonly<{ scripts: Readonly<Record<string, string>> }>
+    const identityPackage = JSON.parse(await readFile(
+      join(workspaceRoot, 'packages', 'domains', 'identity-access', 'package.json'),
+      'utf8'
+    )) as Readonly<{ sciforgeMainNativeAddons?: unknown }>
 
-    expect(rootPackage.scripts.build).toContain('npm run build:domain-native-addons')
-    expect(rootPackage.scripts.build).toContain('npm run stage:domain-native-addons')
+    expect(rootPackage.scripts.build).toBe(
+      'npm run build:agent-support && npm run build:domain-native-addons && electron-vite build'
+    )
     expect(rootPackage.scripts['build:domain-native-addons']).toBe(
       'node ./packages/domains/identity-access/src/main/private-vault/native/build-addon.mjs --skip-unsupported'
     )
-    expect(rootPackage.scripts['stage:domain-native-addons']).toBe(
-      'node ./packages/domains/identity-access/src/main/private-vault/native/stage-addon.mjs --skip-unsupported'
-    )
+    expect(rootPackage.scripts['stage:domain-native-addons']).toBeUndefined()
     expect(rootPackage.scripts['build:domain-native-addons']).not.toContain('opencontent-connector')
-    expect(rootPackage.scripts['stage:domain-native-addons']).not.toContain('opencontent-connector')
     expect(rootPackage.scripts['build:opencontent-native']).toBeUndefined()
     expect(rootPackage.scripts['stage:opencontent-native']).toBeUndefined()
+    expect(identityPackage.sciforgeMainNativeAddons).toEqual({
+      contractVersion: 1,
+      artifacts: [{
+        platforms: ['darwin'],
+        sourceRelativePath:
+          'src/main/private-vault/native/build/Release/identity_private_vault.node',
+        bundleRelativePath: 'native/build/Release/identity_private_vault.node'
+      }]
+    })
+    await expect(stat(join(nativeRoot, 'stage-addon.mjs'))).rejects.toMatchObject({
+      code: 'ENOENT'
+    })
   })
 })
 
