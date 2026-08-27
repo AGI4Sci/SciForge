@@ -198,6 +198,8 @@ jobs:
           npx vitest run src/main/domain-package-storage.test.ts
 
       - name: Build the Desktop application
+        env:
+          NODE_OPTIONS: "--max-old-space-size=6144"
         run: npm run build
 
   keycloak-macos-bash32:
