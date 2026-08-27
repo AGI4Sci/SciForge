@@ -213,13 +213,35 @@ export const taskOfferedPayloadSchema = z.object({
   type: z.literal('task.offered'),
   projectId: projectIdSchema,
   taskId: taskIdSchema,
-  executionId: executionIdSchema,
   taskOfferId: taskOfferIdSchema,
+  workerUserId: userIdSchema,
   currentTaskRevision: revisionSchema,
-  currentExecutionRevision: revisionSchema,
   offerRevision: revisionSchema
 }).strict()
 export type TaskOfferedPayload = z.infer<typeof taskOfferedPayloadSchema>
+
+export const taskOfferClaimedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('task.offer.claimed'),
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  taskOfferId: taskOfferIdSchema,
+  executionId: executionIdSchema,
+  claimedByAgentId: agentIdSchema,
+  offerRevision: revisionSchema
+}).strict()
+export type TaskOfferClaimedPayload = z.infer<typeof taskOfferClaimedPayloadSchema>
+
+export const taskOfferClosedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('task.offer.closed'),
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  taskOfferId: taskOfferIdSchema,
+  outcome: z.enum(['withdrawn', 'timed_out']),
+  offerRevision: revisionSchema
+}).strict()
+export type TaskOfferClosedPayload = z.infer<typeof taskOfferClosedPayloadSchema>
 
 export const projectionUpdatedPayloadSchema = z.object({
   ...agentInboxEnvelopeShape,
@@ -288,6 +310,8 @@ export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
   }).strict(),
   personalMessageReceivedPayloadSchema,
   taskOfferedPayloadSchema,
+  taskOfferClaimedPayloadSchema,
+  taskOfferClosedPayloadSchema,
   taskRecoveryOutputLinkedPayloadSchema,
   taskRecoveryAbandonedPayloadSchema,
   projectionUpdatedPayloadSchema,

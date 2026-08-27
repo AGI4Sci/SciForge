@@ -23,7 +23,8 @@ This package owns only the Human-facing coordination surfaces for:
   Project's Coordinator;
 - generating, editing, submitting, and confirming a Project Plan;
 - browsing the Cloud-global online Worker directory, selecting Project members
-  by User, and selecting an exact Agent for each Task;
+  and Task recipients by User while keeping nested Agent facts as readiness
+  evidence only;
 - transferring Coordinator authority only to another exact active Agent owned
   by the same Project Owner, with durable old-authority fencing feedback;
 - reviewing immutable Task results, asking/answering Project HumanNeeded, and
@@ -61,8 +62,8 @@ Collaboration runtime owns the one canonical current Cloud Device-to-Agent
 binding; this package freshly reads that exact active Agent and its Cloud
 revision immediately before `project.create`. A Cloud Device ID is an Identity
 authority fact and is never treated as the Host installation/execution node ID.
-The creator Agent is Coordinator only for the created Project and may remain a
-Worker Agent in another Project.
+The creator Agent is Coordinator only for the created Project and may claim a
+Worker offer in another Project.
 
 Coordinator Agent Plan submission, HumanNeeded, result review, decision, and
 final completion acquire Collaboration's versioned, main-only command service.
@@ -106,8 +107,8 @@ safe recovery action without deleting Provider content.
 `./contract` contains the strict renderer-safe coordination read model. It
 composes the Cloud-global online Worker directory and the canonical Project
 Plan, Project-scoped Worker Availability, Membership,
-Task Authority, execution, result/review, content readiness, provisioning and
-recovery records; it adds only UI-specific grouping, exact selection and focus
+Task Authority, User-level offers, execution, result/review, content readiness,
+provisioning and recovery records; it adds only UI-specific grouping, User selection and focus
 wrappers rather than redefining those state machines.
 `./ports` contains the narrow package-owned workspace, Plan, provisioning, and
 action workflow ports used by the capability factory plus the closed
@@ -123,6 +124,9 @@ Provider adapter, or second Cloud DTO.
 
 Owner confirmation activates the Project and dispatches each dependency-free
 initial Plan item through the canonical Coordinator Agent command service. Main
-re-reads the exact Agent availability immediately before every offer and sends
-the fresh availability revision; an offline, unready, non-member, ineligible,
-busy, expired, capability-mismatched, or content-unready Agent fails closed.
+re-reads the selected User's current Project-scoped availability immediately
+before every offer and requires at least one eligible Runtime. The Cloud command
+contains only `workerUserId`; Cloud broadcasts the pending Offer to all eligible
+Runtime Agents owned by that User, and the first Device claim creates the exact
+Task Execution. No Agent identity or availability revision is supplied by the
+renderer or persisted as a pre-claim assignment.

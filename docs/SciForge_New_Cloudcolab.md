@@ -140,7 +140,8 @@ Project Topic 是多人 Project 的沟通入口，不是某个人的私人 Sessi
 - 把内容记录为候选观察；
 - 拒绝越权或与 Project 无关的指令。
 
-Project Topic 中的一句话不会直接广播给所有 Agent。Worker 只有收到明确分配给自己的 Task 才会执行。
+Project Topic 中的一句话不会直接广播给所有 Agent。Coordinator 先把正式 Task Offer 指向一个
+Worker User；Cloud 再把该 Offer 广播给此 User 当前所有合格 Device Agent，首个 claim 才执行。
 
 ### 4.3 为什么必须区分两者
 
@@ -214,11 +215,16 @@ Project 成员列表记录参与的用户，而不是只记录机器。界面把
 
 Coordinator 是一种 Project 角色，不是一种特殊版本的 SciForge。同一台 SciForge 可以在自己的 Project 中担任 Coordinator，也可以在其他 Project 中担任 Worker。
 
-### 6.3 Worker 只处理明确 Task
+### 6.3 Worker User 的某一台 Device 只处理已 claim 的明确 Task
 
-Worker 收到的每个 Task 都明确包含目标、执行者、当前版本、完成条件和状态。
+Worker User 收到的每个 Task Offer 都明确包含目标、当前版本、完成条件和状态，但不预选 Agent。
+该 User 的所有合格 Device 都会收到通知；首个成功 claim 的 Device 才成为实际执行者，Cloud
+在同一事务记录 User/Device/Agent 并创建 immutable Execution。
 
-Worker 可以接受、拒绝、执行、报告失败、提交结果或请求真人帮助，但不能直接修改全局计划，也不能向其他 Worker 广播新的执行指令。如果需要其他能力，Worker 向 Coordinator 提出建议，由 Coordinator 决定是否创建新 Task。
+Worker Device 可以 claim、执行、报告失败、提交结果或请求真人帮助；某台 Device 的本地忽略
+不会代表该 User 全局拒绝，其他 Device 仍可 claim。Worker 不能直接修改全局计划，也不能向
+其他 Worker 广播新的执行指令。如果需要其他能力，Worker 向 Coordinator 提出建议，由
+Coordinator 决定是否创建新 Task。
 
 ### 6.4 使用星形协作而不是自由群聊
 

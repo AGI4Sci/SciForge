@@ -6,7 +6,7 @@ SciForge 需要同时支持两个场景：用户可以在手机上继续操作�
 
 这种缺口会造成危险的歧义：用户 A 在手机发出的消息可能由用户 B 的机器执行；同一个 Zulip topic 中的六个人可能被当成一个本地 Session 的共同操作者；手机身份也可能被误认为拥有本机工具审批权。仅记录 `senderId` 不能满足多人协作中的身份、路由和授权要求。
 
-本变更把“协作个体”定义为稳定的 `UserPrincipal`。手机是该用户的人类交互端点，SciForge 安装实例是该用户拥有的 Agent 节点。两者不是两个用户，也不互相冒充，而是用不同凭据、不同信任级别代表同一个 `userId`。Project 以用户为成员，以 Agent 为执行者；个人 Session 消息路由到该用户明确选择的 Agent，Project 群聊则路由到云端 Project 和显式 Coordinator，绝不根据当前在线机器或桌面焦点猜测执行目标。
+本变更把“协作个体”定义为稳定的 `UserPrincipal`。手机是该用户的人类交互端点，SciForge 安装实例是该用户拥有的 Agent 节点。两者不是两个用户，也不互相冒充，而是用不同凭据、不同信任级别代表同一个 `userId`。Project 以用户为成员；Coordinator 是 Project 级的精确 Agent，Worker 派发则指向 User，并在该 User 的设备领取后才确定执行 Agent。个人 Session 消息路由到该用户明确选择的 Agent，Project 群聊则路由到云端 Project 和显式 Coordinator，绝不根据当前在线机器或桌面焦点猜测 Coordinator 或个人 Session 执行目标。
 
 ## 变更内容
 
@@ -15,7 +15,7 @@ SciForge 需要同时支持两个场景：用户可以在手机上继续操作�
 - 新增 `AgentNode` 所有权模型，每台 SciForge 使用稳定 `agentId` 注册，并明确记录 `ownerUserId`；PoC 中每个用户选择一个 primary Agent 作为手机默认执行端。
 - 新增 `ParticipantProfile`，把一个用户、其 primary 人类端点和 primary Agent 组合成一个逻辑协作个体，同时保留端点各自的凭据、在线状态和保证级别。
 - 区分两类远端会话：个人 Session topic 与一个用户所拥有 Agent 上的一个本地 thread 一一对应；Project topic 对应云端 Project 协作入口，由显式 Coordinator 处理，不直接冒充任何成员的私人 Session。
-- 建立稳定路由规则：个人消息按 `userId + projectionId` 路由；Project 消息按 `projectId + senderUserId` 鉴权后写入 Project 信箱；Task 按 `assigneeAgentId` 投递。
+- 建立稳定路由规则：个人消息按 `userId + projectionId` 路由；Project 消息按 `projectId + senderUserId` 鉴权后写入 Project 信箱；Task Offer 按 `workerUserId` 广播到该 User 的合格 Agent/Device，并在原子 claim 后绑定 Execution。
 - 让桌面与手机共享同一条个人 Session 逻辑消息流，使用 receipt、去重、每 Session 顺序队列和重启恢复保证幂等。
 - 让多个用户各自的 Agent 通过一个云端协作内核共享 Project、Task、Project Record 和持久信箱；云端不运行特殊 LLM Agent。
 - 明确身份与授权分离：手机和机器属于同一用户，不代表 Zulip 登录具备本机高风险能力的批准强度；远程批准必须由 capability policy 显式允许，否则保持桌面待审批。

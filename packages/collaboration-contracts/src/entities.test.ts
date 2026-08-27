@@ -210,7 +210,9 @@ describe('projection, Project, Task, and Record invariants', () => {
     expect(taskSchema.safeParse({
       ...taskFixture,
       status: 'completed',
+      currentExecutionId: TEST_IDS.executionId,
       currentExecutionState: 'completed',
+      executionCount: 1,
       completedAt: TEST_LATER_TIMESTAMP
     }).success).toBe(true)
   })

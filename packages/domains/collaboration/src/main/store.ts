@@ -14,7 +14,6 @@ import {
   remoteSessionProjectionSchema,
   taskExecutionPreflightSchema,
   taskExecutionSchema,
-  taskOfferRejectionReasonSchema,
   taskResultOutputSchema,
   taskSchema,
   userPrincipalSchema
@@ -187,6 +186,30 @@ export const collaborationTaskOfferJournalSchema = z.object({
   receivedAt: timestampSchema
 }).strict()
 
+export const collaborationPendingTaskOfferSchema = z.object({
+  projectId: projectSchema.shape.projectId,
+  taskId: taskSchema.shape.taskId,
+  taskOfferId: taskOfferIdSchema,
+  workerUserId: userPrincipalSchema.shape.userId,
+  currentTaskRevision: taskSchema.shape.revision,
+  offerRevision: taskSchema.shape.revision,
+  recipientAgentId: agentNodeSchema.shape.agentId,
+  receivedAt: timestampSchema,
+  state: z.enum(['pending', 'awaiting-manual', 'claiming', 'dismissed', 'claimed_elsewhere', 'closed', 'failed']),
+  updatedAt: timestampSchema,
+  completedAt: timestampSchema.nullable(),
+  error: z.string().trim().min(1).max(4_000).nullable()
+}).strict().superRefine((offer, context) => {
+  const terminal = ['dismissed', 'claimed_elsewhere', 'closed', 'failed'].includes(offer.state)
+  if (terminal !== (offer.completedAt !== null)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['completedAt'],
+      message: 'A terminal pending-offer journal requires its completion time.'
+    })
+  }
+})
+
 export const collaborationWorkerPreflightSchema = z.object({
   cloud: taskExecutionPreflightSchema,
   outcome: z.enum(['allowed', 'denied']),
@@ -212,26 +235,10 @@ export const collaborationWorkerPreflightSchema = z.object({
   }
 })
 
-export const collaborationTaskOfferDecisionSchema = z.discriminatedUnion('decision', [
-  z.object({
-    decision: z.literal('accept'),
-    decidedAt: timestampSchema
-  }).strict(),
-  z.object({
-    decision: z.literal('reject'),
-    reason: taskOfferRejectionReasonSchema,
-    safeReasonDetail: z.string().trim().min(1).max(500).nullable(),
-    decidedAt: timestampSchema
-  }).strict().superRefine((decision, context) => {
-    if ((decision.reason === 'other') !== (decision.safeReasonDetail !== null)) {
-      context.addIssue({
-        code: 'custom',
-        path: ['safeReasonDetail'],
-        message: 'Only other rejection requires a bounded safe detail.'
-      })
-    }
-  })
-])
+export const collaborationTaskOfferDecisionSchema = z.object({
+  decision: z.literal('accept'),
+  decidedAt: timestampSchema
+}).strict()
 
 export const collaborationAgentInvocationJournalSchema = z.object({
   logicalInvocationId: localInvocationIdSchema,
@@ -327,18 +334,15 @@ export const collaborationTaskRunSchema = z.object({
   task: taskSchema.nullable(),
   execution: taskExecutionSchema.nullable(),
   latestPreflight: collaborationWorkerPreflightSchema.nullable(),
-  decision: collaborationTaskOfferDecisionSchema.nullable(),
+  decision: collaborationTaskOfferDecisionSchema,
   expectedTaskRevision: taskSchema.shape.revision,
   expectedExecutionRevision: taskExecutionSchema.shape.revision,
   state: z.enum([
-    'offered',
-    'awaiting-manual',
     'accepting',
     'running',
     'needs-human',
     'submitting',
     'completed',
-    'rejected',
     'failed',
     'fenced',
     'manual-recovery'
@@ -425,6 +429,7 @@ export const collaborationLocalStateSchema = z.object({
   projects: z.array(projectSchema).max(10_000),
   tasks: z.array(taskSchema).max(100_000),
   taskRuns: z.array(collaborationTaskRunSchema).max(100_000),
+  pendingTaskOffers: z.array(collaborationPendingTaskOfferSchema).max(100_000).default([]),
   workerAcceptancePolicies: z.array(collaborationWorkerAcceptancePolicySchema)
     .max(64)
     .default([])
@@ -454,6 +459,7 @@ export type CollaborationQueueItem = z.infer<typeof collaborationQueueItemSchema
 export type CollaborationLocalReceipt = z.infer<typeof collaborationLocalReceiptSchema>
 export type CollaborationOutboxEntry = z.infer<typeof collaborationOutboxEntrySchema>
 export type CollaborationTaskRun = z.infer<typeof collaborationTaskRunSchema>
+export type CollaborationPendingTaskOffer = z.infer<typeof collaborationPendingTaskOfferSchema>
 export type CollaborationExternalOperationJournal = z.infer<
   typeof collaborationExternalOperationJournalSchema
 >
@@ -477,6 +483,7 @@ export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.f
   projects: [],
   tasks: [],
   taskRuns: [],
+  pendingTaskOffers: [],
   workerAcceptancePolicies: [],
   queue: [],
   receipts: [],

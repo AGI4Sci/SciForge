@@ -72,7 +72,7 @@ Owner Desktop SHALL 把当前 OIDC User、ACTIVE Device、公钥/签名、当前
 
 ### Requirement: 动态增加 Worker 先完成成员 provisioning
 
-Coordinator 选择一个尚非 Project Member 的 Worker Agent 时，Cloud SHALL 先加入其 Owner User、要求其 Provider principal readiness、递增 provisioning revision 并生成精确 add-member intent。新 Member SHALL 保持 `pending_membership`，其 Agent SHALL 不可接受文件 Task，直到 Owner Desktop 对 Provider 成员写入、写后核验和新 attestation 全部成功。Task 完成、Worker 从候选集合移除或 Agent 离线 SHALL NOT 自动移除 Project/Provider Member。
+Coordinator 选择一个尚非 Project Member 的 Worker User 时，Cloud SHALL 先加入该 User、要求其 Provider principal readiness、递增 provisioning revision 并生成精确 add-member intent。新 Member SHALL 保持 `pending_membership`，该 User 的任何 Agent SHALL 不可领取文件 Task，直到 Owner Desktop 对 Provider 成员写入、写后核验和新 attestation 全部成功。Task 完成、Worker 从候选集合移除或 Agent 离线 SHALL NOT 自动移除 Project/Provider Member。
 
 #### Scenario: 动态 Worker 已是 Cloud Member 但 Provider 添加失败
 

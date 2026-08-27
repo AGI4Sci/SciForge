@@ -32,6 +32,12 @@ closed，并只把 active Task count/本地是否接收新 offer 作为 Worker �
 不含 Project 字段。Project-scoped 查询再从独立的 Membership、Task Authority、Provider principal
 fact 与 content readiness 组合视图，并显式返回 principal snapshot 的 match/missing/stale 状态。
 
+Coordinator 的 Task 目标是 `workerUserId`。Cloud 先创建一个 `execution_id IS NULL` 的 User-level
+Task Offer，并向该 User 当前 eligible 的所有 Agent/Device Inbox 投递同一 Offer。第一台 Device 的
+Agent 通过 Task/Offer revision CAS claim；Task、Offer、精确 User/Device/Agent Task Execution 与资源
+在同一 PostgreSQL transaction 中提交。第二个或过期 claim 不会创建 execution。Device 本地忽略不写
+Cloud；共享关闭只来自 claim、Coordinator withdraw 或 timeout。
+
 跨包协议、实体和 wire schema 必须从 `@sciforge/collaboration-contracts` 的公共入口导入；不要依赖本包 `src/` 私有路径。
 
 Cloud 的 Provider Instance identity 只有
@@ -51,7 +57,7 @@ project resume/link/兼容命令。后续尝试必须创建新的 provisioning/r
 ## 前置条件
 
 - Node.js `>=22.12.0`。
-- PostgreSQL 17；schema-v12 的 fresh、v4、v5、v9 与 A-v11 升级路线均以 PostgreSQL 17 作为发布门禁。
+- PostgreSQL 17；schema-v16 的 fresh、v4、v5、v9、A-v11 与 current-v12 至 current-v15 升级路线均以 PostgreSQL 17 作为发布门禁。
 - npm workspace 安装的仓库依赖。生产发布还必须包含版本完全匹配的 contracts、provider adapter 与 server 包。
 - 反向代理必须支持 HTTP/1.1 WebSocket Upgrade；应用默认只监听 loopback。
 
@@ -100,7 +106,7 @@ npm --workspace @sciforge/collaboration-server run dev
 
 `dev` 会读取包目录中可选的 `.env`。该文件只适合本机、必须被 Git 忽略，并且不应保存共享或生产凭据。更安全的做法是由 shell 的临时环境或本地 secret manager 向进程注入数据库连接。
 
-迁移是显式、forward-only、失败即非零退出的发布步骤。schema-v12 只接受五条冻结路线：fresh、共同基线 v4、旧公网 v5、隔离 staging v9、A-v11；v4/v5/v9 先核对机械 catalog fingerprint 并执行 `0011_a_content_space_execution_identity.sql`，随后所有 v11 路线执行 `0012_oidc_only_endpoint_agent_authority.sql`。v12 是唯一 ready 状态；未知、混合或部分 lineage 必须保持 `/readyz` 失败。
+迁移是显式、forward-only、失败即非零退出的发布步骤。schema-v16 只接受代码中冻结且具有机械 catalog fingerprint 的 source routes；fresh/v4/v5/v9/A-v11 会依次进入 0011–0016，current-v12 至 current-v15 只执行其后的缺失迁移。`0016_user_targeted_task_offers.sql` 在安装新约束前先 fence 旧的 pending Agent 直派执行，再把 Task Offer 改为 User target 与 nullable execution。v16 是唯一 ready 状态；未知、混合或部分 lineage 必须保持 `/readyz` 失败。
 
 `0012` 删除匿名 endpoint challenge、非 Agent credential 与 `agent_nodes.installation_id`，并要求每个 Active Agent 精确绑定一个 Active Device、每个 Device 最多拥有一个 Active Agent。它不会把 installation-only Agent 猜测迁移为 Device authority；存在未绑定 Agent 时迁移会 fail closed。升级前必须在隔离副本验证数据并保留可恢复备份。不要在应用 worker 启动时隐式迁移，也不要让多个 migration unit 并发执行。
 
@@ -173,7 +179,7 @@ curl --fail http://127.0.0.1:8787/readyz
 
 收到 `SIGTERM` 或 `SIGINT` 后，进程会停止接受新连接，并依次关闭 provider pump、WebSocket、HTTP 与 PostgreSQL pool。外部服务管理器仍应配置有界停止超时。
 
-## OIDC Endpoint 绑定、Agent 注册与消息同步摘要
+## OIDC Endpoint 绑定、Device Agent ensure 与消息同步摘要
 
 User 先由 Identity 模块完成 OIDC/PKCE 登录和 Device 注册。Access Token 只由 Identity 私有运行边界持有；协作包通过无令牌的内部 Cloud transport 发起 OIDC User 命令，调用方不能传入 bearer、任意 URL、method 或 header。
 
@@ -185,7 +191,7 @@ User 先由 Identity 模块完成 OIDC/PKCE 登录和 Device 注册。Access Tok
 
 Desktop 使用同一 OIDC Principal 调用 `endpoint.challenge.get` 读取 `pending`、`verified` 或 `expired` 状态；Cloud 会核对 challenge owner，流程没有 poll secret、匿名 redeem、User bearer credential 或第二种角色账号。Provider 事件只在 provider、realm、provider user ID 与 challenge 全部精确匹配时绑定到现有 User。Bot 的成功或安全失败回复进入 provider-identity durable inbox，并沿用 provider delivery ledger、retry、reconciliation 与 ack，不由命令 parser 旁路发送。私聊 `/bind SF1...` 是唯一绑定命令入口；公开 Topic 消息不会验证 challenge。
 
-Agent 注册同样是 OIDC User 命令，必须引用该 User 的 Active Device，并提交一次性的 X25519 bootstrap public key。Cloud 只返回绑定 Agent、Device 和 credential generation 的 `sealedCredential`；协作包在自己的私有运行边界解封，并把 Agent machine credential 写入原生安全存储。响应、IPC、日志、Git 和验收回执都不得携带明文 credential；幂等重放只返回脱敏结果，不会再次下发 sealed material，恢复时必须显式旋转 credential。
+Identity 为当前 OIDC User 的 Active Desktop Device 自动 ensure 一个 Device-named Agent，并使用一次性的 X25519 bootstrap public key 建立 Agent authority。Cloud 只返回绑定 Agent、Device 和 credential generation 的 `sealedCredential`；Identity 在自己的私有运行边界解封并写入原生安全存储。响应、IPC、日志、Git 和验收回执都不得携带明文 credential；幂等重放只返回脱敏结果，不会再次下发 sealed material，恢复时走同一 ensure/rotation 路径。
 
 个人 Topic 绑定到固定 projection 与 Agent，顺序 inbox/outbox、receipt 和 provider cursor 都持久化在 PostgreSQL。Topic 整体重命名或移动时，provider adapter 保留稳定 topic identity，云端先排入 revision 更新通知，再继续同一个桌面 Session；歧义、部分移动、冲突或旧 revision 都会 fail closed。
 

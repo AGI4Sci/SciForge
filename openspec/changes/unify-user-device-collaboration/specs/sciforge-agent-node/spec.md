@@ -4,7 +4,7 @@
 
 ### Requirement: 每台 SciForge 是所属用户的独立 Agent 节点
 
-每个参与协作的 SciForge SHALL 使用稳定 `agentId`、`ownerUserId`、节点名称、节点类型、能力和在线状态注册。PoC 用户 SHALL 明确选择 primary Agent；同一用户的其他节点 SHALL NOT 被自动选为替代执行者。
+每个参与协作的 SciForge SHALL 使用稳定 `agentId`、`ownerUserId`、节点名称、节点类型、能力和在线状态注册。Identity SHALL 在当前 OIDC User/ACTIVE Device/Runtime ready 后自动 ensure 并复用该 Device 的 canonical Agent；不得要求手工注册或 primary Agent 选择。同一 User 的多个合格 Agent/Device MAY 同时收到 User-level Task Offer，但只有首个原子 claim 胜者成为执行者。
 
 #### Scenario: 同一用户注册桌面和服务器节点
 
@@ -15,13 +15,13 @@
 
 ### Requirement: Agent 使用设备身份连接统一信箱
 
-Agent SHALL 使用仅属于本节点的可撤销 device credential 连接云端，通过统一版本化合同读取 Inbox、确认 sequence、接受或拒绝 Task、报告状态并提交结果。
+Agent SHALL 使用仅属于本节点的可撤销 device credential 连接云端，通过统一版本化合同读取 Inbox、确认 sequence、claim User-level Task Offer、报告状态并提交结果。手动忽略只修改本 Device 的本地状态，不得作为 User 级 Cloud reject。
 
 #### Scenario: Agent 接受 Task
 
-- **WHEN** Agent 收到分配给自己的当前 revision TaskOffer
-- **THEN** SHALL 发送 TaskAccepted receipt
-- **AND** 只有云端确认 assignee 后才开始正式执行。
+- **WHEN** Agent 收到分配给其 Owner User 的当前 revision TaskOffer
+- **THEN** SHALL 在本地 preflight 通过后发送原子 claim
+- **AND** 只有云端确认该 Agent/Device 为唯一 Execution assignee 后才开始正式执行。
 
 #### Scenario: Agent 收到其他节点的消息
 

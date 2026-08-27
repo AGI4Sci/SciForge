@@ -87,8 +87,8 @@ const fixture = {
       },
       assignments: [{
         planItemId: 'item_architecture01',
-        selectedAgentId: 'agt_WorkerAgent001',
-        recommendationReason: 'The Agent advertises the required Runtime capability.'
+        workerUserId: 'usr_Worker000001',
+        recommendationReason: 'The User has an eligible Runtime advertising the required capability.'
       }]
     },
     workerGroups: [{
@@ -169,6 +169,7 @@ const fixture = {
       }]
     }],
     tasks: [],
+    offers: [],
     reviews: [],
     pendingHumanNeeded: [],
     records: [],
@@ -187,22 +188,22 @@ const fixture = {
   }]
 }
 
-test('workspace composes canonical Cloud facts while grouping dynamic User candidates by exact Agent', () => {
+test('workspace composes canonical Cloud facts while selecting a Worker User from grouped runtime evidence', () => {
   const parsed = projectCoordinatorWorkspaceSchema.parse(fixture)
   assert.equal(parsed.projects[0]?.workerGroups[0]?.agents.length, 2)
   assert.equal(
-    parsed.projects[0]?.plan?.assignments[0]?.selectedAgentId,
-    'agt_WorkerAgent001'
+    parsed.projects[0]?.plan?.assignments[0]?.workerUserId,
+    'usr_Worker000001'
   )
   assert.equal(parsed.projects[0]?.plan?.plan.type, 'project_plan')
 })
 
-test('workspace rejects a selected Agent outside the User-grouped canonical availability projection', () => {
+test('workspace rejects a selected Worker User outside the grouped canonical availability projection', () => {
   const invalid = structuredClone(fixture)
-  invalid.projects[0]!.plan!.assignments[0]!.selectedAgentId = 'agt_UnknownAgent01'
+  invalid.projects[0]!.plan!.assignments[0]!.workerUserId = 'usr_UnknownUser001'
   assert.throws(
     () => projectCoordinatorWorkspaceSchema.parse(invalid),
-    /exact Agent in the User-grouped candidate projection/u
+    /one User in the grouped candidate projection/u
   )
 })
 
@@ -380,7 +381,7 @@ test('Task output recovery HCI supplies only the visible action identity or an a
   const retry = {
     projectId: 'prj_Project000001',
     recoveryActionId: 'rca_TaskRecovery001',
-    assigneeAgentId: 'agt_WorkerAgent001',
+    workerUserId: 'usr_Worker000001',
     nextOutputFileName: 'architecture-review.recovery-2.md',
     offerExpiresAt: '2026-08-27T09:00:00.000Z'
   }

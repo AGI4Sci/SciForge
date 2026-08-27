@@ -55,7 +55,7 @@
 ## 7. 多用户 Project 协作
 
 - [x] 7.1 实现 Project 创建、member user、Coordinator Agent、手动转交和 role/owner 校验。
-- [x] 7.2 实现结构化 Task offer/accept/reject/progress/result/failure/needs-human 状态，按 assigneeAgentId 投递并用 revision 防止过期结果。
+- [x] 7.2 实现结构化 User-level Task offer/claim/withdraw/timeout/progress/result/failure/needs-human 状态，向 workerUserId 的合格运行时广播，首个原子 claim 绑定 Agent/Device Execution，并用 revision 防止过期结果。
 - [x] 7.3 在本地记录 active taskId/revision/turn，Agent 断线重连后报告实际状态，不重复执行或覆盖已改派 Task。
 - [x] 7.4 实现 Coordinator 单写者和星形协作；Worker 只能更新自己 Task、提交 observation/result 或提出子任务建议。
 - [x] 7.5 实现每 Project Task/轮次/重试预算和明确终止；Coordinator 离线时暂停并允许有权用户显式转交，不自动选主。

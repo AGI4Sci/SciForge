@@ -667,8 +667,7 @@ test('renderer decision HCI invokes only the four governed canonical actions', a
     expectedCoordinatorAuthorityEpoch: 1,
     decision: 'accept',
     instruction: null,
-    nextAssigneeAgentId: null,
-    expectedNextAssigneeAvailabilityRevision: null,
+    nextWorkerUserId: null,
     nextOfferExpiresAt: null,
     nextFileIntent: null
   })
@@ -740,7 +739,7 @@ test('renderer provisioning client keeps the reviewed full plan behind its confi
   await client.retryRecoverySuccessor({
     projectId: plan.projectId,
     recoveryActionId: 'rca_TaskRecovery001',
-    assigneeAgentId: 'agt_WorkerAgent001',
+    workerUserId: 'usr_Worker000001',
     nextOutputFileName: 'meeting-summary.recovery-2.md',
     offerExpiresAt: '2026-08-27T01:08:00.000Z'
   })
@@ -809,7 +808,7 @@ test('renderer provisioning client keeps the reviewed full plan behind its confi
       input: {
         projectId: plan.projectId,
         recoveryActionId: 'rca_TaskRecovery001',
-        assigneeAgentId: 'agt_WorkerAgent001',
+        workerUserId: 'usr_Worker000001',
         nextOutputFileName: 'meeting-summary.recovery-2.md',
         offerExpiresAt: '2026-08-27T01:08:00.000Z'
       }
@@ -1043,7 +1042,7 @@ test('a local Plan draft exposes full content editing before immutable submit', 
       runtimeProvenance: project.plan.plan.runtimeProvenance,
       assignments: [{
         planItemId: task.planItemId,
-        selectedAgentId: null,
+        workerUserId: null,
         recommendationReason: null
       }],
       createdAt: project.project.createdAt,
@@ -1061,7 +1060,7 @@ test('a local Plan draft exposes full content editing before immutable submit', 
   assert.match(markup, /name="plan-item-objective-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-criteria-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-capabilities-item_meeting_summary"/u)
-  assert.match(markup, /name="plan-item-agent-item_meeting_summary"/u)
+  assert.match(markup, /name="plan-item-user-item_meeting_summary"/u)
   assert.match(markup, /projectCoordinatorSavePlanEdits/u)
 })
 
@@ -1157,7 +1156,7 @@ test('decision HCI derives exact review and completion CAS facts from the visibl
     'accept',
     {
       instruction: '',
-      nextAssigneeAgentId: '',
+      nextWorkerUserId: '',
       nextOfferExpiresAt: '',
       nextOutputFileName: ''
     }
@@ -1182,6 +1181,8 @@ test('decision HCI derives exact review and completion CAS facts from the visibl
       task: { ...reviewProject.tasks[0]!.task, fileIntent }
     }],
     workerGroups: [{
+      userId: 'usr_Worker0000002',
+      displayName: 'Worker User 2',
       agents: [{
         projectAvailability: {
           agentId: 'agt_Worker0000002',
@@ -1196,7 +1197,7 @@ test('decision HCI derives exact review and completion CAS facts from the visibl
     'request_revision',
     {
       instruction: 'Re-run with the confirmed assumptions.',
-      nextAssigneeAgentId: 'agt_Worker0000002',
+      nextWorkerUserId: 'usr_Worker0000002',
       nextOfferExpiresAt: '2026-08-26T01:08:00.000Z',
       nextOutputFileName: 'training-plan-comparison.revision-2.md'
     }
@@ -1213,12 +1214,11 @@ test('decision HCI derives exact review and completion CAS facts from the visibl
     expectedCoordinatorAuthorityEpoch: 1,
     decision: 'accept',
     instruction: null,
-    nextAssigneeAgentId: null,
-    expectedNextAssigneeAvailabilityRevision: null,
+    nextWorkerUserId: null,
     nextOfferExpiresAt: null,
     nextFileIntent: null
   })
-  assert.equal(revised?.expectedNextAssigneeAvailabilityRevision, 7)
+  assert.equal(revised?.nextWorkerUserId, 'usr_Worker0000002')
   assert.deepEqual(revised?.nextFileIntent, {
     ...fileIntent,
     output: {
@@ -1232,7 +1232,7 @@ test('decision HCI derives exact review and completion CAS facts from the visibl
     'request_revision',
     {
       instruction: 'Re-run with the confirmed assumptions.',
-      nextAssigneeAgentId: 'agt_Worker0000002',
+      nextWorkerUserId: 'usr_Worker0000002',
       nextOfferExpiresAt: '2026-08-26T01:08:00.000Z',
       nextOutputFileName: fileIntent.output.fileName
     }
@@ -1503,6 +1503,7 @@ function awaitingConfirmationProjectFixture() {
     },
     workerGroups: [],
     tasks: [],
+    offers: [],
     reviews: [],
     pendingHumanNeeded: [],
     records: [],
@@ -1721,7 +1722,7 @@ function decisionProjectFixture(
     decision: 'accept' as const,
     instruction: null,
     acceptedProjectRecordId: 'rec_Observation0001',
-    nextExecutionId: null,
+    nextTaskOfferId: null,
     decidedAt: timestamp
   } : null
   return {

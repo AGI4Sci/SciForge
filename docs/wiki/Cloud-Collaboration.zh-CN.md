@@ -148,8 +148,8 @@ SciForge Desktop 统一登录确认两件事：当前登录的是哪个 SciForge
 常见分工是：
 
 - Coordinator 维护计划、创建或改派 Task，并验收结果
-- Assignee Agent 处理分配给自己的 Task
-- 用户在需要时接受、拒绝或要求修改
+- Coordinator 选择 Worker User；Cloud 向该 User 的合格 Device Agent 广播 Offer
+- 首个 claim 的 Device 执行 Task；本机忽略不产生 User 全局拒绝
 
 ## 完成标志
 

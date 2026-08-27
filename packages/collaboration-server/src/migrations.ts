@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 
 import type { SqlPool } from './postgres.js'
 
-export const COLLABORATION_SCHEMA_VERSION = 15
+export const COLLABORATION_SCHEMA_VERSION = 16
 
 export type CollaborationSchemaRoute =
   | 'fresh-v4'
@@ -15,6 +15,7 @@ export type CollaborationSchemaRoute =
   | 'current-v13'
   | 'current-v14'
   | 'current-v15'
+  | 'current-v16'
 
 export const COLLABORATION_SOURCE_CATALOG_FINGERPRINTS = {
   'upstream-v4': '0577af72da028cee0f45daf6bbf8dad873f9ff2fde578662ffb30d50629b9843',
@@ -24,7 +25,8 @@ export const COLLABORATION_SOURCE_CATALOG_FINGERPRINTS = {
   'current-v12': '19db1ebc685321ae5c425244d99ff6d41790f22b4e2ca6318a90d7b2bc503cca',
   'current-v13': '98432384bdf366300d45230a2d68c7364e21bcb35d70ea5ee37ba49de9827011',
   'current-v14': 'f7bb26001468ca3761e2f7e509ada2e7dd22f5869a4932aa034d5f8f940b7214',
-  'current-v15': 'd25743e11c40971f2e19557f82ca502ba42295474e87f63c10d4e9475a678082'
+  'current-v15': 'd25743e11c40971f2e19557f82ca502ba42295474e87f63c10d4e9475a678082',
+  'current-v16': 'ed65abb012242ac52d47d35ae6858266953002ab5c43c69b68abd570f661198a'
 } as const
 
 const COLLABORATION_V14_CATALOG_FINGERPRINTS = {
@@ -49,18 +51,18 @@ export const COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS = {
 } as const
 
 /**
- * Full admitted v15 catalogs. PostgreSQL retains the immutable migration
+ * Full admitted v16 catalogs. PostgreSQL retains the immutable migration
  * ledger and historical column ordinals, so public-v5 and staging-v9 remain
  * distinguishable audit lineages after converging on the same frozen v15
  * collaboration schema.
  */
 export const COLLABORATION_CURRENT_CATALOG_FINGERPRINTS = {
-  'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v15'],
-  'public-v5': 'c73f6befaa308cf3c4d588a06fab0fe576e8271bb68103022ac5d2051c86189d',
-  'staging-v9': '51b6b9be48083a4555857a947e1ee1f2c54993fe1dc9340a411ca04cfb78cf85'
+  'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v16'],
+  'public-v5': 'cb3be600da76ff30d3ef04570a2026786bfcc3e9c4c3b3001c65718f200b9d69',
+  'staging-v9': '39902dbacef236e97375dd7f677c790a1be0d64bd939538abd964bf3dfa34983'
 } as const
 
-/** Canonical fresh/upstream v15 catalog retained for existing consumers. */
+/** Canonical fresh/upstream v16 catalog retained for existing consumers. */
 export const COLLABORATION_CATALOG_FINGERPRINT =
   COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['base-v4']
 
@@ -90,7 +92,12 @@ Record<Exclude<CollaborationSchemaRoute, 'fresh-v4'>, ReadonlySet<string>>
     COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['staging-v9-v13']
   ]),
   'current-v14': new Set(Object.values(COLLABORATION_V14_CATALOG_FINGERPRINTS)),
-  'current-v15': admittedCurrentCatalogFingerprints
+  'current-v15': new Set([
+    COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v15'],
+    'c73f6befaa308cf3c4d588a06fab0fe576e8271bb68103022ac5d2051c86189d',
+    '51b6b9be48083a4555857a947e1ee1f2c54993fe1dc9340a411ca04cfb78cf85'
+  ]),
+  'current-v16': admittedCurrentCatalogFingerprints
 }
 
 type LineageFacts = Readonly<{
@@ -117,7 +124,8 @@ const FORWARD_MIGRATIONS = [
   '0012_oidc_only_endpoint_agent_authority.sql',
   '0013_full_multi_user_loop.sql',
   '0014_pre_provider_provisioning_binding.sql',
-  '0015_canonical_project_created_inbox.sql'
+  '0015_canonical_project_created_inbox.sql',
+  '0016_user_targeted_task_offers.sql'
 ] as const
 
 const exactColumns = {
@@ -197,7 +205,8 @@ const exactColumns = {
     'effective_at:timestamp with time zone:NO', 'revision:bigint:NO',
     'created_at:timestamp with time zone:NO', 'updated_at:timestamp with time zone:NO'],
   tasks: ['task_id:text:NO', 'project_id:text:NO', 'title:text:NO', 'objective:text:NO',
-    'completion_criteria:jsonb:NO', 'dependency_task_ids:jsonb:NO', 'status:text:NO',
+    'completion_criteria:jsonb:NO', 'dependency_task_ids:jsonb:NO',
+    'required_capability_tags:jsonb:NO', 'status:text:NO',
     'max_retries:integer:NO', 'coordination_round:integer:NO', 'revision:bigint:NO',
     'created_at:timestamp with time zone:NO', 'updated_at:timestamp with time zone:NO',
     'completed_at:timestamp with time zone:YES', 'file_intent:jsonb:YES',
@@ -211,10 +220,10 @@ const exactColumns = {
     'started_at:timestamp with time zone:YES', 'terminal_at:timestamp with time zone:YES',
     'revision:bigint:NO', 'created_at:timestamp with time zone:NO',
     'updated_at:timestamp with time zone:NO'],
-  task_offers: ['task_offer_id:text:NO', 'execution_id:text:NO', 'task_id:text:NO', 'project_id:text:NO',
-    'assignee_user_id:text:NO', 'assignee_agent_id:text:NO', 'assignee_device_id:text:NO',
+  task_offers: ['task_offer_id:text:NO', 'execution_id:text:YES', 'task_id:text:NO', 'project_id:text:NO',
+    'worker_user_id:text:NO',
     'state:text:NO', 'offered_at:timestamp with time zone:NO', 'expires_at:timestamp with time zone:NO',
-    'responded_at:timestamp with time zone:YES', 'rejection_reason:text:YES', 'safe_reason_detail:text:YES',
+    'responded_at:timestamp with time zone:YES',
     'revision:bigint:NO', 'created_at:timestamp with time zone:NO',
     'updated_at:timestamp with time zone:NO'],
   task_execution_events: [],
@@ -253,7 +262,7 @@ const exactColumns = {
     'task_id:text:NO', 'execution_id:text:NO', 'reviewed_result_revision:bigint:NO',
     'decided_by_user_id:text:NO', 'decided_by_coordinator_agent_id:text:NO',
     'coordinator_authority_epoch:bigint:NO', 'decision:text:NO', 'instruction:text:YES',
-    'accepted_project_record_id:text:YES', 'next_execution_id:text:YES',
+    'accepted_project_record_id:text:YES', 'next_task_offer_id:text:YES',
     'decided_at:timestamp with time zone:NO', 'revision:bigint:NO',
     'created_at:timestamp with time zone:NO', 'updated_at:timestamp with time zone:NO'],
   project_final_summaries: ['project_id:text:NO', 'project_record_id:text:NO', 'project_plan_id:text:NO',
@@ -369,27 +378,31 @@ export async function runCollaborationMigrations(
   if (!sourceFingerprintMatches) {
     throw new Error(`collaboration_schema_source_fingerprint_mismatch:${route}`)
   }
-  if (![11, 12, 13, 14, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
+  if (![11, 12, 13, 14, 15, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[0])
     facts = await readLineageFacts(pool)
   }
-  if (![12, 13, 14, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
+  if (![12, 13, 14, 15, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[1])
     facts = await readLineageFacts(pool)
   }
-  if (![13, 14, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
+  if (![13, 14, 15, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[2])
     facts = await readLineageFacts(pool)
   }
-  if (![14, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
+  if (![14, 15, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[3])
     facts = await readLineageFacts(pool)
   }
-  if (facts.version !== COLLABORATION_SCHEMA_VERSION) {
+  if (![15, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[4])
+    facts = await readLineageFacts(pool)
+  }
+  if (facts.version !== COLLABORATION_SCHEMA_VERSION) {
+    await applyMigration(pool, FORWARD_MIGRATIONS[5])
   }
   const current = await readLineageFacts(pool)
-  assertRoute(current, 'current-v15')
+  assertRoute(current, 'current-v16')
   const fingerprint = await collaborationSchemaFingerprint(pool)
   if (fingerprint !== COLLABORATION_SCHEMA_FINGERPRINT) {
     throw new Error('collaboration_schema_fingerprint_mismatch')
@@ -422,7 +435,7 @@ export async function isCollaborationDatabaseReady(
   }> = {}
 ): Promise<boolean> {
   try {
-    assertRoute(await readLineageFacts(pool), 'current-v15')
+    assertRoute(await readLineageFacts(pool), 'current-v16')
     return await collaborationSchemaFingerprint(pool) === COLLABORATION_SCHEMA_FINGERPRINT &&
       admittedCurrentCatalogFingerprints.has(
         await (runtime.currentCatalogFingerprint ?? collaborationCatalogFingerprint)(pool)
@@ -484,6 +497,10 @@ export function detectCollaborationSchemaRoute(facts: LineageFacts): Collaborati
   if (facts.version === 15 && facts.managedContainers && facts.remoteApprovals && facts.oidcIdentities &&
       facts.devices && facts.taskResourceRefs && facts.projectContentSpaceBindings && facts.taskExecutions) {
     return 'current-v15'
+  }
+  if (facts.version === 16 && facts.managedContainers && facts.remoteApprovals && facts.oidcIdentities &&
+      facts.devices && facts.taskResourceRefs && facts.projectContentSpaceBindings && facts.taskExecutions) {
+    return 'current-v16'
   }
   throw new Error('collaboration_schema_lineage_unsupported')
 }

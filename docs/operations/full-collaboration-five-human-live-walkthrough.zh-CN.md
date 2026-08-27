@@ -4,7 +4,7 @@
 
 适用范围：OpenSpec `add-full-multi-user-collaboration-loop` 的 8.6–8.8 真人验收
 
-基础环境：个人 Fork、source app、现有 `cloud-test` / `login-test`、五台物理机或相互独立 VM
+基础环境：个人 Fork、source app、现有 `cloud-test` / `login-test`、五个真人与至少六个独立 Device profile
 
 ## 先读结论
 
@@ -15,7 +15,7 @@
 | --- | --- | --- | --- |
 | Identity / `Identity`（人形图标） | 顶部工具栏 | 本地账户、OIDC 登录、注册当前 Desktop | U0–U4 |
 | Project Coordinator / `协同中心`（流程图标） | `概览`、`项目`、`复审` | 创建 Project、查看在线人数、生成/确认 Plan、复审、HumanNeeded、完成 Project | 主要由 U0 |
-| Collaboration / `协同中心` | `我的任务`；右上角设置中的 `连接与设置` | 连接 Cloud、注册 Agent、设置接单策略、接受或拒绝 Task | U0–U4 |
+| Collaboration / `协同中心` | `我的任务`；右上角设置中的 `连接与设置` | 连接 Cloud、自动确保当前 Device Agent、设置接单策略、认领或本机忽略 Task | U0–U4 |
 | Content Space / `协同中心` | `文件` | 选择 OpenContent、连接个人账号、浏览/下载/上传 | U0–U4 |
 
 三个协作 domain package 只合并用户界面，包边界、Capability Broker、Cloud 投递、恢复状态机
@@ -30,32 +30,20 @@ OpenSpec 7.4 的公网 candidate 已经通过。当前代码也已经支持五�
 Cloud 在线状态、OpenContent 个人连接、Worker 手动/自动接单、结果复审、返修改派、
 Coordinator HumanNeeded 和 Project completion。
 
-但是，按 2026-08-27 当前 source UI 审计，**完整的“只靠按钮”文件闭环仍有三个产品入口缺口**：
-
-1. `创建 Project` 要求 Human 手填 `Coordinator Agent revision`，但 `协同中心 → 连接与设置`
-   没有显示该 revision，且在线心跳会继续推进它；普通用户无法稳定填写当前值。
-2. `创建 Project` 当前固定发送 `content.mode = none`，`生成 Plan 草稿` 固定使用空的
-   `sourceInputLocators`；因此按钮路径不能创建需要 OpenContent provisioning 的文件 Project。
-3. U3 点击 `拒绝 Task` 后，Cloud 会正确 fence 旧 execution 并把 Task 置为
-   `revision_requested`，但 U0 界面当前没有针对“被拒 offer”的 `重新指派` 按钮。
-
-因此明天必须区分两种结论：
-
-- 五人身份/Cloud/在线人数/OpenContent 基础连通可以真实执行并单独记为通过；
-- 只有上述三个入口在冻结 commit 中关闭后，才允许把三文件双并行闭环记为 OpenSpec 8.6
-  `passed`。否则应在对应步骤记 `blocked`，不能用 SSH、数据库手改、测试 driver 或口头说明
-  冒充 Human UI 验收。
+当前冻结语义是 Project 级角色：创建者当前 Device 的 canonical Agent 自动成为该 Project
+Coordinator；Worker 列表只显示 Cloud User。Task Offer 广播给该 User 的所有合格 Device Agent，
+首个 claim 才创建 Execution。任何一个 Device 的本地忽略都不代表该 User 全局拒绝。
 
 ## 1. 推荐的真实协作例子
 
 使用仓库已有的纯合成项目：**“多用户协作设计评审会”**。
 
-会议目标是在 60 分钟内，由五个真人和五个独立 Agent 共同完成：
+会议目标是在 60 分钟内，由五个真人完成；其中 U3 使用两个独立 Device 验证 User 广播：
 
 - U1 产出 `architecture-review.md`；
 - U2 产出 `meeting-minutes.md`；
-- U3 首次收到 `risk-register.md` 后拒绝；
-- U0 把风险任务改派给 U4，U4 通过新的 execution 完成 `risk-register.md`；
+- U3 的 Device A 与 Device B 收到同一 `risk-register.md` Offer；A 本机忽略，B claim 并完成；
+- U0 另行验证 withdraw 后向 U4 Worker User reassign，新 Offer 仍不预选 Agent；
 - `architecture-review.md` 与 `meeting-minutes.md` 必须在时间上真实并行；
 - U0 至少直接接受一个结果，对另一个结果要求一次返修；
 - 三个当前结果都接受后，U0 发起一次 Project 级真人决策，亲自回答并完成 Project。
@@ -73,8 +61,8 @@ Coordinator HumanNeeded 和 Project completion。
 | U0 | Owner + Coordinator | `Manual acceptance` 即可 | 建 Project、确认 Plan、复审、提问、完成 |
 | U1 | 架构评审 Worker | `Manual acceptance` | 手动接受并完成架构评审 |
 | U2 | 会议纪要 Worker | `Automatic acceptance` | 自动接单并与 U1 并行执行 |
-| U3 | 风险任务首选 Worker | `Manual acceptance` | 明确拒绝首次 offer |
-| U4 | 风险任务替补 Worker | `Manual acceptance` | 接受新 execution 并完成风险登记表 |
+| U3 | 风险任务 Worker User（两台 Device） | `Manual acceptance` | Device A 本机忽略；Device B claim 并完成风险登记表 |
+| U4 | 替代 Worker User | `Manual acceptance` | 验证 withdraw/reassign 后的新 User Offer |
 
 ## 2. 今晚由组织者准备
 
@@ -111,7 +99,8 @@ Role: U0 / U1 / U2 / U3 / U4
 | U0 | `usr_…` | connected | `agt_…` | Codex/Claude | manual | connected |
 | U1 | `usr_…` | connected | `agt_…` | Codex/Claude | manual | connected |
 | U2 | `usr_…` | connected | `agt_…` | Codex/Claude | automatic | connected |
-| U3 | `usr_…` | connected | `agt_…` | Codex/Claude | manual | connected |
+| U3-A | `usr_…` | connected | `agt_…` | Codex/Claude | manual | connected |
+| U3-B | 与 U3-A 相同 | connected | 另一 `agt_…` | Codex/Claude | manual | connected |
 | U4 | `usr_…` | connected | `agt_…` | Codex/Claude | manual | connected |
 
 最终公开回执再对 ID 做稳定脱敏。表里不得记录密码、Token、Authorization header、私钥、
@@ -131,7 +120,7 @@ OpenContent credential、Codex credential 或完整 profile 内容。
 6. 回到 SciForge；若显示 `此 Desktop 尚未连接`，点击 `注册这台 Desktop`。
 7. 等待界面显示 `此 Desktop 已连接`。
 
-通过标准：每个人使用不同 OIDC User，且自己的 Desktop 为 connected/ACTIVE。不要截图密码、
+通过标准：U0–U4 使用五个 OIDC User；U3-A/U3-B 是同一 U3 User 的两个不同 ACTIVE Device。不要截图密码、
 浏览器授权码或 Token。
 
 ### 3.2 Settings：确认真实 Runtime
@@ -143,7 +132,7 @@ OpenContent credential、Codex credential 或完整 profile 内容。
 5. 完全退出应用，按基础执行单运行 `run0:participant:runtime-check`。
 6. 只有回执为 `agent_runtime_ready` 才重新正式启动。
 
-### 3.3 Collaboration：连接 Cloud 并注册 Agent
+### 3.3 Collaboration：连接 Cloud 并自动确保当前 Device Agent
 
 1. 点击顶部流程图标 `协同中心`，再点击右上角设置，打开 `连接与设置`。
 2. 在 `云端连接` 中确认地址精确为：
@@ -217,7 +206,7 @@ Agent online 的截图。该阶段通过只证明五人 Cloud 协作基础，不
 3. 填写：
    - `Project 名称`：`多用户协作设计评审会`；
    - `Project 目标`：复制下方目标文本；
-   - `Coordinator`：选择当前 U0 的 exact Agent；
+   - `Coordinator`：由系统采用当前 U0 Device 的 canonical Agent，只绑定本 Project；
    - `Worker User`：加入 U1–U4 的四个 exact User。
 
 建议目标文本：
@@ -227,14 +216,14 @@ Agent online 的截图。该阶段通过只证明五人 Cloud 协作基础，不
 1) 架构评审，产出 architecture-review.md；
 2) 会议纪要，产出 meeting-minutes.md；
 3) 风险登记，产出 risk-register.md。
-架构评审与会议纪要必须并行。风险任务第一次由 U3 接收并拒绝，再由 U4 的新 execution 完成。
+架构评审与会议纪要必须并行。风险任务广播给 U3 的两台 Device；一台本机忽略，另一台 claim 并完成。
 所有结果由 Coordinator 复审；至少一次 request revision；三个当前结果接受后询问 Project Owner
-是否批准“保持单一 Coordinator、精确 Agent 指派、运行时重新核验 Provider ACL”的最终方案，
+是否批准“保持 Project 级单 Coordinator、Worker User 广播与首 Device claim、运行时重新核验 Provider ACL”的最终方案，
 收到真人回答后才完成 Project。
 ```
 
 4. 选择 `Content required` 或等价文件 Project 模式，并选择三个输入 fixture 的 Content Space
-   references；若界面仍只有手填 Agent revision、且不能选择内容模式/输入文件，记录
+   references；若界面要求手填 Agent revision、且不能选择内容模式/输入文件，记录
    `blocked: project_creation_hci` 并停止。
 5. 点击 `创建 Project`。
 6. 新 Project 必须自动聚焦，初始状态应为 paused/provisioning，而不是伪装 completed。
@@ -256,16 +245,16 @@ Agent online 的截图。该阶段通过只证明五人 Cloud 协作基础，不
    `blocked: plan_task_editor`，不得把一个 Task 当作三个。
 3. 按下面内容编辑三张卡：
 
-| Task | 精确 Agent | 完成标准 |
+| Task | Worker User | 完成标准 |
 | --- | --- | --- |
-| 架构评审 | U1 Agent | 引用三个合成输入；给出至少 3 条结论；输出新 `architecture-review.md` |
-| 会议纪要 | U2 Agent | 包含议题、结论、Owner 待决策项；输出新 `meeting-minutes.md` |
-| 风险登记 | U3 Agent | 至少 3 个风险、触发条件、Owner、恢复动作；输出新 `risk-register.md` |
+| 架构评审 | U1 | 引用三个合成输入；给出至少 3 条结论；输出新 `architecture-review.md` |
+| 会议纪要 | U2 | 包含议题、结论、Owner 待决策项；输出新 `meeting-minutes.md` |
+| 风险登记 | U3 | 至少 3 个风险、触发条件、Owner、恢复动作；输出新 `risk-register.md` |
 
-4. `所需能力标签` 只能填写所选 Agent 在 `Worker 选择 → 能力` 中真实显示的标签子集；
+4. `所需能力标签` 只能填写该 Worker User 至少一个在线 Runtime 真实具备的标签子集；
    不要凭空填写能力。
 5. 点击 `保存 Plan 编辑`。
-6. 复核每张卡的 exact Agent 后，点击 `提交不可变 Plan`。
+6. 复核每张卡的 Worker User 后，点击 `提交不可变 Plan`。
 7. 在默认可见的确认卡中点击 `确认 Plan 并激活 Project`。
 8. U0 记下三项 Task 的投递时间；U1/U2 必须在同一时间窗口进入执行。
 
@@ -274,8 +263,8 @@ Agent online 的截图。该阶段通过只证明五人 Cloud 协作基础，不
 U1：
 
 1. 打开 `协同中心 → 我的任务 → Project 与 Task`。
-2. 找到“架构评审”，核对 Assigned Agent 是自己的 Agent。
-3. 点击 `接受 Task`。
+2. 找到“架构评审”，核对 Worker User 是自己；界面不应提供 Agent 选择。
+3. 点击 `由本设备领取`。
 4. 观察状态依次进入 accepted/in progress/awaiting review；不要另开测试 driver。
 
 U2：
@@ -288,18 +277,14 @@ U2：
 新文件，禁止覆盖输入。两项 execution 的 `in progress` 时间区间至少重叠一次；U0 截图 Task
 队列中同时有两个 active Task。
 
-### 5.5 U3 拒绝，U0 改派 U4
+### 5.5 U3 多 Device 广播与首个 claim
 
-1. U3 打开 `协同中心 → 我的任务 → Project 与 Task`，找到风险任务。
-2. 点击 `拒绝 Task`。
-3. U3 记录旧 execution ID，之后不得再提交任何结果。
-4. U0 在 `协同中心 → 复审 → 等待你处理 / Task` 中打开被拒任务。
-5. 点击 `重新指派`，选择 U4 的 exact Agent，填写未来 30 分钟的 expiry，并确认。
-6. Cloud 必须创建新的 execution ID，旧 execution 显示 fenced/rejected。
-7. U4 在自己的 `协同中心 → 我的任务 → Project 与 Task` 中看到新 offer，点击 `接受 Task` 并完成。
-
-若第 5 步没有 `重新指派` 控件，记录 `blocked: rejected_offer_reassignment_hci`。不要让 U3 改成
-“先完成再返修”并声称 reject 已通过；那是另一条业务路径。
+1. U3 在 Device A 与 Device B 打开 `协同中心 → 我的任务 → Project 与 Task`，两边都应看到同一 `taskOfferId`。
+2. Device A 点击 `仅在本设备忽略`；确认 Cloud Task/Offer 未变，Device B 仍可操作。
+3. Device B 点击 `由本设备领取`。
+4. Cloud 必须只创建一个 Execution，并绑定 U3 User、Device B 及其 canonical Agent；Device A 收到 claimed 终态。
+5. Device B 完成真实 `download → Runtime → upload-new`；任何第二次 claim 都必须失败且不能创建第二个 Execution。
+6. 另建一个未认领测试 Offer：U0 withdraw 后选择 U4 Worker User reassign，确认新 Offer 仍没有 Execution，直到 U4 某台 Device claim。
 
 ### 5.6 U0 复审并制造一次真实返修
 
@@ -311,7 +296,7 @@ U2：
    请补充每项结论对应的验证证据，并把最终建议整理为三条可执行动作。
    ```
 
-4. 在 `精确的下一位 Worker Agent` 选择负责返修的 Agent。
+4. 在 `下一位 Worker User` 选择负责返修的 User。
 5. `新 Offer 到期时间` 填未来时间。macOS 可在 Terminal 生成：
 
    ```bash
@@ -332,7 +317,7 @@ U2：
 
    ```text
    基于三份已接受结果，请在 A/B 中做最终选择并说明一条理由：
-   A. 批准保持单一 Coordinator、精确 Agent 指派及运行时 Provider ACL 重验；
+   A. 批准保持 Project 级单 Coordinator、Worker User 广播/claim 及运行时 Provider ACL 重验；
    B. 暂缓，并指出必须先关闭的一个风险。
    ```
 
@@ -355,7 +340,7 @@ U2：
 | 00:35–00:45 | 协同中心文件连接 | 五人各自 Account connected |
 | 00:45–00:55 | U0 在线人数 Gate | `5/5 members`、`5/5 Agents` |
 | 00:55–01:05 | Project/provisioning/Plan | 三 Task 已投递 |
-| 01:05–01:25 | U1/U2 并行、U3 reject、U4 接替 | 两并行闭环 + 新 execution |
+| 01:05–01:25 | U1/U2 并行、U3-A 本机忽略、U3-B claim | 两并行闭环 + 单一获胜 execution |
 | 01:25–01:40 | U0 复审/返修 | 三个当前结果 accepted |
 | 01:40–01:50 | HumanNeeded/完成 | decision + completed |
 | 01:50–02:00 | 脱敏证据与结论 | receipt 无秘密且状态准确 |
@@ -370,7 +355,7 @@ U2：
 | U1 | manual 策略；Accept Task；Runtime 执行；提交 awaiting review |
 | U2 | automatic 策略；自动进入执行；提交 awaiting review |
 | U3 | Reject Task；旧 execution ID；旧 execution fenced |
-| U4 | 新 offer / 新 execution；Accept Task；风险结果 awaiting review |
+| U3 | 两 Device 同一 offer；A 本机忽略；B 唯一 claim；风险结果 awaiting review |
 
 推荐文件名：
 
@@ -384,7 +369,7 @@ U0-06-project-completed.png
 U1-01-manual-accept.png
 U2-01-automatic-running.png
 U3-01-rejected.png
-U4-01-reassigned-execution.png
+U3-01-multi-device-claim.png
 ```
 
 截图保留在验收 evidence 目录，不提交账号、邮件、credential、Token、Keychain 提示或真实敏感
@@ -403,7 +388,7 @@ U4-01-reassigned-execution.png
 | G6 Project entry | U0 可从 UI 选择当前 Coordinator 及内容输入 | `blocked: project_creation_hci` |
 | G7 File plan | 三个 file Task 可编辑、精确指派并确认 | `blocked: plan_task_editor` |
 | G8 Parallel | U1/U2 execution 时间真实重叠 | `incomplete` |
-| G9 Reject/reassign | U3 reject 后 U0 可选择 U4 新 execution | `blocked: rejected_offer_reassignment_hci` |
+| G9 User Offer/claim | U3-A 本机忽略不改 Cloud；U3-B 是唯一 claim winner | `blocked: user_offer_claim_hci` |
 | G10 Review | 至少一次 accept、一次 request revision | `incomplete` |
 | G11 Human | U0 真人回答唯一 Project HumanNeeded | `incomplete` |
 | G12 Complete | 三个当前结果 accepted，Project completed | `incomplete` |

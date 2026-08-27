@@ -2,7 +2,6 @@ import { z } from 'zod'
 import {
   managedProviderContainerSchema,
   providerLocatorSchema,
-  taskOfferRejectionReasonSchema
 } from '@sciforge/collaboration-contracts'
 
 const idSchema = z.string().trim().min(1).max(256)
@@ -135,8 +134,10 @@ export const collaborationProjectionViewSchema = z.object({
 export const collaborationTaskViewSchema = z.object({
   taskId: idSchema,
   projectId: idSchema,
-  executionId: idSchema,
-  assigneeAgentId: idSchema,
+  taskOfferId: idSchema,
+  workerUserId: idSchema,
+  executionId: idSchema.optional(),
+  assigneeAgentId: idSchema.optional(),
   revision: z.number().int().positive(),
   title: displayTextSchema,
   state: z.enum([
@@ -148,6 +149,9 @@ export const collaborationTaskViewSchema = z.object({
     'submitting',
     'completed',
     'rejected',
+    'dismissed',
+    'claimed-elsewhere',
+    'closed',
     'failed',
     'fenced',
     'manual-recovery'
@@ -339,23 +343,13 @@ export const collaborationWorkerAcceptanceUpdateResultSchema = z.object({
 
 export const collaborationTaskOfferDecisionInputSchema = z.discriminatedUnion('decision', [
   z.object({
-    executionId: idSchema,
+    taskOfferId: idSchema,
     decision: z.literal('accept')
   }).strict(),
   z.object({
-    executionId: idSchema,
-    decision: z.literal('reject'),
-    reason: taskOfferRejectionReasonSchema.extract(['human_rejected', 'other']),
-    safeReasonDetail: z.string().trim().min(1).max(500).optional()
-  }).strict().superRefine((value, context) => {
-    if ((value.reason === 'other') !== Boolean(value.safeReasonDetail)) {
-      context.addIssue({
-        code: 'custom',
-        path: ['safeReasonDetail'],
-        message: 'Only other rejection requires a bounded safe detail.'
-      })
-    }
-  })
+    taskOfferId: idSchema,
+    decision: z.literal('dismiss')
+  }).strict()
 ])
 export const collaborationTaskOfferDecisionResultSchema = z.object({
   accepted: z.literal(true)

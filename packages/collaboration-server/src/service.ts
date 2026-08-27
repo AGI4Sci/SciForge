@@ -4200,7 +4200,7 @@ export class CollaborationService {
   async createTaskOffer(
     actor: AgentActor,
     input: CloudCommand<'task.offer.create'>
-  ): Promise<Readonly<{ task: StoredTask; execution: StoredTaskExecution; offer: StoredTaskOffer }>> {
+  ): Promise<Readonly<{ task: StoredTask; offer: StoredTaskOffer }>> {
     return this.commit(actor, 'task.offer.create', input.idempotencyKey, input, async (tx, at) => {
       const project = required(await tx.getProjectForUpdate(input.projectId), 'Project')
       requireCoordinatorCommand(project, actor, input.expectedProjectRevision, input.expectedCoordinatorAuthorityEpoch)
@@ -4234,75 +4234,24 @@ export class CollaborationService {
       if (totalTasks >= project.budget.maxTasks || roundTasks >= project.budget.maxTasksPerRound) {
         fail('budget_exhausted', 'The Project Task budget is exhausted.')
       }
-      const eligibility = await requireEligibleAssignee({
+      const eligibility = await requireEligibleWorkerUser({
         tx,
         project,
-        assigneeAgentId: input.assigneeAgentId,
-        expectedAvailabilityRevision: input.expectedAvailabilityRevision,
+        workerUserId: input.workerUserId,
         fileIntent: item.fileIntent,
         requiredCapabilityTags: item.requiredCapabilityTags,
         at
       })
-      const assignmentTaskRevision = 1
-      const executionId = newId('exe')
-      const artifacts = deriveAssignmentArtifacts({
-        project,
-        taskId,
-        executionId,
-        assignmentTaskRevision,
-        fileIntent: item.fileIntent,
-        binding: eligibility.binding,
-        at
-      })
-      const execution: StoredTaskExecution = {
-        executionId,
-        taskId,
-        projectId: project.projectId,
-        attempt: 1,
-        offeredByCoordinatorAgentId: actor.agentId,
-        assigneeUserId: eligibility.agent.ownerUserId,
-        assigneeAgentId: eligibility.agent.agentId,
-        assigneeDeviceId: eligibility.agent.deviceId,
-        state: 'offered',
-        stateRevision: 1,
-        fence: {
-          schemaVersion: 1,
-          executionId,
-          assigneeUserId: eligibility.agent.ownerUserId,
-          assigneeAgentId: eligibility.agent.agentId,
-          assigneeDeviceId: eligibility.agent.deviceId,
-          assignmentTaskRevision,
-          projectExecutionAuthorityEpoch: project.executionAuthorityEpoch,
-          userTaskAuthorityEpoch: eligibility.authority.authorityEpoch,
-          bindingRevision: eligibility.binding?.revision ?? null,
-          status: 'open',
-          reason: null,
-          fencedAt: null
-        },
-        fileIntent: artifacts.executionFileIntent,
-        currentResultSubmissionId: null,
-        offeredAt: at,
-        acceptedAt: null,
-        startedAt: null,
-        terminalAt: null,
-        revision: 1,
-        createdAt: at,
-        updatedAt: at
-      }
       const offer: StoredTaskOffer = {
         taskOfferId: newId('ofr'),
-        executionId,
+        executionId: null,
         taskId,
         projectId: project.projectId,
-        assigneeUserId: execution.assigneeUserId,
-        assigneeAgentId: execution.assigneeAgentId,
-        assigneeDeviceId: execution.assigneeDeviceId,
+        workerUserId: input.workerUserId,
         state: 'pending',
         offeredAt: at,
         expiresAt: input.offerExpiresAt,
         respondedAt: null,
-        rejectionReason: null,
-        safeReasonDetail: null,
         revision: 1,
         createdAt: at,
         updatedAt: at
@@ -4315,11 +4264,12 @@ export class CollaborationService {
         objective: item.objective,
         completionCriteria: item.completionCriteria,
         dependencyTaskIds,
+        requiredCapabilityTags: item.requiredCapabilityTags,
         fileIntent: item.fileIntent,
-        currentExecutionId: executionId,
-        currentExecutionState: 'offered',
+        currentExecutionId: null,
+        currentExecutionState: null,
         status: 'offered',
-        executionCount: 1,
+        executionCount: 0,
         maxRetries: project.budget.maxTaskRetries,
         coordinationRound: project.coordinationRound,
         revision: 1,
@@ -4328,23 +4278,24 @@ export class CollaborationService {
         completedAt: null
       }
       await tx.insertTask(task)
-      await tx.insertTaskExecution(execution)
       await tx.insertTaskOffer(offer)
-      if (artifacts.resources.length > 0) await tx.insertCloudResourceRefs(artifacts.resources)
       await tx.updateProject({ ...project, revision: project.revision + 1, updatedAt: at }, project.revision)
-      const message = await this.appendInbox(tx, { kind: 'agent', id: execution.assigneeAgentId }, 'task.offer.created', {
-        protocolVersion: '1.0', type: 'task.offer.created', projectId: project.projectId,
-        taskId, executionId, taskOfferId: offer.taskOfferId,
-        expectedTaskRevision: task.revision, expectedExecutionRevision: execution.revision,
-        expectedOfferRevision: offer.revision
-      }, at)
+      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+      for (const agentId of eligibility.recipientAgentIds) {
+        const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offered', {
+          protocolVersion: '1.0', type: 'task.offered', projectId: project.projectId,
+          taskId, taskOfferId: offer.taskOfferId, workerUserId: offer.workerUserId,
+          currentTaskRevision: task.revision, offerRevision: offer.revision
+        }, at)
+        notifications.push({ recipient: message.recipient, sequence: message.sequence })
+      }
       return {
-        response: { protocolVersion: '1.0', type: 'task.offer.created', task, execution, offer },
+        response: { protocolVersion: '1.0', type: 'task.offer.created', task, offer },
         resourceKind: 'task_offer',
         resourceId: offer.taskOfferId,
-        notifications: [{ recipient: message.recipient, sequence: message.sequence }]
+        notifications
       }
-    }).then(taskOfferBundleResponse)
+    }).then(taskOfferResponse)
   }
 
   async acceptTaskOffer(
@@ -4352,30 +4303,93 @@ export class CollaborationService {
     input: CloudCommand<'task.offer.accept'>
   ): Promise<Readonly<{ task: StoredTask; execution: StoredTaskExecution; offer: StoredTaskOffer }>> {
     return this.commit(actor, 'task.offer.accept', input.idempotencyKey, input, async (tx, at) => {
-      const { project, task, execution, offer } = await requireTaskOfferBundle(tx, input)
-      requireExactAssignee(actor, execution)
-      assertOpenCurrentExecution(project, task, execution)
-      if (offer.state !== 'pending' || offer.expiresAt <= at || execution.state !== 'offered') {
+      const { project, task, offer } = await requireTaskOfferClaim(tx, input)
+      if (offer.workerUserId !== actor.userId) {
+        fail('permission_denied', 'Only an Agent Device owned by the selected Worker User may claim this offer.')
+      }
+      if (offer.state !== 'pending' || offer.expiresAt <= at || task.status !== 'offered' ||
+          task.currentExecutionId !== null) {
         fail('invalid_state_transition', 'The Task offer is no longer pending and current.')
       }
-      await requireCurrentExecutionAuthority(tx, project, execution, at)
-      const updatedOffer: StoredTaskOffer = { ...offer, state: 'accepted', respondedAt: at,
+      const eligibility = await requireEligibleAssignee({
+        tx,
+        project,
+        workerUserId: offer.workerUserId,
+        assigneeAgentId: actor.agentId,
+        fileIntent: task.fileIntent,
+        requiredCapabilityTags: task.requiredCapabilityTags,
+        at
+      })
+      if (eligibility.agent.deviceId !== actor.deviceId) {
+        fail('permission_denied', 'The claim does not come from the authenticated Agent Device.')
+      }
+      const assignmentTaskRevision = task.revision + 1
+      const executionId = newId('exe')
+      const artifacts = deriveAssignmentArtifacts({ project, taskId: task.taskId, executionId,
+        assignmentTaskRevision, fileIntent: task.fileIntent, binding: eligibility.binding, at })
+      const execution: StoredTaskExecution = {
+        executionId,
+        taskId: task.taskId,
+        projectId: project.projectId,
+        attempt: task.executionCount + 1,
+        offeredByCoordinatorAgentId: task.createdByCoordinatorAgentId,
+        assigneeUserId: actor.userId,
+        assigneeAgentId: actor.agentId,
+        assigneeDeviceId: actor.deviceId,
+        state: 'accepted',
+        stateRevision: 1,
+        fence: {
+          schemaVersion: 1,
+          executionId,
+          assigneeUserId: actor.userId,
+          assigneeAgentId: actor.agentId,
+          assigneeDeviceId: actor.deviceId,
+          assignmentTaskRevision,
+          projectExecutionAuthorityEpoch: project.executionAuthorityEpoch,
+          userTaskAuthorityEpoch: eligibility.authority.authorityEpoch,
+          bindingRevision: eligibility.binding?.revision ?? null,
+          status: 'open',
+          reason: null,
+          fencedAt: null
+        },
+        fileIntent: artifacts.executionFileIntent,
+        currentResultSubmissionId: null,
+        offeredAt: offer.offeredAt,
+        acceptedAt: at,
+        startedAt: null,
+        terminalAt: null,
+        revision: 1,
+        createdAt: at,
+        updatedAt: at
+      }
+      const updatedOffer: StoredTaskOffer = { ...offer, executionId, state: 'accepted', respondedAt: at,
         revision: offer.revision + 1, updatedAt: at }
-      const updatedExecution: StoredTaskExecution = { ...execution, state: 'accepted',
-        stateRevision: execution.stateRevision + 1, acceptedAt: at,
-        revision: execution.revision + 1, updatedAt: at }
-      const updatedTask: StoredTask = { ...task, status: 'in_progress', currentExecutionState: 'accepted',
-        revision: task.revision + 1, updatedAt: at }
+      const updatedTask: StoredTask = { ...task, status: 'in_progress', currentExecutionId: executionId,
+        currentExecutionState: 'accepted', executionCount: task.executionCount + 1,
+        revision: assignmentTaskRevision, updatedAt: at }
+      await tx.insertTaskExecution(execution)
+      if (artifacts.resources.length > 0) await tx.insertCloudResourceRefs(artifacts.resources)
       await tx.updateTaskOffer(updatedOffer, offer.revision)
-      await tx.updateTaskExecution(updatedExecution, execution.revision)
       await tx.updateTask(updatedTask, task.revision)
-      const message = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId }, 'task.offer.accepted', {
+      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+      const coordinatorMessage = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId }, 'task.offer.accepted', {
         protocolVersion: '1.0', type: 'task.offer.accepted', projectId: project.projectId,
         taskId: task.taskId, executionId: execution.executionId, taskOfferId: offer.taskOfferId
       }, at)
+      notifications.push({ recipient: coordinatorMessage.recipient, sequence: coordinatorMessage.sequence })
+      const userAgentIds = [...new Set((await tx.listWorkerAvailabilityForUser(offer.workerUserId, at))
+        .map(({ agentId }) => agentId))].sort()
+      for (const agentId of userAgentIds) {
+        const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offer.claimed', {
+          protocolVersion: '1.0', type: 'task.offer.claimed', projectId: project.projectId,
+          taskId: task.taskId, taskOfferId: offer.taskOfferId, executionId,
+          claimedByAgentId: actor.agentId, offerRevision: updatedOffer.revision
+        }, at)
+        notifications.push({ recipient: message.recipient, sequence: message.sequence })
+      }
       return { response: { protocolVersion: '1.0', type: 'task.offer.accepted',
-        task: updatedTask, execution: updatedExecution, offer: updatedOffer }, resourceKind: 'task_offer',
-        resourceId: offer.taskOfferId, notifications: [{ recipient: message.recipient, sequence: message.sequence }] }
+        task: updatedTask, execution, offer: updatedOffer }, resourceKind: 'task_offer',
+        resourceId: offer.taskOfferId, notifications }
     }).then(taskOfferBundleResponse)
   }
 
@@ -4406,13 +4420,11 @@ export class CollaborationService {
         }
         const task = required(await tx.getTaskForUpdate(offer.taskId), 'Task')
         const project = required(await tx.getProjectForUpdate(offer.projectId), 'Project')
-        const execution = required(await tx.getTaskExecutionForUpdate(offer.executionId), 'Task execution')
         if (
-          task.currentExecutionId !== execution.executionId ||
-          execution.taskId !== task.taskId ||
-          execution.projectId !== project.projectId ||
-          execution.state !== 'offered' ||
-          execution.fence.status !== 'open'
+          offer.executionId !== null ||
+          task.currentExecutionId !== null ||
+          task.projectId !== project.projectId ||
+          task.status !== 'offered'
         ) {
           return { response: { transitioned: false } }
         }
@@ -4423,34 +4435,28 @@ export class CollaborationService {
           revision: offer.revision + 1,
           updatedAt: committedAt
         }
-        const updatedExecution = fenceTaskExecution(execution, 'timed_out', 'offer_timed_out', committedAt)
         const updatedTask: StoredTask = {
           ...task,
           status: 'revision_requested',
-          currentExecutionState: 'timed_out',
           revision: task.revision + 1,
           updatedAt: committedAt
         }
         await tx.updateTaskOffer(updatedOffer, offer.revision)
-        await tx.updateTaskExecution(updatedExecution, execution.revision)
         await tx.updateTask(updatedTask, task.revision)
-        if (execution.fileIntent !== null) {
-          await tx.invalidateCloudResourceRefs(task.taskId, execution.executionId, committedAt)
-        }
         const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
-        for (const recipient of [
-          { kind: 'agent' as const, id: project.coordinatorAgentId },
-          { kind: 'agent' as const, id: execution.assigneeAgentId }
-        ]) {
-          const message = await this.appendInbox(tx, recipient, 'task.updated', {
+        const recipientAgentIds = new Set([
+          project.coordinatorAgentId,
+          ...(await tx.listWorkerAvailabilityForUser(offer.workerUserId, committedAt)).map(({ agentId }) => agentId)
+        ])
+        for (const agentId of [...recipientAgentIds].sort()) {
+          const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offer.closed', {
             protocolVersion: '1.0',
-            type: 'task.updated',
+            type: 'task.offer.closed',
             projectId: project.projectId,
             taskId: task.taskId,
-            executionId: execution.executionId,
-            revision: updatedTask.revision,
-            status: 'revision_requested',
-            safeFailureCode: 'offer_timed_out'
+            taskOfferId: offer.taskOfferId,
+            outcome: 'timed_out',
+            offerRevision: updatedOffer.revision
           }, committedAt)
           notifications.push({ recipient: message.recipient, sequence: message.sequence })
         }
@@ -4466,73 +4472,44 @@ export class CollaborationService {
     return expiredCount
   }
 
-  async rejectTaskOffer(
-    actor: AgentActor,
-    input: CloudCommand<'task.offer.reject'>
-  ): Promise<Readonly<{ task: StoredTask; execution: StoredTaskExecution; offer: StoredTaskOffer }>> {
-    return this.commit(actor, 'task.offer.reject', input.idempotencyKey, input, async (tx, at) => {
-      const { project, task, execution, offer } = await requireTaskOfferBundle(tx, input)
-      requireExactAssignee(actor, execution)
-      assertOpenCurrentExecution(project, task, execution)
-      if (offer.state !== 'pending' || execution.state !== 'offered') {
-        fail('invalid_state_transition', 'Only the current pending Task offer may be rejected.')
-      }
-      const updatedOffer: StoredTaskOffer = { ...offer, state: 'rejected', respondedAt: at,
-        rejectionReason: input.reason, safeReasonDetail: input.safeReasonDetail,
-        revision: offer.revision + 1, updatedAt: at }
-      const updatedExecution = fenceTaskExecution(execution, 'rejected', 'offer_rejected', at)
-      const updatedTask: StoredTask = { ...task, status: 'revision_requested', currentExecutionState: 'rejected',
-        revision: task.revision + 1, updatedAt: at }
-      await tx.updateTaskOffer(updatedOffer, offer.revision)
-      await tx.updateTaskExecution(updatedExecution, execution.revision)
-      await tx.updateTask(updatedTask, task.revision)
-      if (execution.fileIntent !== null) await tx.invalidateCloudResourceRefs(task.taskId, execution.executionId, at)
-      const message = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId }, 'task.offer.rejected', {
-        protocolVersion: '1.0', type: 'task.offer.rejected', projectId: project.projectId,
-        taskId: task.taskId, executionId: execution.executionId, taskOfferId: offer.taskOfferId,
-        reason: input.reason
-      }, at)
-      return { response: { protocolVersion: '1.0', type: 'task.offer.rejected',
-        task: updatedTask, execution: updatedExecution, offer: updatedOffer }, resourceKind: 'task_offer',
-        resourceId: offer.taskOfferId, notifications: [{ recipient: message.recipient, sequence: message.sequence }] }
-    }).then(taskOfferBundleResponse)
-  }
-
   async withdrawTaskOffer(
     actor: AgentActor,
     input: CloudCommand<'task.offer.withdraw'>
-  ): Promise<Readonly<{ task: StoredTask; execution: StoredTaskExecution; offer: StoredTaskOffer }>> {
+  ): Promise<Readonly<{ task: StoredTask; offer: StoredTaskOffer }>> {
     return this.commit(actor, 'task.offer.withdraw', input.idempotencyKey, input, async (tx, at) => {
-      const { project, task, execution, offer } = await requireTaskOfferBundle(tx, input)
+      const { project, task, offer } = await requireTaskOfferClaim(tx, input)
       requireCoordinatorCommand(project, actor, project.revision, input.expectedCoordinatorAuthorityEpoch)
-      assertOpenCurrentExecution(project, task, execution)
-      if (offer.state !== 'pending' || execution.state !== 'offered') {
+      if (offer.state !== 'pending' || offer.executionId !== null || task.status !== 'offered' ||
+          task.currentExecutionId !== null) {
         fail('invalid_state_transition', 'Only the current pending Task offer may be withdrawn.')
       }
       const updatedOffer: StoredTaskOffer = { ...offer, state: 'withdrawn', respondedAt: at,
         revision: offer.revision + 1, updatedAt: at }
-      const updatedExecution = fenceTaskExecution(execution, 'cancelled', 'offer_withdrawn', at)
-      const updatedTask: StoredTask = { ...task, status: 'revision_requested', currentExecutionState: 'cancelled',
+      const updatedTask: StoredTask = { ...task, status: 'revision_requested',
         revision: task.revision + 1, updatedAt: at }
       await tx.updateTaskOffer(updatedOffer, offer.revision)
-      await tx.updateTaskExecution(updatedExecution, execution.revision)
       await tx.updateTask(updatedTask, task.revision)
-      if (execution.fileIntent !== null) await tx.invalidateCloudResourceRefs(task.taskId, execution.executionId, at)
-      const message = await this.appendInbox(tx, { kind: 'agent', id: execution.assigneeAgentId }, 'task.offer.withdrawn', {
-        protocolVersion: '1.0', type: 'task.offer.withdrawn', projectId: project.projectId,
-        taskId: task.taskId, executionId: execution.executionId, taskOfferId: offer.taskOfferId,
-        reason: input.reason
-      }, at)
+      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+      const recipientAgentIds = new Set((await tx.listWorkerAvailabilityForUser(offer.workerUserId, at))
+        .map(({ agentId }) => agentId))
+      for (const agentId of [...recipientAgentIds].sort()) {
+        const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offer.closed', {
+          protocolVersion: '1.0', type: 'task.offer.closed', projectId: project.projectId,
+          taskId: task.taskId, taskOfferId: offer.taskOfferId, outcome: 'withdrawn',
+          offerRevision: updatedOffer.revision
+        }, at)
+        notifications.push({ recipient: message.recipient, sequence: message.sequence })
+      }
       return { response: { protocolVersion: '1.0', type: 'task.offer.withdrawn',
-        task: updatedTask, execution: updatedExecution, offer: updatedOffer }, resourceKind: 'task_offer',
-        resourceId: offer.taskOfferId, notifications: [{ recipient: message.recipient, sequence: message.sequence }] }
-    }).then(taskOfferBundleResponse)
+        task: updatedTask, offer: updatedOffer }, resourceKind: 'task_offer',
+        resourceId: offer.taskOfferId, notifications }
+    }).then(taskOfferResponse)
   }
 
   async reassignTaskOffer(
     actor: AgentActor,
     input: CloudCommand<'task.offer.reassign'>
-  ): Promise<Readonly<{ task: StoredTask; execution: StoredTaskExecution; offer: StoredTaskOffer }>> {
+  ): Promise<Readonly<{ task: StoredTask; offer: StoredTaskOffer }>> {
     return this.commit(actor, 'task.offer.reassign', input.idempotencyKey, input, async (tx, at) => {
       const task = required(await tx.getTaskForUpdate(input.taskId), 'Task')
       expectRevision(task.revision, input.expectedTaskRevision)
@@ -4544,19 +4521,39 @@ export class CollaborationService {
         input.expectedCoordinatorAuthorityEpoch
       )
       expectRevision(project.executionAuthorityEpoch, input.expectedExecutionAuthorityEpoch)
-      const previous = required(await tx.getTaskExecutionForUpdate(input.previousExecutionId), 'Previous Task execution')
-      expectRevision(previous.revision, input.expectedExecutionRevision)
-      if (task.currentExecutionId !== previous.executionId || previous.taskId !== task.taskId) {
-        fail('revision_conflict', 'Reassignment must name the exact current Task execution.')
+      const previousOffer = required(
+        await tx.getTaskOfferForUpdate(input.previousTaskOfferId),
+        'Previous Task offer'
+      )
+      expectRevision(previousOffer.revision, input.expectedPreviousOfferRevision)
+      if (previousOffer.taskId !== task.taskId || previousOffer.projectId !== project.projectId) {
+        fail('revision_conflict', 'Reassignment must name the previous offer for this exact Task.')
       }
-      if (
-        task.status !== 'revision_requested' ||
-        previous.fence.status !== 'fenced' ||
-        !(['rejected', 'failed', 'cancelled', 'timed_out', 'revoked'] as const).includes(
-          previous.state as 'rejected' | 'failed' | 'cancelled' | 'timed_out' | 'revoked'
+      if (task.status !== 'revision_requested' || previousOffer.state === 'pending') {
+        fail('invalid_state_transition', 'Reassignment requires a terminal previous Task offer.')
+      }
+      if (previousOffer.executionId === null) {
+        if (task.currentExecutionId !== null || !['withdrawn', 'timed_out'].includes(previousOffer.state)) {
+          fail('revision_conflict', 'An unclaimed previous offer must leave no current execution.')
+        }
+      } else {
+        const previous = required(
+          await tx.getTaskExecutionForUpdate(previousOffer.executionId),
+          'Previous Task execution'
         )
-      ) {
-        fail('invalid_state_transition', 'Reassignment requires a retryable terminal Task execution fact.')
+        if (
+          task.currentExecutionId !== previous.executionId ||
+          previous.taskId !== task.taskId ||
+          previous.fence.status !== 'fenced' ||
+          !(['failed', 'cancelled', 'timed_out', 'revoked'] as const).includes(
+            previous.state as 'failed' | 'cancelled' | 'timed_out' | 'revoked'
+          )
+        ) {
+          fail('invalid_state_transition', 'Reassignment requires a retryable terminal execution.')
+        }
+        if (previous.fileIntent !== null) {
+          await tx.invalidateCloudResourceRefs(task.taskId, previous.executionId, at)
+        }
       }
       if (task.executionCount >= task.maxRetries + 1) fail('budget_exhausted', 'The Task retry budget is exhausted.')
       if (Date.parse(input.offerExpiresAt) <= Date.parse(at)) fail('validation_failed', 'The next Task offer expiry must be in the future.')
@@ -4565,54 +4562,35 @@ export class CollaborationService {
         task,
         input.nextFileIntent
       )
-      const eligibility = await requireEligibleAssignee({ tx, project,
-        assigneeAgentId: input.assigneeAgentId,
-        expectedAvailabilityRevision: input.expectedAvailabilityRevision,
+      const eligibility = await requireEligibleWorkerUser({ tx, project,
+        workerUserId: input.workerUserId,
         fileIntent: nextFileIntent,
-        requiredCapabilityTags: [], at })
-      const assignmentTaskRevision = task.revision + 1
-      const executionId = newId('exe')
-      const artifacts = deriveAssignmentArtifacts({ project, taskId: task.taskId, executionId,
-        assignmentTaskRevision, fileIntent: nextFileIntent, binding: eligibility.binding, at })
-      if (previous.fileIntent !== null) await tx.invalidateCloudResourceRefs(task.taskId, previous.executionId, at)
-      const execution: StoredTaskExecution = {
-        executionId, taskId: task.taskId, projectId: task.projectId, attempt: previous.attempt + 1,
-        offeredByCoordinatorAgentId: actor.agentId,
-        assigneeUserId: eligibility.agent.ownerUserId, assigneeAgentId: eligibility.agent.agentId,
-        assigneeDeviceId: eligibility.agent.deviceId, state: 'offered', stateRevision: 1,
-        fence: { schemaVersion: 1, executionId, assigneeUserId: eligibility.agent.ownerUserId,
-          assigneeAgentId: eligibility.agent.agentId, assigneeDeviceId: eligibility.agent.deviceId,
-          assignmentTaskRevision, projectExecutionAuthorityEpoch: project.executionAuthorityEpoch,
-          userTaskAuthorityEpoch: eligibility.authority.authorityEpoch,
-          bindingRevision: eligibility.binding?.revision ?? null, status: 'open', reason: null, fencedAt: null },
-        fileIntent: artifacts.executionFileIntent, currentResultSubmissionId: null, offeredAt: at,
-        acceptedAt: null, startedAt: null, terminalAt: null, revision: 1, createdAt: at, updatedAt: at
-      }
+        requiredCapabilityTags: task.requiredCapabilityTags, at })
       const offer: StoredTaskOffer = {
-        taskOfferId: newId('ofr'), executionId, taskId: task.taskId, projectId: task.projectId,
-        assigneeUserId: execution.assigneeUserId, assigneeAgentId: execution.assigneeAgentId,
-        assigneeDeviceId: execution.assigneeDeviceId, state: 'pending', offeredAt: at,
-        expiresAt: input.offerExpiresAt, respondedAt: null, rejectionReason: null, safeReasonDetail: null,
+        taskOfferId: newId('ofr'), executionId: null, taskId: task.taskId, projectId: task.projectId,
+        workerUserId: input.workerUserId, state: 'pending', offeredAt: at,
+        expiresAt: input.offerExpiresAt, respondedAt: null,
         revision: 1, createdAt: at, updatedAt: at
       }
-      const updatedTask: StoredTask = { ...task, currentExecutionId: executionId, currentExecutionState: 'offered',
+      const updatedTask: StoredTask = { ...task, currentExecutionId: null, currentExecutionState: null,
         status: 'offered', fileIntent: nextFileIntent,
-        executionCount: task.executionCount + 1, revision: assignmentTaskRevision,
+        revision: task.revision + 1,
         completedAt: null, updatedAt: at }
-      await tx.insertTaskExecution(execution)
       await tx.insertTaskOffer(offer)
-      if (artifacts.resources.length > 0) await tx.insertCloudResourceRefs(artifacts.resources)
       await tx.updateTask(updatedTask, task.revision)
-      const message = await this.appendInbox(tx, { kind: 'agent', id: execution.assigneeAgentId }, 'task.offer.created', {
-        protocolVersion: '1.0', type: 'task.offer.created', projectId: project.projectId,
-        taskId: task.taskId, executionId, taskOfferId: offer.taskOfferId,
-        expectedTaskRevision: updatedTask.revision, expectedExecutionRevision: execution.revision,
-        expectedOfferRevision: offer.revision
-      }, at)
+      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+      for (const agentId of eligibility.recipientAgentIds) {
+        const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offered', {
+          protocolVersion: '1.0', type: 'task.offered', projectId: project.projectId,
+          taskId: task.taskId, taskOfferId: offer.taskOfferId, workerUserId: offer.workerUserId,
+          currentTaskRevision: updatedTask.revision, offerRevision: offer.revision
+        }, at)
+        notifications.push({ recipient: message.recipient, sequence: message.sequence })
+      }
       return { response: { protocolVersion: '1.0', type: 'task.offer.reassigned',
-        task: updatedTask, execution, offer }, resourceKind: 'task_offer', resourceId: offer.taskOfferId,
-        notifications: [{ recipient: message.recipient, sequence: message.sequence }] }
-    }).then(taskOfferBundleResponse)
+        task: updatedTask, offer }, resourceKind: 'task_offer', resourceId: offer.taskOfferId,
+        notifications }
+    }).then(taskOfferResponse)
   }
 
   async startTaskExecution(
@@ -4956,7 +4934,8 @@ export class CollaborationService {
       let updatedExecution: StoredTaskExecution
       let nextOffer: StoredTaskOffer | null = null
       let acceptedProjectRecordId: string | null = null
-      let nextExecutionId: string | null = null
+      let nextTaskOfferId: string | null = null
+      let nextRecipientAgentIds: readonly string[] = []
       if (input.decision === 'accept') {
         const record: StoredProjectRecord = {
           projectRecordId: newId('rec'), projectId: project.projectId, kind: 'observation', status: 'accepted',
@@ -4988,17 +4967,12 @@ export class CollaborationService {
           task,
           input.nextFileIntent
         )
-        const eligibility = await requireEligibleAssignee({ tx, project,
-          assigneeAgentId: input.nextAssigneeAgentId!,
-          expectedAvailabilityRevision: input.expectedNextAssigneeAvailabilityRevision!,
-          fileIntent: nextFileIntent, requiredCapabilityTags: [], at })
+        const eligibility = await requireEligibleWorkerUser({ tx, project,
+          workerUserId: input.nextWorkerUserId!,
+          fileIntent: nextFileIntent, requiredCapabilityTags: task.requiredCapabilityTags, at })
         if (Date.parse(input.nextOfferExpiresAt!) <= Date.parse(at)) {
           fail('validation_failed', 'The revision offer expiry must be in the future.')
         }
-        const assignmentTaskRevision = task.revision + 1
-        nextExecutionId = newId('exe')
-        const artifacts = deriveAssignmentArtifacts({ project, taskId: task.taskId, executionId: nextExecutionId,
-          assignmentTaskRevision, fileIntent: nextFileIntent, binding: eligibility.binding, at })
         updatedExecution = {
           ...execution,
           state: 'superseded',
@@ -5008,32 +4982,19 @@ export class CollaborationService {
           revision: execution.revision + 1,
           updatedAt: at
         }
-        const nextExecution: StoredTaskExecution = {
-          executionId: nextExecutionId, taskId: task.taskId, projectId: task.projectId,
-          attempt: execution.attempt + 1, offeredByCoordinatorAgentId: project.coordinatorAgentId,
-          assigneeUserId: eligibility.agent.ownerUserId, assigneeAgentId: eligibility.agent.agentId,
-          assigneeDeviceId: eligibility.agent.deviceId, state: 'offered', stateRevision: 1,
-          fence: { schemaVersion: 1, executionId: nextExecutionId,
-            assigneeUserId: eligibility.agent.ownerUserId, assigneeAgentId: eligibility.agent.agentId,
-            assigneeDeviceId: eligibility.agent.deviceId, assignmentTaskRevision,
-            projectExecutionAuthorityEpoch: project.executionAuthorityEpoch,
-            userTaskAuthorityEpoch: eligibility.authority.authorityEpoch,
-            bindingRevision: eligibility.binding?.revision ?? null, status: 'open', reason: null, fencedAt: null },
-          fileIntent: artifacts.executionFileIntent, currentResultSubmissionId: null,
-          offeredAt: at, acceptedAt: null, startedAt: null, terminalAt: null,
-          revision: 1, createdAt: at, updatedAt: at
-        }
-        nextOffer = { taskOfferId: newId('ofr'), executionId: nextExecutionId, taskId: task.taskId,
-          projectId: task.projectId, assigneeUserId: nextExecution.assigneeUserId,
-          assigneeAgentId: nextExecution.assigneeAgentId, assigneeDeviceId: nextExecution.assigneeDeviceId,
+        nextTaskOfferId = newId('ofr')
+        nextOffer = { taskOfferId: nextTaskOfferId, executionId: null, taskId: task.taskId,
+          projectId: task.projectId, workerUserId: input.nextWorkerUserId!,
           state: 'pending', offeredAt: at, expiresAt: input.nextOfferExpiresAt!, respondedAt: null,
-          rejectionReason: null, safeReasonDetail: null, revision: 1, createdAt: at, updatedAt: at }
-        updatedTask = { ...task, status: 'offered', currentExecutionId: nextExecutionId,
-          currentExecutionState: 'offered', executionCount: task.executionCount + 1,
-          fileIntent: nextFileIntent, revision: assignmentTaskRevision, updatedAt: at }
-        await tx.insertTaskExecution(nextExecution)
+          revision: 1, createdAt: at, updatedAt: at }
+        updatedTask = { ...task, status: 'offered', currentExecutionId: null,
+          currentExecutionState: null, fileIntent: nextFileIntent,
+          revision: task.revision + 1, updatedAt: at }
         await tx.insertTaskOffer(nextOffer)
-        if (artifacts.resources.length > 0) await tx.insertCloudResourceRefs(artifacts.resources)
+        nextRecipientAgentIds = eligibility.recipientAgentIds
+        if (execution.fileIntent !== null) {
+          await tx.invalidateCloudResourceRefs(task.taskId, execution.executionId, at)
+        }
       }
       const review: StoredTaskResultReview = {
         reviewDecisionId,
@@ -5048,7 +5009,7 @@ export class CollaborationService {
         decision: input.decision,
         instruction: input.instruction,
         acceptedProjectRecordId,
-        nextExecutionId,
+        nextTaskOfferId,
         decidedAt: at,
         revision: 1,
         createdAt: at,
@@ -5058,17 +5019,28 @@ export class CollaborationService {
       await tx.updateTaskExecution(updatedExecution, execution.revision)
       await tx.updateTask(updatedTask, task.revision)
       await tx.updateProject({ ...project, revision: project.revision + 1, updatedAt: at }, project.revision)
-      const recipient = nextOffer === null ? submission.submittedByAgentId : nextOffer.assigneeAgentId
-      const message = await this.appendInbox(tx, { kind: 'agent', id: recipient }, 'task.result.reviewed', {
-        protocolVersion: '1.0', type: 'task.result.reviewed', projectId: project.projectId,
+      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+      const reviewMessage = await this.appendInbox(tx, { kind: 'agent', id: submission.submittedByAgentId }, 'task.updated', {
+        protocolVersion: '1.0', type: 'task.updated', projectId: project.projectId,
         taskId: task.taskId, executionId: execution.executionId,
-        resultSubmissionId: submission.resultSubmissionId, reviewDecisionId,
-        decision: input.decision, nextExecutionId
+        revision: updatedTask.revision, status: updatedTask.status
       }, at)
+      notifications.push({ recipient: reviewMessage.recipient, sequence: reviewMessage.sequence })
+      if (nextOffer !== null) {
+        for (const agentId of nextRecipientAgentIds) {
+          const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offered', {
+            protocolVersion: '1.0', type: 'task.offered', projectId: project.projectId,
+            taskId: task.taskId, taskOfferId: nextOffer.taskOfferId,
+            workerUserId: nextOffer.workerUserId, currentTaskRevision: updatedTask.revision,
+            offerRevision: nextOffer.revision
+          }, at)
+          notifications.push({ recipient: message.recipient, sequence: message.sequence })
+        }
+      }
       return { response: { protocolVersion: '1.0', type: 'task.result.reviewed',
         task: updatedTask, execution: updatedExecution, review, offer: nextOffer },
         resourceKind: 'task_review_decision', resourceId: reviewDecisionId,
-        notifications: [{ recipient: message.recipient, sequence: message.sequence }] }
+        notifications }
     }).then((response) => ({
       task: response.task as StoredTask,
       execution: response.execution as StoredTaskExecution,
@@ -6428,11 +6400,93 @@ function taskIdForPlanItem(projectPlanId: string, planItemId: string): string {
   return `tsk_${stableDigest({ projectPlanId, planItemId }).slice(0, 32)}`
 }
 
+async function requireEligibleWorkerUser(input: Readonly<{
+  tx: CollaborationTransaction
+  project: StoredProject
+  workerUserId: string
+  fileIntent: TaskFileIntent | null
+  requiredCapabilityTags: readonly string[]
+  at: string
+}>): Promise<Readonly<{
+  authority: StoredTaskAuthority
+  binding: StoredProjectContentSpaceBinding | null
+  recipientAgentIds: readonly string[]
+}>> {
+  if (input.project.status !== 'active') fail('invalid_state_transition', 'The Project is not active.')
+  const user = required(await input.tx.getUserForUpdate(input.workerUserId), 'Worker User')
+  const membership = required(
+    await input.tx.getProjectMemberForUpdate(input.project.projectId, input.workerUserId),
+    'Worker Project Membership'
+  )
+  const scope = input.fileIntent === null ? 'text_tasks' as const : 'file_tasks' as const
+  const authority = required(
+    await input.tx.getTaskAuthorityForUpdate(input.project.projectId, input.workerUserId, scope),
+    'Worker Task authority'
+  )
+  if (user.status !== 'active' || membership.state !== 'active' || authority.state !== 'eligible') {
+    fail('permission_denied', 'The selected Worker User, Membership and Task authority are not eligible.')
+  }
+  let binding: StoredProjectContentSpaceBinding | null = null
+  if (input.fileIntent !== null) {
+    if (input.project.contentMode !== 'required') {
+      fail('permission_denied', 'A content-free Project cannot create a file Task.')
+    }
+    binding = required(
+      await input.tx.getProjectContentSpaceBindingForUpdate(input.project.projectId),
+      'Project Content binding'
+    )
+    const readiness = required(
+      await input.tx.getProjectContentReadinessForUpdate(input.project.projectId, input.workerUserId),
+      'Worker Content readiness'
+    )
+    if (
+      binding.status !== 'active' ||
+      binding.rootLocator === null ||
+      binding.rootLocatorDigest === null ||
+      binding.revision !== input.fileIntent.bindingRevision ||
+      readiness.state !== 'ready' ||
+      readiness.bindingRevision !== binding.revision ||
+      readiness.providerPrincipalFactId === null ||
+      readiness.snapshottedFactRevision === null
+    ) {
+      fail('permission_denied', 'The Worker User Content snapshot and active binding are not ready.')
+    }
+    const currentFact = await input.tx.getProviderDirectoryPrincipalFactForSlotForUpdate(
+      input.workerUserId,
+      readiness.providerInstance
+    )
+    if (
+      currentFact?.providerPrincipalFactId !== readiness.providerPrincipalFactId ||
+      currentFact.revision !== readiness.snapshottedFactRevision ||
+      currentFact.readiness !== 'ready'
+    ) {
+      fail('revision_conflict', 'The Worker Provider principal fact no longer matches the Project snapshot.')
+    }
+  }
+  const recipientAgentIds = (await input.tx.listWorkerAvailabilityForUser(input.workerUserId, input.at))
+    .filter((availability) => (
+      availability.userId === input.workerUserId &&
+      availability.agentActive &&
+      availability.deviceActive &&
+      availability.connectionStatus === 'online' &&
+      availability.runtimeReadiness === 'ready' &&
+      availability.acceptsNewOffers &&
+      availability.expiresAt > input.at &&
+      input.requiredCapabilityTags.every((tag) => availability.runtimeCapabilityTags.includes(tag))
+    ))
+    .map(({ agentId }) => agentId)
+    .sort()
+  if (recipientAgentIds.length === 0) {
+    fail('permission_denied', 'The selected Worker User has no online eligible Runtime for this Task.')
+  }
+  return { authority, binding, recipientAgentIds }
+}
+
 async function requireEligibleAssignee(input: Readonly<{
   tx: CollaborationTransaction
   project: StoredProject
+  workerUserId: string
   assigneeAgentId: string
-  expectedAvailabilityRevision: number
   fileIntent: TaskFileIntent | null
   requiredCapabilityTags: readonly string[]
   at: string
@@ -6442,79 +6496,33 @@ async function requireEligibleAssignee(input: Readonly<{
   authority: StoredTaskAuthority
   binding: StoredProjectContentSpaceBinding | null
 }>> {
-  if (input.project.status !== 'active') fail('invalid_state_transition', 'The Project is not active.')
+  const userEligibility = await requireEligibleWorkerUser(input)
   const availability = required(
     await input.tx.getWorkerAvailabilityForUpdate(input.assigneeAgentId),
     'Worker availability'
   )
-  expectRevision(availability.revision, input.expectedAvailabilityRevision)
   const agent = required(await input.tx.getAgentForUpdate(input.assigneeAgentId), 'Assignee Agent')
   const device = required(await input.tx.getDeviceForUpdate(agent.deviceId), 'Assignee Device')
-  const membership = required(
-    await input.tx.getProjectMemberForUpdate(input.project.projectId, agent.ownerUserId),
-    'Assignee Project Membership'
-  )
-  const scope = input.fileIntent === null ? 'text_tasks' as const : 'file_tasks' as const
-  const authority = required(
-    await input.tx.getTaskAuthorityForUpdate(input.project.projectId, agent.ownerUserId, scope),
-    'Assignee Task authority'
-  )
   if (
+    agent.ownerUserId !== input.workerUserId ||
     agent.status !== 'active' ||
     device.status !== 'active' ||
-    device.userId !== agent.ownerUserId ||
-    availability.userId !== agent.ownerUserId ||
+    device.userId !== input.workerUserId ||
+    availability.userId !== input.workerUserId ||
     availability.deviceId !== agent.deviceId ||
     !availability.agentActive ||
     !availability.deviceActive ||
     availability.connectionStatus !== 'online' ||
     availability.runtimeReadiness !== 'ready' ||
     !availability.acceptsNewOffers ||
-    availability.expiresAt <= input.at ||
-    membership.state !== 'active' ||
-    authority.state !== 'eligible'
+    availability.expiresAt <= input.at
   ) {
-    fail('permission_denied', 'The exact Worker Agent, Device, Membership and Task authority are not eligible.')
+    fail('permission_denied', 'The claiming Worker Agent and Device are not eligible.')
   }
   if (input.requiredCapabilityTags.some((tag) => !availability.runtimeCapabilityTags.includes(tag))) {
-    fail('permission_denied', 'The selected Worker Runtime lacks a required plan capability.')
+    fail('permission_denied', 'The claiming Worker Runtime lacks a required Task capability.')
   }
-  if (input.fileIntent === null) return { agent, availability, authority, binding: null }
-  if (input.project.contentMode !== 'required') {
-    fail('permission_denied', 'A content-free Project cannot create a file Task.')
-  }
-  const binding = required(
-    await input.tx.getProjectContentSpaceBindingForUpdate(input.project.projectId),
-    'Project Content binding'
-  )
-  const readiness = required(
-    await input.tx.getProjectContentReadinessForUpdate(input.project.projectId, agent.ownerUserId),
-    'Worker Content readiness'
-  )
-  if (
-    binding.status !== 'active' ||
-    binding.rootLocator === null ||
-    binding.rootLocatorDigest === null ||
-    binding.revision !== input.fileIntent.bindingRevision ||
-    readiness.state !== 'ready' ||
-    readiness.bindingRevision !== binding.revision ||
-    readiness.providerPrincipalFactId === null ||
-    readiness.snapshottedFactRevision === null
-  ) {
-    fail('permission_denied', 'The exact Worker Content snapshot and active binding are not ready.')
-  }
-  const currentFact = await input.tx.getProviderDirectoryPrincipalFactForSlotForUpdate(
-    agent.ownerUserId,
-    readiness.providerInstance
-  )
-  if (
-    currentFact?.providerPrincipalFactId !== readiness.providerPrincipalFactId ||
-    currentFact.revision !== readiness.snapshottedFactRevision ||
-    currentFact.readiness !== 'ready'
-  ) {
-    fail('revision_conflict', 'The Worker Provider principal fact no longer matches the Project snapshot.')
-  }
-  return { agent, availability, authority, binding }
+  return { agent, availability, authority: userEligibility.authority, binding: userEligibility.binding }
 }
 
 function deriveAssignmentArtifacts(input: Readonly<{
@@ -6628,38 +6636,31 @@ async function requireNewlyNamedSuccessorFileIntent(
   return nextFileIntent
 }
 
-async function requireTaskOfferBundle(
+async function requireTaskOfferClaim(
   tx: CollaborationTransaction,
   input: Readonly<{
     taskOfferId: string
     taskId: string
-    executionId: string
     expectedTaskRevision: number
-    expectedExecutionRevision: number
     expectedOfferRevision: number
   }>
 ): Promise<Readonly<{
   project: StoredProject
   task: StoredTask
-  execution: StoredTaskExecution
   offer: StoredTaskOffer
 }>> {
   const task = required(await tx.getTaskForUpdate(input.taskId), 'Task')
   expectRevision(task.revision, input.expectedTaskRevision)
-  const execution = required(await tx.getTaskExecutionForUpdate(input.executionId), 'Task execution')
-  expectRevision(execution.revision, input.expectedExecutionRevision)
   const offer = required(await tx.getTaskOfferForUpdate(input.taskOfferId), 'Task offer')
   expectRevision(offer.revision, input.expectedOfferRevision)
   const project = required(await tx.getProjectForUpdate(task.projectId), 'Project')
   if (
-    execution.taskId !== task.taskId ||
     offer.taskId !== task.taskId ||
-    offer.executionId !== execution.executionId ||
     offer.projectId !== project.projectId
   ) {
-    fail('validation_failed', 'Task, execution and offer identities do not form one assignment attempt.')
+    fail('validation_failed', 'Task and User-targeted offer identities do not form one assignment.')
   }
-  return { project, task, execution, offer }
+  return { project, task, offer }
 }
 
 function requireExactAssignee(actor: AgentActor, execution: StoredTaskExecution): void {
@@ -6738,6 +6739,13 @@ function taskOfferBundleResponse(response: Record<string, unknown>): Readonly<{
 }> {
   return { task: response.task as StoredTask, execution: response.execution as StoredTaskExecution,
     offer: response.offer as StoredTaskOffer }
+}
+
+function taskOfferResponse(response: Record<string, unknown>): Readonly<{
+  task: StoredTask
+  offer: StoredTaskOffer
+}> {
+  return { task: response.task as StoredTask, offer: response.offer as StoredTaskOffer }
 }
 
 function taskExecutionBundleResponse(response: Record<string, unknown>): Readonly<{

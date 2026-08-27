@@ -410,7 +410,7 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
         },
         assignments: content.tasks.map(({ planItemId }) => ({
           planItemId,
-          selectedAgentId: null,
+          workerUserId: null,
           recommendationReason: null
         })),
         createdAt: timestamp,
@@ -430,15 +430,15 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
         throw new Error('Plan draft revision conflict.')
       }
       const project = await readProject(input.projectId)
-      const projectMemberAgentIds = new Set(project.workerGroups.flatMap((group) => (
-        group.agents
-          .filter(({ projectAvailability }) => projectAvailability.membership?.state === 'active')
-          .map(({ projectAvailability }) => projectAvailability.agentId)
-      )))
-      if (input.assignments.some(({ selectedAgentId }) => (
-        selectedAgentId !== null && !projectMemberAgentIds.has(selectedAgentId)
+      const projectMemberUserIds = new Set(project.workerGroups
+        .filter((group) => group.agents.some(({ projectAvailability }) => (
+          projectAvailability.membership?.state === 'active'
+        )))
+        .map(({ userId }) => userId))
+      if (input.assignments.some(({ workerUserId }) => (
+        workerUserId !== null && !projectMemberUserIds.has(workerUserId)
       ))) {
-        throw new Error('A Plan assignment must select an exact Agent of an active Project member.')
+        throw new Error('A Plan assignment must select an active Project member User.')
       }
       const next = projectCoordinatorPlanDraftSchema.parse({
         ...current,
@@ -457,8 +457,8 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       if (draft.draftRevision !== input.expectedDraftRevision) {
         throw new Error('Plan draft revision conflict.')
       }
-      if (draft.assignments.some(({ selectedAgentId }) => selectedAgentId === null)) {
-        throw new Error('Every Plan item requires an exact Worker Agent before submit.')
+      if (draft.assignments.some(({ workerUserId }) => workerUserId === null)) {
+        throw new Error('Every Plan item requires a Worker User before submit.')
       }
       if (!options.coordinatorCloudCommands) {
         throw new Error('Coordinator Agent Cloud command mediation is unavailable.')
@@ -597,7 +597,7 @@ initialWorkspace: ProjectCoordinatorWorkspace): Promise<ProjectCoordinatorWorksp
     assignments.length !== confirmedPlan.tasks.length ||
     confirmedPlan.tasks.some(({ planItemId }) => !assignmentByItem.has(planItemId))
   ) {
-    throw new Error('Confirmed Plan Task dispatch requires its exact durable Agent assignments.')
+    throw new Error('Confirmed Plan Task dispatch requires its durable Worker User assignments.')
   }
 
   let workspace = initialWorkspace
@@ -615,33 +615,29 @@ initialWorkspace: ProjectCoordinatorWorkspace): Promise<ProjectCoordinatorWorksp
       throw new Error('Initial Task dispatch lost the exact active Project and confirmed Plan.')
     }
     const assignment = assignmentByItem.get(item.planItemId)
-    if (!assignment?.selectedAgentId) {
-      throw new Error('Every initial Plan item requires an exact Worker Agent assignment.')
+    if (!assignment?.workerUserId) {
+      throw new Error('Every initial Plan item requires a Worker User assignment.')
     }
-    const candidate = project.workerGroups.flatMap(({ agents }) => agents).find(({ projectAvailability }) => (
-      projectAvailability.agentId === assignment.selectedAgentId
-    ))
-    if (!candidate) throw new Error('The selected Worker Agent is no longer visible in Cloud.')
-    const view = candidate.projectAvailability
-    const availability = view.availability
+    const workerGroup = project.workerGroups.find(({ userId }) => userId === assignment.workerUserId)
+    if (!workerGroup) throw new Error('The selected Worker User is no longer visible in Cloud.')
     const requiredScope = item.fileIntent ? 'file_tasks' : 'text_tasks'
-    if (
-      view.membership?.state !== 'active' ||
-      !view.taskAuthorities?.some(({ scope, state }) => (
-        scope === requiredScope && state === 'eligible'
-      )) ||
-      !availability.agentActive ||
-      !availability.deviceActive ||
-      availability.connectionStatus !== 'online' ||
-      availability.runtimeReadiness !== 'ready' ||
-      !availability.acceptsNewOffers ||
-      Date.parse(availability.expiresAt) <= Date.parse(view.observedAt) ||
-      item.requiredCapabilityTags.some((tag) => (
-        !availability.runtimeCapabilityTags.includes(tag)
-      )) ||
-      (item.fileIntent !== null && view.contentReadiness?.state !== 'ready')
-    ) {
-      throw new Error('The selected Worker Agent is not currently eligible for this initial Task.')
+    const hasEligibleRuntime = workerGroup.agents.some(({ projectAvailability: view }) => {
+      const availability = view.availability
+      return view.membership?.state === 'active' &&
+        Boolean(view.taskAuthorities?.some(({ scope, state }) => (
+          scope === requiredScope && state === 'eligible'
+        ))) &&
+        availability.agentActive &&
+        availability.deviceActive &&
+        availability.connectionStatus === 'online' &&
+        availability.runtimeReadiness === 'ready' &&
+        availability.acceptsNewOffers &&
+        Date.parse(availability.expiresAt) > Date.parse(view.observedAt) &&
+        item.requiredCapabilityTags.every((tag) => availability.runtimeCapabilityTags.includes(tag)) &&
+        (item.fileIntent === null || view.contentReadiness?.state === 'ready')
+    })
+    if (!hasEligibleRuntime) {
+      throw new Error('The selected Worker User has no currently eligible Runtime for this initial Task.')
     }
     const offerExpiresAt = new Date(options.now().getTime() + 15 * 60_000).toISOString()
     const response = await options.coordinatorCloudCommands.execute({
@@ -662,8 +658,7 @@ initialWorkspace: ProjectCoordinatorWorkspace): Promise<ProjectCoordinatorWorksp
       projectPlanId: confirmedPlan.projectPlanId,
       expectedPlanRevision: project.plan.plan.revision,
       planItemId: item.planItemId,
-      assigneeAgentId: assignment.selectedAgentId,
-      expectedAvailabilityRevision: availability.revision,
+      workerUserId: assignment.workerUserId,
       offerExpiresAt
     })
     if (response.type === 'rest.error') {
@@ -673,40 +668,33 @@ initialWorkspace: ProjectCoordinatorWorkspace): Promise<ProjectCoordinatorWorksp
       throw new Error(`Initial Task offer returned ${response.type}.`)
     }
     const tasks = response.items.filter((entity): entity is Task => entity.type === 'task')
-    const executions = response.items.filter((entity): entity is TaskExecution => (
-      entity.type === 'task_execution'
-    ))
     const offers = response.items.filter((entity): entity is TaskOffer => entity.type === 'task_offer')
     const task = tasks[0]
-    const execution = executions[0]
     const offer = offers[0]
     if (
-      response.items.length !== 3 ||
+      response.items.length !== 2 ||
       tasks.length !== 1 ||
-      executions.length !== 1 ||
       offers.length !== 1 ||
-      !task || !execution || !offer ||
+      !task || !offer ||
       task.projectId !== project.project.projectId ||
       task.createdByCoordinatorAgentId !== project.project.coordinatorAgentId ||
       task.title !== item.title ||
       task.objective !== item.objective ||
       stableDigest(task.completionCriteria) !== stableDigest(item.completionCriteria) ||
       task.dependencyTaskIds.length !== 0 ||
+      stableDigest(task.requiredCapabilityTags) !== stableDigest(item.requiredCapabilityTags) ||
       stableDigest(task.fileIntent) !== stableDigest(item.fileIntent) ||
-      execution.projectId !== task.projectId ||
-      execution.taskId !== task.taskId ||
-      execution.offeredByCoordinatorAgentId !== project.project.coordinatorAgentId ||
-      execution.assigneeAgentId !== assignment.selectedAgentId ||
-      execution.assigneeDeviceId !== availability.deviceId ||
+      task.currentExecutionId !== null ||
+      task.currentExecutionState !== null ||
+      task.status !== 'offered' ||
       offer.projectId !== task.projectId ||
       offer.taskId !== task.taskId ||
-      offer.executionId !== execution.executionId ||
-      offer.assigneeAgentId !== assignment.selectedAgentId ||
-      offer.assigneeDeviceId !== availability.deviceId ||
+      offer.executionId !== null ||
+      offer.workerUserId !== assignment.workerUserId ||
       offer.state !== 'pending' ||
       offer.expiresAt !== offerExpiresAt
     ) {
-      throw new Error('Initial Task offer did not return the exact selected Agent assignment.')
+      throw new Error('Initial Task offer did not return the selected Worker User assignment.')
     }
     offeredTaskIds.add(task.taskId)
   }
@@ -1193,6 +1181,7 @@ function projectCoordinatorProjectView(
   }
   const plan = currentPlans[0]
   const executions = factItems<TaskExecution>(snapshot, 'executions')
+  const offers = factItems<TaskOffer>(snapshot, 'offers')
   const submissions = factItems<TaskResultSubmission>(snapshot, 'result_submissions')
   const decisions = factItems<TaskReviewDecision>(snapshot, 'review_decisions')
   const intents = factItems<ProjectCoordinatorProject['provisioning']['intent']>(
@@ -1217,6 +1206,7 @@ function projectCoordinatorProjectView(
         task,
         executions: executions.filter((execution) => execution.taskId === task.taskId)
       })),
+    offers,
     reviews: submissions.map((submission) => ({
       submission,
       decision: decisions.find(({ resultSubmissionId }) => (

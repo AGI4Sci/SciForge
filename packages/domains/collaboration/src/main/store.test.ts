@@ -33,6 +33,7 @@ test('restart recovery only rewinds safely replayable local and outbox work', as
     projects: [],
     tasks: [],
     taskRuns: [],
+    pendingTaskOffers: [],
     workerAcceptancePolicies: [],
     queue: [{
       queueItemId: 'lqi_Queue00000001',

@@ -262,7 +262,7 @@ describe.skipIf(connectionString === undefined).sequential(
       }
     })
 
-    it('atomically commits Task/Execution/Offer, Inbox, receipt, and journal across Server restart', async () => {
+    it('atomically claims a User-targeted offer and replays the exact execution across Server restart', async () => {
       assertSafeStage3Database(connectionString!)
       const at = '2026-08-26T04:00:00.000Z'
       const expiresAt = '2026-08-26T05:00:00.000Z'
@@ -270,21 +270,17 @@ describe.skipIf(connectionString === undefined).sequential(
       await installRoute(pool, 'fresh-v4')
       await runCollaborationMigrations(pool)
       const repository = new PostgresCollaborationRepository(pool)
-      await seedRecoveryOffer(pool, repository, at, expiresAt)
+      await seedUserOffer(pool, repository, at, expiresAt)
 
       const command = {
         protocolVersion: '1.0' as const,
-        type: 'task.offer.reject' as const,
-        requestId: 'req_stage3_pg_reject',
-        idempotencyKey: 'idem_stage3_pg_reject',
+        type: 'task.offer.accept' as const,
+        requestId: 'req_stage3_pg_accept',
+        idempotencyKey: 'idem_stage3_pg_accept',
         taskOfferId: IDS.offer,
         taskId: IDS.task,
-        executionId: IDS.execution,
         expectedTaskRevision: 2,
-        expectedExecutionRevision: 1,
-        expectedOfferRevision: 1,
-        reason: 'human_rejected' as const,
-        safeReasonDetail: null
+        expectedOfferRevision: 1
       }
       const worker: AgentActor = {
         kind: 'agent_device',
@@ -311,25 +307,27 @@ describe.skipIf(connectionString === undefined).sequential(
         repository: failAtReceipt(repository),
         now: () => new Date(at)
       })
-      await expect(failing.rejectTaskOffer(worker, command))
+      await expect(failing.acceptTaskOffer(worker, command))
         .rejects.toThrow(/stage3_injected_before_receipt/u)
 
       expect(await offerState(repository)).toEqual({
-        task: ['offered', 2], execution: ['offered', 1], offer: ['pending', 1]
+        task: ['offered', 2], execution: [undefined, undefined], offer: ['pending', 1]
       })
       expect(await repository.pullInbox({ kind: 'agent', id: IDS.coordinator }, 0, 20, at)).toEqual([])
       expect(await repository.getReceipt(worker.actorKey, command.idempotencyKey)).toBeNull()
-      expect((await repository.getExternalOperationJournalById(IDS.journal))?.state)
-        .toBe('outcome_unknown')
 
       const service = new CollaborationService({ repository, now: () => new Date(at) })
-      const committed = await service.rejectTaskOffer(worker, command)
+      const committed = await service.acceptTaskOffer(worker, command)
       const committedInbox = await repository.pullInbox(
         { kind: 'agent', id: IDS.coordinator }, 0, 20, at
       )
       const committedReceipt = await repository.getReceipt(worker.actorKey, command.idempotencyKey)
       expect(committedInbox).toHaveLength(1)
-      expect(committedReceipt?.operation).toBe('task.offer.reject')
+      expect(committedInbox[0]?.payload).toMatchObject({
+        type: 'task.offer.accepted',
+        executionId: committed.execution.executionId
+      })
+      expect(committedReceipt?.operation).toBe('task.offer.accept')
       const ackCommand = {
         inboxMessageId: committedInbox[0]!.messageId,
         sequence: committedInbox[0]!.sequence,
@@ -356,7 +354,7 @@ describe.skipIf(connectionString === undefined).sequential(
         taskOfferExpiryIntervalMs: 300_000
       })
       await runtime.start()
-      const replayed = await runtime.service.rejectTaskOffer(worker, command)
+      const replayed = await runtime.service.acceptTaskOffer(worker, command)
       expect(replayed).toEqual(committed)
       expect(await runtime.service.ackInboxMessage(coordinator, ackCommand)).toEqual(committedAck)
       await runtime.stop()
@@ -365,10 +363,13 @@ describe.skipIf(connectionString === undefined).sequential(
       const recovered = new PostgresCollaborationRepository(verificationPool)
       try {
         expect(await offerState(recovered)).toEqual({
-          task: ['revision_requested', 3], execution: ['rejected', 2], offer: ['rejected', 2]
+          task: ['in_progress', 3], execution: ['accepted', 1], offer: ['accepted', 2]
         })
-        expect((await recovered.getTaskExecution(IDS.execution))?.fence).toMatchObject({
-          status: 'fenced', reason: 'offer_rejected'
+        expect(await recovered.getTaskExecution(committed.execution.executionId)).toMatchObject({
+          assigneeUserId: IDS.workerUser,
+          assigneeAgentId: IDS.workerAgent,
+          assigneeDeviceId: IDS.workerDevice,
+          fence: { status: 'open', reason: null }
         })
         const recoveredInbox = await recovered.pullInbox(
           { kind: 'agent', id: IDS.coordinator }, 0, 20, at
@@ -382,16 +383,10 @@ describe.skipIf(connectionString === undefined).sequential(
           ackedSequence: committedInbox[0]!.sequence,
           nextSequence: committedInbox[0]!.sequence + 1
         })
-        expect(await recovered.getExternalOperationJournalById(IDS.journal)).toMatchObject({
-          logicalInvocationId: 'stage3-provider-write-001',
-          state: 'outcome_unknown',
-          revision: 1
-        })
         const counts = await verificationPool.query<{
           inbox_count: unknown
           receipt_count: unknown
           ack_receipt_count: unknown
-          journal_count: unknown
         }>(
           `SELECT
              (SELECT count(*) FROM sciforge_collaboration.inbox_messages
@@ -399,14 +394,12 @@ describe.skipIf(connectionString === undefined).sequential(
              (SELECT count(*) FROM sciforge_collaboration.receipts
                WHERE actor_key=$2 AND idempotency_key=$3) AS receipt_count,
              (SELECT count(*) FROM sciforge_collaboration.receipts
-               WHERE actor_key=$5 AND idempotency_key=$6) AS ack_receipt_count,
-             (SELECT count(*) FROM sciforge_collaboration.external_operation_journal
-               WHERE content_recovery_journal_entry_id=$4) AS journal_count`,
-          [IDS.coordinator, worker.actorKey, command.idempotencyKey, IDS.journal,
+               WHERE actor_key=$4 AND idempotency_key=$5) AS ack_receipt_count`,
+          [IDS.coordinator, worker.actorKey, command.idempotencyKey,
             coordinator.actorKey, ackCommand.idempotencyKey]
         )
         expect(counts.rows[0]).toEqual({
-          inbox_count: '1', receipt_count: '1', ack_receipt_count: '1', journal_count: '1'
+          inbox_count: '1', receipt_count: '1', ack_receipt_count: '1'
         })
       } finally {
         await recovered.close()
@@ -424,7 +417,8 @@ const ROUTES: readonly CollaborationSchemaRoute[] = [
   'current-v12',
   'current-v13',
   'current-v14',
-  'current-v15'
+  'current-v15',
+  'current-v16'
 ]
 
 const BASELINE_MIGRATIONS = [
@@ -439,7 +433,8 @@ const FORWARD_MIGRATIONS = [
   '0012_oidc_only_endpoint_agent_authority.sql',
   '0013_full_multi_user_loop.sql',
   '0014_pre_provider_provisioning_binding.sql',
-  '0015_canonical_project_created_inbox.sql'
+  '0015_canonical_project_created_inbox.sql',
+  '0016_user_targeted_task_offers.sql'
 ] as const
 
 const HISTORICAL_MIGRATIONS = [
@@ -463,9 +458,7 @@ const IDS = {
   workerAgent: 'agn_Stage3PgWorker1',
   project: 'prj_Stage3PgProject1',
   task: 'tsk_Stage3PgTask001',
-  execution: 'exe_Stage3PgExec001',
-  offer: 'tof_Stage3PgOffer01',
-  journal: 'crj_Stage3PgJournal1'
+  offer: 'tof_Stage3PgOffer01'
 } as const
 
 async function installRoute(pool: SqlPool, route: CollaborationSchemaRoute): Promise<void> {
@@ -485,7 +478,8 @@ async function installRoute(pool: SqlPool, route: CollaborationSchemaRoute): Pro
     'current-v12': 2,
     'current-v13': 3,
     'current-v14': 4,
-    'current-v15': 5
+    'current-v15': 5,
+    'current-v16': 6
   }[route]
   for (const name of FORWARD_MIGRATIONS.slice(0, forwardCount)) {
     await pool.query(await migrationSource(name))
@@ -709,7 +703,7 @@ async function seedLegacyContentBinding(pool: SqlPool): Promise<void> {
   )
 }
 
-async function seedRecoveryOffer(
+async function seedUserOffer(
   pool: SqlPool,
   repository: PostgresCollaborationRepository,
   at: string,
@@ -773,14 +767,46 @@ async function seedRecoveryOffer(
       membership('pmr_Stage3PgOwner01', IDS.ownerUser, at),
       membership('pmr_Stage3PgWorker1', IDS.workerUser, at)
     ])
+    await tx.upsertWorkerAvailability({
+      agentId: IDS.workerAgent,
+      userId: IDS.workerUser,
+      deviceId: IDS.workerDevice,
+      agentActive: true,
+      deviceActive: true,
+      connectionStatus: 'online',
+      lastHeartbeatAt: at,
+      runtimeReadiness: 'ready',
+      runtimeCapabilityTags: ['task.execute'],
+      acceptsNewOffers: true,
+      activeTaskCount: 0,
+      observedAt: at,
+      expiresAt,
+      revision: 1,
+      createdAt: at,
+      updatedAt: at
+    }, null)
+    await tx.upsertTaskAuthority({
+      taskAuthorityId: 'tau_Stage3PgWorker1',
+      projectId: IDS.project,
+      userId: IDS.workerUser,
+      scope: 'text_tasks',
+      state: 'eligible',
+      authorityEpoch: 1,
+      reason: null,
+      effectiveAt: at,
+      revision: 1,
+      createdAt: at,
+      updatedAt: at
+    }, null)
     await tx.insertTask({
       taskId: IDS.task,
       projectId: IDS.project,
       createdByCoordinatorAgentId: IDS.coordinator,
       title: 'Stage 3 durable offer',
-      objective: 'Reject atomically and recover after restart',
+      objective: 'Claim atomically and recover after restart',
       completionCriteria: ['Coordinator observes one durable fact'],
       dependencyTaskIds: [],
+      requiredCapabilityTags: ['task.execute'],
       fileIntent: null,
       currentExecutionId: null,
       currentExecutionState: null,
@@ -793,55 +819,16 @@ async function seedRecoveryOffer(
       updatedAt: at,
       completedAt: null
     })
-    await tx.insertTaskExecution({
-      executionId: IDS.execution,
-      taskId: IDS.task,
-      projectId: IDS.project,
-      attempt: 1,
-      offeredByCoordinatorAgentId: IDS.coordinator,
-      assigneeUserId: IDS.workerUser,
-      assigneeAgentId: IDS.workerAgent,
-      assigneeDeviceId: IDS.workerDevice,
-      state: 'offered',
-      stateRevision: 1,
-      fence: {
-        schemaVersion: 1,
-        executionId: IDS.execution,
-        assigneeUserId: IDS.workerUser,
-        assigneeAgentId: IDS.workerAgent,
-        assigneeDeviceId: IDS.workerDevice,
-        assignmentTaskRevision: 2,
-        projectExecutionAuthorityEpoch: 1,
-        userTaskAuthorityEpoch: 1,
-        bindingRevision: null,
-        status: 'open',
-        reason: null,
-        fencedAt: null
-      },
-      fileIntent: null,
-      currentResultSubmissionId: null,
-      offeredAt: at,
-      acceptedAt: null,
-      startedAt: null,
-      terminalAt: null,
-      revision: 1,
-      createdAt: at,
-      updatedAt: at
-    })
     await tx.insertTaskOffer({
       taskOfferId: IDS.offer,
-      executionId: IDS.execution,
+      executionId: null,
       taskId: IDS.task,
       projectId: IDS.project,
-      assigneeUserId: IDS.workerUser,
-      assigneeAgentId: IDS.workerAgent,
-      assigneeDeviceId: IDS.workerDevice,
+      workerUserId: IDS.workerUser,
       state: 'pending',
       offeredAt: at,
       expiresAt,
       respondedAt: null,
-      rejectionReason: null,
-      safeReasonDetail: null,
       revision: 1,
       createdAt: at,
       updatedAt: at
@@ -851,14 +838,15 @@ async function seedRecoveryOffer(
       projectId: IDS.project,
       createdByCoordinatorAgentId: IDS.coordinator,
       title: 'Stage 3 durable offer',
-      objective: 'Reject atomically and recover after restart',
+      objective: 'Claim atomically and recover after restart',
       completionCriteria: ['Coordinator observes one durable fact'],
       dependencyTaskIds: [],
+      requiredCapabilityTags: ['task.execute'],
       fileIntent: null,
-      currentExecutionId: IDS.execution,
-      currentExecutionState: 'offered',
+      currentExecutionId: null,
+      currentExecutionState: null,
       status: 'offered',
-      executionCount: 1,
+      executionCount: 0,
       maxRetries: 2,
       coordinationRound: 1,
       revision: 2,
@@ -866,30 +854,6 @@ async function seedRecoveryOffer(
       updatedAt: at,
       completedAt: null
     }, 1)
-    await tx.insertExternalOperationJournal({
-      contentRecoveryJournalEntryId: IDS.journal,
-      scope: 'task_content_transfer',
-      logicalInvocationId: 'stage3-provider-write-001',
-      projectId: IDS.project,
-      taskId: IDS.task,
-      preparedTaskRevision: 2,
-      provisioningIntentId: null,
-      provisioningRevision: null,
-      executionId: IDS.execution,
-      preparedExecutionRevision: 1,
-      operation: 'upload_new',
-      requestDigest: '5'.repeat(64),
-      state: 'outcome_unknown',
-      observationDigest: null,
-      receiptDigest: null,
-      safeFailureCode: 'provider_outcome_unknown',
-      preparedAt: at,
-      dispatchedAt: at,
-      resolvedAt: null,
-      revision: 1,
-      createdAt: at,
-      updatedAt: at
-    })
   })
 }
 
@@ -937,7 +901,9 @@ async function offerState(repository: CollaborationRepository): Promise<Readonly
   offer: readonly [string | undefined, number | undefined]
 }>> {
   const task = await repository.getTask(IDS.task)
-  const execution = await repository.getTaskExecution(IDS.execution)
+  const execution = task?.currentExecutionId
+    ? await repository.getTaskExecution(task.currentExecutionId)
+    : null
   const offer = await repository.getTaskOffer(IDS.offer)
   return {
     task: [task?.status, task?.revision],

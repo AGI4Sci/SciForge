@@ -33,6 +33,7 @@ import {
   projectWorkerAvailabilityViewSchema,
   workerAvailabilityProjectionSchema,
   taskExecutionSchema,
+  taskOfferSchema,
   taskFileDestinationNameSchema,
   taskResultOutputSchema,
   taskResultReviewFactsSchema,
@@ -100,14 +101,14 @@ export const projectCoordinatorConnectionSchema = z.discriminatedUnion('state', 
 /** UI-only assignment projection; the Plan and Agent facts remain canonical Cloud records. */
 export const projectCoordinatorPlanAssignmentSchema = z.object({
   planItemId: projectPlanTaskSchema.shape.planItemId,
-  selectedAgentId: agentIdSchema.nullable(),
+  workerUserId: userIdSchema.nullable(),
   recommendationReason: safeReasonSchema.nullable()
 }).strict().superRefine((assignment, context) => {
-  if ((assignment.selectedAgentId === null) !== (assignment.recommendationReason === null)) {
+  if ((assignment.workerUserId === null) !== (assignment.recommendationReason === null)) {
     context.addIssue({
       code: 'custom',
       path: ['recommendationReason'],
-      message: 'A selected exact Agent and its recommendation reason must be projected together.'
+      message: 'A selected Worker User and its recommendation reason must be projected together.'
     })
   }
 }).readonly()
@@ -256,7 +257,7 @@ export const projectCoordinatorContentRecoveryAbandonInputSchema = z.object({
 export const projectCoordinatorContentRecoveryRetrySuccessorInputSchema = z.object({
   projectId: projectIdSchema,
   recoveryActionId: visibleRecoveryActionSchema.shape.recoveryActionId,
-  assigneeAgentId: agentIdSchema,
+  workerUserId: userIdSchema,
   nextOutputFileName: taskFileDestinationNameSchema,
   offerExpiresAt: timestampSchema
 }).strict().readonly()
@@ -434,7 +435,7 @@ export const projectCoordinatorAvailableWorkerGroupSchema = z.object({
   })
 }).readonly()
 
-/** User is the grouping key; availability and selection remain exact Agent facts. */
+/** User is the selection key; nested Agent facts are internal dispatch-readiness evidence. */
 export const projectCoordinatorWorkerGroupSchema = z.object({
   userId: userIdSchema,
   displayName: displayNameSchema,
@@ -519,6 +520,7 @@ export const projectCoordinatorProjectSchema = z.object({
   plan: projectCoordinatorPlanViewSchema.nullable(),
   workerGroups: z.array(projectCoordinatorWorkerGroupSchema).max(1_000),
   tasks: z.array(projectCoordinatorTaskViewSchema).max(10_000),
+  offers: z.array(taskOfferSchema).max(10_000),
   reviews: z.array(projectCoordinatorReviewViewSchema).max(10_000),
   pendingHumanNeeded: z.array(humanNeededSchema).max(10_000),
   records: z.array(projectRecordSchema).max(10_000),
@@ -556,13 +558,13 @@ export const projectCoordinatorProjectSchema = z.object({
       message: 'Each Agent must occur in exactly one User group.'
     })
   }
-  const candidateIds = new Set(agentIds)
+  const candidateUserIds = new Set(userIds)
   view.plan?.assignments.forEach((assignment, index) => {
-    if (assignment.selectedAgentId === null || candidateIds.has(assignment.selectedAgentId)) return
+    if (assignment.workerUserId === null || candidateUserIds.has(assignment.workerUserId)) return
     context.addIssue({
       code: 'custom',
-      path: ['plan', 'assignments', index, 'selectedAgentId'],
-      message: 'A selected Worker must reference an exact Agent in the User-grouped candidate projection.'
+      path: ['plan', 'assignments', index, 'workerUserId'],
+      message: 'A selected Worker must reference one User in the grouped candidate projection.'
     })
   })
   view.workerGroups.forEach((group, index) => {
@@ -578,6 +580,14 @@ export const projectCoordinatorProjectSchema = z.object({
   view.tasks.forEach((task, index) => {
     if (task.task.projectId === projectId) return
     context.addIssue({ code: 'custom', path: ['tasks', index], message: 'Task must belong to this Project.' })
+  })
+  view.offers.forEach((offer, index) => {
+    if (offer.projectId === projectId && view.tasks.some(({ task }) => task.taskId === offer.taskId)) return
+    context.addIssue({
+      code: 'custom',
+      path: ['offers', index],
+      message: 'Every Task offer must belong to a visible Task in this Project.'
+    })
   })
   view.reviews.forEach((review, index) => {
     if (review.submission.projectId === projectId) return

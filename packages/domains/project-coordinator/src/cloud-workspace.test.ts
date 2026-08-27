@@ -255,7 +255,7 @@ test('OIDC Project create rejects a Cloud response that changes the exact creato
   }
 })
 
-test('Cloud-global online Workers stay visible outside current Project membership with exact Agent choice', async () => {
+test('Cloud-global online Worker Users stay visible outside current Project membership with grouped Agent evidence', async () => {
   const project = projectFixture('prj_ProjectCreated01', 'Created meeting')
   const responses = [
     response(200, {

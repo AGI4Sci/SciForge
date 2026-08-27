@@ -99,8 +99,8 @@ sequenceDiagram
 
 ## 7. 多人 Project
 
-Project 用 `memberUserIds` 表达成员，用 `coordinatorAgentId` 和 Task `assigneeAgentId` 表达执行节点。
-每个 Project 同时只有一个 active Coordinator。
+Project 用 `memberUserIds` 表达成员，用 `coordinatorAgentId` 表达当前 Project Coordinator。Task Offer 指向 `workerUserId`；Cloud 向该 User 的合格 Agent/Device Runtime 广播，并在首次原子 claim 后才为 Task Execution 记录 `assigneeAgentId` 与 Device。
+每个 Project 同时只有一个 active Coordinator；Coordinator/Worker 是 Project/Task 关系，不是账号类型。
 
 正式协作是星形结构：
 

@@ -1,6 +1,6 @@
 ## Purpose
 
-定义动态 SciForge User 与精确 Agent 围绕一个 Cloud-authoritative Project 完成计划、接单、执行、真人升级、复审、改派和恢复的单 Coordinator、多 Worker 协作合同。
+定义动态 SciForge User 与其 Agent/Device Runtime 围绕一个 Cloud-authoritative Project 完成计划、User 级派发、设备领取、执行、真人升级、复审、改派和恢复的单 Coordinator、多 Worker 协作合同。
 
 ## ADDED Requirements
 
@@ -16,15 +16,15 @@
 - **AND** 该身份 SHALL 仅建立此 Project 的 Coordinator 关系，不得把 User、Device 或 Agent 标记为账号级 Coordinator
 - **AND** Cloud Device ID SHALL 与 Host installation/execution node ID 保持不同语义，不得通过令二者相等来建立绑定。
 
-### Requirement: Worker 由 Coordinator HCI 选择精确 Agent
+### Requirement: Worker 由 Coordinator HCI 选择 User
 
-Coordinator HCI SHALL 从 Cloud-global online Worker directory 按 User 分组展示 active、online、Runtime-ready Agent；创建 Project 时 Human SHALL 选择 Worker Member User，在 Plan 中 SHALL 为每个 Task 选择精确 `assigneeAgentId`。候选 SHALL NOT 限于当前 Project Member 或当前 OIDC User 的 `participant.get` self-Agent 列表。User 和 Worker 集合 SHALL 是动态的；Cloud SHALL NOT 固定角色账号、验收 fixture 用户或每 User 只有一个 Agent。
+Coordinator HCI SHALL 从 Cloud-global online Worker directory 中聚合 Worker User；在 Plan 中 Human SHALL 为每个 Task 选择精确 `workerUserId`，不得选择 Agent 或 Device。候选 SHALL NOT 限于当前 Project Member 或当前 OIDC User 的 `participant.get` self-Agent 列表。User 和 Worker 集合 SHALL 是动态的；Cloud SHALL NOT 固定角色账号、验收 fixture 用户或每 User 只有一个 Agent。Agent/Device 明细 MAY 作为当前可派发证据展示，但 SHALL NOT 下发为 Plan 或 Offer 的选择值。
 
 #### Scenario: 一个 User 有两台可用 Desktop
 
-- **WHEN** Coordinator 展开该 User 的 Worker 候选
-- **THEN** HCI SHALL 分别显示两个 Agent/Device 的状态
-- **AND** Task offer SHALL 只投递到 Human 选中的 `assigneeAgentId`。
+- **WHEN** Coordinator 选择该 User 为 Worker
+- **THEN** HCI MAY 显示两个 Agent/Device 的当前状态，但 SHALL 只提交该 `workerUserId`
+- **AND** Cloud SHALL 向该 User 所有满足 Task capability/authority/readiness 的在线 Agent/Device Runtime 广播同一个 User-level Task Offer。
 
 ### Requirement: Worker Availability Projection 只描述当前事实
 
@@ -33,7 +33,7 @@ Cloud SHALL 为 Coordinator 提供包含 Agent/Device active 状态、online/off
 #### Scenario: Projection 显示 Worker 可用但本机状态已变化
 
 - **WHEN** offer 到达时 Worker 的 Runtime、Provider 或本地接单门禁已不可用
-- **THEN** Worker SHALL 拒绝或保持未接受并返回有界原因
+- **THEN** 该 Device SHALL 保持未领取或在本地忽略，并记录有界原因
 - **AND** Cloud SHALL NOT 因旧 projection 强制其执行。
 
 #### Scenario: Coordinator 查看 Cloud 全局在线候选
@@ -46,23 +46,29 @@ Cloud SHALL 为 Coordinator 提供包含 Agent/Device active 状态、online/off
 
 ### Requirement: 接单策略是每 Agent Device 的本地持久策略
 
-每个 Agent Device SHALL 本地持久化 `manual` 或 `automatic` Task acceptance policy。Cloud Task 合同 SHALL NOT 包含 `acceptancePolicy`，策略 SHALL NOT 跨 Device 同步。自动接单仍 SHALL 在本机检查 Device、Runtime、Task capability、并发、Project membership 和内容 readiness 后明确发送 accept；手动模式 SHALL 要求 Human accept 或 reject 并可附有界原因。
+每个 Agent Device SHALL 本地持久化 `manual` 或 `automatic` Task acceptance policy。Cloud Task 合同 SHALL NOT 包含 `acceptancePolicy`，策略 SHALL NOT 跨 Device 同步。自动接单仍 SHALL 在本机检查 Device、Runtime、Task capability、并发、Project membership 和内容 readiness 后明确发送 claim；手动模式 SHALL 要求 Human 选择 claim 或 local dismiss。local dismiss 只影响当前 Device，不得产生 Cloud User-level reject。
 
 #### Scenario: 同一 User 的两个 Agent 使用不同策略
 
 - **WHEN** Agent A 配置为 manual 且 Agent B 配置为 automatic
 - **THEN** 两个本地策略 SHALL 独立持久化和生效
-- **AND** Cloud SHALL 只记录各 offer 的接受或拒绝事实，不记录策略来源。
+- **AND** Cloud SHALL 只记录首个成功 claim 及其确定的 Agent/Device Execution，不记录策略来源或其他 Device 的本地忽略。
 
-### Requirement: 每次分派产生新的 fenced execution
+### Requirement: User Offer 领取时才产生 fenced execution
 
-Task SHALL 以 offer 开始，并允许目标 Agent accept、reject 或在超时/撤回后被重新分派。每次有效分派 SHALL 创建新的唯一 `executionId`；Cloud SHALL 将旧 execution fence 为不可写，并通过 expected revision、idempotency key 和 assignee identity 拒绝其 ACK、progress、HumanNeeded、result、record 或文件引用。
+Task SHALL 以指向 `workerUserId` 的 pending Offer 开始，此时 SHALL NOT 存在预选的 Agent/Device 或 `executionId`。该 User 的合格 Agent/Device 可使用 compare-and-set 领取；首个成功 claim SHALL 在同一事务中创建唯一 `executionId`、绑定认证的 Worker User/Device/Agent 并关闭其他 Device 的 Offer 视图。Offer 可超时、被 Coordinator 撤回或改派到另一 Worker User；Cloud SHALL NOT 提供 User-level reject 命令。Cloud SHALL 将旧 execution fence 为不可写，并通过 expected revision、idempotency key 和 assignee identity 拒绝其 ACK、progress、HumanNeeded、result、record 或文件引用。
 
-#### Scenario: Worker 拒绝后改派
+#### Scenario: Coordinator 撤回后改派
 
-- **WHEN** 第一个 Agent 拒绝 Task 且 Coordinator 选择替代 Agent
-- **THEN** Cloud SHALL 创建新 `executionId` 并向替代 Agent 投递新 offer
-- **AND** 第一个 Agent 对旧 execution 的任何迟到提交 SHALL 被确定性拒绝。
+- **WHEN** pending User Offer 未被领取，Coordinator 撤回并选择替代 Worker User
+- **THEN** Cloud SHALL 关闭旧 Offer，且不得为它伪造 execution
+- **AND** Cloud SHALL 创建指向替代 User 的新 Offer，并仅在后者被合格 Device 领取时创建 execution。
+
+#### Scenario: 同一 User 的两台 Device 竞态领取
+
+- **WHEN** 两台合格 Device 同时对同一 Offer 提交 claim
+- **THEN** Cloud SHALL 仅允许一个 compare-and-set 成功，并只创建一个 Execution
+- **AND** 败者 SHALL 收到已被其他 Device 领取的确定事实，不得执行 Task。
 
 #### Scenario: 重复 offer 或 ACK
 
@@ -92,9 +98,9 @@ Coordinator 的 Project plan 与 Worker 的 Task transformation SHALL 通过 run
 #### Scenario: Owner 确认 Plan 后派发初始 Task
 
 - **WHEN** Owner 确认 Plan 且 Project 激活
-- **THEN** Coordinator main SHALL 为每个无依赖的初始 Plan item 创建一个指向所选精确 Agent 的 Task offer
-- **AND** 每次写入前 SHALL 重新读取该 Agent 的 active Device、online/ready、接单状态、Task Authority、capability、content readiness 与 availability revision
-- **AND** 任一事实过期或不合格 SHALL fail closed，而不得使用 Plan 编辑时缓存的 revision。
+- **THEN** Coordinator main SHALL 为每个无依赖的初始 Plan item 创建一个指向所选 Worker User 的 Task Offer
+- **AND** Cloud SHALL 在创建 Offer 时确认该 User 至少有一个当前合格运行时，并将 Task 的 required capability tags 作为权威事实保存
+- **AND** 每台 Device SHALL 在 claim 事务中重验当前 User/Device/Agent authority、online/ready、接单状态、Task capability 与 content readiness；任一事实过期或不合格 SHALL fail closed。
 
 ### Requirement: HumanNeeded 使用统一 scope 合同且权威回答者是 Project Owner
 

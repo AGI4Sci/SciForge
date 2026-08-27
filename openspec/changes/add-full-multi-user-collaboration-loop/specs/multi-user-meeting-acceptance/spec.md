@@ -46,7 +46,7 @@ Run-0 验收 SHALL 使用 U0 Project Owner、U0 所有的精确 Coordinator Agen
 
 ### Requirement: 会议脚本产生三项真实协作产物
 
-验收 Project SHALL 命名为“多用户协作设计评审会”。U0 Coordinator Agent SHALL 读取真实合成 agenda/requirements 文件，通过真实 AgentRuntime 生成由 Human 确认或编辑的 plan，并并行派发生成 `architecture-review.md`、`meeting-minutes.md`、`risk-register.md` 的三个最终 Task。U1 SHALL 手动接单，U2 SHALL 自动接单，U3 SHALL 拒绝且 U4 SHALL 接替；所有 Worker SHALL 真实下载输入、调用本机 Runtime/模型、上传结果。
+验收 Project SHALL 命名为“多用户协作设计评审会”。U0 Coordinator Agent SHALL 读取真实合成 agenda/requirements 文件，通过真实 AgentRuntime 生成由 Human 确认或编辑的 plan，并并行派发生成 `architecture-review.md`、`meeting-minutes.md`、`risk-register.md` 的三个最终 Task。U1 SHALL 从其 Device 手动 claim，U2 SHALL 由其 Device 自动 claim，U3 的 Device SHALL 执行 local dismiss 且 Cloud Offer 仍保持 pending，随后 U0 SHALL withdraw 并改派给 U4 由其 Device claim；所有实际领取的 Worker SHALL 真实下载输入、调用本机 Runtime/模型、上传结果。
 
 #### Scenario: 三个输出完成初稿
 

@@ -50,6 +50,7 @@ import { RemoteApprovalCoordinator } from './remote-approval-coordinator.js'
 import {
   CollaborationLocalStore,
   FileCollaborationStateBackend,
+  type CollaborationPendingTaskOffer,
   type CollaborationLocalProjection,
   type CollaborationTaskRun,
   type CollaborationStateBackend
@@ -69,6 +70,8 @@ export type CollaborationRuntimeOptions = Readonly<{
 
 export function isWorkerTaskInboxPayload(payload: AgentInboxMessage['payload']): boolean {
   return payload.type === 'task.offered' ||
+    payload.type === 'task.offer.claimed' ||
+    payload.type === 'task.offer.closed' ||
     payload.type === 'task.recovery.output_linked' ||
     payload.type === 'task.recovery.abandoned' ||
     payload.type === 'task.cancelled' ||
@@ -357,9 +360,18 @@ export class CollaborationRuntime {
       state: mapProjectState(project.status),
       revision: project.revision,
       coordinatorAgentId: project.coordinatorAgentId,
-      tasks: state.taskRuns
-        .filter((run) => run.offer.projectId === project.projectId)
-        .map((run) => mapTaskView(run, this.requireTasks().acceptanceMode(run.offer.recipientAgentId)))
+      tasks: [
+        ...state.pendingTaskOffers
+          .filter((offer) => offer.projectId === project.projectId)
+          .map((offer) => mapPendingTaskOfferView(
+            offer,
+            this.requireTasks().acceptanceMode(offer.recipientAgentId),
+            state.tasks.find((task) => task.taskId === offer.taskId)
+          )),
+        ...state.taskRuns
+          .filter((run) => run.offer.projectId === project.projectId)
+          .map((run) => mapTaskView(run, this.requireTasks().acceptanceMode(run.offer.recipientAgentId)))
+      ]
     }))
     return {
       revision: state.revision,
@@ -720,9 +732,19 @@ export class CollaborationRuntime {
 
   listTasks(input: CollaborationTaskListInput): readonly CollaborationTaskView[] {
     const states = new Set(input.states ?? [])
-    return this.store.snapshot().taskRuns
-      .filter((run) => !input.projectId || run.offer.projectId === input.projectId)
-      .map((run) => mapTaskView(run, this.requireTasks().acceptanceMode(run.offer.recipientAgentId)))
+    const snapshot = this.store.snapshot()
+    return [
+      ...snapshot.pendingTaskOffers
+        .filter((offer) => !input.projectId || offer.projectId === input.projectId)
+        .map((offer) => mapPendingTaskOfferView(
+          offer,
+          this.requireTasks().acceptanceMode(offer.recipientAgentId),
+          snapshot.tasks.find((task) => task.taskId === offer.taskId)
+        )),
+      ...snapshot.taskRuns
+        .filter((run) => !input.projectId || run.offer.projectId === input.projectId)
+        .map((run) => mapTaskView(run, this.requireTasks().acceptanceMode(run.offer.recipientAgentId)))
+    ]
       .filter((task) => states.size === 0 || states.has(task.state))
   }
 
@@ -739,14 +761,10 @@ export class CollaborationRuntime {
 
   async decideTaskOffer(input: CollaborationTaskOfferDecisionInput): Promise<void> {
     await this.requireTasks().decideOffer(
-      input.executionId,
+      input.taskOfferId,
       input.decision === 'accept'
         ? { decision: 'accept' }
-        : {
-            decision: 'reject',
-            reason: input.reason,
-            ...(input.safeReasonDetail ? { safeReasonDetail: input.safeReasonDetail } : {})
-          }
+        : { decision: 'dismiss' }
     )
   }
 
@@ -1028,20 +1046,55 @@ function mapTaskView(
   acceptanceMode: 'manual' | 'automatic'
 ): CollaborationTaskView {
   const latestTurn = [...run.agentJournal].reverse().find((entry) => entry.turnId)?.turnId
+  if (!run.execution) {
+    throw new Error('A claimed local Task run is missing its immutable Worker execution.')
+  }
   return {
     taskId: run.offer.taskId,
     projectId: run.offer.projectId,
+    taskOfferId: run.offer.taskOfferId,
+    workerUserId: run.execution.assigneeUserId,
     executionId: run.offer.executionId,
     assigneeAgentId: run.offer.recipientAgentId,
     revision: run.task?.revision ?? run.expectedTaskRevision,
     title: run.task?.title ?? 'Pending Task offer',
     state: run.state,
     acceptanceMode,
-    decisionRequired: run.state === 'awaiting-manual',
+    decisionRequired: false,
     preflightReasons: run.latestPreflight?.reasons ?? [],
     ...(latestTurn ? { localTurnId: latestTurn } : {}),
     updatedAt: run.updatedAt,
     ...(run.error ? { error: run.error } : {})
+  }
+}
+
+function mapPendingTaskOfferView(
+  offer: CollaborationPendingTaskOffer,
+  acceptanceMode: 'manual' | 'automatic',
+  task?: Task
+): CollaborationTaskView {
+  const state = offer.state === 'pending'
+    ? 'offered' as const
+    : offer.state === 'claiming'
+      ? 'accepting' as const
+      : offer.state === 'claimed_elsewhere'
+        ? 'claimed-elsewhere' as const
+        : offer.state === 'dismissed'
+          ? 'dismissed' as const
+          : offer.state
+  return {
+    taskId: offer.taskId,
+    projectId: offer.projectId,
+    taskOfferId: offer.taskOfferId,
+    workerUserId: offer.workerUserId,
+    revision: task?.revision ?? offer.currentTaskRevision,
+    title: task?.title ?? 'Pending Task offer',
+    state,
+    acceptanceMode,
+    decisionRequired: offer.state === 'awaiting-manual',
+    preflightReasons: [],
+    updatedAt: offer.updatedAt,
+    ...(offer.error ? { error: offer.error } : {})
   }
 }
 

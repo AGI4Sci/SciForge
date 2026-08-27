@@ -146,7 +146,7 @@ test('Coordinator accepts or requests revision through the exact immutable resul
         decision: command.decision,
         instruction: command.instruction,
         acceptedProjectRecordId: command.decision === 'accept' ? TEST_IDS.projectRecordId : null,
-        nextExecutionId: command.decision === 'request_revision' ? 'exe_NextRevision001' : null,
+        nextTaskOfferId: command.decision === 'request_revision' ? 'ofr_NextRevision001' : null,
         decidedAt: TEST_TIMESTAMP,
         revision: 1,
         createdAt: TEST_TIMESTAMP,
@@ -189,8 +189,7 @@ test('Coordinator accepts or requests revision through the exact immutable resul
     ...common,
     decision: 'accept',
     instruction: null,
-    nextAssigneeAgentId: null,
-    expectedNextAssigneeAvailabilityRevision: null,
+    nextWorkerUserId: null,
     nextOfferExpiresAt: null,
     nextFileIntent: null
   }, 'idem_ResultAccept0001')
@@ -198,8 +197,7 @@ test('Coordinator accepts or requests revision through the exact immutable resul
     ...common,
     decision: 'request_revision',
     instruction: 'Re-run with the Owner-confirmed cost assumptions.',
-    nextAssigneeAgentId: TEST_IDS.secondAgentId,
-    expectedNextAssigneeAvailabilityRevision: 7,
+    nextWorkerUserId: TEST_IDS.secondUserId,
     nextOfferExpiresAt: TEST_LATER_TIMESTAMP,
     nextFileIntent: null
   }, 'idem_ResultRevision01')
@@ -213,20 +211,17 @@ test('Coordinator accepts or requests revision through the exact immutable resul
       ? {
           decision: command.decision,
           instruction: command.instruction,
-          nextAssigneeAgentId: command.nextAssigneeAgentId,
-          availabilityRevision: command.expectedNextAssigneeAvailabilityRevision
+          nextWorkerUserId: command.nextWorkerUserId
         }
       : null
   )), [{
     decision: 'accept',
     instruction: null,
-    nextAssigneeAgentId: null,
-    availabilityRevision: null
+    nextWorkerUserId: null
   }, {
     decision: 'request_revision',
     instruction: 'Re-run with the Owner-confirmed cost assumptions.',
-    nextAssigneeAgentId: TEST_IDS.secondAgentId,
-    availabilityRevision: 7
+    nextWorkerUserId: TEST_IDS.secondUserId
   }])
 })
 
@@ -456,6 +451,7 @@ function workspaceFixture(
       plan: null,
       workerGroups: [],
       tasks: [],
+      offers: [],
       reviews: [],
       pendingHumanNeeded: [],
       records: facts.records ?? [],

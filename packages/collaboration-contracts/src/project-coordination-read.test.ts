@@ -338,7 +338,7 @@ describe('Project Coordinator authoritative read protocol', () => {
       assigneeUserId: TEST_IDS.secondUserId,
       assigneeAgentId: TEST_IDS.secondAgentId,
       assigneeDeviceId: workerDeviceId,
-      state: 'offered',
+      state: 'accepted',
       stateRevision: 1,
       fence: {
         schemaVersion: 1,
@@ -357,7 +357,7 @@ describe('Project Coordinator authoritative read protocol', () => {
       fileIntent: null,
       currentResultSubmissionId: null,
       offeredAt: TEST_TIMESTAMP,
-      acceptedAt: null,
+      acceptedAt: TEST_TIMESTAMP,
       startedAt: null,
       terminalAt: null,
       revision: 1,
@@ -371,18 +371,21 @@ describe('Project Coordinator authoritative read protocol', () => {
       projectId: TEST_IDS.projectId,
       taskId: TEST_IDS.taskId,
       executionId: TEST_IDS.executionId,
-      assigneeUserId: TEST_IDS.secondUserId,
-      assigneeAgentId: TEST_IDS.secondAgentId,
-      assigneeDeviceId: workerDeviceId,
-      state: 'pending',
+      workerUserId: TEST_IDS.secondUserId,
+      state: 'accepted',
       offeredAt: TEST_TIMESTAMP,
       expiresAt: TEST_LATER_TIMESTAMP,
-      respondedAt: null,
-      rejectionReason: null,
-      safeReasonDetail: null,
+      respondedAt: TEST_TIMESTAMP,
       revision: 1,
       createdAt: TEST_TIMESTAMP,
       updatedAt: TEST_TIMESTAMP
+    } as const
+    const task = {
+      ...taskFixture,
+      currentExecutionId: TEST_IDS.executionId,
+      currentExecutionState: 'accepted',
+      status: 'in_progress',
+      executionCount: 1
     } as const
     const response = {
       protocolVersion: '1.0',
@@ -393,7 +396,7 @@ describe('Project Coordinator authoritative read protocol', () => {
       pages: [
         { collection: 'memberships', limit: 10, items: [ownerMembership, workerMembership] },
         { collection: 'agent_label_facts', limit: 10, items: [ownerAgentLabel, workerAgentLabel] },
-        { collection: 'tasks', limit: 10, items: [taskFixture] },
+        { collection: 'tasks', limit: 10, items: [task] },
         { collection: 'executions', limit: 10, items: [execution] },
         { collection: 'offers', limit: 10, items: [offer] }
       ],
@@ -409,7 +412,7 @@ describe('Project Coordinator authoritative read protocol', () => {
     expect(restResponseSchema.safeParse({
       ...response,
       pages: response.pages.map((page) => page.collection === 'tasks'
-        ? { ...page, items: [{ ...taskFixture, currentExecutionId: 'exe_Exec00000002' }] }
+        ? { ...page, items: [{ ...task, currentExecutionId: 'exe_Exec00000002' }] }
         : page)
     }).success).toBe(false)
   })
@@ -772,7 +775,9 @@ describe('Project Coordinator authoritative read protocol', () => {
     const task = {
       ...taskFixture,
       status: 'needs_human',
-      currentExecutionState: 'needs_human'
+      currentExecutionId: TEST_IDS.executionId,
+      currentExecutionState: 'needs_human',
+      executionCount: 1
     } as const
     const execution = {
       schemaVersion: 1,
@@ -917,7 +922,9 @@ describe('Project Coordinator authoritative read protocol', () => {
     const task = {
       ...taskFixture,
       status: 'completed',
+      currentExecutionId: TEST_IDS.executionId,
       currentExecutionState: 'completed',
+      executionCount: 1,
       completedAt: TEST_LATER_TIMESTAMP,
       revision: 5,
       updatedAt: TEST_LATER_TIMESTAMP
@@ -1011,7 +1018,7 @@ describe('Project Coordinator authoritative read protocol', () => {
       decision: 'accept',
       instruction: null,
       acceptedProjectRecordId: TEST_IDS.projectRecordId,
-      nextExecutionId: null,
+      nextTaskOfferId: null,
       decidedAt: TEST_LATER_TIMESTAMP
     } as const
     const finalRecordId = 'rec_Rec000000002'

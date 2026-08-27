@@ -614,7 +614,7 @@ describe('production HTTP OIDC-only boundary', () => {
       resultSubmissionId: 'rsu_Result000001', expectedProjectRevision: 1,
       expectedTaskRevision: 1, expectedExecutionRevision: 1, expectedResultRevision: 1,
       expectedCoordinatorAuthorityEpoch: 1, decision: 'accept', instruction: null,
-      nextAssigneeAgentId: null, expectedNextAssigneeAvailabilityRevision: null,
+      nextWorkerUserId: null,
       nextOfferExpiresAt: null, nextFileIntent: null
     }, {
       protocolVersion: '1.0', requestId: 'req_HttpSummary00001',

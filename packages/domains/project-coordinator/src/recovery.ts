@@ -75,7 +75,8 @@ type RecoverySuccessorTuple = Readonly<{
   execution: ProjectCoordinatorProject['tasks'][number]['executions'][number]
   action: ProjectCoordinatorProject['provisioning']['recoveryActions'][number]
   journal: ProjectCoordinatorProject['provisioning']['externalOperationJournal'][number]
-  agent: ProjectCoordinatorProject['workerGroups'][number]['agents'][number]
+  previousOffer: ProjectCoordinatorProject['offers'][number]
+  workerGroup: ProjectCoordinatorProject['workerGroups'][number]
 }>
 
 export function createProjectCoordinatorRecoveryPort(options: Readonly<{
@@ -236,13 +237,15 @@ export function createProjectCoordinatorRecoveryPort(options: Readonly<{
       ))) {
       throw new Error('A recovery successor requires a new no-overwrite output filename.')
     }
-    const agent = project.workerGroups.flatMap(({ agents }) => agents).find(
-      ({ projectAvailability }) => (
-        projectAvailability.agentId === input.assigneeAgentId
-      )
-    )
-    if (!agent || !agent.projectAvailability.availability.acceptsNewOffers) {
-      throw new Error('The exact selected Worker Agent is not currently available.')
+    const previousOffer = project.offers.find(({ executionId }) => executionId === execution.executionId)
+    if (!previousOffer || previousOffer.state !== 'accepted') {
+      throw new Error('The abandoned execution does not resolve to its claimed User-level offer.')
+    }
+    const workerGroup = project.workerGroups.find(({ userId }) => userId === input.workerUserId)
+    if (!workerGroup || !workerGroup.agents.some(({ projectAvailability }) => (
+      projectAvailability.availability.acceptsNewOffers
+    ))) {
+      throw new Error('The selected Worker User has no currently available Runtime.')
     }
     return Object.freeze({
       workspace,
@@ -251,7 +254,8 @@ export function createProjectCoordinatorRecoveryPort(options: Readonly<{
       execution,
       action,
       journal,
-      agent
+      previousOffer,
+      workerGroup
     })
   }
 
@@ -425,22 +429,20 @@ export function createProjectCoordinatorRecoveryPort(options: Readonly<{
         type: 'task.offer.reassign',
         idempotencyKey,
         taskId: current.task.taskId,
-        previousExecutionId: current.execution.executionId,
+        previousTaskOfferId: current.previousOffer.taskOfferId,
+        expectedPreviousOfferRevision: current.previousOffer.revision,
         expectedProjectRevision: current.project.project.revision,
         expectedTaskRevision: current.task.revision,
-        expectedExecutionRevision: current.execution.revision,
         expectedCoordinatorAuthorityEpoch:
           current.project.project.coordinatorAuthorityEpoch,
         expectedExecutionAuthorityEpoch:
           current.project.project.executionAuthorityEpoch,
-        assigneeAgentId: current.agent.projectAvailability.agentId,
-        expectedAvailabilityRevision:
-          current.agent.projectAvailability.availability.revision,
+        workerUserId: current.workerGroup.userId,
         offerExpiresAt: input.offerExpiresAt,
         nextFileIntent
       })
       const response = await options.coordinatorCloudCommands.execute(command)
-      const successorExecutionId = requireExactSuccessorResponse(
+      const successorOfferId = requireExactSuccessorResponse(
         response,
         current,
         nextFileIntent
@@ -451,7 +453,7 @@ export function createProjectCoordinatorRecoveryPort(options: Readonly<{
       requireFreshSuccessorWorkspace(
         fresh,
         current,
-        successorExecutionId,
+        successorOfferId,
         nextFileIntent
       )
       return fresh
@@ -614,44 +616,26 @@ function requireExactSuccessorResponse(
   const task = findParsed(response.items, taskSchema, ({ taskId }) => (
     taskId === current.task.taskId
   ))
-  const execution = findParsed(response.items, taskExecutionSchema, (candidate) => (
-    candidate.taskId === current.task.taskId &&
-    candidate.executionId !== current.execution.executionId
+  const offer = findParsed(response.items, taskOfferSchema, (candidate) => (
+    candidate.taskId === current.task.taskId && candidate.taskOfferId !== current.previousOffer.taskOfferId
   ))
-  const offer = execution
-    ? findParsed(response.items, taskOfferSchema, (candidate) => (
-        candidate.taskId === current.task.taskId &&
-        candidate.executionId === execution.executionId
-      ))
-    : undefined
   if (!task || task.revision !== current.task.revision + 1 ||
-    task.currentExecutionId === current.execution.executionId ||
-    task.currentExecutionId !== execution?.executionId ||
-    task.currentExecutionState !== 'offered' ||
+    task.currentExecutionId !== null ||
+    task.currentExecutionState !== null ||
     task.status !== 'offered' ||
-    task.executionCount !== current.task.executionCount + 1 ||
+    task.executionCount !== current.task.executionCount ||
     stableDigest(task.fileIntent) !== stableDigest(nextFileIntent) ||
-    !execution || execution.state !== 'offered' ||
-    execution.attempt !== current.execution.attempt + 1 ||
-    execution.offeredByCoordinatorAgentId !== current.project.project.coordinatorAgentId ||
-    execution.assigneeAgentId !== current.agent.projectAvailability.agentId ||
-    execution.fence.status !== 'open' ||
-    execution.fence.assignmentTaskRevision !== task.revision ||
-    execution.fence.bindingRevision !== nextFileIntent.bindingRevision ||
-    execution.fileIntent?.output.fileName !== nextFileIntent.output.fileName ||
-    execution.fileIntent.output.mediaType !== nextFileIntent.output.mediaType ||
-    execution.fileIntent.output.maxBytes !== nextFileIntent.output.maxBytes ||
-    !offer || offer.state !== 'pending' ||
-    offer.assigneeAgentId !== execution.assigneeAgentId) {
-    throw new Error('Cloud did not return the exact freshly named successor execution.')
+    !offer || offer.state !== 'pending' || offer.executionId !== null ||
+    offer.workerUserId !== current.workerGroup.userId) {
+    throw new Error('Cloud did not return the exact freshly named User-level successor offer.')
   }
-  return execution.executionId
+  return offer.taskOfferId
 }
 
 function requireFreshSuccessorWorkspace(
   workspace: ProjectCoordinatorWorkspace,
   current: RecoverySuccessorTuple,
-  successorExecutionId: string,
+  successorOfferId: string,
   nextFileIntent: NonNullable<RecoverySuccessorTuple['task']['fileIntent']>
 ): void {
   const project = requireOwnerProject(workspace, current.project.project.projectId)
@@ -659,23 +643,22 @@ function requireFreshSuccessorWorkspace(
   const oldExecution = taskView?.executions.find(({ executionId }) => (
     executionId === current.execution.executionId
   ))
-  const successor = taskView?.executions.find(({ executionId }) => (
-    executionId === successorExecutionId
-  ))
+  const successorOffer = project.offers.find(({ taskOfferId }) => taskOfferId === successorOfferId)
   const action = project.provisioning.recoveryActions.find(({ recoveryActionId }) => (
     recoveryActionId === current.action.recoveryActionId
   ))
-  if (!taskView || taskView.task.currentExecutionId !== successorExecutionId ||
-    successorExecutionId === current.execution.executionId ||
-    taskView.task.executionCount !== current.task.executionCount + 1 ||
+  if (!taskView || taskView.task.currentExecutionId !== null ||
+    taskView.task.currentExecutionState !== null ||
+    taskView.task.status !== 'offered' ||
+    taskView.task.executionCount !== current.task.executionCount ||
     stableDigest(taskView.task.fileIntent) !== stableDigest(nextFileIntent) ||
-    !successor || successor.assigneeAgentId !== current.agent.projectAvailability.agentId ||
-    successor.fileIntent?.output.fileName !== nextFileIntent.output.fileName ||
+    !successorOffer || successorOffer.workerUserId !== current.workerGroup.userId ||
+    successorOffer.executionId !== null || successorOffer.state !== 'pending' ||
     !oldExecution || oldExecution.state !== 'cancelled' ||
     oldExecution.fence.status !== 'fenced' ||
     oldExecution.fence.reason !== 'manual_recovery_abandoned' ||
     action?.status !== 'completed') {
-    throw new Error('The fresh Cloud workspace did not retain the fenced old execution and successor.')
+    throw new Error('The fresh Cloud workspace did not retain the fenced old execution and User-level successor offer.')
   }
 }
 

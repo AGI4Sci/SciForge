@@ -2,13 +2,13 @@
 
 ## ADDED Requirements
 
-### Requirement: Project 成员是用户，执行者是 Agent
+### Requirement: Project 成员与 Worker 目标是 User，Execution 执行者是 Agent
 
-Project SHALL 使用 `memberUserIds` 表达参与者，使用 `coordinatorAgentId` 和 Task `assigneeAgentId` 表达执行节点。系统 SHALL 通过 Agent `ownerUserId` 验证成员与执行者关系，不能把 userId 和 agentId 当成可互换身份。
+Project SHALL 使用 `memberUserIds` 表达参与者，使用 `coordinatorAgentId` 表达 Project Coordinator，并使用 Task Offer `workerUserId` 表达 Worker 目标。只有成功 claim 后的 Task Execution SHALL 记录 `assigneeAgentId`/Device。系统 SHALL 通过 Agent `ownerUserId` 验证成员、Offer 目标与执行者关系，不能把 userId 和 agentId 当成可互换身份。
 
 #### Scenario: 六名用户加入 Project
 
-- **WHEN** 六个 UserPrincipal 成为成员并分别选择自己的 Agent
+- **WHEN** 六个 UserPrincipal 成为成员且各自的一台或多台 Agent/Device 运行时上线
 - **THEN** Project SHALL 记录六个 userId
 - **AND** Agent registry SHALL 分别记录其 owner
 - **AND** 手机与机器 SHALL 在 UI 中组合显示为六个协作个体。
@@ -31,13 +31,13 @@ Project SHALL 同时记录一个 active Coordinator Agent。只有该 Agent 能�
 
 ### Requirement: Project 使用星形结构化任务协作
 
-Coordinator SHALL 通过云端为 Worker 创建独立 Task；Worker SHALL 只更新分配给自己的 Task、提交结果或提出子任务建议，不得自由修改计划或向其他 Agent 广播可执行指令。
+Coordinator SHALL 通过云端为 Worker User 创建独立 Task Offer；Cloud SHALL 向该 User 的合格 Agent/Device Runtime 广播，但只有首个原子 claim 成功的 Agent SHALL 更新其 Execution、提交结果或提出子任务建议，不得自由修改计划或向其他 Agent 广播可执行指令。
 
 #### Scenario: 两个 Worker 并行执行
 
-- **WHEN** Coordinator 创建两个无依赖 Task 并分配给两个 Agent
-- **THEN** 两个 Agent MAY 并行执行
-- **AND** 各自 SHALL 只能更新自己的 Task。
+- **WHEN** Coordinator 创建两个无依赖 Task 并分配给两个 Worker User
+- **THEN** 两个 User 中各自首个领取的 Agent MAY 并行执行
+- **AND** 各自 SHALL 只能更新已绑定自己 Agent/Device 的 Task Execution。
 
 #### Scenario: Worker 需要其他能力
 

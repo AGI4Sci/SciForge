@@ -20,7 +20,7 @@ import {
 } from './ports.js'
 import { ProjectCoordinatorStateStore } from './state.js'
 
-test('local Coordinator Runtime creates an editable durable Plan draft with exact Agent assignment', async () => {
+test('local Coordinator Runtime creates an editable durable Plan draft with Worker User assignment', async () => {
   const settings = inMemorySettings()
   const prompts: string[] = []
   const agentExecution: DomainMainAgentExecutionHost = {
@@ -41,7 +41,7 @@ test('local Coordinator Runtime creates an editable durable Plan draft with exac
             requiredCapabilityTags: ['meeting.review'],
             fileIntent: null
           }],
-          rationale: 'One ready Worker Agent can synthesize the meeting.'
+          rationale: 'One ready Worker User can synthesize the meeting.'
         })
       }
     }
@@ -64,7 +64,7 @@ test('local Coordinator Runtime creates an editable durable Plan draft with exac
   })
   assert.equal(generated.draftRevision, 1)
   assert.equal(generated.runtimeProvenance.generatedByCoordinatorAgentId, 'agt_Coordinator01')
-  assert.equal(generated.assignments[0]?.selectedAgentId, null)
+  assert.equal(generated.assignments[0]?.workerUserId, null)
   assert.match(prompts[0] ?? '', /Created meeting.*meeting\.review/su)
 
   const edited = await port.editDraft({
@@ -75,12 +75,12 @@ test('local Coordinator Runtime creates an editable durable Plan draft with exac
     rationale: generated.rationale,
     assignments: [{
       planItemId: 'item_meeting_summary',
-      selectedAgentId: 'agt_WorkerAgent001',
-      recommendationReason: 'Owner selected the exact ready Desktop Agent.'
+      workerUserId: 'usr_Worker000001',
+      recommendationReason: 'Owner selected the User with an eligible ready Runtime.'
     }]
   })
   assert.equal(edited.draftRevision, 2)
-  assert.equal(edited.assignments[0]?.selectedAgentId, 'agt_WorkerAgent001')
+  assert.equal(edited.assignments[0]?.workerUserId, 'usr_Worker000001')
 
   const reloaded = createProjectCoordinatorPlanPort(options)
   assert.deepEqual(await reloaded.readDraft({ projectId: generated.projectId }), edited)
@@ -92,7 +92,7 @@ test('local Coordinator Runtime creates an editable durable Plan draft with exac
     rationale: edited.rationale,
     assignments: [{
       planItemId: 'item_meeting_summary',
-      selectedAgentId: 'agt_NotAProjectAgent',
+      workerUserId: 'usr_NotAProjectUser',
       recommendationReason: 'An invented candidate must be rejected.'
     }]
   }), /active Project member/u)
@@ -123,8 +123,7 @@ test('immutable Plan submit uses Coordinator Agent authority before Owner confir
       assert.equal(phase, 'active')
       assert.equal(command.expectedProjectRevision, 4)
       assert.equal(command.expectedPlanRevision, 2)
-      assert.equal(command.expectedAvailabilityRevision, 11)
-      assert.equal(command.assigneeAgentId, 'agt_WorkerAgent001')
+      assert.equal(command.workerUserId, 'usr_Worker000001')
       offeredBundle = taskOfferResponse(command)
       return offeredBundle
     },
@@ -205,8 +204,8 @@ test('immutable Plan submit uses Coordinator Agent authority before Owner confir
     rationale: draft.rationale,
     assignments: [{
       planItemId: 'item_meeting_summary',
-      selectedAgentId: 'agt_WorkerAgent001',
-      recommendationReason: 'Owner selected the ready meeting reviewer.'
+      workerUserId: 'usr_Worker000001',
+      recommendationReason: 'Owner selected the User with a ready meeting-review Runtime.'
     }]
   })
 
@@ -368,6 +367,7 @@ function workspaceFixture() {
         }]
       }],
       tasks: [],
+      offers: [],
       reviews: [],
       pendingHumanNeeded: [],
       records: [],
@@ -404,7 +404,7 @@ function workflowWorkspace(
           ? 5
           : 4
   const offeredTask = offeredBundle?.items.find((item) => item.type === 'task')
-  const offeredExecution = offeredBundle?.items.find((item) => item.type === 'task_execution')
+  const offeredOffer = offeredBundle?.items.find((item) => item.type === 'task_offer')
   return {
     ...base,
     projects: [{
@@ -418,8 +418,8 @@ function workflowWorkspace(
         plan,
         assignments: [{
           planItemId: 'item_meeting_summary',
-          selectedAgentId: 'agt_WorkerAgent001',
-          recommendationReason: 'Owner selected the ready meeting reviewer.'
+          workerUserId: 'usr_Worker000001',
+          recommendationReason: 'Owner selected the User with a ready meeting-review Runtime.'
         }]
       } : null,
       workerGroups: base.projects[0]!.workerGroups.map((group) => ({
@@ -438,10 +438,11 @@ function workflowWorkspace(
       })),
       tasks: [
         ...(phase === 'active' ? [previousPlanTaskView()] : []),
-        ...(offeredTask && offeredExecution
-          ? [{ task: offeredTask, executions: [offeredExecution] }]
+        ...(offeredTask
+          ? [{ task: offeredTask, executions: [] }]
           : [])
-      ]
+      ],
+      offers: offeredOffer ? [offeredOffer] : []
     }]
   }
 }
@@ -461,10 +462,11 @@ function previousPlanTaskView() {
       objective: 'Remain visible as immutable Project history.',
       completionCriteria: ['The historical Task remains distinct from the new Plan.'],
       dependencyTaskIds: [],
+      requiredCapabilityTags: ['meeting.review'],
       fileIntent: null,
       currentExecutionId: executionId,
-      currentExecutionState: 'offered',
-      status: 'offered',
+      currentExecutionState: 'running',
+      status: 'in_progress',
       executionCount: 1,
       maxRetries: 2,
       completedAt: null,
@@ -483,8 +485,8 @@ function previousPlanTaskView() {
       assigneeUserId: 'usr_Worker000001',
       assigneeAgentId: 'agt_WorkerAgent001',
       assigneeDeviceId: 'dev_WorkerDevice01',
-      state: 'offered',
-      stateRevision: 1,
+      state: 'running',
+      stateRevision: 2,
       fence: {
         schemaVersion: 1,
         executionId,
@@ -502,8 +504,8 @@ function previousPlanTaskView() {
       fileIntent: null,
       currentResultSubmissionId: null,
       offeredAt: at,
-      acceptedAt: null,
-      startedAt: null,
+      acceptedAt: at,
+      startedAt: at,
       terminalAt: null,
       revision: 1,
       createdAt: at,
@@ -518,7 +520,6 @@ function taskOfferResponse(command: Extract<
 >): Extract<RestResponse, { type: 'rest.collection' }> {
   const at = '2026-08-25T01:06:00.000Z'
   const taskId = 'tsk_MeetingSummary01'
-  const executionId = 'exe_MeetingSummary01'
   const task = taskSchema.parse({
     schemaVersion: 1,
     type: 'task',
@@ -529,50 +530,14 @@ function taskOfferResponse(command: Extract<
     objective: 'Produce a bounded meeting decision summary.',
     completionCriteria: ['Owner can review one concise summary.'],
     dependencyTaskIds: [],
+    requiredCapabilityTags: ['meeting.review'],
     fileIntent: null,
-    currentExecutionId: executionId,
-    currentExecutionState: 'offered',
+    currentExecutionId: null,
+    currentExecutionState: null,
     status: 'offered',
-    executionCount: 1,
+    executionCount: 0,
     maxRetries: 2,
     completedAt: null,
-    revision: 1,
-    createdAt: at,
-    updatedAt: at
-  })
-  const execution = taskExecutionSchema.parse({
-    schemaVersion: 1,
-    type: 'task_execution',
-    projectId: command.projectId,
-    taskId,
-    executionId,
-    attempt: 1,
-    offeredByCoordinatorAgentId: 'agt_Coordinator01',
-    assigneeUserId: 'usr_Worker000001',
-    assigneeAgentId: command.assigneeAgentId,
-    assigneeDeviceId: 'dev_WorkerDevice01',
-    state: 'offered',
-    stateRevision: 1,
-    fence: {
-      schemaVersion: 1,
-      executionId,
-      assigneeUserId: 'usr_Worker000001',
-      assigneeAgentId: command.assigneeAgentId,
-      assigneeDeviceId: 'dev_WorkerDevice01',
-      assignmentTaskRevision: 1,
-      projectExecutionAuthorityEpoch: command.expectedExecutionAuthorityEpoch,
-      userTaskAuthorityEpoch: 1,
-      bindingRevision: null,
-      status: 'open',
-      reason: null,
-      fencedAt: null
-    },
-    fileIntent: null,
-    currentResultSubmissionId: null,
-    offeredAt: at,
-    acceptedAt: null,
-    startedAt: null,
-    terminalAt: null,
     revision: 1,
     createdAt: at,
     updatedAt: at
@@ -583,16 +548,12 @@ function taskOfferResponse(command: Extract<
     taskOfferId: 'ofr_MeetingSummary01',
     projectId: command.projectId,
     taskId,
-    executionId,
-    assigneeUserId: 'usr_Worker000001',
-    assigneeAgentId: command.assigneeAgentId,
-    assigneeDeviceId: 'dev_WorkerDevice01',
+    executionId: null,
+    workerUserId: command.workerUserId,
     state: 'pending',
     offeredAt: at,
     expiresAt: command.offerExpiresAt,
     respondedAt: null,
-    rejectionReason: null,
-    safeReasonDetail: null,
     revision: 1,
     createdAt: at,
     updatedAt: at
@@ -601,7 +562,7 @@ function taskOfferResponse(command: Extract<
     protocolVersion: '1.0',
     type: 'rest.collection',
     requestId: command.requestId,
-    items: [task, execution, offer]
+    items: [task, offer]
   }) as Extract<RestResponse, { type: 'rest.collection' }>
 }
 
@@ -622,7 +583,7 @@ function planAgentExecution(): DomainMainAgentExecutionHost {
           requiredCapabilityTags: ['meeting.review'],
           fileIntent: null
         }],
-        rationale: 'One ready Worker Agent can synthesize the meeting.'
+        rationale: 'One ready Worker User can synthesize the meeting.'
       })
     })
   }

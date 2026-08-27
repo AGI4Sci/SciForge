@@ -36,6 +36,7 @@ const created: ProjectCoordinatorProjectCreateResult = {
       plan: null,
       workerGroups: [],
       tasks: [],
+      offers: [],
       reviews: [],
       pendingHumanNeeded: [],
       records: [],

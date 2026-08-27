@@ -707,9 +707,8 @@ describe('PostgreSQL production transaction path', () => {
       await tx.updateTaskOffer({
         taskOfferId: 'tof_Event0000001', executionId: 'exe_Event0000001',
         taskId: 'tsk_Event0000001', projectId: 'prj_Event0000001',
-        assigneeUserId: 'usr_Worker000001', assigneeAgentId: 'agn_Worker000001',
-        assigneeDeviceId: 'dev_Worker000001', state: 'accepted', offeredAt: at, expiresAt,
-        respondedAt: at, rejectionReason: null, safeReasonDetail: null, revision: 2,
+        workerUserId: 'usr_Worker000001', state: 'accepted', offeredAt: at, expiresAt,
+        respondedAt: at, revision: 2,
         createdAt: at, updatedAt: at
       }, 1)
       await tx.insertAudit({
@@ -748,7 +747,7 @@ describe('PostgreSQL production transaction path', () => {
     expect(queries.find(({ text }) => text.includes('UPDATE sciforge_collaboration.task_executions'))?.text)
       .toContain('AND $9=$11+1 AND $3=$11+1')
     expect(queries.find(({ text }) => text.includes('UPDATE sciforge_collaboration.task_offers'))?.text)
-      .toContain('WHERE task_offer_id=$1 AND revision=$8 AND $6=$8+1')
+      .toContain('WHERE task_offer_id=$1 AND revision=$7 AND $5=$7+1')
     expect(queries.some(({ text }) => text.includes('task_execution_events'))).toBe(false)
   })
 })

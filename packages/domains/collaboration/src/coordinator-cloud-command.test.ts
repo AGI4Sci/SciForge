@@ -65,8 +65,7 @@ const commands = [
     projectPlanId: TEST_IDS.projectPlanId,
     expectedPlanRevision: 1,
     planItemId: 'item_Plan00000001',
-    assigneeAgentId: TEST_IDS.secondAgentId,
-    expectedAvailabilityRevision: 1,
+    workerUserId: TEST_IDS.secondUserId,
     offerExpiresAt: TEST_TIMESTAMP
   },
   {
@@ -75,9 +74,7 @@ const commands = [
     type: 'task.offer.withdraw' as const,
     taskOfferId: TEST_IDS.taskOfferId,
     taskId: TEST_IDS.taskId,
-    executionId: TEST_IDS.executionId,
     expectedTaskRevision: 1,
-    expectedExecutionRevision: 1,
     expectedOfferRevision: 1,
     expectedCoordinatorAuthorityEpoch: 1,
     reason: 'Coordinator changed the synthetic assignment.'
@@ -87,14 +84,13 @@ const commands = [
     idempotencyKey: 'idem_task.offer.reassign-01',
     type: 'task.offer.reassign' as const,
     taskId: TEST_IDS.taskId,
-    previousExecutionId: TEST_IDS.executionId,
+    previousTaskOfferId: TEST_IDS.taskOfferId,
+    expectedPreviousOfferRevision: 1,
     expectedProjectRevision: 1,
     expectedTaskRevision: 1,
-    expectedExecutionRevision: 1,
     expectedCoordinatorAuthorityEpoch: 1,
     expectedExecutionAuthorityEpoch: 1,
-    assigneeAgentId: TEST_IDS.secondAgentId,
-    expectedAvailabilityRevision: 1,
+    workerUserId: TEST_IDS.secondUserId,
     offerExpiresAt: TEST_TIMESTAMP,
     nextFileIntent: null
   }
@@ -102,7 +98,7 @@ const commands = [
 
 test('Coordinator Cloud command service exposes one closed Agent-command allowlist', () => {
   assert.equal(COORDINATOR_CLOUD_COMMAND_SERVICE_ID, 'sciforge.collaboration.coordinator-cloud-command')
-  assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '3.0.0')
+  assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '4.0.0')
   assert.deepEqual(commands.map((command) => coordinatorCloudCommandSchema.parse(command).type), [
     'project.plan.submit',
     'task.offer.create',
@@ -159,8 +155,7 @@ test('Coordinator Agent allowlist owns HumanNeeded, review, decision, and final 
     expectedCoordinatorAuthorityEpoch: 2,
     decision: 'accept' as const,
     instruction: null,
-    nextAssigneeAgentId: null,
-    expectedNextAssigneeAvailabilityRevision: null,
+    nextWorkerUserId: null,
     nextOfferExpiresAt: null,
     nextFileIntent: null
   }, {

@@ -15,6 +15,7 @@ import {
   runtimeIdSchema,
   sha256Schema,
   taskIdSchema,
+  taskOfferIdSchema,
   timestampSchema,
   userIdSchema
 } from './core.js'
@@ -260,11 +261,11 @@ export const taskReviewDecisionSchema = z.object({
   decision: taskReviewDecisionKindSchema,
   instruction: nonEmptyTextSchema.nullable(),
   acceptedProjectRecordId: projectRecordIdSchema.nullable(),
-  nextExecutionId: executionIdSchema.nullable(),
+  nextTaskOfferId: taskOfferIdSchema.nullable(),
   decidedAt: timestampSchema
 }).strict().superRefine((review, context) => {
   if (review.decision === 'accept') {
-    if (review.instruction !== null || review.acceptedProjectRecordId === null || review.nextExecutionId !== null) {
+    if (review.instruction !== null || review.acceptedProjectRecordId === null || review.nextTaskOfferId !== null) {
       context.addIssue({
         code: 'custom',
         path: ['acceptedProjectRecordId'],
@@ -274,12 +275,12 @@ export const taskReviewDecisionSchema = z.object({
   } else if (
     review.instruction === null ||
     review.acceptedProjectRecordId !== null ||
-    review.nextExecutionId === null
+    review.nextTaskOfferId === null
   ) {
     context.addIssue({
       code: 'custom',
-      path: ['nextExecutionId'],
-      message: 'Request-revision requires bounded instruction and the new execution, without an accepted record.'
+      path: ['nextTaskOfferId'],
+      message: 'Request-revision requires bounded instruction and the new User-targeted offer, without an accepted record.'
     })
   }
 })

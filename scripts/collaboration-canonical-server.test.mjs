@@ -239,7 +239,7 @@ async function createActiveTextProject(rig, { owner, members, coordinator, tasks
   return { created, project: active, plan: confirmed }
 }
 
-async function createOffer(rig, { coordinator, project, plan, assignee, availability, planItemId, key }) {
+async function createOffer(rig, { coordinator, project, plan, assignee, planItemId, key }) {
   return rig.service.createTaskOffer(coordinator.actor, {
     protocolVersion: '1.0',
     type: 'task.offer.create',
@@ -252,8 +252,7 @@ async function createOffer(rig, { coordinator, project, plan, assignee, availabi
     projectPlanId: plan.projectPlanId,
     expectedPlanRevision: plan.revision,
     planItemId,
-    assigneeAgentId: assignee.agent.agentId,
-    expectedAvailabilityRevision: availability.revision,
+    workerUserId: assignee.agent.ownerUserId,
     offerExpiresAt: new Date(rig.clock.now().getTime() + 60_000).toISOString()
   })
 }
@@ -266,9 +265,7 @@ async function acceptAndStart(rig, worker, offered, key) {
     idempotencyKey: `idem_offer_accept_${key}`,
     taskOfferId: offered.offer.taskOfferId,
     taskId: offered.task.taskId,
-    executionId: offered.execution.executionId,
     expectedTaskRevision: offered.task.revision,
-    expectedExecutionRevision: offered.execution.revision,
     expectedOfferRevision: offered.offer.revision
   })
   return rig.service.startTaskExecution(worker.actor, {
@@ -496,7 +493,7 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
   project = await rig.repository.getProject(project.projectId)
   const offeredC = await createOffer(rig, { coordinator: agentA, project, plan: active.plan,
     assignee: agentC, availability: availabilityC, planItemId: 'item_worker_c', key: 'ledger_c' })
-  assert.notEqual(offeredB.execution.assigneeAgentId, offeredC.execution.assigneeAgentId)
+  assert.notEqual(offeredB.offer.workerUserId, offeredC.offer.workerUserId)
   const taskInboxBeforeRestart = await rig.service.pullInbox(agentC.actor, { afterSequence: 0, limit: 20 })
   assert.ok(taskInboxBeforeRestart.messages.some((message) => message.payload.taskId === offeredC.task.taskId))
 
@@ -577,7 +574,7 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
   const newCoordinatorOffer = await createOffer(rig, { coordinator: agentA2, project: resumedAfterHandoff,
     plan: confirmedHandoffPlan, assignee: agentB, availability: currentAvailabilityB,
     planItemId: 'item_after_handoff', key: 'new_coordinator' })
-  assert.equal(newCoordinatorOffer.execution.assigneeAgentId, agentB.agent.agentId)
+  assert.equal(newCoordinatorOffer.offer.workerUserId, agentB.agent.ownerUserId)
 })
 
 test('8.4 canonical service bounds payloads and blocks sensitive Project Record material', async () => {

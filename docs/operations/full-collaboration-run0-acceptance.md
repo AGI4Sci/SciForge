@@ -10,7 +10,7 @@
 | `awaiting_real_devices` | 代码和 source 自动门禁可通过，但尚未提供至少三台物理机或独立 VM 上的五个独立 source-app profile。 |
 | `incomplete` | 必需步骤尚未执行或证据不足；回执必须逐项标记 `not_run`/`blocked`。 |
 | `failed` | 一个必需门禁执行后失败。 |
-| `passed` | 部署隔离、source、五设备 happy path、恢复矩阵、完整性和秘密审计全部通过。 |
+| `passed` | 部署隔离、source、五 User/六 Device happy path、恢复矩阵、完整性和秘密审计全部通过。 |
 
 `passed` 不代表公网生产化，也不声称邮件验证、MFA、签名公证、完整灾备或公开发布门禁已完成。
 
@@ -31,17 +31,18 @@
 
 ## 设备与角色矩阵
 
-五个 profile 必须 checkout 同一 exact commit，并通过 canonical source build/start path 启动；每个 profile 拥有不同 user-data directory、原生安全存储、Device、Agent、Identity-owned Agent Cloud Session、Runtime 配置和 OpenContent account。Agent machine credential 只能存在于各 profile 的 Identity 私有原生安全存储中，不得进入 collaboration package、回执或 profile 间传递。DMG、安装包和发布 artifact 不属于本次 Run-0 前置条件。
+六个 profile 必须 checkout 同一 exact commit，并通过 canonical source build/start path 启动；U3-A/U3-B 登录同一 U3 OIDC User，其余 profile 各属独立 User。每个 profile 拥有不同 user-data directory、原生安全存储、Device、Agent、Identity-owned Agent Cloud Session、Runtime 配置和 OpenContent account。Agent machine credential 只能存在于各 profile 的 Identity 私有原生安全存储中，不得进入 collaboration package、回执或 profile 间传递。DMG、安装包和发布 artifact 不属于本次 Run-0 前置条件。
 
 | Fixture | Project 职责 | 接单策略 | 必需行为 | 设备要求 |
 | --- | --- | --- | --- | --- |
 | U0 | Project Owner + 该 Owner 所有的 Coordinator Agent | 任意 | 创建/确认计划、provision、回答 HumanNeeded、复审、完成 Project | 独立 Desktop profile |
-| U1 | Worker Agent | `manual` | 手动接受一个文件 Task 并提交真实结果 | 独立 Desktop profile |
-| U2 | Worker Agent | `automatic` | 本地 preflight 后显式自动接受并提交真实结果 | 独立 Desktop profile |
-| U3 | 首选 Worker Agent | `manual` | 显式拒绝一个 offer 并给出有界原因 | 独立 Desktop profile |
-| U4 | 替代 Worker Agent | 任意 | 接受 U3 被改派的全新 execution 并完成结果 | 独立 Desktop profile |
+| U1 | Worker User | `manual` | 在一个 Device 上手动认领文件 Task 并提交真实结果 | 独立 Desktop profile |
+| U2 | Worker User | `automatic` | 本地 preflight 后由一个 Device 自动认领并提交真实结果 | 独立 Desktop profile |
+| U3-A | Worker User U3 的 Device A | `manual` | 仅在本机忽略 User Offer，不产生 Cloud reject | 独立 Desktop profile |
+| U3-B | Worker User U3 的 Device B | `manual` | 收到同一广播 Offer 并赢得 claim，完成风险结果 | 额外独立 Desktop profile |
+| U4 | 替代 Worker User | 任意 | 用于验证 Coordinator withdraw/reassign 后的新 User Offer | 独立 Desktop profile |
 
-五个 profile 至少分布在三台物理机器或相互独立的 VM。一个物理机上的多个普通进程、共享 user-data、测试 harness 或 source renderer 不算独立设备。
+六个 profile 至少分布在三台物理机器或相互独立的 VM。一个物理机上的多个普通进程、共享 user-data、测试 harness 或 source renderer 不算独立设备。
 
 明早的 cold-clone、exact-commit 前检、独立 profile 启动和现场停线条件见
 [五人现场执行单](./full-collaboration-run0-five-person-field-guide.zh-CN.md)。五人基线不得安装
@@ -53,7 +54,7 @@
 Project 名称固定为“多用户协作设计评审会”。输入只使用合成数据，并至少包含：
 
 - `agenda.md`：会议目标、议题、时限、需要决策的架构问题；
-- `requirements.md`：用户动态加入、单 Coordinator、精确 Worker Agent、真实 Content Space、拒绝改派、HumanNeeded、复审和恢复要求；
+- `requirements.md`：用户动态加入、Project 级单 Coordinator、Worker User 广播与首 Device claim、真实 Content Space、HumanNeeded、复审和恢复要求；
 - 一个可公开的合成风险/约束列表，禁止真实组织秘密、个人信息、Token、密码或 Provider credential。
 
 Coordinator 与 Worker 必须使用各自 Desktop 当前配置的真实 AgentRuntime/模型。回执记录 Runtime/模型 ID 和版本，不记录完整 prompt、隐藏 reasoning、API key 或登录材料。
@@ -62,7 +63,7 @@ Coordinator 与 Worker 必须使用各自 Desktop 当前配置的真实 AgentRun
 
 ### 1. 身份、Device 与 Agent
 
-1. U0–U4 分别通过现有 `login-test/realms/SciForge` system-browser OIDC 注册/登录。
+1. U0–U4 分别通过现有 `login-test/realms/SciForge` system-browser OIDC 注册/登录；U3-A/U3-B 必须是同一 U3 User 的两个独立 Device。
 2. Cloud 只通过 OIDC JIT 创建/找到五个 Canonical User。
 3. 每个 Desktop 注册独立 `ACTIVE` Device。
 4. 每个 Human 配置至少一个真实 AgentRuntime；在这之前不得创建 Agent。
@@ -86,14 +87,14 @@ Coordinator 与 Worker 必须使用各自 Desktop 当前配置的真实 AgentRun
 
 1. U0 Coordinator Agent 从 Project Content Directory 真实下载合成 agenda/requirements。
 2. U0 的 AgentRuntime 生成可编辑 Project plan；Human 在 HCI 中确认或修改。
-3. Coordinator 从按 User 分组的 availability projection 选择精确 Agent，并创建三个并行最终产物 Task：
+3. Coordinator 从 Cloud 全局在线目录选择 Worker User，并创建三个并行最终产物 Task：
    - `architecture-review.md`
    - `meeting-minutes.md`
    - `risk-register.md`
-4. U1 手动接受其 offer；U2 经本地 preflight 自动发送 accept；U3 显式 reject。
-5. Coordinator 选择 U4 的精确 Agent 重新分派 U3 Task；Cloud 创建新的 `executionId` 并 fence U3 旧 execution。
-6. U1/U2/U4 分别真实下载输入、使用本机真实 Runtime/模型转换、通过 OpenContent real upload-new 提交各自输出。
-7. `architecture-review.md` 与 `meeting-minutes.md` 的两个当前 execution 必须在时间线上真实重叠，并分别形成可复核的 download → Runtime → upload → review 闭环；U3 拒绝/U4 改派作为独立控制支路保留。
+4. U1 的一个 Device 手动 claim；U2 的一个 Device 经本地 preflight 自动 claim。风险 Task 广播到 U3-A/U3-B：U3-A 仅本机忽略，U3-B claim。
+5. 每次 claim 的同一 Cloud 事务才创建并绑定实际 User/Device/Agent `executionId`；其他 Device 收到 claimed 关闭提示。
+6. U1/U2/U3-B 分别真实下载输入、使用本机真实 Runtime/模型转换、通过 OpenContent real upload-new 提交各自输出。
+7. 另以一个未认领 Offer 验证 U0 withdraw 后向 U4 User reassign；两者都不预创建 Execution。`architecture-review.md` 与 `meeting-minutes.md` 的两个当前 Execution 必须在时间线上真实重叠。
 
 每个文件 transfer 的 evidence 必须含 exact resource/root、execution 和真实 operation observation。实现可保留 bytes/SHA-256 作为诊断，但它们以及汇总 `integrityVerified` 暂不作为本 PoC 完成门禁。
 
@@ -116,7 +117,7 @@ Coordinator 与 Worker 必须使用各自 Desktop 当前配置的真实 AgentRun
 | R1 | Worker accept 后重启 | 同一 `executionId` 从本地 journal 与 Cloud 状态恢复，不重复 Runtime turn 或外部写。 |
 | R2 | WSS 断开后 Cloud 写入 Inbox | 重连只提示可用；客户端按 sequence refill/ACK，不丢失、不重复执行。 |
 | R3 | 重复 offer 与 ACK | 相同 idempotency key 返回同一事实，revision 不重复推进。 |
-| R4 | U3 reject 后迟到提交旧 execution | Cloud 以 fenced 拒绝 Task/result/file association；Provider late fact 只进 recovery journal。 |
+| R4 | U3-A 本机忽略后 U3-B claim | U3-A 不发送 Cloud 写；U3-B 获得唯一 Execution；任何第二次 claim 都不创建 Execution。 |
 | R5 | Worker Device revoke | Principal/Agent/file operations 停止，Cloud 拒绝新接单与旧 execution 写。 |
 | R6 | Owner 在自己拥有的 Agent 间显式 transfer Coordinator | 新 Owner-owned Agent 成为唯一 Coordinator，旧 Agent 的 coordinator-only 写立即 fenced；其他 User 的 Agent 不可被选中。 |
 | R7 | 普通成员在 OpenContent Team 中被移除 | metadata 可见不算通过；真实 DownloadCheck/upload denied，该 User degraded，其他成员继续。 |

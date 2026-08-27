@@ -227,7 +227,6 @@ export type TaskExecution = z.infer<typeof taskExecutionSchema>
 export const taskOfferStateSchema = z.enum([
   'pending',
   'accepted',
-  'rejected',
   'withdrawn',
   'timed_out'
 ])
@@ -249,16 +248,13 @@ export const taskOfferSchema = z.object({
   taskOfferId: taskOfferIdSchema,
   projectId: projectIdSchema,
   taskId: taskIdSchema,
-  executionId: executionIdSchema,
-  assigneeUserId: userIdSchema,
-  assigneeAgentId: agentIdSchema,
-  assigneeDeviceId: deviceIdSchema,
+  /** Filled exactly once by the Device whose Agent wins the User-level claim. */
+  executionId: executionIdSchema.nullable(),
+  workerUserId: userIdSchema,
   state: taskOfferStateSchema,
   offeredAt: timestampSchema,
   expiresAt: timestampSchema,
   respondedAt: timestampSchema.nullable(),
-  rejectionReason: taskOfferRejectionReasonSchema.nullable(),
-  safeReasonDetail: z.string().trim().min(1).max(500).nullable()
 }).strict().superRefine((offer, context) => {
   if (Date.parse(offer.expiresAt) <= Date.parse(offer.offeredAt)) {
     context.addIssue({ code: 'custom', path: ['expiresAt'], message: 'Task offer expiry must follow its creation.' })
@@ -267,14 +263,12 @@ export const taskOfferSchema = z.object({
   if (responded !== (offer.respondedAt !== null)) {
     context.addIssue({ code: 'custom', path: ['respondedAt'], message: 'Only a terminal offer has a response time.' })
   }
-  if ((offer.state === 'rejected') !== (offer.rejectionReason !== null)) {
-    context.addIssue({ code: 'custom', path: ['rejectionReason'], message: 'Only a rejected offer has a bounded rejection reason.' })
-  }
-  if (offer.rejectionReason === 'other' && offer.safeReasonDetail === null) {
-    context.addIssue({ code: 'custom', path: ['safeReasonDetail'], message: 'Other rejection requires a bounded safe detail.' })
-  }
-  if (offer.state !== 'rejected' && offer.safeReasonDetail !== null) {
-    context.addIssue({ code: 'custom', path: ['safeReasonDetail'], message: 'Only a rejected offer may carry safe detail.' })
+  if ((offer.state === 'accepted') !== (offer.executionId !== null)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['executionId'],
+      message: 'Only the winning User-level claim binds the immutable execution.'
+    })
   }
 })
 export type TaskOffer = z.infer<typeof taskOfferSchema>

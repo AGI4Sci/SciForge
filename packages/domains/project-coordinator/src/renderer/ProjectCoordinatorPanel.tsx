@@ -1950,7 +1950,7 @@ export function ProjectCoordinatorPlanSection({
   onConfirmActivate(): void
 }>): ReactElement {
   const { t } = useTranslation('common')
-  const visibleAgents = project?.workerGroups.flatMap((group) => group.agents) ?? []
+  const visibleWorkerGroups = project?.workerGroups ?? []
   const awaitingConfirmation = project?.plan?.plan.state === 'awaiting_confirmation'
   return (
     <Section id="plan" title={t('projectCoordinatorPlan')} icon={<ListChecks className="h-4 w-4" />}>
@@ -1984,14 +1984,14 @@ export function ProjectCoordinatorPlanSection({
                   )
                 })),
                 assignments: draft.assignments.map((assignment) => {
-                  const selectedAgentId = String(
-                    values.get(`plan-item-agent-${assignment.planItemId}`) ?? ''
+                  const workerUserId = String(
+                    values.get(`plan-item-user-${assignment.planItemId}`) ?? ''
                   )
                   return {
                     ...assignment,
-                    selectedAgentId: selectedAgentId || null,
-                    recommendationReason: selectedAgentId
-                      ? t('projectCoordinatorOwnerSelectedExactAgent')
+                    workerUserId: workerUserId || null,
+                    recommendationReason: workerUserId
+                      ? t('projectCoordinatorOwnerSelectedWorkerUser')
                       : null
                   }
                 })
@@ -2019,23 +2019,24 @@ export function ProjectCoordinatorPlanSection({
                 <textarea required name={`plan-item-criteria-${item.planItemId}`} defaultValue={item.completionCriteria.join('\n')} aria-label={t('projectCoordinatorCompletionCriteria')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
                 <input required name={`plan-item-capabilities-${item.planItemId}`} defaultValue={item.requiredCapabilityTags.join(', ')} aria-label={t('projectCoordinatorCapabilityTags')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
                 <select
-                  name={`plan-item-agent-${item.planItemId}`}
+                  name={`plan-item-user-${item.planItemId}`}
                   className="mt-1 w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
-                  defaultValue={assignment?.selectedAgentId ?? ''}
+                  defaultValue={assignment?.workerUserId ?? ''}
                   disabled={busy}
                 >
-                  <option value="">{t('projectCoordinatorChooseExactAgent')}</option>
-                  {visibleAgents.map((agent) => {
-                    const operational = projectCoordinatorAgentOperationalState(agent)
+                  <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
+                  {visibleWorkerGroups.map((group) => {
+                    const online = group.agents.some((agent) => {
+                      const operational = projectCoordinatorAgentOperationalState(agent)
+                      return operational.state !== 'blocked' && operational.state !== 'offline'
+                    })
                     return (
                       <option
-                        key={agent.projectAvailability.agentId}
-                        value={agent.projectAvailability.agentId}
-                        disabled={operational.state === 'blocked' || operational.state === 'offline'}
+                        key={group.userId}
+                        value={group.userId}
+                        disabled={!online}
                       >
-                        {agent.displayName} · {t(agentStateMessageKey(
-                          operational.state
-                        ))} · {agent.projectAvailability.availability.runtimeCapabilityTags?.join(', ') || '—'} · {shortIdentifier(agent.projectAvailability.agentId)}
+                        {group.displayName}
                       </option>
                     )
                   })}
@@ -2049,7 +2050,7 @@ export function ProjectCoordinatorPlanSection({
           </form>
           <button
             type="button"
-            disabled={busy || draft.assignments.some(({ selectedAgentId }) => selectedAgentId === null)}
+            disabled={busy || draft.assignments.some(({ workerUserId }) => workerUserId === null)}
             onClick={onSubmitDraft}
             className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50"
           >
@@ -2074,9 +2075,12 @@ export function ProjectCoordinatorPlanSection({
             <div key={item.planItemId} className="rounded border border-ds-border p-2">
               <div className="font-medium">{item.title}</div>
               <p className="mt-1 text-[11px] text-ds-muted">{item.objective}</p>
-              {assignment?.selectedAgentId ? (
-                <div className="mt-1 break-all text-[10px] font-mono text-ds-faint">
-                  {t('projectCoordinatorExactAgent')}: {assignment.selectedAgentId}
+              {assignment?.workerUserId ? (
+                <div className="mt-1 text-[10px] text-ds-faint">
+                  {t('projectCoordinatorWorkerUser')}: {
+                    visibleWorkerGroups.find(({ userId }) => userId === assignment.workerUserId)?.displayName ??
+                    assignment.workerUserId
+                  }
                 </div>
               ) : null}
             </div>
@@ -2528,14 +2532,14 @@ export function ProjectCoordinatorDecisionSection({
                 event.preventDefault()
                 const values = new FormData(event.currentTarget)
                 const decision = String(values.get('decision') ?? '')
-                const selectedAgentId = String(values.get('next-agent') ?? '')
+                const workerUserId = String(values.get('next-user') ?? '')
                 const input = projectCoordinatorResultReviewInput(
                   project,
                   review.submission.resultSubmissionId,
                   decision === 'accept' ? 'accept' : 'request_revision',
                   {
                     instruction: String(values.get('instruction') ?? ''),
-                    nextAssigneeAgentId: selectedAgentId,
+                    nextWorkerUserId: workerUserId,
                     nextOfferExpiresAt: String(values.get('offer-expires-at') ?? ''),
                     nextOutputFileName: String(values.get('next-output-file-name') ?? '')
                   }
@@ -2578,13 +2582,11 @@ export function ProjectCoordinatorDecisionSection({
                 </div>
               ) : null}
               <textarea name="instruction" aria-label={t('projectCoordinatorRevisionInstruction')} placeholder={t('projectCoordinatorRevisionInstruction')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
-              <select name="next-agent" defaultValue="" aria-label={t('projectCoordinatorNextAgent')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs">
-                <option value="">{t('projectCoordinatorChooseExactAgent')}</option>
-                {project.workerGroups.flatMap(({ agents }) => agents).map((agent) => (
-                  <option key={agent.projectAvailability.agentId} value={agent.projectAvailability.agentId}>
-                    {agent.displayName} · {t(agentStateMessageKey(
-                      projectCoordinatorAgentOperationalState(agent).state
-                    ))} · {agent.projectAvailability.availability.runtimeCapabilityTags?.join(', ') || '—'} · {shortIdentifier(agent.projectAvailability.agentId)}
+              <select name="next-user" defaultValue="" aria-label={t('projectCoordinatorNextWorkerUser')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs">
+                <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
+                {project.workerGroups.map((group) => (
+                  <option key={group.userId} value={group.userId}>
+                    {group.displayName}
                   </option>
                 ))}
               </select>
@@ -2664,7 +2666,7 @@ export function projectCoordinatorResultReviewInput(
   decision: 'accept' | 'request_revision',
   revision: Readonly<{
     instruction: string
-    nextAssigneeAgentId: string
+    nextWorkerUserId: string
     nextOfferExpiresAt: string
     nextOutputFileName: string
   }>
@@ -2678,11 +2680,7 @@ export function projectCoordinatorResultReviewInput(
     executionId === review.submission.executionId
   ))
   if (!task || !execution) return null
-  const nextAgent = project.workerGroups.flatMap(({ agents }) => agents).find(
-    ({ projectAvailability }) => (
-      projectAvailability.agentId === revision.nextAssigneeAgentId
-    )
-  )
+  const nextWorker = project.workerGroups.find(({ userId }) => userId === revision.nextWorkerUserId)
   const parsedOutputName = task.task.fileIntent
     ? taskFileDestinationNameSchema.safeParse(revision.nextOutputFileName)
     : null
@@ -2713,18 +2711,15 @@ export function projectCoordinatorResultReviewInput(
     ...base,
     decision,
     instruction: null,
-    nextAssigneeAgentId: null,
-    expectedNextAssigneeAvailabilityRevision: null,
+    nextWorkerUserId: null,
     nextOfferExpiresAt: null,
     nextFileIntent: null
-  } : revision.instruction.trim() && nextAgent && revision.nextOfferExpiresAt &&
+  } : revision.instruction.trim() && nextWorker && revision.nextOfferExpiresAt &&
       nextFileIntent !== undefined ? {
         ...base,
         decision,
         instruction: revision.instruction,
-        nextAssigneeAgentId: revision.nextAssigneeAgentId,
-        expectedNextAssigneeAvailabilityRevision:
-          nextAgent.projectAvailability.availability.revision,
+        nextWorkerUserId: revision.nextWorkerUserId,
         nextOfferExpiresAt: revision.nextOfferExpiresAt,
         nextFileIntent
       } : null
@@ -2970,7 +2965,7 @@ export function ProjectCoordinatorProvisioningSection({
                     onRetryRecoverySuccessor({
                       projectId: project!.project.projectId,
                       recoveryActionId: abandonedRecoveryAction.recoveryActionId,
-                      assigneeAgentId: String(values.get('successor-agent') ?? ''),
+                      workerUserId: String(values.get('successor-user') ?? ''),
                       nextOutputFileName: String(
                         values.get('next-output-file-name') ?? ''
                       ),
@@ -2980,20 +2975,18 @@ export function ProjectCoordinatorProvisioningSection({
                 >
                   <select
                     required
-                    name="successor-agent"
+                    name="successor-user"
                     defaultValue=""
-                    aria-label={t('projectCoordinatorNextAgent')}
+                    aria-label={t('projectCoordinatorNextWorkerUser')}
                     className="w-full rounded border border-ds-border bg-ds-surface px-2 py-1 text-[10px]"
                   >
-                    <option value="">{t('projectCoordinatorChooseExactAgent')}</option>
-                    {project!.workerGroups.flatMap(({ agents }) => agents).map((agent) => (
+                    <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
+                    {project!.workerGroups.map((group) => (
                       <option
-                        key={agent.projectAvailability.agentId}
-                        value={agent.projectAvailability.agentId}
+                        key={group.userId}
+                        value={group.userId}
                       >
-                        {agent.displayName} · {t(agentStateMessageKey(
-                          projectCoordinatorAgentOperationalState(agent).state
-                        ))} · {agent.projectAvailability.availability.runtimeCapabilityTags?.join(', ') || '—'} · {shortIdentifier(agent.projectAvailability.agentId)}
+                        {group.displayName}
                       </option>
                     ))}
                   </select>

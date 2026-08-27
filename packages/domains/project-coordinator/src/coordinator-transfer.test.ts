@@ -153,6 +153,7 @@ function transferWorkspace(transferred: boolean) {
         workerGroup(TEST_IDS.secondUserId, 'agt_MemberAgent001', 9)
       ],
       tasks: [],
+      offers: [],
       reviews: [],
       pendingHumanNeeded: [],
       records: [],

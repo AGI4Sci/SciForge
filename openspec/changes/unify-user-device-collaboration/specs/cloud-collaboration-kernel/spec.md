@@ -18,14 +18,14 @@ Collaboration Server SHALL 是 User、Human Endpoint Binding、Agent ownership�
 
 #### Scenario: 创建 Project
 
-- **WHEN** 用户创建 Project 并指定 Coordinator Agent
+- **WHEN** 用户在已登录且已建立当前 Device Agent 的 Desktop 创建 Project
 - **THEN** 云端 SHALL 持久化 Project、成员、目标和 Coordinator
 - **AND** SHALL 投递 `project.started`
 - **AND** SHALL NOT 自行生成项目计划。
 
 ### Requirement: Project 和 Task 有唯一权威状态
 
-Project SHALL 记录 member user IDs、唯一 active Coordinator Agent 和 revision；Task SHALL 记录唯一 assignee Agent 和 revision。所有写入 SHALL 验证 actor user/agent、所有权、Project role、expected revision 和状态机。
+Project SHALL 记录 member user IDs、唯一 active Coordinator Agent 和 revision；Task SHALL 记录 Worker User、required capability tags 和 revision。User-level Offer 被原子 claim 后，当前 Task Execution SHALL 记录唯一 assignee User/Device/Agent 和 fence。所有写入 SHALL 验证 actor user/agent、所有权、Project role、expected revision 和状态机。
 
 #### Scenario: 非 Coordinator 修改计划
 
@@ -41,9 +41,9 @@ Project SHALL 记录 member user IDs、唯一 active Coordinator Agent 和 revis
 
 #### Scenario: Agent owner 不是 Project 成员
 
-- **WHEN** Coordinator 尝试把 Task 分配给未授权用户所拥有的 Agent
+- **WHEN** Coordinator 尝试把 Task 分配给未授权的 Worker User
 - **THEN** 云端 SHALL 拒绝分配
-- **AND** 除非该 Agent 是 Project 显式授权的机构服务节点。
+- **AND** 不得通过选择该 User 的某个 Agent 绕过 Membership 或 Task Authority。
 
 ### Requirement: 状态变化和信箱消息原子持久化
 
@@ -51,9 +51,9 @@ Project SHALL 记录 member user IDs、唯一 active Coordinator Agent 和 revis
 
 #### Scenario: Worker 离线
 
-- **WHEN** Coordinator 为离线 Worker 创建 Task
-- **THEN** TaskOffer SHALL 保存在 Agent inbox
-- **AND** Worker 重连后 SHALL 从最后确认 sequence 按序读取。
+- **WHEN** 一个 Worker User 的合格 Agent 在 Offer 创建后断线
+- **THEN** User-level Task Offer 与已产生的 Agent Inbox 通知 SHALL 持久化
+- **AND** 该 Agent 重连后 SHALL 从最后确认 sequence 按序读取，并在 claim 时重验当前可派发事实。
 
 #### Scenario: 请求重试
 

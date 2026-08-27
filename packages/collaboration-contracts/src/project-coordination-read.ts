@@ -375,7 +375,8 @@ export const restProjectCoordinationResponseSchema = z.object({
   uniqueKeys(tasks.map(({ taskId }) => taskId), ['pages'], 'A Task fact may appear only once.')
   uniqueKeys(executions.map(({ executionId }) => executionId), ['pages'], 'A Task execution fact may appear only once.')
   uniqueKeys(offers.map(({ taskOfferId }) => taskOfferId), ['pages'], 'A Task offer fact may appear only once.')
-  uniqueKeys(offers.map(({ executionId }) => executionId), ['pages'], 'One execution can have only one canonical Task offer.')
+  uniqueKeys(offers.flatMap(({ executionId }) => executionId === null ? [] : [executionId]),
+    ['pages'], 'One execution can have only one canonical claimed Task offer.')
   uniqueKeys(taskAuthorities.map(({ taskAuthorityId }) => taskAuthorityId), ['pages'], 'Task Authority IDs must be unique.')
   uniqueKeys(
     taskAuthorities.map(({ userId, scope }) => `${userId}\u0000${scope}`),
@@ -403,6 +404,7 @@ export const restProjectCoordinationResponseSchema = z.object({
   const membershipsByUserId = new Map(memberships.map((fact) => [fact.userId, fact]))
   const tasksById = new Map(tasks.map((fact) => [fact.taskId, fact]))
   const executionsById = new Map(executions.map((fact) => [fact.executionId, fact]))
+  const offersById = new Map(offers.map((fact) => [fact.taskOfferId, fact]))
   const providerFactsById = new Map(providerPrincipalFacts.map((fact) => [fact.providerPrincipalFactId, fact]))
   const observationsById = new Map(providerObservations.map((fact) => [fact.providerObservationId, fact]))
   const intentsById = new Map(provisioningIntents.map((fact) => [fact.provisioningIntentId, fact]))
@@ -576,24 +578,37 @@ export const restProjectCoordinationResponseSchema = z.object({
   }
 
   for (const [index, offer] of offers.entries()) {
-    const execution = executionsById.get(offer.executionId)
     requireCompleteReference(
-      'executions',
-      execution,
-      ['pages', index, 'executionId'],
-      'A Task offer must resolve to its exact execution inside a complete execution fact collection.'
+      'memberships',
+      membershipsByUserId.get(offer.workerUserId),
+      ['pages', index, 'workerUserId'],
+      'A Task offer Worker User must resolve to the unique Project Membership fact.'
     )
+    const task = tasksById.get(offer.taskId)
+    requireCompleteReference(
+      'tasks',
+      task,
+      ['pages', index, 'taskId'],
+      'A Task offer must resolve to its Task inside a complete Task fact collection.'
+    )
+    const execution = offer.executionId === null ? undefined : executionsById.get(offer.executionId)
+    if (offer.executionId !== null) {
+      requireCompleteReference(
+        'executions',
+        execution,
+        ['pages', index, 'executionId'],
+        'An accepted Task offer must resolve to its winning execution.'
+      )
+    }
     if (execution !== undefined && (
       offer.projectId !== execution.projectId ||
       offer.taskId !== execution.taskId ||
-      offer.assigneeUserId !== execution.assigneeUserId ||
-      offer.assigneeAgentId !== execution.assigneeAgentId ||
-      offer.assigneeDeviceId !== execution.assigneeDeviceId
+      offer.workerUserId !== execution.assigneeUserId
     )) {
       context.addIssue({
         code: 'custom',
         path: ['pages', index, 'executionId'],
-        message: 'Task offer references must match the immutable execution assignee and Task identity.'
+        message: 'The claimed Task offer must match the immutable execution User and Task identity.'
       })
     }
   }
@@ -1063,19 +1078,19 @@ export const restProjectCoordinationResponseSchema = z.object({
         })
       }
     }
-    if (review.nextExecutionId !== null) {
-      const nextExecution = executionsById.get(review.nextExecutionId)
+    if (review.nextTaskOfferId !== null) {
+      const nextOffer = offersById.get(review.nextTaskOfferId)
       requireCompleteReference(
-        'executions',
-        nextExecution,
-        ['pages', index, 'nextExecutionId'],
-        'A request-revision decision must resolve its newly fenced execution attempt.'
+        'offers',
+        nextOffer,
+        ['pages', index, 'nextTaskOfferId'],
+        'A request-revision decision must resolve its new User-targeted offer.'
       )
-      if (nextExecution !== undefined && nextExecution.taskId !== review.taskId) {
+      if (nextOffer !== undefined && nextOffer.taskId !== review.taskId) {
         context.addIssue({
           code: 'custom',
-          path: ['pages', index, 'nextExecutionId'],
-          message: 'A revision execution must belong to the exact reviewed Task.'
+          path: ['pages', index, 'nextTaskOfferId'],
+          message: 'A revision offer must belong to the exact reviewed Task.'
         })
       }
     }

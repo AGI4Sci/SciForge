@@ -217,9 +217,7 @@ describe('Coordinator authority epoch', () => {
       idempotencyKey: 'idem_offer_withdraw_001',
       taskOfferId: TEST_IDS.taskOfferId,
       taskId: TEST_IDS.taskId,
-      executionId: TEST_IDS.executionId,
       expectedTaskRevision: 2,
-      expectedExecutionRevision: 1,
       expectedOfferRevision: 1,
       expectedCoordinatorAuthorityEpoch: 4,
       reason: 'Coordinator selected a replacement.'
@@ -249,29 +247,28 @@ describe('Coordinator authority epoch', () => {
     }).success).toBe(true)
   })
 
-  it('requires exact availability for reassignment and revision offers', () => {
+  it('targets a Worker User for reassignment and revision offers', () => {
     const reassign = {
       protocolVersion: '1.0',
       type: 'task.offer.reassign',
       requestId: TEST_IDS.requestId,
       idempotencyKey: 'idem_offer_reassign_001',
       taskId: TEST_IDS.taskId,
-      previousExecutionId: TEST_IDS.executionId,
+      previousTaskOfferId: TEST_IDS.taskOfferId,
+      expectedPreviousOfferRevision: 2,
       expectedProjectRevision: 8,
       expectedTaskRevision: 3,
-      expectedExecutionRevision: 2,
       expectedCoordinatorAuthorityEpoch: 4,
       expectedExecutionAuthorityEpoch: 2,
-      assigneeAgentId: TEST_IDS.secondAgentId,
-      expectedAvailabilityRevision: 9,
+      workerUserId: TEST_IDS.secondUserId,
       offerExpiresAt: TEST_LATER_TIMESTAMP,
       nextFileIntent: null
     }
     expect(restRequestSchema.safeParse(reassign).success).toBe(true)
     const { nextFileIntent: _nextFileIntent, ...withoutNextFileIntent } = reassign
     expect(restRequestSchema.safeParse(withoutNextFileIntent).success).toBe(false)
-    const { expectedAvailabilityRevision: _availability, ...withoutAvailability } = reassign
-    expect(restRequestSchema.safeParse(withoutAvailability).success).toBe(false)
+    const { workerUserId: _workerUserId, ...withoutWorkerUser } = reassign
+    expect(restRequestSchema.safeParse(withoutWorkerUser).success).toBe(false)
     const { expectedProjectRevision: _projectRevision, ...withoutProjectRevision } = reassign
     expect(restRequestSchema.safeParse(withoutProjectRevision).success).toBe(false)
     const { expectedExecutionAuthorityEpoch: _executionEpoch, ...withoutExecutionEpoch } = reassign
@@ -294,15 +291,14 @@ describe('Coordinator authority epoch', () => {
       expectedCoordinatorAuthorityEpoch: 4,
       decision: 'request_revision',
       instruction: 'Address the missing evidence.',
-      nextAssigneeAgentId: TEST_IDS.secondAgentId,
-      expectedNextAssigneeAvailabilityRevision: 9,
+      nextWorkerUserId: TEST_IDS.secondUserId,
       nextOfferExpiresAt: TEST_LATER_TIMESTAMP,
       nextFileIntent: null
     }
     expect(restRequestSchema.safeParse(review).success).toBe(true)
     expect(restRequestSchema.safeParse({
       ...review,
-      expectedNextAssigneeAvailabilityRevision: null
+      nextWorkerUserId: null
     }).success).toBe(false)
   })
 

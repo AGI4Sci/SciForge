@@ -13,7 +13,10 @@ const expectedSource = process.env.SCIFORGE_A_POSTGRES17_SOURCE
 if (!connectionString || !expectedSource) {
   throw new Error('SCIFORGE_A_POSTGRES17_TEST_URL and SCIFORGE_A_POSTGRES17_SOURCE are required')
 }
-if (!['fresh-v4', 'upstream-v4', 'public-v5', 'staging-v9', 'a-v11', 'current-v12'].includes(expectedSource)) {
+if (![
+  'fresh-v4', 'upstream-v4', 'public-v5', 'staging-v9', 'a-v11', 'current-v12',
+  'current-v13', 'current-v14', 'current-v15', 'current-v16'
+].includes(expectedSource)) {
   throw new Error('SCIFORGE_A_POSTGRES17_SOURCE names an unsupported forward-upgrade source')
 }
 const url = new URL(connectionString)
@@ -96,7 +99,7 @@ try {
       status: 'paused', coordinatorAgentId: coordinatorId, coordinatorAuthorityEpoch: 1,
       executionAuthorityEpoch: 1, contentOwnerUserId: null,
       budget: { maxTasks: 20, maxTasksPerRound: 5, maxTaskRetries: 2, maxCoordinationRounds: 4 },
-      coordinationRound: 0, revision: 1, createdAt: at, updatedAt: at
+      coordinationRound: 1, revision: 1, createdAt: at, updatedAt: at
     }, [
       { projectMembershipId: 'pmr_PgOwner000001', projectId, userId: ownerUserId, state: 'active',
         authorityEpoch: 1, activatedAt: at, removalRequestedAt: null, removalRequestedByUserId: null,
@@ -117,7 +120,7 @@ try {
       contentMode: 'none', status: 'active', coordinatorAgentId: coordinatorId,
       coordinatorAuthorityEpoch: 1, executionAuthorityEpoch: 2, contentOwnerUserId: null,
       budget: { maxTasks: 20, maxTasksPerRound: 5, maxTaskRetries: 2, maxCoordinationRounds: 4 },
-      coordinationRound: 0, revision: 2, createdAt: at, updatedAt: at
+      coordinationRound: 1, revision: 2, createdAt: at, updatedAt: at
     }, 1)
     for (const scope of ['text_tasks', 'file_tasks'] as const) {
       await tx.upsertTaskAuthority({
@@ -136,31 +139,32 @@ try {
     await tx.insertTask({
       taskId, projectId, createdByCoordinatorAgentId: coordinatorId, title: 'Text task',
       objective: 'Exercise immutable assignment attempts', completionCriteria: ['result reviewed'],
-      dependencyTaskIds: [], fileIntent: null, currentExecutionId: null, currentExecutionState: null,
+      dependencyTaskIds: [], requiredCapabilityTags: ['task.execute'],
+      fileIntent: null, currentExecutionId: null, currentExecutionState: null,
       status: 'planned', executionCount: 0, maxRetries: 2, coordinationRound: 1,
       revision: 1, createdAt: at, updatedAt: at, completedAt: null
     })
     await tx.insertTaskExecution({
       executionId, taskId, projectId, attempt: 1, offeredByCoordinatorAgentId: coordinatorId,
       assigneeUserId: workerUserId, assigneeAgentId: workerAgentId, assigneeDeviceId: workerDeviceId,
-      state: 'offered', stateRevision: 1, fence: {
+      state: 'accepted', stateRevision: 1, fence: {
         schemaVersion: 1, executionId, assigneeUserId: workerUserId, assigneeAgentId: workerAgentId,
         assigneeDeviceId: workerDeviceId, assignmentTaskRevision: 2, projectExecutionAuthorityEpoch: 2,
         userTaskAuthorityEpoch: 2, bindingRevision: null, status: 'open', reason: null, fencedAt: null
-      }, fileIntent: null, currentResultSubmissionId: null, offeredAt: at, acceptedAt: null,
+      }, fileIntent: null, currentResultSubmissionId: null, offeredAt: at, acceptedAt: at,
       startedAt: null, terminalAt: null, revision: 1, createdAt: at, updatedAt: at
     })
     await tx.insertTaskOffer({
-      taskOfferId: 'tof_PgOffer000001', executionId, taskId, projectId, assigneeUserId: workerUserId,
-      assigneeAgentId: workerAgentId, assigneeDeviceId: workerDeviceId, state: 'pending',
-      offeredAt: at, expiresAt, respondedAt: null, rejectionReason: null, safeReasonDetail: null,
+      taskOfferId: 'ofr_PgOffer000001', executionId, taskId, projectId, workerUserId,
+      state: 'accepted', offeredAt: at, expiresAt, respondedAt: at,
       revision: 1, createdAt: at, updatedAt: at
     })
     await tx.updateTask({
       taskId, projectId, createdByCoordinatorAgentId: coordinatorId, title: 'Text task',
       objective: 'Exercise immutable assignment attempts', completionCriteria: ['result reviewed'],
-      dependencyTaskIds: [], fileIntent: null, currentExecutionId: executionId,
-      currentExecutionState: 'offered', status: 'offered', executionCount: 1, maxRetries: 2,
+      dependencyTaskIds: [], requiredCapabilityTags: ['task.execute'],
+      fileIntent: null, currentExecutionId: executionId,
+      currentExecutionState: 'accepted', status: 'in_progress', executionCount: 1, maxRetries: 2,
       coordinationRound: 1, revision: 2, createdAt: at, updatedAt: at, completedAt: null
     }, 1)
     await tx.insertExternalOperationJournal({
@@ -246,5 +250,6 @@ async function sourceRoute(): Promise<string> {
   if (version === 9 && row.managed === true && row.oidc === true && row.legacy_refs === true) return 'staging-v9'
   if (version === 11) return 'a-v11'
   if (version === 12) return 'current-v12'
+  if (version >= 13 && version <= 16) return `current-v${version}`
   return `unsupported-${String(version)}`
 }

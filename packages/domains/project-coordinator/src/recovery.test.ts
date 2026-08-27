@@ -46,7 +46,6 @@ const recoveryActionId = 'rca_TaskRecovery001'
 const journalEntryId = 'crj_TaskRecovery001'
 const expectedName = 'meeting-summary.recovery-1.md'
 const successorName = 'meeting-summary.recovery-2.md'
-const successorExecutionId = 'exe_RecoveryExec002'
 const root = {
   contractVersion: 1 as const,
   kind: 'content-space.container-reference' as const,
@@ -246,7 +245,7 @@ test('Owner abandons from freshly read CAS facts without manufacturing an observ
   })
 })
 
-test('Owner approval asks the current Coordinator Agent to create one freshly named successor', async () => {
+test('Owner approval asks the current Coordinator Agent to broadcast one freshly named successor offer', async () => {
   const abandoned = recoveryWorkspace('abandoned')
   const retried = recoverySuccessorWorkspace()
   let workspaceReads = 0
@@ -268,7 +267,7 @@ test('Owner approval asks the current Coordinator Agent to create one freshly na
     },
     transport: cloudTransport(async () => {
       userTransportCalled = true
-      throw new Error('Human/User transport must not create a successor execution')
+      throw new Error('Human/User transport must not create a successor offer')
     }),
     coordinatorCloudCommands,
     getCapabilities: () => capabilityInvoker(async () => {
@@ -281,28 +280,30 @@ test('Owner approval asks the current Coordinator Agent to create one freshly na
   const result = await port.retrySuccessor({
     projectId,
     recoveryActionId,
-    assigneeAgentId: 'agt_RecoveryWorker01',
+    workerUserId: 'usr_RecoveryWorker01',
     nextOutputFileName: successorName,
     offerExpiresAt: '2026-08-27T02:00:00.000Z'
   }, 'idem_TaskRecoverySuccessor01')
 
   assert.equal(userTransportCalled, false)
   assert.equal(workspaceReads, 2)
-  assert.equal(result.projects[0]?.tasks[0]?.task.currentExecutionId, successorExecutionId)
+  assert.equal(result.projects[0]?.tasks[0]?.task.currentExecutionId, null)
+  assert.equal(result.projects[0]?.offers.some(({ taskOfferId }) => (
+    taskOfferId === 'ofr_RecoveryOffer002'
+  )), true)
   assert.deepEqual(commands, [{
     protocolVersion: '1.0',
     requestId: 'req_TaskRecoverySuccessor01',
     type: 'task.offer.reassign',
     idempotencyKey: 'idem_TaskRecoverySuccessor01',
     taskId,
-    previousExecutionId: executionId,
+    previousTaskOfferId: 'ofr_RecoveryOffer001',
+    expectedPreviousOfferRevision: 2,
     expectedProjectRevision: 9,
     expectedTaskRevision: 7,
-    expectedExecutionRevision: 8,
     expectedCoordinatorAuthorityEpoch: 4,
     expectedExecutionAuthorityEpoch: 2,
-    assigneeAgentId: 'agt_RecoveryWorker01',
-    expectedAvailabilityRevision: 11,
+    workerUserId: 'usr_RecoveryWorker01',
     offerExpiresAt: '2026-08-27T02:00:00.000Z',
     nextFileIntent: {
       schemaVersion: 1,
@@ -353,6 +354,7 @@ function recoveryWorkspace(
     objective: 'Write and upload one reviewable meeting summary.',
     completionCriteria: ['The exact new file is available for review.'],
     dependencyTaskIds: [],
+    requiredCapabilityTags: ['content.write'],
     fileIntent: {
       schemaVersion: 1,
       bindingRevision: 3,
@@ -511,6 +513,22 @@ function recoveryWorkspace(
       plan: null,
       workerGroups: recoveryWorkerGroups(),
       tasks: [{ task, executions: [execution] }],
+      offers: [taskOfferSchema.parse({
+        schemaVersion: 1,
+        type: 'task_offer',
+        taskOfferId: 'ofr_RecoveryOffer001',
+        projectId,
+        taskId,
+        executionId,
+        workerUserId: 'usr_RecoveryWorker01',
+        state: 'accepted',
+        offeredAt: now,
+        expiresAt: '2026-08-26T03:00:00.000Z',
+        respondedAt: now,
+        revision: 2,
+        createdAt: now,
+        updatedAt: now
+      })],
       reviews: [],
       pendingHumanNeeded: [],
       records: [],
@@ -606,10 +624,10 @@ function recoverySuccessorWorkspace(): ProjectCoordinatorWorkspace {
   const succeededAt = '2026-08-26T02:05:00.000Z'
   taskView.task = taskSchema.parse({
     ...taskView.task,
-    currentExecutionId: successorExecutionId,
-    currentExecutionState: 'offered',
+    currentExecutionId: null,
+    currentExecutionState: null,
     status: 'offered',
-    executionCount: 2,
+    executionCount: 1,
     revision: 8,
     updatedAt: succeededAt,
     fileIntent: {
@@ -620,55 +638,18 @@ function recoverySuccessorWorkspace(): ProjectCoordinatorWorkspace {
       }
     }
   })
-  taskView.executions.push(taskExecutionSchema.parse({
+  project.offers.push(taskOfferSchema.parse({
     schemaVersion: 1,
-    type: 'task_execution',
+    type: 'task_offer',
+    taskOfferId: 'ofr_RecoveryOffer002',
     projectId,
     taskId,
-    executionId: successorExecutionId,
-    attempt: 2,
-    offeredByCoordinatorAgentId: 'agt_RecoveryCoord01',
-    assigneeUserId: 'usr_RecoveryWorker01',
-    assigneeAgentId: 'agt_RecoveryWorker01',
-    assigneeDeviceId: 'dev_RecoveryWorker01',
-    state: 'offered',
-    stateRevision: 1,
-    fence: {
-      schemaVersion: 1,
-      executionId: successorExecutionId,
-      assigneeUserId: 'usr_RecoveryWorker01',
-      assigneeAgentId: 'agt_RecoveryWorker01',
-      assigneeDeviceId: 'dev_RecoveryWorker01',
-      assignmentTaskRevision: 8,
-      projectExecutionAuthorityEpoch: 2,
-      userTaskAuthorityEpoch: 2,
-      bindingRevision: 3,
-      status: 'open',
-      reason: null,
-      fencedAt: null
-    },
-    fileIntent: {
-      schemaVersion: 1,
-      type: 'task_execution_file_intent',
-      projectId,
-      taskId,
-      executionId: successorExecutionId,
-      assignmentTaskRevision: 8,
-      bindingRevision: 3,
-      declarationDigest: 'c'.repeat(64),
-      inputs: [],
-      output: {
-        rootResourceRefId: 'rrf_RecoveryRoot001',
-        fileName: successorName,
-        mediaType: 'text/markdown',
-        maxBytes: 65_536
-      }
-    },
-    currentResultSubmissionId: null,
+    executionId: null,
+    workerUserId: 'usr_RecoveryWorker01',
+    state: 'pending',
     offeredAt: succeededAt,
-    acceptedAt: null,
-    startedAt: null,
-    terminalAt: null,
+    expiresAt: '2026-08-27T02:00:00.000Z',
+    respondedAt: null,
     revision: 1,
     createdAt: succeededAt,
     updatedAt: succeededAt
@@ -752,31 +733,11 @@ function abandonResponseItems(workspace: ProjectCoordinatorWorkspace) {
 }
 
 function successorResponseItems(workspace: ProjectCoordinatorWorkspace) {
-  const taskView = workspace.projects[0]!.tasks[0]!
-  const execution = taskView.executions.find(({ executionId: id }) => (
-    id === successorExecutionId
+  const project = workspace.projects[0]!
+  const offer = project.offers.find(({ taskOfferId }) => (
+    taskOfferId === 'ofr_RecoveryOffer002'
   ))!
-  const offer = taskOfferSchema.parse({
-    schemaVersion: 1,
-    type: 'task_offer',
-    taskOfferId: 'ofr_RecoveryOffer002',
-    projectId,
-    taskId,
-    executionId: successorExecutionId,
-    assigneeUserId: 'usr_RecoveryWorker01',
-    assigneeAgentId: 'agt_RecoveryWorker01',
-    assigneeDeviceId: 'dev_RecoveryWorker01',
-    state: 'pending',
-    offeredAt: execution.offeredAt,
-    expiresAt: '2026-08-27T02:00:00.000Z',
-    respondedAt: null,
-    rejectionReason: null,
-    safeReasonDetail: null,
-    revision: 1,
-    createdAt: execution.createdAt,
-    updatedAt: execution.updatedAt
-  })
-  return [taskView.task, execution, offer]
+  return [project.tasks[0]!.task, offer]
 }
 
 function capabilityInvoker(

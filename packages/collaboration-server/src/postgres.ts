@@ -1185,12 +1185,11 @@ class PostgresReadRepository implements CollaborationReadRepository {
   async listExpiredTaskOffers(now: string, limit: number): Promise<StoredTaskOffer[]> {
     const result = await this.sql.query(
       `SELECT offer.* FROM sciforge_collaboration.task_offers AS offer
-       JOIN sciforge_collaboration.task_executions AS execution
-         ON execution.execution_id=offer.execution_id
        JOIN sciforge_collaboration.tasks AS task
-         ON task.task_id=offer.task_id AND task.current_execution_id=execution.execution_id
+         ON task.task_id=offer.task_id
        WHERE offer.state='pending' AND offer.expires_at <= $1
-         AND execution.state='offered' AND execution.fence ->> 'status'='open'
+         AND offer.execution_id IS NULL AND task.status='offered'
+         AND task.current_execution_id IS NULL
        ORDER BY offer.expires_at,offer.task_offer_id LIMIT $2`,
       [now, limit]
     )
@@ -2466,11 +2465,12 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.tasks
        (task_id,project_id,created_by_coordinator_agent_id,title,objective,completion_criteria,
-        dependency_task_ids,file_intent,current_execution_id,current_execution_state,status,
+        dependency_task_ids,required_capability_tags,file_intent,current_execution_id,current_execution_state,status,
         execution_count,max_retries,coordination_round,revision,created_at,updated_at,completed_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
       [task.taskId, task.projectId, task.createdByCoordinatorAgentId, task.title, task.objective,
         JSON.stringify(task.completionCriteria), JSON.stringify(task.dependencyTaskIds),
+        JSON.stringify(task.requiredCapabilityTags),
         task.fileIntent === null ? null : JSON.stringify(task.fileIntent), task.currentExecutionId,
         task.currentExecutionState, task.status, task.executionCount, task.maxRetries,
         task.coordinationRound, task.revision, task.createdAt, task.updatedAt, task.completedAt]
@@ -2525,13 +2525,11 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
   async insertTaskOffer(offer: StoredTaskOffer): Promise<void> {
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.task_offers
-       (task_offer_id,execution_id,task_id,project_id,assignee_user_id,assignee_agent_id,
-        assignee_device_id,state,offered_at,expires_at,responded_at,rejection_reason,
-        safe_reason_detail,revision,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-      [offer.taskOfferId, offer.executionId, offer.taskId, offer.projectId, offer.assigneeUserId,
-        offer.assigneeAgentId, offer.assigneeDeviceId, offer.state, offer.offeredAt, offer.expiresAt,
-        offer.respondedAt, offer.rejectionReason, offer.safeReasonDetail, offer.revision,
+       (task_offer_id,execution_id,task_id,project_id,worker_user_id,state,offered_at,
+        expires_at,responded_at,revision,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [offer.taskOfferId, offer.executionId, offer.taskId, offer.projectId, offer.workerUserId,
+        offer.state, offer.offeredAt, offer.expiresAt, offer.respondedAt, offer.revision,
         offer.createdAt, offer.updatedAt]
     )
   }
@@ -2539,11 +2537,10 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
   async updateTaskOffer(offer: StoredTaskOffer, expectedRevision: number): Promise<void> {
     const result = await this.sql.query(
       `UPDATE sciforge_collaboration.task_offers
-       SET state=$2,responded_at=$3,rejection_reason=$4,safe_reason_detail=$5,
-           revision=$6,updated_at=$7
-       WHERE task_offer_id=$1 AND revision=$8 AND $6=$8+1`,
-      [offer.taskOfferId, offer.state, offer.respondedAt, offer.rejectionReason,
-        offer.safeReasonDetail, offer.revision, offer.updatedAt, expectedRevision]
+       SET execution_id=$2,state=$3,responded_at=$4,revision=$5,updated_at=$6
+       WHERE task_offer_id=$1 AND revision=$7 AND $5=$7+1`,
+      [offer.taskOfferId, offer.executionId, offer.state, offer.respondedAt,
+        offer.revision, offer.updatedAt, expectedRevision]
     )
     expectRevision(result.rowCount)
   }
@@ -2598,12 +2595,12 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
        (review_decision_id,result_submission_id,project_id,task_id,execution_id,
         reviewed_result_revision,decided_by_user_id,decided_by_coordinator_agent_id,
         coordinator_authority_epoch,decision,instruction,accepted_project_record_id,
-        next_execution_id,decided_at,revision,created_at,updated_at)
+        next_task_offer_id,decided_at,revision,created_at,updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
       [review.reviewDecisionId, review.resultSubmissionId, review.projectId, review.taskId,
         review.executionId, review.reviewedResultRevision, review.decidedByUserId,
         review.decidedByCoordinatorAgentId, review.coordinatorAuthorityEpoch, review.decision,
-        review.instruction, review.acceptedProjectRecordId, review.nextExecutionId,
+        review.instruction, review.acceptedProjectRecordId, review.nextTaskOfferId,
         review.decidedAt, review.revision, review.createdAt, review.updatedAt]
     )
   }
@@ -2899,6 +2896,7 @@ function mapTask(row: SqlRow): StoredTask {
     createdByCoordinatorAgentId: string(row, 'created_by_coordinator_agent_id'),
     title: string(row, 'title'), objective: string(row, 'objective'),
     completionCriteria: jsonStrings(row.completion_criteria), dependencyTaskIds: jsonStrings(row.dependency_task_ids),
+    requiredCapabilityTags: jsonStrings(row.required_capability_tags),
     fileIntent: row.file_intent == null ? null : jsonRecord(row.file_intent) as StoredTask['fileIntent'],
     currentExecutionId: optionalString(row, 'current_execution_id') ?? null,
     currentExecutionState: (optionalString(row, 'current_execution_state') ?? null) as StoredTask['currentExecutionState'],
@@ -2923,14 +2921,12 @@ function mapTaskExecution(row: SqlRow): StoredTaskExecution {
 }
 function mapTaskOffer(row: SqlRow): StoredTaskOffer {
   return {
-    taskOfferId: string(row, 'task_offer_id'), executionId: string(row, 'execution_id'),
+    taskOfferId: string(row, 'task_offer_id'), executionId: optionalString(row, 'execution_id') ?? null,
     taskId: string(row, 'task_id'), projectId: string(row, 'project_id'),
-    assigneeUserId: string(row, 'assignee_user_id'), assigneeAgentId: string(row, 'assignee_agent_id'),
-    assigneeDeviceId: string(row, 'assignee_device_id'),
+    workerUserId: string(row, 'worker_user_id'),
     state: string(row, 'state') as StoredTaskOffer['state'], offeredAt: iso(row.offered_at),
     expiresAt: iso(row.expires_at), respondedAt: optionalIso(row.responded_at) ?? null,
-    rejectionReason: (optionalString(row, 'rejection_reason') ?? null) as StoredTaskOffer['rejectionReason'],
-    safeReasonDetail: optionalString(row, 'safe_reason_detail') ?? null, revision: number(row.revision),
+    revision: number(row.revision),
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
   }
 }
@@ -2976,7 +2972,7 @@ function mapTaskResultReview(row: SqlRow): StoredTaskResultReview {
     decision: string(row, 'decision') as StoredTaskResultReview['decision'],
     instruction: optionalString(row, 'instruction') ?? null,
     acceptedProjectRecordId: optionalString(row, 'accepted_project_record_id') ?? null,
-    nextExecutionId: optionalString(row, 'next_execution_id') ?? null,
+    nextTaskOfferId: optionalString(row, 'next_task_offer_id') ?? null,
     decidedAt: iso(row.decided_at), revision: number(row.revision),
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
   }

@@ -487,6 +487,7 @@ function workspaceFixture(input: Readonly<{
       plan: null,
       workerGroups: [],
       tasks: [],
+      offers: [],
       reviews: [],
       pendingHumanNeeded: [],
       records: [],

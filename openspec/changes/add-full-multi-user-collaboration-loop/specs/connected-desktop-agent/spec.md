@@ -46,7 +46,7 @@ Agent SHALL 是一个 User 所有且绑定一个 Agent Host Device 的执行 ide
 
 #### Scenario: 同一 Agent 承担不同协作职责
 
-- **WHEN** 一个 Agent 是 Project A 的 `coordinatorAgentId` 且是 Project B Task 的 `assigneeAgentId`
+- **WHEN** 一个 Agent 是 Project A 的 `coordinatorAgentId`，且通过领取 Project B 的 User-level Task Offer 成为其当前 Execution 的 `assigneeAgentId`
 - **THEN** Cloud SHALL 根据各自 Project/Task 关系分别授权
 - **AND** SHALL NOT 要求第二个账号、Device 或 Runtime。
 

@@ -1489,11 +1489,10 @@ export class FakeCollaborationRepository {
   async listExpiredTaskOffers(now, limit) {
     return copy([...this.state.taskOffers.values()]
       .filter((offer) => {
-        const execution = this.state.taskExecutions.get(offer.executionId)
         const task = this.state.tasks.get(offer.taskId)
         return offer.state === 'pending' && offer.expiresAt <= now &&
-          execution?.state === 'offered' && execution.fence.status === 'open' &&
-          task?.currentExecutionId === execution.executionId
+          offer.executionId === null && task?.status === 'offered' &&
+          task.currentExecutionId === null
       })
       .sort((left, right) => left.expiresAt.localeCompare(right.expiresAt) ||
         left.taskOfferId.localeCompare(right.taskOfferId))
@@ -1521,8 +1520,7 @@ export class FakeCollaborationRepository {
 
   async updateTaskOffer(offer, expectedRevision) {
     assertImmutableFields(this.state.taskOffers.get(offer.taskOfferId), offer, [
-      'taskOfferId', 'executionId', 'taskId', 'projectId', 'assigneeUserId', 'assigneeAgentId',
-      'assigneeDeviceId', 'offeredAt', 'expiresAt', 'createdAt'
+      'taskOfferId', 'taskId', 'projectId', 'workerUserId', 'offeredAt', 'expiresAt', 'createdAt'
     ], 'Task offer')
     revisionUpdate(this.state.taskOffers, offer.taskOfferId, offer, expectedRevision)
   }
