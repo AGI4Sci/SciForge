@@ -70,13 +70,13 @@
 2. 点击工具栏中的 **Phone Link**。
 3. 展开 **Phone Link Setup**。
 4. 在 **Cloud connection** 中填写管理员提供的协作服务地址。
-5. 点击 **Save service address** 保存地址。
+5. 点击 **Save and connect** 保存并连接。
 
 ![在 SciForge 打开 Phone Link](./assets/zulip-phone-link/03-open-phone-link.png)
 
 ![保存协作服务地址并开始首次设置](./assets/zulip-phone-link/04-phone-link-setup.png)
 
-新电脑首次设置时暂时显示 `disconnected` 是正常的。继续完成手机配对和本机 Agent 注册后，SciForge 会自动连接；此时不需要反复点击 Connect。
+新电脑首次设置时暂时显示 `disconnected` 是正常的。保存地址并完成身份、设备和手机配对后，SciForge 会自动创建或恢复这台电脑自己的 Agent；不需要手动注册或选择主要 Agent，也不需要反复点击 Connect。
 
 第一次设置完成前，**Phone Link Setup** 会保持展开。完成后默认折叠，但仍可随时重新展开查看状态。
 
@@ -97,17 +97,15 @@
 
 为避免泄露设备凭据，本手册不展示任何真实一次性指令。不要把指令截图发给其他人，也不要粘贴到 Channel 或 Topic；只能原样发送给 SciForge Bot 私聊。
 
-## 5. 注册这台电脑
+## 5. 确认这台电脑在线
 
 手机验证成功后：
 
-1. 点击 **注册这台 SciForge**；
-2. 输入容易识别的电脑名称，例如“办公室电脑”或“SciForge-Desktop-2”；
-3. 等待本机 Agent 显示在线。
+1. SciForge 会根据当前身份和本机设备自动创建或恢复这台电脑自己的 Agent；
+2. 等待 **Agent** 区域显示本机 Agent 在线；
+3. 如果仍显示不可用，请检查 Identity、Device 和 Cloud connection 状态，不要重复配对手机。
 
-![填写本机显示名称并注册这台 SciForge](./assets/zulip-phone-link/06-register-computer.png)
-
-每台电脑有自己独立的 Agent。连接同一个 Zulip 账号，不代表两台电脑是同一个 Agent。
+当前版本没有“注册这台 SciForge”、填写 Agent 名称或选择主要 Agent 的普通用户步骤。每台电脑仍有自己独立的 Agent；连接同一个 Zulip 账号，不代表两台电脑是同一个 Agent。
 
 ## 6. 在 Zulip Web 创建私人 Channel
 
@@ -236,7 +234,7 @@ Desktop Capability Broker 始终是最终权限裁决者。手机只有被明确
 
 1. 连接 Collaboration；
 2. 配对 Zulip 账号；
-3. 注册新电脑的本机 Agent；
+3. 等待 SciForge 自动创建或恢复新电脑的本机 Agent；
 4. 为新电脑创建新的私人 Channel 和 Topic；
 5. 绑定新电脑上的电脑对话。
 

@@ -10,8 +10,6 @@ import {
   COLLABORATION_SOURCE_CATALOG_FINGERPRINTS,
   COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS,
   COLLABORATION_V15_CATALOG_FINGERPRINTS,
-  COLLABORATION_V16_CATALOG_FINGERPRINTS,
-  COLLABORATION_V17_CATALOG_FINGERPRINTS,
   type CollaborationSchemaRoute,
   collaborationCatalogFingerprint,
   collaborationSchemaFingerprint,
@@ -53,6 +51,72 @@ describe.skipIf(connectionString === undefined).sequential(
           await runCollaborationMigrations(pool)
           expect(await migrationRestartSnapshot(pool), route).toEqual(beforeRestart)
         }
+      } finally {
+        await pool.end()
+      }
+    }, 30_000)
+
+    it('retires production-v7 legacy authority without deleting its audit graph', async () => {
+      assertSafeStage3Database(connectionString!)
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
+      try {
+        await installRoute(pool, 'production-v7')
+        await seedProductionV7LegacyAuthority(pool)
+
+        await runCollaborationMigrations(pool)
+
+        const authority = await pool.query(
+          `SELECT agent.status AS agent_status,
+                  agent.connection_status,
+                  agent.device_id LIKE 'dev_legacy_%' AS has_retirement_anchor,
+                  device.status AS device_status,
+                  device.installation_id,
+                  endpoint.status AS endpoint_status,
+                  participant.status AS participant_status,
+                  participant.primary_agent_id,
+                  participant.primary_human_endpoint_id,
+                  projection.status AS projection_status,
+                  projection.last_error_code,
+                  container.status AS container_status,
+                  container.safe_error_code,
+                  job.state AS job_state,
+                  (SELECT count(*)::int FROM sciforge_collaboration.credentials) AS credential_count,
+                  (SELECT count(*)::int FROM sciforge_collaboration.credentials
+                    WHERE revoked_at IS NULL) AS live_credential_count,
+                  (SELECT count(*)::int
+                   FROM sciforge_collaboration.provider_private_container_claims) AS claim_count
+           FROM sciforge_collaboration.agent_nodes AS agent
+           JOIN sciforge_collaboration.devices AS device ON device.device_id=agent.device_id
+           JOIN sciforge_collaboration.human_endpoint_bindings AS endpoint
+             ON endpoint.human_endpoint_id='hep_stage3_legacy_01'
+           JOIN sciforge_collaboration.participant_profiles AS participant
+             ON participant.user_id=agent.owner_user_id
+           JOIN sciforge_collaboration.remote_session_projections AS projection
+             ON projection.agent_id=agent.agent_id
+           JOIN sciforge_collaboration.managed_provider_containers AS container
+             ON container.owner_user_id=agent.owner_user_id
+           JOIN sciforge_collaboration.managed_provider_container_jobs AS job
+             ON job.managed_container_id=container.managed_container_id
+           WHERE agent.agent_id='agt_stage3_legacy_01'`
+        )
+        expect(authority.rows).toEqual([{
+          agent_status: 'revoked', connection_status: 'offline', has_retirement_anchor: true,
+          device_status: 'revoked', installation_id: 'ins_stage3_legacy_01',
+          endpoint_status: 'revoked', participant_status: 'incomplete',
+          primary_agent_id: null, primary_human_endpoint_id: null,
+          projection_status: 'paused', last_error_code: 'legacy_identity_retired',
+          container_status: 'suspended', safe_error_code: 'legacy_identity_retired',
+          job_state: 'succeeded', credential_count: 1, live_credential_count: 0, claim_count: 1
+        }])
+        expect(await currentSchemaVersion(pool)).toBe(16)
+        await expect(isCollaborationDatabaseReady(pool)).resolves.toBe(true)
+
+        const repository = new PostgresCollaborationRepository(pool)
+        const retiredAgent = await repository.getAgent('agt_stage3_legacy_01')
+        expect(retiredAgent).toMatchObject({ status: 'revoked', connectionStatus: 'offline' })
+        await expect(repository.getDevice(retiredAgent!.deviceId)).resolves.toMatchObject({
+          status: 'revoked', installationId: 'ins_stage3_legacy_01'
+        })
       } finally {
         await pool.end()
       }
@@ -201,7 +265,7 @@ describe.skipIf(connectionString === undefined).sequential(
       try {
         for (const sourceRoute of ['public-v5', 'staging-v9'] as const) {
           for (const [version, forwardCount] of [
-            [11, 1], [12, 2], [13, 3], [14, 4], [15, 5], [16, 6], [17, 7]
+            [11, 1], [12, 2], [13, 3], [14, 4], [15, 5], [16, 6]
           ] as const) {
             await installRoute(pool, sourceRoute)
             for (const name of FORWARD_MIGRATIONS.slice(0, forwardCount)) {
@@ -223,7 +287,7 @@ describe.skipIf(connectionString === undefined).sequential(
       } finally {
         await pool.end()
       }
-    })
+    }, 60_000)
 
     it('rejects unknown source drift before applying any forward migration', async () => {
       assertSafeStage3Database(connectionString!)
@@ -423,15 +487,14 @@ const ROUTES: readonly CollaborationSchemaRoute[] = [
   'fresh-v4',
   'upstream-v4',
   'public-v5',
+  'production-v7',
   'staging-v9',
   'a-v11',
   'current-v12',
   'current-v13',
   'current-v14',
   'current-v15',
-  'current-v16',
-  'current-v17',
-  'current-v18'
+  'current-v16'
 ]
 
 const BASELINE_MIGRATIONS = [
@@ -447,9 +510,7 @@ const FORWARD_MIGRATIONS = [
   '0013_full_multi_user_loop.sql',
   '0014_pre_provider_provisioning_binding.sql',
   '0015_canonical_project_created_inbox.sql',
-  '0016_remote_approval_reactions.sql',
-  '0017_managed_container_installations.sql',
-  '0018_native_private_container_claims.sql'
+  '0016_zulip_phone_link.sql'
 ] as const
 
 const HISTORICAL_MIGRATIONS = [
@@ -462,6 +523,12 @@ const HISTORICAL_MIGRATIONS = [
   '0007_portable_resource_refs.sql',
   '0008_managed_provider_containers.sql',
   '0009_portal_bounded_reads.sql'
+] as const
+
+const PRODUCTION_V7_MIGRATIONS = [
+  '0005_remote_approval_reactions.sql',
+  '0006_managed_container_installations.sql',
+  '0007_native_private_container_claims.sql'
 ] as const
 
 const IDS = {
@@ -489,6 +556,12 @@ async function installRoute(pool: SqlPool, route: CollaborationSchemaRoute): Pro
     return
   }
   for (const name of BASELINE_MIGRATIONS) await pool.query(await migrationSource(name))
+  if (route === 'production-v7') {
+    for (const name of PRODUCTION_V7_MIGRATIONS) {
+      await pool.query(await productionV7MigrationSource(name))
+    }
+    return
+  }
   const forwardCount = {
     'upstream-v4': 0,
     'a-v11': 1,
@@ -496,9 +569,7 @@ async function installRoute(pool: SqlPool, route: CollaborationSchemaRoute): Pro
     'current-v13': 3,
     'current-v14': 4,
     'current-v15': 5,
-    'current-v16': 6,
-    'current-v17': 7,
-    'current-v18': 8
+    'current-v16': 6
   }[route]
   for (const name of FORWARD_MIGRATIONS.slice(0, forwardCount)) {
     await pool.query(await migrationSource(name))
@@ -622,13 +693,14 @@ async function seedHistoricalProjectScopedRequests(pool: SqlPool): Promise<void>
 
 function expectedCurrentCatalog(route: CollaborationSchemaRoute): string {
   if (route === 'public-v5') return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['public-v5']
+  if (route === 'production-v7') return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['production-v7']
   if (route === 'staging-v9') return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['staging-v9']
   return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['base-v4']
 }
 
 function expectedCheckpointCatalog(
   route: 'public-v5' | 'staging-v9',
-  version: 11 | 12 | 13 | 14 | 15 | 16 | 17
+  version: 11 | 12 | 13 | 14 | 15 | 16
 ): string {
   if (version <= 13) {
     const checkpoint = `${route}-v${version}` as keyof typeof COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS
@@ -640,8 +712,7 @@ function expectedCheckpointCatalog(
     'staging-v9': '398324e912831ec272e33be7af45b97cee186e95f43ed877c40a6ea47988d875'
   }[lineage]
   if (version === 15) return COLLABORATION_V15_CATALOG_FINGERPRINTS[lineage]
-  if (version === 16) return COLLABORATION_V16_CATALOG_FINGERPRINTS[lineage]
-  return COLLABORATION_V17_CATALOG_FINGERPRINTS[lineage]
+  return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS[lineage]
 }
 
 async function migrationSource(name: string): Promise<string> {
@@ -650,6 +721,80 @@ async function migrationSource(name: string): Promise<string> {
 
 async function historicalMigrationSource(name: string): Promise<string> {
   return await readFile(new URL(`./test-fixtures/postgres-a-history/${name}`, import.meta.url), 'utf8')
+}
+
+async function seedProductionV7LegacyAuthority(pool: SqlPool): Promise<void> {
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.user_principals
+       (user_id,display_name,status,revision,created_at,updated_at)
+     VALUES ('usr_stage3_legacy_01','Legacy user','active',1,
+       '2026-08-27T00:00:00Z','2026-08-27T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.human_endpoint_bindings
+       (human_endpoint_id,user_id,provider,realm_id,provider_user_id,display_name,assurance,
+        status,revision,verified_at,updated_at)
+     VALUES ('hep_stage3_legacy_01','usr_stage3_legacy_01','zulip','stage3-realm',
+       'legacy-provider-user','Legacy phone','verified','active',1,
+       '2026-08-27T00:00:00Z','2026-08-27T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.agent_nodes
+       (agent_id,installation_id,owner_user_id,display_name,node_type,capabilities,status,
+        connection_status,credential_generation,revision,last_seen_at,updated_at)
+     VALUES ('agt_stage3_legacy_01','ins_stage3_legacy_01','usr_stage3_legacy_01',
+       'Legacy Agent','desktop','[]'::jsonb,'active','online',1,1,
+       '2026-08-27T00:00:00Z','2026-08-27T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.credentials
+       (credential_id,kind,subject_user_id,subject_agent_id,token_digest,assurance,generation,
+        created_at,revoked_at)
+     VALUES
+       ('cred_stage3_legacy_agent','agent_device','usr_stage3_legacy_01',
+        'agt_stage3_legacy_01',decode(repeat('11',32),'hex'),'device',1,
+        '2026-08-27T00:00:00Z',NULL),
+       ('cred_stage3_legacy_user','user','usr_stage3_legacy_01',NULL,
+        decode(repeat('22',32),'hex'),'verified',1,'2026-08-27T00:00:00Z',NULL);
+
+     INSERT INTO sciforge_collaboration.participant_profiles
+       (user_id,primary_human_endpoint_id,primary_agent_id,status,revision,updated_at)
+     VALUES ('usr_stage3_legacy_01','hep_stage3_legacy_01','agt_stage3_legacy_01',
+       'complete',1,'2026-08-27T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.remote_session_projections
+       (projection_id,owner_user_id,agent_id,human_endpoint_id,locator,locator_revision,
+        display_name,status,allowed_sender_user_ids,last_error_code,revision,created_at,updated_at)
+     VALUES ('rsp_stage3_legacy_01','usr_stage3_legacy_01','agt_stage3_legacy_01',
+       'hep_stage3_legacy_01',
+       '{"provider":"zulip","realmId":"stage3-realm","containerId":"legacy-private","topicId":"legacy-topic"}'::jsonb,
+       1,'Legacy conversation','active','["usr_stage3_legacy_01"]'::jsonb,NULL,1,
+       '2026-08-27T00:00:00Z','2026-08-27T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.managed_provider_containers
+       (managed_container_id,owner_user_id,human_endpoint_id,installation_id,provider,realm_id,
+        owner_provider_user_id,stable_key,display_name,external_container_id,policy,
+        observed_checks,status,last_verified_at,safe_error_code,revision,created_at,updated_at)
+     VALUES ('mco_stage3_legacy_01','usr_stage3_legacy_01','hep_stage3_legacy_01',
+       'ins_stage3_legacy_01','zulip','stage3-realm','legacy-provider-user',
+       'legacy-stable-key','Legacy private Channel','legacy-private','{}'::jsonb,NULL,
+       'active','2026-08-27T00:00:00Z',NULL,1,
+       '2026-08-27T00:00:00Z','2026-08-27T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.managed_provider_container_jobs
+       (job_id,managed_container_id,operation,desired_revision,state,attempt_count,next_attempt_at,
+        safe_error_code,created_at,updated_at)
+     VALUES ('job_stage3_legacy_01','mco_stage3_legacy_01','ensure',1,'succeeded',1,
+       '2026-08-27T00:00:00Z',NULL,'2026-08-27T00:00:00Z','2026-08-27T00:00:00Z');
+
+     INSERT INTO sciforge_collaboration.provider_private_container_claims
+       (claim_id,owner_user_id,human_endpoint_id,installation_id,provider,realm_id,
+        external_container_id,display_name,claimed_at)
+     VALUES ('claim_stage3_legacy_01','usr_stage3_legacy_01','hep_stage3_legacy_01',
+       'ins_stage3_legacy_01','zulip','stage3-realm','legacy-private',
+       'Legacy private Channel','2026-08-27T00:00:00Z')`
+  )
+}
+
+async function productionV7MigrationSource(name: string): Promise<string> {
+  return await readFile(new URL(`./test-fixtures/postgres-production-v7/${name}`, import.meta.url), 'utf8')
 }
 
 function assertSafeStage3Database(value: string): void {

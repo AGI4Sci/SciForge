@@ -2,14 +2,15 @@ BEGIN;
 
 -- This is the only forward migration after the common schema-v4 baseline.
 -- Versions 5 and 9 are recognized historical A deployments with divergent
--- numbering. Their ledgers are inputs, never migration files to replay.
+-- numbering. Version 7 is the deployed Zulip Phone Link lineage based on the
+-- same common v4 catalog. Their ledgers are inputs, never migration files to replay.
 DO $$
 DECLARE
   current_version integer;
 BEGIN
   SELECT max(version) INTO current_version
   FROM sciforge_collaboration.schema_migrations;
-  IF current_version NOT IN (4, 5, 9, 11) THEN
+  IF current_version NOT IN (4, 5, 7, 9, 11) THEN
     RAISE EXCEPTION USING
       ERRCODE = 'P0001',
       MESSAGE = 'migration_0011_unsupported_source_lineage';
@@ -102,6 +103,82 @@ SET status = 'revoked', connection_status = 'offline',
     revision = revision + 1, updated_at = CURRENT_TIMESTAMP,
     revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP)
 WHERE status = 'active' AND device_id IS NULL;
+
+-- The deployed Zulip Phone Link v7 database predates OIDC Device enrollment.
+-- Preserve its audit graph without treating an installation string as live
+-- Device authority: retire every legacy runtime edge, then attach each revoked
+-- Agent to a deterministic revoked migration anchor. These anchors carry no
+-- usable public key or credential and can never authenticate a request.
+DO $$
+BEGIN
+  IF (SELECT max(version) = 7 FROM sciforge_collaboration.schema_migrations) THEN
+    UPDATE sciforge_collaboration.remote_session_projections AS projection
+    SET status = 'paused',
+        last_error_code = 'legacy_identity_retired',
+        revision = projection.revision + 1,
+        updated_at = CURRENT_TIMESTAMP
+    FROM sciforge_collaboration.agent_nodes AS agent
+    WHERE projection.agent_id = agent.agent_id
+      AND agent.device_id IS NULL
+      AND projection.status = 'active';
+
+    UPDATE sciforge_collaboration.managed_provider_containers
+    SET status = 'suspended',
+        safe_error_code = 'legacy_identity_retired',
+        revision = revision + 1,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE status NOT IN ('suspended', 'archived', 'failed');
+
+    UPDATE sciforge_collaboration.managed_provider_container_jobs
+    SET state = 'failed',
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        safe_error_code = 'legacy_identity_retired',
+        updated_at = CURRENT_TIMESTAMP
+    WHERE state IN ('queued', 'running', 'retry_wait');
+
+    UPDATE sciforge_collaboration.human_endpoint_bindings
+    SET status = 'revoked',
+        revision = revision + 1,
+        updated_at = CURRENT_TIMESTAMP,
+        revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP)
+    WHERE status <> 'revoked';
+
+    UPDATE sciforge_collaboration.participant_profiles
+    SET primary_human_endpoint_id = NULL,
+        primary_agent_id = NULL,
+        status = 'incomplete',
+        revision = revision + 1,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE primary_human_endpoint_id IS NOT NULL
+       OR primary_agent_id IS NOT NULL
+       OR status <> 'incomplete';
+
+    INSERT INTO sciforge_collaboration.devices
+      (device_id,user_id,installation_id,display_name,platform,public_key_jwk,
+       capability_summary,status,revision,created_at,updated_at,revoked_at)
+    SELECT
+      'dev_legacy_' || substr(md5(agent.agent_id), 1, 32),
+      agent.owner_user_id,
+      agent.installation_id,
+      'Retired legacy installation',
+      jsonb_build_object('migration', 'production-v7', 'authority', 'retired'),
+      jsonb_build_object('migration', 'production-v7', 'authority', 'retired'),
+      '[]'::jsonb,
+      'revoked',
+      1,
+      agent.updated_at,
+      CURRENT_TIMESTAMP,
+      CURRENT_TIMESTAMP
+    FROM sciforge_collaboration.agent_nodes AS agent
+    WHERE agent.device_id IS NULL;
+
+    UPDATE sciforge_collaboration.agent_nodes AS agent
+    SET device_id = 'dev_legacy_' || substr(md5(agent.agent_id), 1, 32)
+    WHERE agent.device_id IS NULL;
+  END IF;
+END
+$$;
 
 DO $$
 BEGIN

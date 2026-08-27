@@ -3,12 +3,13 @@ import { readFile } from 'node:fs/promises'
 
 import type { SqlPool } from './postgres.js'
 
-export const COLLABORATION_SCHEMA_VERSION = 18
+export const COLLABORATION_SCHEMA_VERSION = 16
 
 export type CollaborationSchemaRoute =
   | 'fresh-v4'
   | 'upstream-v4'
   | 'public-v5'
+  | 'production-v7'
   | 'staging-v9'
   | 'a-v11'
   | 'current-v12'
@@ -16,21 +17,18 @@ export type CollaborationSchemaRoute =
   | 'current-v14'
   | 'current-v15'
   | 'current-v16'
-  | 'current-v17'
-  | 'current-v18'
 
 export const COLLABORATION_SOURCE_CATALOG_FINGERPRINTS = {
   'upstream-v4': '0577af72da028cee0f45daf6bbf8dad873f9ff2fde578662ffb30d50629b9843',
   'public-v5': '238d1ae31083f9bba86539e1be20630e89614ebf5df304ff7407bc3e40cfbc54',
+  'production-v7': '132cc58e2ccda4ee8c0bdba494304465723bca9c918e29b66fca7963d20de872',
   'staging-v9': 'd6f1098f4b1fcdaa3524c4d9924068e1073701ea8db6c668a425ee16dc2fcb0f',
   'a-v11': 'cbbdf62f0a71dfae30a55f82aac8c1ad9e660dd47e7caa6480248eee41b8e549',
   'current-v12': '19db1ebc685321ae5c425244d99ff6d41790f22b4e2ca6318a90d7b2bc503cca',
   'current-v13': '98432384bdf366300d45230a2d68c7364e21bcb35d70ea5ee37ba49de9827011',
   'current-v14': 'f7bb26001468ca3761e2f7e509ada2e7dd22f5869a4932aa034d5f8f940b7214',
   'current-v15': 'd25743e11c40971f2e19557f82ca502ba42295474e87f63c10d4e9475a678082',
-  'current-v16': '5f6e535f1f80f8159032cb2664d0cc3c407c4584fd79417af6ddc8d50a7316ff',
-  'current-v17': '0feac5ea8ee38a2b1ae6ba7c7fbfd2ddf15e4c0ba175720319938c3ce41f2d0d',
-  'current-v18': '14ae8bdf4cee2b38f884cf98ed588eb3357994d971550817ae1c59d2b6361615'
+  'current-v16': 'd6efee3a3e320db9f80de8f1afedbd9fbe9833596d348541d6f79390d1b7f4db'
 } as const
 
 const COLLABORATION_V14_CATALOG_FINGERPRINTS = {
@@ -43,18 +41,6 @@ export const COLLABORATION_V15_CATALOG_FINGERPRINTS = {
   'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v15'],
   'public-v5': 'c73f6befaa308cf3c4d588a06fab0fe576e8271bb68103022ac5d2051c86189d',
   'staging-v9': '51b6b9be48083a4555857a947e1ee1f2c54993fe1dc9340a411ca04cfb78cf85'
-} as const
-
-export const COLLABORATION_V16_CATALOG_FINGERPRINTS = {
-  'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v16'],
-  'public-v5': '71dc11728adbd048e93fa2c61d71d3ada8a9a337e25f7f11d1d4df237a89ecde',
-  'staging-v9': '2d42f353dc710352b167512ea667bd88db432c3d6a42f1e748f5dd20901f82e1'
-} as const
-
-export const COLLABORATION_V17_CATALOG_FINGERPRINTS = {
-  'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v17'],
-  'public-v5': 'f849881a48aa762e2b82b61711e63ebead5c9b4379e985e55892584428f12c68',
-  'staging-v9': 'ba2adc641e53402c5beb377c39296345a800ca87f2e2d3b2cf796a984ceea9d4'
 } as const
 
 /**
@@ -73,23 +59,39 @@ export const COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS = {
 } as const
 
 /**
- * Full admitted v15 catalogs. PostgreSQL retains the immutable migration
+ * Full admitted v16 catalogs. PostgreSQL retains the immutable migration
  * ledger and historical column ordinals, so public-v5 and staging-v9 remain
- * distinguishable audit lineages after converging on the same frozen v15
+ * distinguishable audit lineages after converging on the same frozen v16
  * collaboration schema.
  */
 export const COLLABORATION_CURRENT_CATALOG_FINGERPRINTS = {
-  'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v18'],
-  'public-v5': '20529dead35721c494c657da7263af18e4851bd7f9314944580d3bcefa024fa7',
-  'staging-v9': '5286a6892598b7bf3e16ae4d0319d0fb7d43a60e6fbb85898700fe21d6a81a6b'
+  'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v16'],
+  'production-v7': '8f107fd0f72540f90a1e8aa2b9b414f6ca2d90536a6858fe117a75102f459bf4',
+  'public-v5': '7036a37be0b51f33f9f79d373a46f08ff43f189ed928548d72640dcebf20a7be',
+  'staging-v9': 'eb0fac2aec37d755d30cdf27c59e391dd969cb50ecb163f5d52115d6ccf9f0dd'
 } as const
 
-/** Canonical fresh/upstream v15 catalog retained for existing consumers. */
+// The deployed host uses PostgreSQL 18 while the canonical Stage 3 matrix
+// intentionally exercises PostgreSQL 17. System-rendered defaults and index
+// definitions differ between those major versions, so both exact catalogs are
+// frozen instead of weakening the catalog check.
+export const COLLABORATION_PRODUCTION_V7_POSTGRES18_SOURCE_CATALOG_FINGERPRINT =
+  '3a040d47896e641a285ef8519088c34cfece1a3e609d5f21a3c9e93d9d96c86d'
+
+// Measured from the restored deployed PostgreSQL 18 production-v7 lineage
+// after its independently verified v11-v16 forward migration.
+export const COLLABORATION_PRODUCTION_V7_POSTGRES18_CURRENT_CATALOG_FINGERPRINT =
+  'a65d14cc8d36285bfefbd21fe6404fbe2e0cd7d5162a4cc05e2dd14228da6a60'
+
+/** Canonical fresh/upstream v16 catalog retained for existing consumers. */
 export const COLLABORATION_CATALOG_FINGERPRINT =
   COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['base-v4']
 
 const admittedCurrentCatalogFingerprints = new Set<string>(
-  Object.values(COLLABORATION_CURRENT_CATALOG_FINGERPRINTS)
+  [
+    ...Object.values(COLLABORATION_CURRENT_CATALOG_FINGERPRINTS),
+    COLLABORATION_PRODUCTION_V7_POSTGRES18_CURRENT_CATALOG_FINGERPRINT
+  ]
 )
 
 const admittedSourceCatalogFingerprints: Readonly<
@@ -97,6 +99,10 @@ Record<Exclude<CollaborationSchemaRoute, 'fresh-v4'>, ReadonlySet<string>>
 > = {
   'upstream-v4': new Set([COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['upstream-v4']]),
   'public-v5': new Set([COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['public-v5']]),
+  'production-v7': new Set([
+    COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['production-v7'],
+    COLLABORATION_PRODUCTION_V7_POSTGRES18_SOURCE_CATALOG_FINGERPRINT
+  ]),
   'staging-v9': new Set([COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['staging-v9']]),
   'a-v11': new Set([
     COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['a-v11'],
@@ -115,9 +121,7 @@ Record<Exclude<CollaborationSchemaRoute, 'fresh-v4'>, ReadonlySet<string>>
   ]),
   'current-v14': new Set(Object.values(COLLABORATION_V14_CATALOG_FINGERPRINTS)),
   'current-v15': new Set(Object.values(COLLABORATION_V15_CATALOG_FINGERPRINTS)),
-  'current-v16': new Set(Object.values(COLLABORATION_V16_CATALOG_FINGERPRINTS)),
-  'current-v17': new Set(Object.values(COLLABORATION_V17_CATALOG_FINGERPRINTS)),
-  'current-v18': admittedCurrentCatalogFingerprints
+  'current-v16': admittedCurrentCatalogFingerprints
 }
 
 type LineageFacts = Readonly<{
@@ -145,9 +149,7 @@ const FORWARD_MIGRATIONS = [
   '0013_full_multi_user_loop.sql',
   '0014_pre_provider_provisioning_binding.sql',
   '0015_canonical_project_created_inbox.sql',
-  '0016_remote_approval_reactions.sql',
-  '0017_managed_container_installations.sql',
-  '0018_native_private_container_claims.sql'
+  '0016_zulip_phone_link.sql'
 ] as const
 
 const exactColumns = {
@@ -411,39 +413,31 @@ export async function runCollaborationMigrations(
   if (!sourceFingerprintMatches) {
     throw new Error(`collaboration_schema_source_fingerprint_mismatch:${route}`)
   }
-  if (![11, 12, 13, 14, 15, 16, 17, 18].includes(facts.version ?? -1)) {
+  if (![11, 12, 13, 14, 15, 16].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[0])
     facts = await readLineageFacts(pool)
   }
-  if (![12, 13, 14, 15, 16, 17, 18].includes(facts.version ?? -1)) {
+  if (![12, 13, 14, 15, 16].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[1])
     facts = await readLineageFacts(pool)
   }
-  if (![13, 14, 15, 16, 17, 18].includes(facts.version ?? -1)) {
+  if (![13, 14, 15, 16].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[2])
     facts = await readLineageFacts(pool)
   }
-  if (![14, 15, 16, 17, 18].includes(facts.version ?? -1)) {
+  if (![14, 15, 16].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[3])
     facts = await readLineageFacts(pool)
   }
-  if (![15, 16, 17, 18].includes(facts.version ?? -1)) {
+  if (![15, 16].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[4])
     facts = await readLineageFacts(pool)
   }
-  if (![16, 17, 18].includes(facts.version ?? -1)) {
-    await applyMigration(pool, FORWARD_MIGRATIONS[5])
-    facts = await readLineageFacts(pool)
-  }
-  if (![17, 18].includes(facts.version ?? -1)) {
-    await applyMigration(pool, FORWARD_MIGRATIONS[6])
-    facts = await readLineageFacts(pool)
-  }
   if (facts.version !== COLLABORATION_SCHEMA_VERSION) {
-    await applyMigration(pool, FORWARD_MIGRATIONS[7])
+    await applyMigration(pool, FORWARD_MIGRATIONS[5])
   }
   const current = await readLineageFacts(pool)
-  assertRoute(current, 'current-v18')
+  assertRoute(current, 'current-v16')
   const fingerprint = await collaborationSchemaFingerprint(pool)
   if (fingerprint !== COLLABORATION_SCHEMA_FINGERPRINT) {
     throw new Error('collaboration_schema_fingerprint_mismatch')
@@ -476,7 +470,7 @@ export async function isCollaborationDatabaseReady(
   }> = {}
 ): Promise<boolean> {
   try {
-    assertRoute(await readLineageFacts(pool), 'current-v18')
+    assertRoute(await readLineageFacts(pool), 'current-v16')
     return await collaborationSchemaFingerprint(pool) === COLLABORATION_SCHEMA_FINGERPRINT &&
       admittedCurrentCatalogFingerprints.has(
         await (runtime.currentCatalogFingerprint ?? collaborationCatalogFingerprint)(pool)
@@ -521,6 +515,8 @@ export function detectCollaborationSchemaRoute(facts: LineageFacts): Collaborati
       !facts.oidcIdentities && !facts.devices && !facts.legacyResourceRefs) return 'upstream-v4'
   if (facts.version === 5 && !facts.managedContainers && !facts.remoteApprovals &&
       facts.oidcIdentities && facts.devices && facts.legacyResourceRefs) return 'public-v5'
+  if (facts.version === 7 && facts.managedContainers && facts.remoteApprovals &&
+      !facts.oidcIdentities && !facts.devices && !facts.legacyResourceRefs) return 'production-v7'
   if (facts.version === 9 && facts.managedContainers && !facts.remoteApprovals &&
       facts.oidcIdentities && facts.devices && facts.legacyResourceRefs) return 'staging-v9'
   if (facts.version === 11 && facts.managedContainers && facts.remoteApprovals && facts.oidcIdentities &&
@@ -542,14 +538,6 @@ export function detectCollaborationSchemaRoute(facts: LineageFacts): Collaborati
   if (facts.version === 16 && facts.managedContainers && facts.remoteApprovals && facts.oidcIdentities &&
       facts.devices && facts.taskResourceRefs && facts.projectContentSpaceBindings && facts.taskExecutions) {
     return 'current-v16'
-  }
-  if (facts.version === 17 && facts.managedContainers && facts.remoteApprovals && facts.oidcIdentities &&
-      facts.devices && facts.taskResourceRefs && facts.projectContentSpaceBindings && facts.taskExecutions) {
-    return 'current-v17'
-  }
-  if (facts.version === 18 && facts.managedContainers && facts.remoteApprovals && facts.oidcIdentities &&
-      facts.devices && facts.taskResourceRefs && facts.projectContentSpaceBindings && facts.taskExecutions) {
-    return 'current-v18'
   }
   throw new Error('collaboration_schema_lineage_unsupported')
 }

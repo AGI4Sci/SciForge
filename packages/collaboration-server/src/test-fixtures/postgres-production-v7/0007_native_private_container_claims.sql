@@ -1,17 +1,5 @@
 BEGIN;
 
-LOCK TABLE sciforge_collaboration.schema_migrations IN EXCLUSIVE MODE;
-
-DO $$
-DECLARE current_version bigint;
-BEGIN
-  SELECT max(version) INTO current_version FROM sciforge_collaboration.schema_migrations;
-  IF current_version IS DISTINCT FROM 17 THEN
-    RAISE EXCEPTION 'migration_0018_requires_v17';
-  END IF;
-END
-$$;
-
 CREATE TABLE IF NOT EXISTS sciforge_collaboration.provider_private_container_discoveries (
   owner_user_id text NOT NULL REFERENCES sciforge_collaboration.user_principals(user_id),
   human_endpoint_id text NOT NULL REFERENCES sciforge_collaboration.human_endpoint_bindings(human_endpoint_id),
@@ -42,7 +30,7 @@ CREATE TABLE IF NOT EXISTS sciforge_collaboration.provider_private_container_cla
 );
 
 INSERT INTO sciforge_collaboration.schema_migrations(version)
-VALUES (18)
+VALUES (7)
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;

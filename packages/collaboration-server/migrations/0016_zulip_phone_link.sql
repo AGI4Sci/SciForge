@@ -6,11 +6,21 @@ DO $$
 DECLARE current_version bigint;
 BEGIN
   SELECT max(version) INTO current_version FROM sciforge_collaboration.schema_migrations;
-  IF current_version IS DISTINCT FROM 16 THEN
-    RAISE EXCEPTION 'migration_0017_requires_v16';
+  IF current_version IS DISTINCT FROM 15 THEN
+    RAISE EXCEPTION 'migration_0016_requires_v15';
   END IF;
 END
 $$;
+
+ALTER TABLE sciforge_collaboration.remote_capability_approvals
+  ADD COLUMN IF NOT EXISTS interaction_mode text NOT NULL DEFAULT 'command_v1';
+
+ALTER TABLE sciforge_collaboration.remote_capability_approvals
+  DROP CONSTRAINT IF EXISTS remote_capability_approvals_interaction_mode_check;
+
+ALTER TABLE sciforge_collaboration.remote_capability_approvals
+  ADD CONSTRAINT remote_capability_approvals_interaction_mode_check
+  CHECK (interaction_mode IN ('command_v1', 'reaction_v1'));
 
 ALTER TABLE sciforge_collaboration.managed_provider_containers
   ADD COLUMN IF NOT EXISTS installation_id text;
@@ -66,8 +76,37 @@ WHERE projection.agent_id = agent.agent_id
   AND device.installation_id <> container.installation_id
   AND projection.status = 'active';
 
+CREATE TABLE IF NOT EXISTS sciforge_collaboration.provider_private_container_discoveries (
+  owner_user_id text NOT NULL REFERENCES sciforge_collaboration.user_principals(user_id),
+  human_endpoint_id text NOT NULL REFERENCES sciforge_collaboration.human_endpoint_bindings(human_endpoint_id),
+  installation_id text NOT NULL,
+  provider text NOT NULL,
+  realm_id text NOT NULL,
+  external_container_id text NOT NULL,
+  display_name text NOT NULL,
+  observed_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
+  PRIMARY KEY (owner_user_id, human_endpoint_id, installation_id, provider, realm_id, external_container_id)
+);
+
+CREATE INDEX IF NOT EXISTS provider_private_container_discoveries_expiry_idx
+  ON sciforge_collaboration.provider_private_container_discoveries(expires_at);
+
+CREATE TABLE IF NOT EXISTS sciforge_collaboration.provider_private_container_claims (
+  claim_id text PRIMARY KEY,
+  owner_user_id text NOT NULL REFERENCES sciforge_collaboration.user_principals(user_id),
+  human_endpoint_id text NOT NULL REFERENCES sciforge_collaboration.human_endpoint_bindings(human_endpoint_id),
+  installation_id text NOT NULL,
+  provider text NOT NULL,
+  realm_id text NOT NULL,
+  external_container_id text NOT NULL,
+  display_name text NOT NULL,
+  claimed_at timestamptz NOT NULL,
+  UNIQUE (provider, realm_id, external_container_id)
+);
+
 INSERT INTO sciforge_collaboration.schema_migrations(version)
-VALUES (17)
+VALUES (16)
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
