@@ -21,7 +21,7 @@ const owner = {
 const secrets = createDomainPackageStorageFactory({
   userDataDir,
   encryption,
-  getDeviceId: () => 'cross-process-device',
+  getExecutionNodeId: () => 'cross-process-device',
   currentPrincipal: () => undefined
 }).forOwner(owner).secrets
 

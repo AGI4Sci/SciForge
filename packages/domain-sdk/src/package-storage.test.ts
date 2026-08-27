@@ -7,9 +7,15 @@ import {
   domainMainProviderCredentialBindingSchema,
   domainMainPackageSecretKeySchema,
   domainMainPackageSettingsSnapshotSchema,
+  type DomainMainProviderCredentialErrorCode,
   type DomainMainPackageSecretStoreHost,
   type DomainMainPackageSettingsHost
 } from './package-storage.js'
+
+// @ts-expect-error Host execution-node identity and Principal Device identity are independent.
+const retiredPrincipalDeviceMismatch: DomainMainProviderCredentialErrorCode =
+  'principal_device_mismatch'
+void retiredPrincipalDeviceMismatch
 
 describe('package-owned storage contracts', () => {
   it('keeps non-secret settings JSON behind an exact revision', async () => {

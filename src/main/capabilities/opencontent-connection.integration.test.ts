@@ -24,6 +24,7 @@ import {
   defineCapability,
   type CapabilityDefinition
 } from './registry'
+import { createDomainPackageStorageFactory } from '../domain-package-storage'
 
 const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo'
 const ACCOUNT_CANARY = 'account-canary-must-not-be-retained@example.test'
@@ -41,6 +42,13 @@ const otherPrincipal = Object.freeze({
   ...principal,
   subject: 'opencontent-other-integration-user',
   identityVersion: 8
+})
+const cloudPrincipal = Object.freeze({
+  authority: 'sciforge-cloud',
+  subject: 'opencontent-cloud-integration-user',
+  assurance: 'cloud-authenticated' as const,
+  deviceId: 'opencontent-cloud-device',
+  identityVersion: 9
 })
 
 const caller: CapabilityCallerContextInput = Object.freeze({
@@ -62,9 +70,13 @@ writeFileSync(deploymentPath, JSON.stringify({
 
 const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const enrollmentPublicKey = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+const temporaryUserDataDirectories: string[] = []
 
 afterAll(() => rmSync(applicationRoot, { recursive: true, force: true }))
 afterEach(() => {
+  for (const directory of temporaryUserDataDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true })
+  }
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -188,6 +200,61 @@ describe('OpenContent connection through the Host capability Broker', () => {
       ['Broker audit', harness.broker.listAuditRecords()],
       ['console/log sinks', logSpies.flatMap((spy) => spy.mock.calls)]
     ])
+  })
+
+  it('reports disconnected for a Cloud Principal whose Device differs from the Host execution node', async () => {
+    const fetchImplementation = vi.fn(async () => {
+      throw new Error('Disconnected status must not contact OpenContent.')
+    })
+    vi.stubGlobal('fetch', fetchImplementation)
+    const harness = createCloudHostStorageHarness()
+
+    const status = await harness.broker.invoke(caller, {
+      actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
+      input: { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF }
+    })
+
+    expect(status.output).toEqual({
+      outcome: 'success',
+      status: { state: 'disconnected' }
+    })
+    expect(fetchImplementation).not.toHaveBeenCalled()
+  })
+
+  it('binds and reuses OpenContent through Host storage with independent Cloud Device and execution-node IDs', async () => {
+    const fetchImplementation = enrollmentFetch()
+    vi.stubGlobal('fetch', fetchImplementation)
+    const harness = createCloudHostStorageHarness()
+
+    const bound = await harness.broker.invoke(caller, {
+      actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind,
+      invocationId: 'opencontent-cloud-principal-bind',
+      input: {
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        account: ACCOUNT_CANARY,
+        password: PASSWORD_CANARY
+      }
+    })
+    const restored = await harness.broker.invoke(caller, {
+      actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
+      input: { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF }
+    })
+
+    expect(bound.output).toMatchObject({
+      outcome: 'success',
+      status: {
+        state: 'connected',
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+      }
+    })
+    expect(restored.output).toMatchObject({
+      outcome: 'success',
+      status: {
+        state: 'connected',
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+      }
+    })
+    expect(fetchImplementation).toHaveBeenCalledTimes(6)
   })
 
   it('returns a bounded secret-free conflict while another sensitive enrollment is active', async () => {
@@ -362,6 +429,53 @@ function createHarness() {
       currentPrincipal = next
     }
   }
+}
+
+function createCloudHostStorageHarness() {
+  const userDataDir = mkdtempSync(join(tmpdir(), 'sciforge-opencontent-cloud-storage-'))
+  temporaryUserDataDirectories.push(userDataDir)
+  const storage = createDomainPackageStorageFactory({
+    userDataDir,
+    encryption: Object.freeze({
+      state: () => 'available' as const,
+      encryptString: (value: string) => Buffer.from(value, 'utf8'),
+      decryptString: (value: Buffer) => value.toString('utf8')
+    }),
+    getExecutionNodeId: () => 'opencontent-host-installation',
+    currentPrincipal: () => cloudPrincipal
+  }).forOwner({
+    moduleId: '@sciforge/domain-opencontent-connector',
+    moduleVersion: '4.0.4'
+  })
+  const packageSecrets = Object.freeze({
+    has: vi.fn(async () => false),
+    read: vi.fn(async () => null),
+    write: vi.fn(async () => undefined),
+    remove: vi.fn(async () => undefined),
+    providerCredentials: storage.secrets.providerCredentials
+  })
+  const host: DomainMainHost = Object.freeze({
+    getUserDataDir: () => userDataDir,
+    getAppRoot: () => applicationRoot,
+    isPackaged: () => false,
+    defineCapability: (options: unknown) => defineCapability(options as never),
+    packageSettings: inMemorySettings(),
+    packageSecrets,
+    internalServices: inMemoryInternalServices()
+  })
+  const entry = createDomainMainEntry(host)
+  const factory: unknown = entry.contributions
+    .find((contribution) => contribution.kind === 'main.capability-factory')
+    ?.value
+  if (!hasCapabilityDefinitions(factory)) {
+    throw new Error('OpenContent capability factory is missing from its main entry.')
+  }
+  const registry = new CapabilityRegistry(factory.createDefinitions())
+  return Object.freeze({
+    broker: new CapabilityBroker(registry, {
+      resolveCurrentPrincipal: () => cloudPrincipal
+    })
+  })
 }
 
 function hasCapabilityDefinitions(value: unknown): value is Readonly<{

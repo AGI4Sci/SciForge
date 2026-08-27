@@ -7,6 +7,8 @@ reviewed: 2026-08-27
 
 Provider credentials are bound to a Human Principal and execution node and may be stored only through a generic Host-owned OS secure-credential facility. Browser cookies, administrator passwords, integration keys, renderer state, plaintext settings, public or caller-controlled URLs, prompts, and cross-node messages are not credential transports.
 
+The execution-node identity is the stable Host installation identity, while a Human Principal's `deviceId` identifies the Device asserted by that Principal authority. They are independent binding dimensions: the Host neither requires them to be equal nor translates one into the other.
+
 A provider integration MAY serialize a credential into an outbound HTTPS query only when the verified provider contract requires that exact transport. The exception remains inside the owning main-process Connector's bounded credential-use callback, targets only Connector-pinned HTTPS origins and paths, rejects redirects, and never exposes or persists the credential-bearing URL through logs, traces, diagnostics, renderer, Agent, capability output, portable references, or cross-node messages. This exception does not make URLs a general credential transport.
 
 For the current OpenContent deployment, the package-owned enrollment form sends
