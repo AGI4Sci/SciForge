@@ -1,5 +1,5 @@
 import React, { lazy, type ReactElement } from 'react'
-import { ClipboardCheck } from 'lucide-react'
+import { Workflow } from 'lucide-react'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   defineTrustedRendererDomainPackageEntry,
@@ -25,6 +25,7 @@ import {
   projectCoordinatorI18nResourceContribution,
   type ProjectCoordinatorI18nResourceContribution
 } from './messages.js'
+import { collectProjectCoordinatorWorkspaceSections } from './workspace-sections.js'
 
 const ProjectCoordinatorPanel = lazy(() =>
   import('./ProjectCoordinatorPanel.browser.js')
@@ -33,7 +34,7 @@ const ProjectCoordinatorPanel = lazy(() =>
 export type ProjectCoordinatorRightPanelContribution =
   DomainRendererWorkbenchRightPanelValue<ReactElement>
 export type ProjectCoordinatorToolbarActionContribution =
-  DomainRendererWorkbenchToolbarActionValue<typeof ClipboardCheck>
+  DomainRendererWorkbenchToolbarActionValue<typeof Workflow>
 export type ProjectCoordinatorRendererContribution =
   | ProjectCoordinatorRightPanelContribution
   | ProjectCoordinatorToolbarActionContribution
@@ -49,12 +50,14 @@ export function createProjectCoordinatorRightPanelContribution(
       const parsedActivation = activation
         ? projectCoordinatorActivationSchema.safeParse(activation.payload)
         : undefined
+      const workspaceSections = collectProjectCoordinatorWorkspaceSections(host)
       return (
         <ProjectCoordinatorPanel
           client={client}
           className={className}
           onCollapse={onCollapse}
           session={session}
+          workspaceSections={workspaceSections}
           {...(host.workbench?.openResource ? {
             onOpenArtifact: async (input: ProjectCoordinatorArtifactReviewPrepareInput) => {
               if (!session.workspaceRoot) {
@@ -135,7 +138,7 @@ export function createDomainRendererEntry(
       {
         ...PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRIBUTION,
         contract: PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRACT,
-        value: Object.freeze({ icon: ClipboardCheck })
+        value: Object.freeze({ icon: Workflow })
       },
       {
         ...PROJECT_COORDINATOR_I18N_CONTRIBUTION,
@@ -148,3 +151,4 @@ export function createDomainRendererEntry(
 export * from './ProjectCoordinatorPanel.js'
 export * from './messages.js'
 export * from './project-coordinator-capability-client.js'
+export * from './workspace-sections.js'

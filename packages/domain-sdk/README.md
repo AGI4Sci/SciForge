@@ -145,6 +145,7 @@ UI. It defines these generic contribution kinds:
 - `renderer.workbench-global-overlay`
 - `renderer.composer-context-provider`
 - `renderer.resource-navigation`
+- `renderer.extension`
 
 A command declaration ID is its stable command ID. Its runtime value has the exact shape
 `{ execute, isAvailable?, isActive? }`. Every invocation carries only bounded process-neutral data:
@@ -158,6 +159,13 @@ The three slots use contribution IDs rather than host-private modes. Composer co
 return bounded text items and metadata through a strict result schema. These pure contracts also
 describe future sandboxed renderer contributions; a sandbox host supplies the view transport
 without changing the manifest data model.
+
+A package-owned composed workspace may discover `renderer.extension` contributions at the
+generic `workbench.workspace-section` location. The strict manifest contract names the workspace,
+stable section slug, placement, translated label, description, and order; the renderer value owns
+only its optional icon and `{ render }` function. The workspace owner filters by `workspaceId` and
+rejects duplicate sections. Contributors therefore remain independently installable and never
+require a Host feature map, domain-ID switch, or renderer import between domain packages.
 
 Exact-resource navigation is contribution-neutral at the caller. A package asks the Workbench to
 open a bounded `{ resourceKind, resourceId, integrity? }` identity; exactly one installed

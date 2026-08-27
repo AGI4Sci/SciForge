@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/codex-runtime",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -28,7 +28,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@sciforge/domain-sdk": "0.2.6"
+    "@sciforge/domain-sdk": "0.2.7"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

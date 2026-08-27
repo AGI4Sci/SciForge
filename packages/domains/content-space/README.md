@@ -8,6 +8,14 @@ are installed independently through standard domain-package composition.
 This package intentionally has no credential, endpoint, connection, Shared
 Documents, or OpenContent-specific behavior.
 
+Its renderer contributes the **Files** view to the Collaboration Center through
+the generic `workbench.workspace-section` contract and does not register a
+separate top-level toolbar action. The package still owns its command,
+right-panel surface, exact-resource navigation, Provider enrollment slots, and
+capability client, so embedded navigation and resource deep links converge on
+the same canonical Content Space behavior. The workspace owner imports none of
+these implementation details and contains no Content Space ID switch.
+
 ## Readiness and boundaries
 
 Standard composition registers a Provider and its declared operation families;

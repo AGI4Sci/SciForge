@@ -4,6 +4,11 @@ export const collaborationI18nResourceContribution = Object.freeze({
     en: Object.freeze({
       collaborationTitle: 'Collaboration',
       collaborationToolbar: 'Collaboration',
+      collaborationCenterMyWork: 'My tasks',
+      collaborationCenterMyWorkDescription: 'Offers, local execution, and recovery',
+      collaborationCenterConnections: 'Connections and Agent',
+      collaborationCenterConnectionsDescription:
+        'Cloud, local Agent, phone endpoint, and personal Session settings',
       collaborationParticipants: 'Participant',
       collaborationCloud: 'Cloud connection',
       collaborationPersonalSessions: 'Personal Sessions',
@@ -160,6 +165,11 @@ export const collaborationI18nResourceContribution = Object.freeze({
     zh: Object.freeze({
       collaborationTitle: '协作',
       collaborationToolbar: '协作',
+      collaborationCenterMyWork: '我的任务',
+      collaborationCenterMyWorkDescription: '接单、本机执行与恢复',
+      collaborationCenterConnections: '连接与 Agent',
+      collaborationCenterConnectionsDescription:
+        'Cloud、本机 Agent、手机端点与个人 Session 设置',
       collaborationParticipants: '协作个体',
       collaborationCloud: '云端连接',
       collaborationPersonalSessions: '个人 Session',

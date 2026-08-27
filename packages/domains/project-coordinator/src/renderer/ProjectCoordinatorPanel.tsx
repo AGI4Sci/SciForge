@@ -16,14 +16,20 @@ import {
   Check,
   CircleDashed,
   ClipboardCheck,
+  Cloud,
   Clock3,
   FileCheck2,
+  FolderOpen,
   FileText,
+  LayoutDashboard,
   ListChecks,
   Loader2,
+  Plus,
   Radio,
   RefreshCw,
+  Settings2,
   ShieldAlert,
+  SquareKanban,
   UserRoundCheck,
   UsersRound,
   Warehouse,
@@ -57,6 +63,7 @@ import type {
   ProjectCoordinatorWorkspace
 } from '../contract.js'
 import type { ProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
+import type { ProjectCoordinatorWorkspaceSection } from './workspace-sections.js'
 
 export const PROJECT_COORDINATOR_PANEL_SECTION_IDS = Object.freeze([
   'coordinator',
@@ -68,6 +75,24 @@ export const PROJECT_COORDINATOR_PANEL_SECTION_IDS = Object.freeze([
 ] as const)
 
 export const PROJECT_COORDINATOR_LIVE_REFRESH_INTERVAL_MS = 15_000
+
+export const PROJECT_COORDINATOR_BUILT_IN_WORKSPACE_VIEWS = Object.freeze([
+  'overview',
+  'projects',
+  'reviews'
+] as const)
+
+export type ProjectCoordinatorBuiltInWorkspaceView =
+  typeof PROJECT_COORDINATOR_BUILT_IN_WORKSPACE_VIEWS[number]
+
+export type ProjectCoordinatorWorkspaceNavigationItem = Readonly<{
+  id: string
+  label: string
+  description: string
+  icon: React.ElementType
+  order: number
+  source: 'built-in' | 'extension'
+}>
 
 type ProjectCoordinatorWorkerAgent =
   ProjectCoordinatorProject['workerGroups'][number]['agents'][number]
@@ -300,6 +325,59 @@ export function projectCoordinatorFlowStages(
   return Object.freeze(stages.map((stage) => Object.freeze(stage)))
 }
 
+export function projectCoordinatorWorkspaceNavigationItems(
+  workspaceSections: readonly ProjectCoordinatorWorkspaceSection[]
+): readonly ProjectCoordinatorWorkspaceNavigationItem[] {
+  const items: ProjectCoordinatorWorkspaceNavigationItem[] = [
+    {
+      id: 'overview',
+      label: 'projectCoordinatorCenterOverview',
+      description: 'projectCoordinatorCenterOverviewDescription',
+      icon: LayoutDashboard,
+      order: 10,
+      source: 'built-in'
+    },
+    {
+      id: 'projects',
+      label: 'projectCoordinatorCenterProjects',
+      description: 'projectCoordinatorCenterProjectsDescription',
+      icon: SquareKanban,
+      order: 20,
+      source: 'built-in'
+    },
+    {
+      id: 'reviews',
+      label: 'projectCoordinatorCenterReviews',
+      description: 'projectCoordinatorCenterReviewsDescription',
+      icon: ClipboardCheck,
+      order: 40,
+      source: 'built-in'
+    }
+  ]
+  const claimed = new Set(items.map(({ id }) => id))
+  for (const section of workspaceSections.filter(({ placement }) => (
+    placement === 'navigation'
+  ))) {
+    if (claimed.has(section.sectionId)) {
+      throw new TypeError(
+        `Collaboration Center navigation section ${section.sectionId} is duplicated.`
+      )
+    }
+    claimed.add(section.sectionId)
+    items.push({
+      id: section.sectionId,
+      label: section.label,
+      description: section.description ?? section.label,
+      icon: section.icon ?? Workflow,
+      order: section.order,
+      source: 'extension'
+    })
+  }
+  return Object.freeze(items.sort((left, right) => (
+    left.order - right.order || left.id.localeCompare(right.id)
+  )).map((item) => Object.freeze(item)))
+}
+
 export type ProjectCoordinatorPanelProps = Readonly<{
   client: ProjectCoordinatorRendererClient
   session: DomainWorkbenchRightPanelSession
@@ -307,6 +385,7 @@ export type ProjectCoordinatorPanelProps = Readonly<{
   className?: string
   onCollapse?: () => void
   onOpenArtifact?: (input: ProjectCoordinatorArtifactReviewPrepareInput) => Promise<void>
+  workspaceSections?: readonly ProjectCoordinatorWorkspaceSection[]
 }>
 
 export function selectFocusedProject(
@@ -356,7 +435,8 @@ export function ProjectCoordinatorPanel({
   initialProjectId,
   className,
   onCollapse,
-  onOpenArtifact
+  onOpenArtifact,
+  workspaceSections = []
 }: ProjectCoordinatorPanelProps): ReactElement {
   const { t } = useTranslation('common')
   const [workspace, setWorkspace] = useState<ProjectCoordinatorWorkspace>()
@@ -373,7 +453,26 @@ export function ProjectCoordinatorPanel({
   const [createCoordinatorAgentId, setCreateCoordinatorAgentId] = useState('')
   const [createCoordinatorRevision, setCreateCoordinatorRevision] = useState('1')
   const [createWorkerUserIds, setCreateWorkerUserIds] = useState('')
+  const [activeView, setActiveView] = useState<string>('overview')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [newProjectRequest, setNewProjectRequest] = useState(0)
   const refreshRequestRef = useRef(0)
+  const settingsButtonRef = useRef<HTMLButtonElement>(null)
+
+  const navigationItems = useMemo(
+    () => projectCoordinatorWorkspaceNavigationItems(workspaceSections),
+    [workspaceSections]
+  )
+  const settingsSections = useMemo(
+    () => workspaceSections.filter(({ placement }) => placement === 'settings'),
+    [workspaceSections]
+  )
+  const activeWorkspaceSection = useMemo(
+    () => workspaceSections.find(({ placement, sectionId }) => (
+      placement === 'navigation' && sectionId === activeView
+    )),
+    [activeView, workspaceSections]
+  )
 
   const refresh = useCallback(async (
     projectId?: string,
@@ -435,6 +534,20 @@ export function ProjectCoordinatorPanel({
     () => selectFocusedProject(workspace, selectedProjectId || initialProjectId),
     [initialProjectId, selectedProjectId, workspace]
   )
+
+  useEffect(() => {
+    if (!navigationItems.some(({ id }) => id === activeView)) setActiveView('overview')
+  }, [activeView, navigationItems])
+
+  useEffect(() => {
+    if (
+      workspace?.connection.state === 'ready' &&
+      workspace.projects.length === 0 &&
+      activeView === 'overview'
+    ) {
+      setActiveView('projects')
+    }
+  }, [activeView, workspace])
 
   useEffect(() => {
     setProvisioningPlan(undefined)
@@ -663,11 +776,34 @@ export function ProjectCoordinatorPanel({
     })
   }, [applyProjectWorkspace, client, runAction])
 
+  const navigateWorkspace = useCallback((viewId: string) => {
+    if (!navigationItems.some(({ id }) => id === viewId)) return
+    setSettingsOpen(false)
+    setActiveView(viewId)
+  }, [navigationItems])
+
+  const startNewProject = useCallback(() => {
+    setSettingsOpen(false)
+    setActiveView('projects')
+    setNewProjectRequest((request) => request + 1)
+  }, [])
+
+  useEffect(() => {
+    if (activeView !== 'projects' || newProjectRequest === 0) return
+    const frame = globalThis.requestAnimationFrame?.(() => {
+      focusCoordinatorSection('create')
+    })
+    return () => {
+      if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame)
+    }
+  }, [activeView, newProjectRequest])
+
   return (
     <aside
       className={`project-coordinator-panel ds-no-drag ${className ?? ''}`}
       data-domain="project-coordinator"
       data-session-id={session.id}
+      data-active-workspace-view={activeView}
     >
       <header className="project-coordinator-header">
         <span className="project-coordinator-brand-mark" aria-hidden="true">
@@ -685,6 +821,25 @@ export function ProjectCoordinatorPanel({
               syncing={backgroundRefreshing}
             />
           ) : null}
+          <button
+            type="button"
+            className="project-coordinator-header-button"
+            disabled={workspace?.connection.state !== 'ready'}
+            onClick={startNewProject}
+          >
+            <Plus aria-hidden="true" />
+            <span>{t('projectCoordinatorCenterNewProject')}</span>
+          </button>
+          <button
+            ref={settingsButtonRef}
+            type="button"
+            className="project-coordinator-icon-button"
+            aria-label={t('projectCoordinatorCenterOpenSettings')}
+            aria-expanded={settingsOpen}
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Settings2 aria-hidden="true" />
+          </button>
           <button
             type="button"
             className="project-coordinator-icon-button"
@@ -709,34 +864,7 @@ export function ProjectCoordinatorPanel({
         </div>
       </header>
 
-      <div className="project-coordinator-scroll">
-        {error ? <Notice tone="error">{error}</Notice> : null}
-        {connectionMessage ? (
-          <Notice tone="warning">
-            {t(connectionMessage)}
-            {'reason' in workspace!.connection ? ` ${workspace!.connection.reason}` : ''}
-          </Notice>
-        ) : null}
-        {loading && !workspace ? <Notice>{t('projectCoordinatorLoading')}</Notice> : null}
-
-        {workspace?.connection.state === 'ready' && workspace.projects.length === 0 ? (
-          <ProjectCreateForm
-            defaultExpanded
-            busy={busyAction === 'project-create'}
-            coordinatorAgentId={createCoordinatorAgentId}
-            coordinatorRevision={createCoordinatorRevision}
-            displayName={createDisplayName}
-            goal={createGoal}
-            workerUserIds={createWorkerUserIds}
-            onCoordinatorAgentId={setCreateCoordinatorAgentId}
-            onCoordinatorRevision={setCreateCoordinatorRevision}
-            onDisplayName={setCreateDisplayName}
-            onGoal={setCreateGoal}
-            onSubmit={createProject}
-            onWorkerUserIds={setCreateWorkerUserIds}
-          />
-        ) : null}
-
+      <div className="project-coordinator-context">
         {workspace?.connection.state === 'ready' && workspace.projects.length > 0 ? (
           <label className="project-coordinator-project-picker">
             <span>{t('projectCoordinatorProject')}</span>
@@ -755,86 +883,447 @@ export function ProjectCoordinatorPanel({
               ))}
             </select>
           </label>
-        ) : null}
-
-        {project ? (
-          <ProjectOverview
-            project={project}
-            observedAt={workspace?.observedAt ?? project.project.updatedAt}
-            nowMilliseconds={nowMilliseconds}
-          />
-        ) : null}
-        <WorkersSection
+        ) : (
+          <span className="project-coordinator-context-label">
+            {t('projectCoordinatorCenterNoActiveProject')}
+          </span>
+        )}
+        <CollaborationReadinessBar
+          workspace={workspace}
           project={project}
-          observedAt={new Date(nowMilliseconds).toISOString()}
+          onNavigate={navigateWorkspace}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
-        <ProjectCoordinatorPlanSection
-          project={project}
-          draft={draft}
-          busy={Boolean(busyAction?.startsWith('plan-'))}
-          onGenerate={generateDraft}
-          onEditDraft={editDraft}
-          onSubmitDraft={submitDraft}
-          onConfirmActivate={confirmActivate}
-        />
-        <TasksSection project={project} />
-        <ProjectCoordinatorDecisionSection
-          project={project}
-          canAnswer={workspace?.connection.state === 'ready' &&
-            workspace.connection.userId === project?.project.ownerUserId}
-          busy={Boolean(busyAction && !busyAction.startsWith('plan-'))}
-          onCreateHumanNeeded={createHumanNeeded}
-          onAnswerHumanNeeded={answerHumanNeeded}
-          onOpenArtifact={onOpenArtifact ? openArtifact : undefined}
-          onReviewResult={reviewResult}
-          onComplete={completeProject}
-        />
-        <ProjectCoordinatorTransferSection
-          project={project}
-          canTransfer={workspace?.connection.state === 'ready' &&
-            workspace.connection.userId === project?.project.ownerUserId}
-          busy={busyAction === 'coordinator-transfer'}
-          onTransfer={transferCoordinator}
-        />
-        <ProjectCoordinatorProvisioningSection
-          project={project}
-          plan={provisioningPlan ?? null}
-          canManage={workspace?.connection.state === 'ready' &&
-            workspace.connection.userId === project?.project.ownerUserId}
-          busy={Boolean(busyAction?.startsWith('provisioning-') ||
-            busyAction?.startsWith('membership-') ||
-            busyAction?.startsWith('recovery-'))}
-          onPreview={previewProvisioning}
-          onApply={applyProvisioning}
-          onAddMember={addMember}
-          onRemoveMember={removeMember}
-          onObserveAndLinkRecovery={observeAndLinkRecovery}
-          onAbandonRecovery={abandonRecovery}
-          onRetryRecoverySuccessor={retryRecoverySuccessor}
-        />
-        {workspace?.connection.state === 'ready' && workspace.projects.length > 0 ? (
-          <ProjectCreateForm
-            busy={busyAction === 'project-create'}
-            coordinatorAgentId={createCoordinatorAgentId}
-            coordinatorRevision={createCoordinatorRevision}
-            displayName={createDisplayName}
-            goal={createGoal}
-            workerUserIds={createWorkerUserIds}
-            onCoordinatorAgentId={setCreateCoordinatorAgentId}
-            onCoordinatorRevision={setCreateCoordinatorRevision}
-            onDisplayName={setCreateDisplayName}
-            onGoal={setCreateGoal}
-            onSubmit={createProject}
-            onWorkerUserIds={setCreateWorkerUserIds}
-          />
-        ) : null}
       </div>
+
+      <div className="project-coordinator-workspace">
+        <CollaborationWorkspaceNavigation
+          activeView={activeView}
+          items={navigationItems}
+          onNavigate={navigateWorkspace}
+        />
+
+        <main
+          className="project-coordinator-workspace-main"
+          aria-label={t(
+            navigationItems.find(({ id }) => id === activeView)?.label ??
+              'projectCoordinatorTitle'
+          )}
+        >
+          <div className="project-coordinator-global-notices">
+            {error ? <Notice tone="error">{error}</Notice> : null}
+            {connectionMessage ? (
+              <Notice tone="warning">
+                {t(connectionMessage)}
+                {'reason' in workspace!.connection ? ` ${workspace!.connection.reason}` : ''}
+              </Notice>
+            ) : null}
+            {loading && !workspace ? <Notice>{t('projectCoordinatorLoading')}</Notice> : null}
+          </div>
+
+          <div
+            className="project-coordinator-workspace-view"
+            data-workspace-view={activeView}
+            data-extension-view={activeWorkspaceSection ? 'true' : 'false'}
+            role="tabpanel"
+            id={`project-coordinator-view-${activeView}`}
+          >
+            {activeView === 'overview' ? (
+              project ? (
+                <>
+                  <ProjectOverview
+                    project={project}
+                    observedAt={workspace?.observedAt ?? project.project.updatedAt}
+                    nowMilliseconds={nowMilliseconds}
+                    onNavigate={navigateWorkspace}
+                  />
+                  <WorkersSection
+                    project={project}
+                    observedAt={new Date(nowMilliseconds).toISOString()}
+                  />
+                </>
+              ) : (
+                <CollaborationCenterEmpty
+                  title={t('projectCoordinatorCenterNoActiveProject')}
+                  message={t('projectCoordinatorCenterNoActiveProjectDescription')}
+                  action={t('projectCoordinatorCenterNewProject')}
+                  onAction={workspace?.connection.state === 'ready'
+                    ? startNewProject
+                    : () => setSettingsOpen(true)}
+                />
+              )
+            ) : null}
+
+            {activeView === 'projects' ? (
+              <>
+                {workspace?.connection.state === 'ready' ? (
+                  <ProjectCreateForm
+                    defaultExpanded={workspace.projects.length === 0}
+                    requestOpen={newProjectRequest}
+                    busy={busyAction === 'project-create'}
+                    coordinatorAgentId={createCoordinatorAgentId}
+                    coordinatorRevision={createCoordinatorRevision}
+                    displayName={createDisplayName}
+                    goal={createGoal}
+                    workerUserIds={createWorkerUserIds}
+                    onCoordinatorAgentId={setCreateCoordinatorAgentId}
+                    onCoordinatorRevision={setCreateCoordinatorRevision}
+                    onDisplayName={setCreateDisplayName}
+                    onGoal={setCreateGoal}
+                    onSubmit={createProject}
+                    onWorkerUserIds={setCreateWorkerUserIds}
+                  />
+                ) : null}
+                <ProjectCoordinatorPlanSection
+                  project={project}
+                  draft={draft}
+                  busy={Boolean(busyAction?.startsWith('plan-'))}
+                  onGenerate={generateDraft}
+                  onEditDraft={editDraft}
+                  onSubmitDraft={submitDraft}
+                  onConfirmActivate={confirmActivate}
+                />
+                <TasksSection project={project} />
+                <ProjectCoordinatorTransferSection
+                  project={project}
+                  canTransfer={workspace?.connection.state === 'ready' &&
+                    workspace.connection.userId === project?.project.ownerUserId}
+                  busy={busyAction === 'coordinator-transfer'}
+                  onTransfer={transferCoordinator}
+                />
+                <ProjectCoordinatorProvisioningSection
+                  project={project}
+                  plan={provisioningPlan ?? null}
+                  canManage={workspace?.connection.state === 'ready' &&
+                    workspace.connection.userId === project?.project.ownerUserId}
+                  busy={Boolean(busyAction?.startsWith('provisioning-') ||
+                    busyAction?.startsWith('membership-') ||
+                    busyAction?.startsWith('recovery-'))}
+                  onPreview={previewProvisioning}
+                  onApply={applyProvisioning}
+                  onAddMember={addMember}
+                  onRemoveMember={removeMember}
+                  onObserveAndLinkRecovery={observeAndLinkRecovery}
+                  onAbandonRecovery={abandonRecovery}
+                  onRetryRecoverySuccessor={retryRecoverySuccessor}
+                />
+              </>
+            ) : null}
+
+            {activeView === 'reviews' ? (
+              <ProjectCoordinatorDecisionSection
+                project={project}
+                canAnswer={workspace?.connection.state === 'ready' &&
+                  workspace.connection.userId === project?.project.ownerUserId}
+                busy={Boolean(busyAction && !busyAction.startsWith('plan-'))}
+                onCreateHumanNeeded={createHumanNeeded}
+                onAnswerHumanNeeded={answerHumanNeeded}
+                onOpenArtifact={onOpenArtifact ? openArtifact : undefined}
+                onReviewResult={reviewResult}
+                onComplete={completeProject}
+              />
+            ) : null}
+
+            {activeWorkspaceSection
+              ? activeWorkspaceSection.render({
+                  active: true,
+                  className: 'project-coordinator-extension-panel',
+                  session
+                })
+              : null}
+          </div>
+        </main>
+      </div>
+
+      <CollaborationSettingsDrawer
+        open={settingsOpen}
+        sections={settingsSections}
+        session={session}
+        returnFocusRef={settingsButtonRef}
+        onClose={() => setSettingsOpen(false)}
+      />
     </aside>
+  )
+}
+
+function CollaborationReadinessBar({
+  workspace,
+  project,
+  onNavigate,
+  onOpenSettings
+}: Readonly<{
+  workspace?: ProjectCoordinatorWorkspace
+  project?: ProjectCoordinatorProject
+  onNavigate(viewId: string): void
+  onOpenSettings(): void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  const coordinator = project?.workerGroups.flatMap(({ agents }) => agents).find(
+    ({ projectAvailability }) => (
+      projectAvailability.agentId === project.project.coordinatorAgentId
+    )
+  )
+  const operational = coordinator
+    ? projectCoordinatorAgentOperationalState(coordinator)
+    : undefined
+  const recoveryRequired = project?.provisioning.recoveryActions.some(({ status }) => (
+    status === 'available'
+  )) ?? false
+  const items = [
+    {
+      id: 'cloud',
+      icon: <Cloud />,
+      label: t('projectCoordinatorCenterCloud'),
+      state: workspace?.connection.state === 'ready' ? 'ready' : 'attention',
+      status: workspace?.connection.state === 'ready'
+        ? t('projectCoordinatorCenterReady')
+        : t('projectCoordinatorCenterActionRequired'),
+      action: onOpenSettings
+    },
+    {
+      id: 'runtime',
+      icon: <Activity />,
+      label: t('projectCoordinatorCenterRuntime'),
+      state: !project ? 'pending' : operational?.runtimeReady ? 'ready' : 'attention',
+      status: !project
+        ? t('projectCoordinatorCenterWhenNeeded')
+        : operational?.runtimeReady
+          ? t('projectCoordinatorCenterReady')
+          : t('projectCoordinatorCenterActionRequired'),
+      action: onOpenSettings
+    },
+    {
+      id: 'agent',
+      icon: <Bot />,
+      label: t('projectCoordinatorCenterAgent'),
+      state: !project ? 'pending' : operational?.online ? 'ready' : 'attention',
+      status: !project
+        ? t('projectCoordinatorCenterWhenNeeded')
+        : operational?.online
+          ? t('projectCoordinatorCenterOnline')
+          : t('projectCoordinatorCenterActionRequired'),
+      action: onOpenSettings
+    },
+    {
+      id: 'files',
+      icon: <FolderOpen />,
+      label: t('projectCoordinatorCenterSharedFiles'),
+      state: project?.provisioning.binding
+        ? 'ready'
+        : recoveryRequired
+          ? 'attention'
+          : 'pending',
+      status: project?.provisioning.binding
+        ? t('projectCoordinatorCenterReady')
+        : recoveryRequired
+          ? t('projectCoordinatorCenterActionRequired')
+          : t('projectCoordinatorCenterWhenNeeded'),
+      action: () => onNavigate('files')
+    }
+  ] as const
+
+  return (
+    <div
+      className="project-coordinator-readiness"
+      aria-label={t('projectCoordinatorCenterReadiness')}
+    >
+      {items.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          data-readiness-id={item.id}
+          data-readiness-state={item.state}
+          onClick={item.action}
+        >
+          <span aria-hidden="true">{item.icon}</span>
+          <span>
+            <strong>{item.label}</strong>
+            <small>{item.status}</small>
+          </span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function CollaborationWorkspaceNavigation({
+  activeView,
+  items,
+  onNavigate
+}: Readonly<{
+  activeView: string
+  items: readonly ProjectCoordinatorWorkspaceNavigationItem[]
+  onNavigate(viewId: string): void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <nav
+      className="project-coordinator-workspace-navigation"
+      aria-label={t('projectCoordinatorCenterNavigation')}
+      role="tablist"
+      onKeyDown={(event) => {
+        if (!['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft', 'Home', 'End']
+          .includes(event.key)) return
+        const tabs = Array.from(
+          event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+        )
+        const current = tabs.indexOf(globalThis.document?.activeElement as HTMLButtonElement)
+        if (tabs.length === 0) return
+        const next = event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? tabs.length - 1
+            : event.key === 'ArrowDown' || event.key === 'ArrowRight'
+              ? (Math.max(current, 0) + 1) % tabs.length
+              : (current <= 0 ? tabs.length : current) - 1
+        event.preventDefault()
+        tabs[next]?.focus()
+        tabs[next]?.click()
+      }}
+    >
+      {items.map((item) => {
+        const Icon = item.icon
+        return (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            id={`project-coordinator-tab-${item.id}`}
+            aria-controls={`project-coordinator-view-${item.id}`}
+            aria-selected={activeView === item.id}
+            tabIndex={activeView === item.id ? 0 : -1}
+            data-navigation-source={item.source}
+            onClick={() => onNavigate(item.id)}
+            title={t(item.description)}
+          >
+            <span className="project-coordinator-navigation-icon" aria-hidden="true">
+              <Icon />
+            </span>
+            <span>
+              <strong>{t(item.label)}</strong>
+              <small>{t(item.description)}</small>
+            </span>
+          </button>
+        )
+      })}
+    </nav>
+  )
+}
+
+function CollaborationCenterEmpty({
+  title,
+  message,
+  action,
+  onAction
+}: Readonly<{
+  title: string
+  message: string
+  action: string
+  onAction(): void
+}>): ReactElement {
+  return (
+    <div className="project-coordinator-center-empty">
+      <span aria-hidden="true"><Workflow /></span>
+      <strong>{title}</strong>
+      <p>{message}</p>
+      <button type="button" onClick={onAction}>{action}</button>
+    </div>
+  )
+}
+
+function CollaborationSettingsDrawer({
+  open,
+  sections,
+  session,
+  returnFocusRef,
+  onClose
+}: Readonly<{
+  open: boolean
+  sections: readonly ProjectCoordinatorWorkspaceSection[]
+  session: DomainWorkbenchRightPanelSession
+  returnFocusRef: React.RefObject<HTMLButtonElement | null>
+  onClose(): void
+}>): ReactElement | null {
+  const { t } = useTranslation('common')
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const close = useCallback(() => {
+    onClose()
+    globalThis.queueMicrotask?.(() => returnFocusRef.current?.focus())
+  }, [onClose, returnFocusRef])
+
+  useEffect(() => {
+    if (!open) return
+    closeButtonRef.current?.focus()
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      close()
+    }
+    globalThis.document?.addEventListener('keydown', onKeyDown)
+    return () => globalThis.document?.removeEventListener('keydown', onKeyDown)
+  }, [close, open])
+
+  if (!open) return null
+  return (
+    <div className="project-coordinator-settings-layer">
+      <button
+        type="button"
+        className="project-coordinator-settings-backdrop"
+        aria-label={t('projectCoordinatorCenterCloseSettings')}
+        onClick={close}
+      />
+      <section
+        className="project-coordinator-settings-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="project-coordinator-settings-title"
+      >
+        <header>
+          <span>
+            <small>{t('projectCoordinatorTitle')}</small>
+            <h3 id="project-coordinator-settings-title">
+              {t('projectCoordinatorCenterConnections')}
+            </h3>
+          </span>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            className="project-coordinator-icon-button"
+            aria-label={t('projectCoordinatorCenterCloseSettings')}
+            onClick={close}
+          >
+            <X aria-hidden="true" />
+          </button>
+        </header>
+        <div className="project-coordinator-settings-scroll">
+          {sections.length > 0 ? sections.map((section) => (
+            <section
+              key={section.contributionId}
+              className="project-coordinator-settings-section"
+              data-settings-section={section.sectionId}
+            >
+              <div className="project-coordinator-settings-section-heading">
+                <strong>{t(section.label)}</strong>
+                {section.description ? <span>{t(section.description)}</span> : null}
+              </div>
+              {section.render({
+                active: true,
+                className: 'project-coordinator-settings-extension',
+                session
+              })}
+            </section>
+          )) : (
+            <Notice>{t('projectCoordinatorCenterSettingsUnavailable')}</Notice>
+          )}
+        </div>
+      </section>
+    </div>
   )
 }
 
 function ProjectCreateForm({
   defaultExpanded = false,
+  requestOpen = 0,
   busy,
   coordinatorAgentId,
   coordinatorRevision,
@@ -849,6 +1338,7 @@ function ProjectCreateForm({
   onWorkerUserIds
 }: Readonly<{
   defaultExpanded?: boolean
+  requestOpen?: number
   busy: boolean
   coordinatorAgentId: string
   coordinatorRevision: string
@@ -867,6 +1357,9 @@ function ProjectCreateForm({
   useEffect(() => {
     if (defaultExpanded) setExpanded(true)
   }, [defaultExpanded])
+  useEffect(() => {
+    if (requestOpen > 0) setExpanded(true)
+  }, [requestOpen])
   return (
     <details
       id="project-coordinator-create"
@@ -988,11 +1481,13 @@ function LiveSyncStatus({
 function ProjectOverview({
   project,
   observedAt,
-  nowMilliseconds
+  nowMilliseconds,
+  onNavigate
 }: Readonly<{
   project: ProjectCoordinatorProject
   observedAt: string
   nowMilliseconds: number
+  onNavigate(viewId: string): void
 }>): ReactElement {
   const { t } = useTranslation('common')
   const record = project.project
@@ -1084,9 +1579,11 @@ function ProjectOverview({
         <span className="project-coordinator-epoch">e{record.coordinatorAuthorityEpoch}</span>
       </div>
 
-      <ProjectFlowRail stages={stages} />
-      <AttentionDeck attention={attention} />
-      {project.finalSummary ? <ProjectOutcomeHandoff project={project} /> : null}
+      <ProjectFlowRail stages={stages} onNavigate={onNavigate} />
+      <AttentionDeck attention={attention} onNavigate={onNavigate} />
+      {project.finalSummary ? (
+        <ProjectOutcomeHandoff project={project} onNavigate={onNavigate} />
+      ) : null}
 
       <footer className="project-coordinator-overview-footer">
         <span>{t('projectCoordinatorObservedAt')}</span>
@@ -1099,13 +1596,17 @@ function ProjectOverview({
 }
 
 function ProjectFlowRail({
-  stages
-}: Readonly<{ stages: readonly ProjectCoordinatorFlowStage[] }>): ReactElement {
+  stages,
+  onNavigate
+}: Readonly<{
+  stages: readonly ProjectCoordinatorFlowStage[]
+  onNavigate(viewId: string): void
+}>): ReactElement {
   const { t } = useTranslation('common')
-  const sectionByStage: Readonly<Record<ProjectCoordinatorFlowStageId, string>> = {
-    plan: 'plan',
-    dispatch: 'tasks',
-    execute: 'tasks',
+  const viewByStage: Readonly<Record<ProjectCoordinatorFlowStageId, string>> = {
+    plan: 'projects',
+    dispatch: 'projects',
+    execute: 'projects',
     review: 'reviews',
     record: 'reviews',
     complete: 'reviews'
@@ -1121,7 +1622,7 @@ function ProjectFlowRail({
           <li key={stage.id} data-flow-state={stage.state}>
             <button
               type="button"
-              onClick={() => focusCoordinatorSection(sectionByStage[stage.id])}
+              onClick={() => onNavigate(viewByStage[stage.id])}
             >
               <span className="project-coordinator-flow-node" aria-hidden="true">
                 {stage.state === 'complete' ? <Check />
@@ -1143,38 +1644,42 @@ function ProjectFlowRail({
 }
 
 function AttentionDeck({
-  attention
-}: Readonly<{ attention: ProjectCoordinatorAttentionSummary }>): ReactElement {
+  attention,
+  onNavigate
+}: Readonly<{
+  attention: ProjectCoordinatorAttentionSummary
+  onNavigate(viewId: string): void
+}>): ReactElement {
   const { t } = useTranslation('common')
   const items = [
     {
       id: 'plan-confirmation',
       count: attention.planConfirmation,
-      section: 'plan',
+      view: 'projects',
       label: t('projectCoordinatorAttentionPlan')
     },
     {
       id: 'human-answers',
       count: attention.humanAnswers,
-      section: 'reviews',
+      view: 'reviews',
       label: t('projectCoordinatorAttentionHuman')
     },
     {
       id: 'result-reviews',
       count: attention.resultReviews,
-      section: 'reviews',
+      view: 'reviews',
       label: t('projectCoordinatorAttentionReview')
     },
     {
       id: 'revision-tasks',
       count: attention.revisionTasks,
-      section: 'tasks',
+      view: 'projects',
       label: t('projectCoordinatorAttentionRevision')
     },
     {
       id: 'recovery-actions',
       count: attention.recoveryActions,
-      section: 'provisioning',
+      view: 'projects',
       label: t('projectCoordinatorAttentionRecovery')
     }
   ].filter(({ count }) => count > 0)
@@ -1192,7 +1697,7 @@ function AttentionDeck({
             <button
               key={item.id}
               type="button"
-              onClick={() => focusCoordinatorSection(item.section)}
+              onClick={() => onNavigate(item.view)}
             >
               <span>{item.label}</span>
               <strong>{item.count}</strong>
@@ -1207,8 +1712,12 @@ function AttentionDeck({
 }
 
 function ProjectOutcomeHandoff({
-  project
-}: Readonly<{ project: ProjectCoordinatorProject }>): ReactElement {
+  project,
+  onNavigate
+}: Readonly<{
+  project: ProjectCoordinatorProject
+  onNavigate(viewId: string): void
+}>): ReactElement {
   const { t } = useTranslation('common')
   const meetingPackage = projectCoordinatorMeetingPackageSummary(project)
   return (
@@ -1249,10 +1758,10 @@ function ProjectOutcomeHandoff({
         </details>
       ) : null}
       <div className="project-coordinator-handoff-actions">
-        <button type="button" onClick={() => focusCoordinatorSection('reviews')}>
+        <button type="button" onClick={() => onNavigate('reviews')}>
           {t('projectCoordinatorReviewRecord')}
         </button>
-        <button type="button" onClick={() => focusCoordinatorSection('create')}>
+        <button type="button" onClick={() => onNavigate('projects')}>
           {t('projectCoordinatorStartFollowUp')}
         </button>
       </div>

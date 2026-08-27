@@ -70,6 +70,7 @@ export type ContentSpacePanelProps = Readonly<{
   initialResource?: ContentSpaceInitialResource
   workspaceId?: string
   enrollmentViews?: readonly ContentSpaceProviderEnrollmentView[]
+  embedded?: boolean
 }>
 
 export function ContentSpacePanel({
@@ -79,7 +80,8 @@ export function ContentSpacePanel({
   onCollapse,
   initialResource,
   workspaceId,
-  enrollmentViews = EMPTY_ENROLLMENT_VIEWS
+  enrollmentViews = EMPTY_ENROLLMENT_VIEWS,
+  embedded = false
 }: ContentSpacePanelProps) {
   const [providers, setProviders] = useState<readonly Readonly<{
     providerInstanceRef: string
@@ -781,11 +783,16 @@ export function ContentSpacePanel({
 
   return (
     <section
-      className={mergeClassNames('content-space-panel', className)}
+      className={mergeClassNames(
+        'content-space-panel',
+        embedded ? 'is-embedded' : undefined,
+        className
+      )}
       data-content-space-panel
+      data-content-space-embedded={embedded ? 'true' : 'false'}
       aria-busy={busy}
     >
-      <header className="content-space-header">
+      {!embedded ? <header className="content-space-header">
         <span className="content-space-brand-mark" aria-hidden>
           <Library size={17} strokeWidth={1.75} />
         </span>
@@ -807,17 +814,29 @@ export function ContentSpacePanel({
           </button>
         )}
         </span>
-      </header>
+      </header> : null}
 
       <div className="content-space-provider-section">
         <div className="content-space-source-stack">
           <div className="content-space-section-label">
             <label htmlFor="content-space-provider">Content source</label>
-            <span aria-live="polite">{providerInstanceRef
-              ? selectedEnrollmentView && selectedAccessState
-                ? providerAccessLabel(selectedAccessState)
-                : 'Source selected'
-              : 'Choose a source'}</span>
+            <span>
+              <span aria-live="polite">{providerInstanceRef
+                ? selectedEnrollmentView && selectedAccessState
+                  ? providerAccessLabel(selectedAccessState)
+                  : 'Source selected'
+                : 'Choose a source'}</span>
+              {embedded && busy ? (
+                <button
+                  type="button"
+                  onClick={cancelMutation}
+                  className="content-space-inline-cancel"
+                >
+                  <X size={12} strokeWidth={1.9} aria-hidden />
+                  Cancel
+                </button>
+              ) : null}
+            </span>
           </div>
           <div className="content-space-select-wrap">
             <HardDrive size={16} strokeWidth={1.75} aria-hidden />

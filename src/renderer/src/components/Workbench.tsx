@@ -191,6 +191,11 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
   }
 }
 
+function rightPanelPreferredWidth(mode: Exclude<RightPanelMode, null>): number {
+  return installedRendererContributions.rightPanels.resolve(mode)
+    ?.contribution.preferredWidth ?? CODE_PANEL_PREFERRED
+}
+
 const CORE_RIGHT_PANEL_RESOURCE_KINDS: Partial<Record<Exclude<RightPanelMode, null>, string>> = {
   file: 'workspace-files',
   'child-agents': 'child-agents',
@@ -1262,7 +1267,8 @@ export function Workbench(): ReactElement {
         setRightPanelPaneWidthForSession(
           sessionId,
           pane.paneId,
-          (width) => Math.max(width, CODE_PANEL_PREFERRED)
+          (width) => Math.max(width, registered.contribution.preferredWidth ??
+            CODE_PANEL_PREFERRED)
         )
         rebindRightPanelPaneForSession(sessionId, pane.paneId, binding)
         return
@@ -1271,7 +1277,7 @@ export function Workbench(): ReactElement {
         sessionId,
         binding,
         target.placement,
-        { width: CODE_PANEL_PREFERRED }
+        { width: registered.contribution.preferredWidth ?? CODE_PANEL_PREFERRED }
       )
     }
     window.addEventListener(DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT, openDomainRightPanel)
@@ -1690,7 +1696,7 @@ export function Workbench(): ReactElement {
       },
       'focused',
       installedRendererContributions.rightPanels.resolve(mode)
-        ? { width: CODE_PANEL_PREFERRED }
+        ? { width: rightPanelPreferredWidth(mode) }
         : undefined
     )
   }
@@ -2848,7 +2854,7 @@ export function Workbench(): ReactElement {
                   setRightPanelPaneWidthForSession(
                     sessionId,
                     paneId,
-                    (width) => Math.max(width, CODE_PANEL_PREFERRED)
+                    (width) => Math.max(width, rightPanelPreferredWidth(mode))
                   )
                 }
               }}

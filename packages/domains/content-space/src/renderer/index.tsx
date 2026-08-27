@@ -1,5 +1,5 @@
 import { lazy, type ReactElement } from 'react'
-import { Folder } from 'lucide-react'
+import { FolderOpen, type LucideIcon } from 'lucide-react'
 import { z } from 'zod'
 
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
@@ -9,7 +9,7 @@ import {
   type DomainRendererResourceNavigationValue,
   type DomainRendererSessionResource,
   type DomainRendererWorkbenchRightPanelValue,
-  type DomainRendererWorkbenchToolbarActionValue,
+  type DomainRendererWorkbenchWorkspaceSectionValue,
   type TrustedRendererDomainPackageEntry
 } from '@sciforge/domain-sdk/renderer'
 
@@ -19,8 +19,9 @@ import {
   CONTENT_SPACE_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION,
   CONTENT_SPACE_RENDERER_RIGHT_PANEL_CONTRACT,
   CONTENT_SPACE_RENDERER_RIGHT_PANEL_CONTRIBUTION,
-  CONTENT_SPACE_RENDERER_TOOLBAR_ACTION_CONTRACT,
-  CONTENT_SPACE_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
+  CONTENT_SPACE_RENDERER_WORKSPACE_FILES_CONTRACT,
+  CONTENT_SPACE_RENDERER_WORKSPACE_FILES_CONTRIBUTION,
+  CONTENT_SPACE_RENDERER_I18N_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition.js'
 import {
@@ -31,6 +32,10 @@ import {
 import { createContentSpaceCapabilityClient } from './capability-client.js'
 import type { ContentSpaceInitialResource } from './ContentSpacePanel.js'
 import { collectContentSpaceProviderEnrollmentViews } from './provider-enrollment-view.js'
+import {
+  contentSpaceI18nResourceContribution,
+  type ContentSpaceI18nResourceContribution
+} from './messages.js'
 
 const ContentSpacePanel = lazy(() => import('./ContentSpacePanel.js').then((module) => ({
   default: module.ContentSpacePanel
@@ -38,13 +43,14 @@ const ContentSpacePanel = lazy(() => import('./ContentSpacePanel.js').then((modu
 
 export type ContentSpaceRightPanelContribution =
   DomainRendererWorkbenchRightPanelValue<ReactElement>
-export type ContentSpaceToolbarActionContribution =
-  DomainRendererWorkbenchToolbarActionValue<typeof Folder>
+export type ContentSpaceWorkspaceSectionContribution =
+  DomainRendererWorkbenchWorkspaceSectionValue<ReactElement, LucideIcon>
 export type ContentSpaceRendererContribution =
   | ContentSpaceRightPanelContribution
-  | ContentSpaceToolbarActionContribution
+  | ContentSpaceWorkspaceSectionContribution
   | DomainRendererCommandHandler
   | DomainRendererResourceNavigationValue
+  | ContentSpaceI18nResourceContribution
 
 export function createContentSpaceRightPanelContribution(
   host: DomainRendererHost
@@ -94,6 +100,25 @@ export function createContentSpaceCommand(host: DomainRendererHost): DomainRende
   })
 }
 
+export function createContentSpaceWorkspaceFilesContribution(
+  host: DomainRendererHost
+): ContentSpaceWorkspaceSectionContribution {
+  const client = createContentSpaceCapabilityClient(host.capabilityInvoker)
+  return Object.freeze({
+    icon: FolderOpen,
+    render: ({ className, session }) => (
+      <ContentSpacePanel
+        client={client}
+        fileTransfers={host.fileTransfers}
+        enrollmentViews={collectContentSpaceProviderEnrollmentViews(host)}
+        className={className}
+        embedded
+        workspaceId={session.workspaceRoot}
+      />
+    )
+  })
+}
+
 export function createContentSpaceResourceNavigationContribution():
 DomainRendererResourceNavigationValue {
   return Object.freeze({
@@ -136,9 +161,13 @@ export function createDomainRendererEntry(
         value: createContentSpaceCommand(host)
       },
       {
-        ...CONTENT_SPACE_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
-        contract: CONTENT_SPACE_RENDERER_TOOLBAR_ACTION_CONTRACT,
-        value: Object.freeze({ icon: Folder })
+        ...CONTENT_SPACE_RENDERER_WORKSPACE_FILES_CONTRIBUTION,
+        contract: CONTENT_SPACE_RENDERER_WORKSPACE_FILES_CONTRACT,
+        value: createContentSpaceWorkspaceFilesContribution(host)
+      },
+      {
+        ...CONTENT_SPACE_RENDERER_I18N_CONTRIBUTION,
+        value: contentSpaceI18nResourceContribution
       },
       {
         ...CONTENT_SPACE_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION,

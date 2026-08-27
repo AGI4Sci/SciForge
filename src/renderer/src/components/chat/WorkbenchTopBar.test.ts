@@ -65,8 +65,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
     expect(html).toContain('Paper Radar')
     expect(html).toContain('aria-pressed="true"')
-    expect(html).toContain('aria-label="Customize feature plugins"')
-    expect(html).toContain('>Configure plugins</span>')
+    expect(html).toContain('aria-label="Customize toolbar"')
+    expect(html).toContain('>Customize toolbar</span>')
   })
 
   it('omits a registered contribution when its generic availability predicate fails', () => {
