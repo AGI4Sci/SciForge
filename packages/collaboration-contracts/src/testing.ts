@@ -400,9 +400,9 @@ export const INVALID_TEST_ONLY_CREDENTIAL_FIXTURE = Object.freeze({
 
 export const redactedCredentialFixture = redactCredentials(INVALID_TEST_ONLY_CREDENTIAL_FIXTURE)
 
-export const agentRegisteredResponseFixture = {
+export const agentEnsuredResponseFixture = {
   protocolVersion: '1.0' as const,
-  type: 'agent.registered' as const,
+  type: 'agent.ensured' as const,
   requestId: TEST_IDS.requestId,
   agent: agentNodeFixture,
   sealedCredential: {

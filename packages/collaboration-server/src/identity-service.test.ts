@@ -71,8 +71,8 @@ describe('A OIDC, Device, and Agent server semantics', () => {
     expect(repository.state.devices.get(created.device.deviceId)).not.toHaveProperty('signature')
 
     const bootstrap = createAgentCredentialBootstrap()
-    const registered = await collaboration.registerAgent(actor, {
-      deviceId: created.device.deviceId, displayName: 'Runtime Agent', nodeType: 'desktop',
+    const registered = await collaboration.ensureAgent(actor, {
+      deviceId: created.device.deviceId,
       capabilities: ['runtime-exec'], credentialBootstrapPublicKey: bootstrap.publicKey,
       idempotencyKey: 'idem_agent_device_link_0001'
     })

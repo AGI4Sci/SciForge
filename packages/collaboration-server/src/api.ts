@@ -244,11 +244,14 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
       humanEndpointId: command.humanEndpointId, status: command.status, expectedRevision: command.expectedRevision,
       idempotencyKey: command.idempotencyKey })))
     case 'endpoint.transfer': return entityResponse(command, toEndpoint(await service.transferEndpoint(requiredUser(actor), command)))
-    case 'agent.register': {
+    case 'agent.ensure': {
       const user = requiredUser(actor)
-      const result = await service.registerAgent(user, command)
-      if (!result.sealedCredential) throw new CollaborationServiceError('idempotency_conflict', 'The one-time sealed Agent credential was already returned.')
-      return response(command, { type: 'agent.registered', agent: toAgent(result.agent), sealedCredential: result.sealedCredential })
+      const result = await service.ensureAgent(user, command)
+      return response(command, {
+        type: 'agent.ensured',
+        agent: toAgent(result.agent),
+        ...(result.sealedCredential ? { sealedCredential: result.sealedCredential } : {})
+      })
     }
     case 'agent.heartbeat': {
       const device = requiredAgent(actor, command.agentId)
@@ -299,10 +302,6 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     case 'managed_container.archive': {
       return entityResponse(command, toManagedContainer(await service.archiveManagedContainer(requiredUser(actor), command)))
     }
-    case 'participant.update_primary': return entityResponse(command, toParticipant(await service.selectPrimary(requiredUser(actor), {
-      primaryHumanEndpointId: command.primaryHumanEndpointId,
-      primaryAgentId: command.primaryAgentId, expectedRevision: command.expectedRevision,
-      idempotencyKey: command.idempotencyKey })))
     case 'projection.create': {
       const user = requiredUser(actor)
       if (user.userId !== command.ownerUserId) throw new CollaborationServiceError('permission_denied', 'Cannot create another user projection.')

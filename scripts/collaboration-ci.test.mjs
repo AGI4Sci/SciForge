@@ -60,6 +60,29 @@ test('runs the Host Content Space Broker integration and this routing contract',
   )
 })
 
+test('builds the Desktop Agent vault path on Linux, macOS, and Windows', () => {
+  assert.match(workflowSource, /^ {2}desktop-agent-platform-contract:$/m)
+  for (const [platform, runner] of [
+    ['Linux', 'ubuntu-latest'],
+    ['macOS', 'macos-latest'],
+    ['Windows', 'windows-latest']
+  ]) {
+    assert.match(
+      workflowSource,
+      new RegExp(`^ {10}- platform: ${platform}\\n {12}os: ${runner}$`, 'm')
+    )
+  }
+  assert.match(
+    workflowSource,
+    /^ {10}npm --workspace @sciforge\/domain-identity-access test$/m
+  )
+  assert.match(
+    workflowSource,
+    /^ {10}npx vitest run src\/main\/domain-package-storage\.test\.ts$/m
+  )
+  assert.match(workflowSource, /^ {8}run: npm run build$/m)
+})
+
 test('does not retain the parallel collaboration identity Token package', async () => {
   assert.equal(
     packageJson.workspaces.includes('packages/collaboration-identity'),

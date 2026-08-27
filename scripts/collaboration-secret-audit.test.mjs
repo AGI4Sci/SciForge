@@ -371,7 +371,7 @@ function cleanFixture() {
     })
   `)
   write(root, 'packages/collaboration-contracts/src/protocol.ts', `
-    export type AgentRegistered = {
+    export type AgentEnsured = {
       sealedCredential: string
       credentialBootstrapPublicKey: string
     }

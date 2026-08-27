@@ -58,8 +58,6 @@ export const COLLABORATION_SMOKE_CAPABILITY_IDS = Object.freeze([
   'collaboration.connection.connect',
   'collaboration.endpoint.challenge.start',
   'collaboration.endpoint.challenge.poll',
-  'collaboration.agent.register',
-  'collaboration.participant.primary-agent.select',
   'collaboration.projection.link',
   'collaboration.projection.update',
   'collaboration.projection.share',

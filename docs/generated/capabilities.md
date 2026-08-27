@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **292**
+Registered actions: **290**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -58,7 +58,6 @@ Registered actions: **292**
 | `browser-preview.reload` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `browser-preview.select` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `change-inspector.open-session` | 1.0.0 | ui | read | none | workspace |
-| `collaboration.agent.register` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.connection.configure` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.connection.connect` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.endpoint.challenge.poll` | 1.0.0 | ui | read | none | global |
@@ -66,7 +65,6 @@ Registered actions: **292**
 | `collaboration.managed-container.archive` | 1.0.0 | ui | destructive | confirmation | global |
 | `collaboration.managed-container.inspect` | 1.0.0 | ui | read | none | global |
 | `collaboration.managed-container.provision` | 1.0.0 | ui | external-write | confirmation | global |
-| `collaboration.participant.primary-agent.select` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.link` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.share` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.update` | 1.0.0 | ui | external-write | confirmation | global |
@@ -16766,140 +16764,6 @@ Issues a read-only resource for one session change snapshot.
 }
 ```
 
-## `collaboration.agent.register`
-
-Registers the active Identity Device as an Agent through Identity-owned private authority.
-
-- Version: `1.0.0`
-- Audiences: ui
-- Effect: `external-write`
-- Approval: confirmation
-- Scope: global
-
-### Contract
-
-```json
-{
-  "concurrency": {
-    "idempotency": "required",
-    "revision": "none"
-  },
-  "contractVersion": 3,
-  "inputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
-    "properties": {
-      "displayName": {
-        "maxLength": 256,
-        "minLength": 1,
-        "type": "string"
-      },
-      "nodeType": {
-        "default": "desktop",
-        "enum": [
-          "desktop",
-          "server"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "displayName",
-      "nodeType"
-    ],
-    "type": "object"
-  },
-  "outputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
-    "properties": {
-      "agent": {
-        "additionalProperties": false,
-        "properties": {
-          "agentId": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
-          },
-          "capabilities": {
-            "items": {
-              "maxLength": 256,
-              "minLength": 1,
-              "type": "string"
-            },
-            "maxItems": 256,
-            "type": "array"
-          },
-          "displayName": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
-          },
-          "lastSeenAt": {
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-            "type": "string"
-          },
-          "nodeType": {
-            "enum": [
-              "desktop",
-              "server"
-            ],
-            "type": "string"
-          },
-          "ownerUserId": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
-          },
-          "primary": {
-            "type": "boolean"
-          },
-          "status": {
-            "enum": [
-              "online",
-              "offline",
-              "revoked"
-            ],
-            "type": "string"
-          },
-          "workerAcceptanceMode": {
-            "enum": [
-              "manual",
-              "automatic"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "agentId",
-          "ownerUserId",
-          "displayName",
-          "nodeType",
-          "status",
-          "capabilities",
-          "primary"
-        ],
-        "type": "object"
-      }
-    },
-    "required": [
-      "agent"
-    ],
-    "type": "object"
-  },
-  "resourceKinds": [],
-  "tags": [
-    "collaboration",
-    "user",
-    "device",
-    "session",
-    "project"
-  ],
-  "title": "Register this Agent"
-}
-```
-
 ## `collaboration.connection.configure`
 
 Stores a non-secret HTTPS service location and loads its provider-neutral catalog.
@@ -18389,299 +18253,6 @@ Creates or repairs the authenticated user managed Channel through the durable pr
 }
 ```
 
-## `collaboration.participant.primary-agent.select`
-
-Selects an active Agent owned by the current user without guessing from presence.
-
-- Version: `1.0.0`
-- Audiences: ui
-- Effect: `external-write`
-- Approval: confirmation
-- Scope: global
-
-### Contract
-
-```json
-{
-  "concurrency": {
-    "idempotency": "required",
-    "revision": "none"
-  },
-  "contractVersion": 3,
-  "inputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
-    "properties": {
-      "agentId": {
-        "maxLength": 256,
-        "minLength": 1,
-        "type": "string"
-      },
-      "expectedParticipantRevision": {
-        "maximum": 9007199254740991,
-        "minimum": 0,
-        "type": "integer"
-      }
-    },
-    "required": [
-      "agentId",
-      "expectedParticipantRevision"
-    ],
-    "type": "object"
-  },
-  "outputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
-    "properties": {
-      "participant": {
-        "additionalProperties": false,
-        "properties": {
-          "agents": {
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "agentId": {
-                  "maxLength": 256,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "capabilities": {
-                  "items": {
-                    "maxLength": 256,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "maxItems": 256,
-                  "type": "array"
-                },
-                "displayName": {
-                  "maxLength": 256,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "lastSeenAt": {
-                  "format": "date-time",
-                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                  "type": "string"
-                },
-                "nodeType": {
-                  "enum": [
-                    "desktop",
-                    "server"
-                  ],
-                  "type": "string"
-                },
-                "ownerUserId": {
-                  "maxLength": 256,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "primary": {
-                  "type": "boolean"
-                },
-                "status": {
-                  "enum": [
-                    "online",
-                    "offline",
-                    "revoked"
-                  ],
-                  "type": "string"
-                },
-                "workerAcceptanceMode": {
-                  "enum": [
-                    "manual",
-                    "automatic"
-                  ],
-                  "type": "string"
-                }
-              },
-              "required": [
-                "agentId",
-                "ownerUserId",
-                "displayName",
-                "nodeType",
-                "status",
-                "capabilities",
-                "primary"
-              ],
-              "type": "object"
-            },
-            "maxItems": 64,
-            "type": "array"
-          },
-          "complete": {
-            "type": "boolean"
-          },
-          "displayName": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
-          },
-          "endpoints": {
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "assurance": {
-                  "enum": [
-                    "low",
-                    "verified",
-                    "strong"
-                  ],
-                  "type": "string"
-                },
-                "displayName": {
-                  "maxLength": 256,
-                  "type": "string"
-                },
-                "humanEndpointId": {
-                  "maxLength": 256,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "lastSeenAt": {
-                  "format": "date-time",
-                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                  "type": "string"
-                },
-                "projectionLocators": {
-                  "items": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "containerDisplayName": {
-                        "maxLength": 200,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "containerId": {
-                        "maxLength": 512,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "provider": {
-                        "pattern": "^[a-z][a-z0-9.-]{0,63}$",
-                        "type": "string"
-                      },
-                      "realmId": {
-                        "maxLength": 512,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "topicDisplayName": {
-                        "maxLength": 200,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "topicId": {
-                        "maxLength": 512,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "type": {
-                        "const": "provider_locator",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "type",
-                      "provider",
-                      "realmId",
-                      "containerId",
-                      "topicId"
-                    ],
-                    "type": "object"
-                  },
-                  "maxItems": 500,
-                  "type": "array"
-                },
-                "providerKey": {
-                  "maxLength": 256,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "status": {
-                  "enum": [
-                    "active",
-                    "suspended",
-                    "revoked"
-                  ],
-                  "type": "string"
-                },
-                "verifiedAt": {
-                  "format": "date-time",
-                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "humanEndpointId",
-                "providerKey",
-                "status",
-                "assurance",
-                "projectionLocators"
-              ],
-              "type": "object"
-            },
-            "maxItems": 64,
-            "type": "array"
-          },
-          "primaryAgentId": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
-          },
-          "primaryHumanEndpointId": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
-          },
-          "revision": {
-            "maximum": 9007199254740991,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "status": {
-            "enum": [
-              "active",
-              "suspended",
-              "revoked"
-            ],
-            "type": "string"
-          },
-          "userId": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": [
-          "userId",
-          "displayName",
-          "status",
-          "revision",
-          "complete",
-          "endpoints",
-          "agents"
-        ],
-        "type": "object"
-      }
-    },
-    "required": [
-      "participant"
-    ],
-    "type": "object"
-  },
-  "resourceKinds": [],
-  "tags": [
-    "collaboration",
-    "user",
-    "device",
-    "session",
-    "project"
-  ],
-  "title": "Select primary Agent"
-}
-```
-
 ## `collaboration.projection.link`
 
 Creates a stable personal Topic projection for an explicit existing or new local Session.
@@ -20060,9 +19631,6 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
                   "minLength": 1,
                   "type": "string"
                 },
-                "primary": {
-                  "type": "boolean"
-                },
                 "status": {
                   "enum": [
                     "online",
@@ -20085,8 +19653,7 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
                 "displayName",
                 "nodeType",
                 "status",
-                "capabilities",
-                "primary"
+                "capabilities"
               ],
               "type": "object"
             },
@@ -20207,11 +19774,6 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
             },
             "maxItems": 64,
             "type": "array"
-          },
-          "primaryAgentId": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
           },
           "primaryHumanEndpointId": {
             "maxLength": 256,

@@ -31,7 +31,6 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import type {
-  CollaborationAgentRegisterInput,
   CollaborationEndpointChallengeStartInput,
   CollaborationProjectionLinkInput,
   CollaborationProjectionQueueItemView,
@@ -228,15 +227,6 @@ export function buildEndpointChallengeInput(input: Readonly<{
   }
 }
 
-export function buildAgentRegistrationInput(
-  displayName: string
-): CollaborationAgentRegisterInput | undefined {
-  const normalized = displayName.trim()
-  return normalized
-    ? { displayName: normalized, nodeType: 'desktop' }
-    : undefined
-}
-
 type PairingDisplay = Readonly<{
   status: 'pending' | 'verified' | 'expired'
   pairingCode?: string
@@ -311,7 +301,6 @@ export function CollaborationPanel({
   const [baseUrl, setBaseUrl] = useState('')
   const [selectedProviderKey, setSelectedProviderKey] = useState('')
   const [locator, setLocator] = useState<Record<string, string>>({})
-  const [agentDisplayName, setAgentDisplayName] = useState('')
   const [selectedProjectionLocatorKey, setSelectedProjectionLocatorKey] = useState('')
   const [confirmSelectedRelink, setConfirmSelectedRelink] = useState(false)
   const [pairing, setPairing] = useState<PairingDisplay | null>(null)
@@ -483,15 +472,9 @@ export function CollaborationPanel({
   }, [client, expirePairing, locator, pollPairing, runAction, selectedProvider])
 
   const participant = snapshot?.participant
-  const primaryAgent = participant?.agents.find(({ agentId }) =>
-    agentId === participant.primaryAgentId
-  )
   const localAgent = participant?.agents.find(({ agentId }) =>
     agentId === snapshot?.connection.localAgentId
   )
-  const authorityRecoveryAgent = snapshot?.connection.agentAuthorityReady === false
-    ? localAgent
-    : undefined
   const primaryEndpoint = participant?.endpoints.find(({ humanEndpointId }) =>
     humanEndpointId === participant.primaryHumanEndpointId
   )
@@ -533,7 +516,7 @@ export function CollaborationPanel({
     : undefined
   const canLink = Boolean(
     participant?.userId &&
-    primaryAgent &&
+    localAgent &&
     primaryEndpoint &&
     selectedProjectionLocator &&
     session.runtimeId &&
@@ -545,7 +528,7 @@ export function CollaborationPanel({
   const linkSession = useCallback(async (mode: 'existing' | 'new'): Promise<void> => {
     if (
       !participant ||
-      !primaryAgent ||
+      !localAgent ||
       !primaryEndpoint ||
       !session.runtimeId
     ) return
@@ -553,7 +536,7 @@ export function CollaborationPanel({
       mode,
       selectedLocatorKey: selectedProjectionLocatorKey,
       locators: projectionLocators,
-      agentId: primaryAgent.agentId,
+      agentId: localAgent.agentId,
       humanEndpointId: primaryEndpoint.humanEndpointId,
       runtimeId: session.runtimeId,
       threadId: session.id,
@@ -565,7 +548,7 @@ export function CollaborationPanel({
   }, [
     client,
     participant,
-    primaryAgent,
+    localAgent,
     primaryEndpoint,
     projectionLocators,
     runAction,
@@ -676,7 +659,8 @@ export function CollaborationPanel({
               providerOptions={snapshot.providerOptions}
               selectedProviderKey={selectedProviderKey}
               locator={locator}
-              agentDisplayName={agentDisplayName}
+              localAgentId={snapshot.connection.localAgentId}
+              agentAuthorityReady={snapshot.connection.agentAuthorityReady}
               pairing={pairing}
               busyKey={busyKey}
               onProviderChange={(providerKey) => {
@@ -688,28 +672,7 @@ export function CollaborationPanel({
               onLocatorChange={(key, value) => {
                 setLocator((current) => ({ ...current, [key]: value }))
               }}
-              onAgentDisplayNameChange={setAgentDisplayName}
               onStartPairing={() => void startPairing()}
-              onRegisterAgent={() => {
-                const input = buildAgentRegistrationInput(agentDisplayName)
-                if (!input) return
-                void runAction('agent-register', () => client.registerAgent(input))
-              }}
-              authorityRecoveryAgent={authorityRecoveryAgent}
-              onRecoverAgentAuthority={() => {
-                if (!authorityRecoveryAgent) return
-                void runAction('agent-authority-recover', () => client.registerAgent({
-                  displayName: authorityRecoveryAgent.displayName,
-                  nodeType: authorityRecoveryAgent.nodeType
-                }))
-              }}
-              onSelectPrimary={(agentId) => {
-                if (!participant) return
-                void runAction(`primary-${agentId}`, () => client.selectPrimaryAgent({
-                  agentId,
-                  expectedParticipantRevision: participant.revision
-                }))
-              }}
               onWorkerAcceptanceModeChange={(agentId, mode) => {
                 void runAction(`worker-policy-${agentId}`, () =>
                   client.updateWorkerAcceptancePolicy({ agentId, mode })
@@ -1344,17 +1307,13 @@ type ParticipantSectionProps = Readonly<{
   providerOptions: CollaborationStatusSnapshot['providerOptions']
   selectedProviderKey: string
   locator: Readonly<Record<string, string>>
-  agentDisplayName: string
+  localAgentId?: string
+  agentAuthorityReady?: boolean
   pairing: PairingDisplay | null
   busyKey: string | null
   onProviderChange: (providerKey: string) => void
   onLocatorChange: (key: string, value: string) => void
-  onAgentDisplayNameChange: (value: string) => void
   onStartPairing: () => void
-  onRegisterAgent: () => void
-  authorityRecoveryAgent?: AgentView
-  onRecoverAgentAuthority: () => void
-  onSelectPrimary: (agentId: string) => void
   onWorkerAcceptanceModeChange: (
     agentId: string,
     mode: 'manual' | 'automatic'
@@ -1366,17 +1325,13 @@ export function ParticipantSection({
   providerOptions,
   selectedProviderKey,
   locator,
-  agentDisplayName,
+  localAgentId,
+  agentAuthorityReady,
   pairing,
   busyKey,
   onProviderChange,
   onLocatorChange,
-  onAgentDisplayNameChange,
   onStartPairing,
-  onRegisterAgent,
-  authorityRecoveryAgent,
-  onRecoverAgentAuthority,
-  onSelectPrimary,
   onWorkerAcceptanceModeChange
 }: ParticipantSectionProps): ReactElement {
   const { t } = useTranslation('common')
@@ -1386,6 +1341,8 @@ export function ParticipantSection({
   const missingRequiredLocator = selectedProvider?.locatorFields.some((field) =>
     field.required && !locator[field.key]?.trim()
   ) ?? true
+  const localAgent = participant?.agents.find((agent) => agent.agentId === localAgentId)
+  const otherAgents = participant?.agents.filter((agent) => agent.agentId !== localAgentId) ?? []
 
   return (
     <section className={PANEL_SECTION} data-collaboration-section="participant">
@@ -1474,62 +1431,45 @@ export function ParticipantSection({
             <Monitor className="h-4 w-4" />
             {t('collaborationAgent')}
           </div>
-          {participant?.agents.length ? (
-            <div className="space-y-2">
-              {participant.agents.map((agent) => (
+          <div className="space-y-2">
+            {localAgent ? (
+              <>
+                <p className="text-xs text-ds-muted">
+                  {t('collaborationAgentAutomatic')}
+                </p>
                 <AgentRow
-                  key={agent.agentId}
-                  agent={agent}
+                  agent={localAgent}
                   busy={busyKey !== null}
-                  onSelectPrimary={() => onSelectPrimary(agent.agentId)}
+                  currentDevice
                   onWorkerAcceptanceModeChange={(mode) =>
-                    onWorkerAcceptanceModeChange(agent.agentId, mode)}
+                    onWorkerAcceptanceModeChange(localAgent.agentId, mode)}
                 />
-              ))}
-              {authorityRecoveryAgent ? (
-                <button
-                  type="button"
-                  className={PRIMARY_BUTTON}
-                  data-collaboration-agent-authority-recover="true"
-                  disabled={
-                    !participant.endpoints.some(({ status }) => status === 'active') ||
-                    busyKey !== null
-                  }
-                  onClick={onRecoverAgentAuthority}
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  {t('collaborationRecoverAgentAuthority')}
-                </button>
-              ) : null}
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <span className="text-xs text-ds-muted">{t('collaborationAgentMissing')}</span>
-              <label className="block text-xs text-ds-muted">
-                <span className="mb-1 block">{t('collaborationAgentDisplayName')}</span>
-                <input
-                  className={INPUT}
-                  data-collaboration-agent-name="true"
-                  required
-                  value={agentDisplayName}
-                  placeholder={t('collaborationAgentDisplayNamePlaceholder')}
-                  onChange={(event) => onAgentDisplayNameChange(event.currentTarget.value)}
-                />
-              </label>
-              <button
-                type="button"
-                className={PRIMARY_BUTTON}
-                disabled={
-                  !agentDisplayName.trim() ||
-                  busyKey !== null
-                }
-                onClick={onRegisterAgent}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                {t('collaborationRegisterAgent')}
-              </button>
-            </div>
-          )}
+              </>
+            ) : (
+              <span className="text-xs text-ds-muted" data-collaboration-agent-preparing="true">
+                {agentAuthorityReady === false
+                  ? t('collaborationAgentUnavailable')
+                  : t('collaborationAgentPreparing')}
+              </span>
+            )}
+            {otherAgents.length ? (
+              <div className="space-y-2 border-t border-ds-border pt-2">
+                <p className="text-xs font-medium text-ds-muted">
+                  {t('collaborationOtherDeviceAgents')}
+                </p>
+                {otherAgents.map((agent) => (
+                  <AgentRow
+                    key={agent.agentId}
+                    agent={agent}
+                    busy={busyKey !== null}
+                    currentDevice={false}
+                    onWorkerAcceptanceModeChange={(mode) =>
+                      onWorkerAcceptanceModeChange(agent.agentId, mode)}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
     </section>
@@ -1568,12 +1508,12 @@ function EndpointRow({ endpoint, primary }: Readonly<{
 function AgentRow({
   agent,
   busy,
-  onSelectPrimary,
+  currentDevice,
   onWorkerAcceptanceModeChange
 }: Readonly<{
   agent: AgentView
   busy: boolean
-  onSelectPrimary: () => void
+  currentDevice: boolean
   onWorkerAcceptanceModeChange: (mode: 'manual' | 'automatic') => void
 }>): ReactElement {
   const { t } = useTranslation('common')
@@ -1582,13 +1522,18 @@ function AgentRow({
       className="rounded-md bg-ds-hover p-2 text-xs"
       data-agent-status={agent.status}
       data-agent-owner={agent.ownerUserId}
-      data-primary-agent={agent.primary ? 'true' : 'false'}
+      data-current-device-agent={currentDevice ? 'true' : 'false'}
     >
       <div className="flex items-center gap-2">
         {agent.nodeType === 'server'
           ? <Server className="h-3.5 w-3.5" />
           : <Monitor className="h-3.5 w-3.5" />}
         <span className="min-w-0 flex-1 truncate font-medium">{agent.displayName}</span>
+        {currentDevice ? (
+          <span className="rounded-full border border-ds-border px-2 py-0.5 text-[10px] text-ds-muted">
+            {t('collaborationCurrentDevice')}
+          </span>
+        ) : null}
         <StatusPill status={agent.status} />
       </div>
       <code className="mt-1 block text-[10px] text-ds-faint">{agent.agentId}</code>
@@ -1608,21 +1553,6 @@ function AgentRow({
             <option value="automatic">{t('collaborationWorkerAcceptanceAutomatic')}</option>
           </select>
         </label>
-      ) : null}
-      {agent.primary ? (
-        <div className="mt-1 flex items-center gap-1 text-ds-muted">
-          <ShieldCheck className="h-3.5 w-3.5" />
-          {t('collaborationPrimaryAgent')}
-        </div>
-      ) : agent.status !== 'revoked' ? (
-        <button
-          type="button"
-          className={`${SECONDARY_BUTTON} mt-2`}
-          disabled={busy}
-          onClick={onSelectPrimary}
-        >
-          {t('collaborationSetPrimary')}
-        </button>
       ) : null}
     </div>
   )

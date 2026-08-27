@@ -16,8 +16,6 @@ export const COLLABORATION_CAPABILITY_IDS = Object.freeze({
   connectionConnect: 'collaboration.connection.connect',
   endpointChallengeStart: 'collaboration.endpoint.challenge.start',
   endpointChallengePoll: 'collaboration.endpoint.challenge.poll',
-  agentRegister: 'collaboration.agent.register',
-  primaryAgentSelect: 'collaboration.participant.primary-agent.select',
   projectionLink: 'collaboration.projection.link',
   projectionUpdate: 'collaboration.projection.update',
   projectionShare: 'collaboration.projection.share',
@@ -78,7 +76,6 @@ export const collaborationAgentViewSchema = z.object({
   status: z.enum(['online', 'offline', 'revoked']),
   capabilities: z.array(idSchema).max(256),
   lastSeenAt: isoDateSchema.optional(),
-  primary: z.boolean(),
   workerAcceptanceMode: z.enum(['manual', 'automatic']).optional()
 }).strict()
 
@@ -89,7 +86,6 @@ export const collaborationParticipantViewSchema = z.object({
   revision: z.number().int().nonnegative(),
   complete: z.boolean(),
   primaryHumanEndpointId: idSchema.optional(),
-  primaryAgentId: idSchema.optional(),
   endpoints: z.array(collaborationEndpointViewSchema).max(64),
   agents: z.array(collaborationAgentViewSchema).max(64)
 }).strict()
@@ -243,22 +239,6 @@ export const collaborationEndpointChallengePollResultSchema = z.discriminatedUni
     assurance: z.enum(['low', 'verified', 'strong'])
   }).strict()
 ])
-
-export const collaborationAgentRegisterInputSchema = z.object({
-  displayName: displayTextSchema,
-  nodeType: z.enum(['desktop', 'server']).default('desktop')
-}).strict()
-export const collaborationAgentRegisterResultSchema = z.object({
-  agent: collaborationAgentViewSchema
-}).strict()
-
-export const collaborationPrimaryAgentSelectInputSchema = z.object({
-  agentId: idSchema,
-  expectedParticipantRevision: z.number().int().nonnegative()
-}).strict()
-export const collaborationPrimaryAgentSelectResultSchema = z.object({
-  participant: collaborationParticipantViewSchema
-}).strict()
 
 const projectionCommonSchema = z.object({
   agentId: idSchema,
@@ -427,8 +407,6 @@ export type CollaborationConnectionConfigureInput = z.infer<typeof collaboration
 export type CollaborationConnectionConnectInput = z.infer<typeof collaborationConnectionConnectInputSchema>
 export type CollaborationEndpointChallengeStartInput = z.infer<typeof collaborationEndpointChallengeStartInputSchema>
 export type CollaborationEndpointChallengePollInput = z.infer<typeof collaborationEndpointChallengePollInputSchema>
-export type CollaborationAgentRegisterInput = z.infer<typeof collaborationAgentRegisterInputSchema>
-export type CollaborationPrimaryAgentSelectInput = z.infer<typeof collaborationPrimaryAgentSelectInputSchema>
 export type CollaborationProjectionLinkInput = z.infer<typeof collaborationProjectionLinkInputSchema>
 export type CollaborationProjectionUpdateInput = z.infer<typeof collaborationProjectionUpdateInputSchema>
 export type CollaborationProjectionShareInput = z.infer<typeof collaborationProjectionShareInputSchema>

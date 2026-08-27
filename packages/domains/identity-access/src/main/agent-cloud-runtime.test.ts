@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   agentNodeFixture,
-  agentRegisteredResponseFixture,
+  agentEnsuredResponseFixture,
   webSocketMessageFixture
 } from '@sciforge/collaboration-contracts/testing'
 import type { RestRequest } from '@sciforge/collaboration-contracts'
@@ -26,7 +26,7 @@ describe('Identity Agent Cloud runtime', () => {
       contractVersion: 1 as const,
       status: 200,
       body: {
-        ...agentRegisteredResponseFixture,
+        ...agentEnsuredResponseFixture,
         requestId: input.payload.requestId
       }
     }))
@@ -34,27 +34,112 @@ describe('Identity Agent Cloud runtime', () => {
       getRuntime: () => runtimeDouble(executeAuthenticatedCloud) as never,
       vault,
       createBootstrap: () => ({
-        publicKey: agentRegisteredResponseFixture.sealedCredential.ephemeralPublicKey,
+        publicKey: agentEnsuredResponseFixture.sealedCredential.ephemeralPublicKey,
         open
       })
     })
 
-    const agent = await service.registerAgent({
-      displayName: 'Packaged Worker',
-      nodeType: 'desktop',
-      idempotencyKey: 'idem_agent-register_123456789012'
-    })
+    const agent = await service.ensureAgent()
 
     expect(agent).toEqual(agentNodeFixture)
     expect(open).toHaveBeenCalledOnce()
     expect(executeAuthenticatedCloud.mock.calls[0]?.[0].payload).toMatchObject({
-      type: 'agent.register',
+      type: 'agent.ensure',
       deviceId: agentNodeFixture.deviceId,
-      credentialBootstrapPublicKey: agentRegisteredResponseFixture.sealedCredential.ephemeralPublicKey
+      credentialBootstrapPublicKey: agentEnsuredResponseFixture.sealedCredential.ephemeralPublicKey
     })
     const stored = vault.value({ kind: 'agent-credential', agentId: agent.agentId })
     expect(stored).toContain(AUTHORITY)
     expect(JSON.stringify(agent)).not.toContain(AUTHORITY)
+  })
+
+  it('reuses the secure local authority when the Device Agent already exists', async () => {
+    const vault = memoryVault()
+    await seedAuthority(vault)
+    const open = vi.fn(() => AUTHORITY)
+    const executeAuthenticatedCloud = vi.fn(async (input: Readonly<{ payload: RestRequest }>) => ({
+      contractVersion: 1 as const,
+      status: 200,
+      body: {
+        protocolVersion: '1.0' as const,
+        type: 'agent.ensured' as const,
+        requestId: input.payload.requestId,
+        agent: agentNodeFixture
+      }
+    }))
+    const service = createTestIdentityAgentCloudRuntime({
+      getRuntime: () => runtimeDouble(executeAuthenticatedCloud) as never,
+      vault,
+      createBootstrap: () => ({
+        publicKey: agentEnsuredResponseFixture.sealedCredential.ephemeralPublicKey,
+        open
+      })
+    })
+
+    await expect(service.ensureAgent()).resolves.toEqual(agentNodeFixture)
+
+    expect(executeAuthenticatedCloud).toHaveBeenCalledOnce()
+    expect(executeAuthenticatedCloud.mock.calls[0]?.[0].payload.type).toBe('agent.ensure')
+    expect(open).not.toHaveBeenCalled()
+    expect(vault.value({
+      kind: 'agent-credential',
+      agentId: agentNodeFixture.agentId
+    })).toContain(AUTHORITY)
+  })
+
+  it('recovers a missing local authority through the bounded rotation path', async () => {
+    const vault = memoryVault()
+    const recoveredAuthority = `agent.${'R'.repeat(32)}`
+    const rotatedAgent = {
+      ...agentNodeFixture,
+      credentialVersion: 2,
+      revision: 2
+    }
+    const rotatedEnvelope = {
+      ...agentEnsuredResponseFixture.sealedCredential,
+      credentialGeneration: 2
+    }
+    const requests: RestRequest[] = []
+    const executeAuthenticatedCloud = vi.fn(async (input: Readonly<{ payload: RestRequest }>) => {
+      requests.push(input.payload)
+      return {
+        contractVersion: 1 as const,
+        status: 200,
+        body: input.payload.type === 'agent.ensure'
+          ? {
+              protocolVersion: '1.0' as const,
+              type: 'agent.ensured' as const,
+              requestId: input.payload.requestId,
+              agent: agentNodeFixture
+            }
+          : {
+              protocolVersion: '1.0' as const,
+              type: 'agent.credential_rotated' as const,
+              requestId: input.payload.requestId,
+              agent: rotatedAgent,
+              sealedCredential: rotatedEnvelope
+            }
+      }
+    })
+    const service = createTestIdentityAgentCloudRuntime({
+      getRuntime: () => runtimeDouble(executeAuthenticatedCloud) as never,
+      vault,
+      createBootstrap: () => ({
+        publicKey: rotatedEnvelope.ephemeralPublicKey,
+        open: vi.fn(() => recoveredAuthority)
+      })
+    })
+
+    await expect(service.ensureAgent()).resolves.toEqual(rotatedAgent)
+
+    expect(requests.map(({ type }) => type)).toEqual([
+      'agent.ensure',
+      'agent.rotate_credential'
+    ])
+    expect(vault.value({
+      kind: 'agent-credential',
+      agentId: agentNodeFixture.agentId
+    })).toContain(recoveredAuthority)
   })
 
   it('guards bootstrap in Device then Runtime order and derives capability facts internally', async () => {
@@ -67,7 +152,7 @@ describe('Identity Agent Cloud runtime', () => {
         contractVersion: 1 as const,
         status: 200,
         body: {
-          ...agentRegisteredResponseFixture,
+          ...agentEnsuredResponseFixture,
           requestId: input.payload.requestId
         }
       }
@@ -101,26 +186,20 @@ describe('Identity Agent Cloud runtime', () => {
             }
       },
       createBootstrap: () => ({
-        publicKey: agentRegisteredResponseFixture.sealedCredential.ephemeralPublicKey,
+        publicKey: agentEnsuredResponseFixture.sealedCredential.ephemeralPublicKey,
         open: vi.fn(() => AUTHORITY)
       })
     })
-    const input = {
-      displayName: 'Packaged Worker',
-      nodeType: 'desktop' as const,
-      idempotencyKey: 'idem_agent-register_runtime_gate_01'
-    }
-
-    await expect(service.registerAgent(input)).rejects.toMatchObject({ code: 'runtime_required' })
+    await expect(service.ensureAgent()).rejects.toMatchObject({ code: 'runtime_required' })
     expect(steps).toEqual(['device_active', 'runtime_checked'])
     expect(executeAuthenticatedCloud).not.toHaveBeenCalled()
 
     runtimeReady = true
     steps.length = 0
-    await expect(service.registerAgent(input)).resolves.toEqual(agentNodeFixture)
+    await expect(service.ensureAgent()).resolves.toEqual(agentNodeFixture)
     expect(steps).toEqual(['device_active', 'runtime_checked', 'agent_registered'])
     expect(executeAuthenticatedCloud.mock.calls[0]?.[0].payload).toMatchObject({
-      type: 'agent.register',
+      type: 'agent.ensure',
       deviceId: agentNodeFixture.deviceId,
       capabilities: ['agent-runtime.codex', 'model-access.api']
     })
@@ -142,11 +221,7 @@ describe('Identity Agent Cloud runtime', () => {
       getRuntimeReadiness: readiness
     })
 
-    await expect(service.registerAgent({
-      displayName: 'Blocked Worker',
-      nodeType: 'desktop',
-      idempotencyKey: 'idem_agent-register_device_gate_01'
-    })).rejects.toMatchObject({ code: 'device_required' })
+    await expect(service.ensureAgent()).rejects.toMatchObject({ code: 'device_required' })
     expect(readiness).not.toHaveBeenCalled()
     expect(executeAuthenticatedCloud).not.toHaveBeenCalled()
   })
@@ -242,7 +317,7 @@ describe('Identity Agent Cloud runtime', () => {
       credentialVersion: agentNodeFixture.credentialVersion + 1
     }
     const rotatedEnvelope = {
-      ...agentRegisteredResponseFixture.sealedCredential,
+      ...agentEnsuredResponseFixture.sealedCredential,
       credentialGeneration: rotatedAgent.credentialVersion
     }
     const executeAuthenticatedCloud = vi.fn(async (input: Readonly<{ payload: RestRequest }>) => ({
@@ -309,7 +384,7 @@ describe('Identity Agent Cloud runtime', () => {
       credentialVersion: agentNodeFixture.credentialVersion + 1
     }
     const rotatedEnvelope = {
-      ...agentRegisteredResponseFixture.sealedCredential,
+      ...agentEnsuredResponseFixture.sealedCredential,
       credentialGeneration: rotatedAgent.credentialVersion
     }
     const service = createTestIdentityAgentCloudRuntime({

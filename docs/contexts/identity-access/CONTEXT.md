@@ -124,6 +124,10 @@ _Avoid_: Worker, Agent Host, mobile Agent
 An execution identity owned by one SciForge User and hosted by one Agent Host. An Agent may hold different execution roles in different Projects, but it is never a person or a Device.
 _Avoid_: SciForge User, Device, Coordinator product, Worker product
 
+**Device Agent Binding**:
+The Cloud-authoritative one-to-one binding from an exact ACTIVE Desktop Device to its single active Agent. Identity ensures it automatically after the canonical Agent Runtime is ready, and the Agent display name mirrors the Device display name. Agent authority stays in the Identity private vault: device-only Keychain on macOS or Host package secrets on Windows/Linux, with insecure Linux storage rejected. A matching hostname is not Device identity and never merges separately enrolled Devices.
+_Avoid_: manual Agent registration, primary Agent selection, hostname fingerprint, hardware-account merge
+
 **Agent Bootstrap**:
-The ordered establishment of a Canonical SciForge User, Active Desktop Device, configured Agent Runtime, and finally one active Agent for that Device. It is not pairing and does not create a role-specific account.
-_Avoid_: automatic login, Coordinator account creation, pairing, Runtime installation alone
+The ordered establishment of a Canonical SciForge User, Active Desktop Device, configured Agent Runtime, and automatic Device Agent Binding. It is not pairing and does not create a role-specific account.
+_Avoid_: manual Agent registration, automatic login, Coordinator account creation, pairing, Runtime installation alone

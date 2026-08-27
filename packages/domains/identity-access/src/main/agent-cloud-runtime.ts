@@ -20,7 +20,6 @@ import {
   defineAgentCloudRuntime,
   type AgentCloudRuntime,
   type AgentCloudAuthorityStatus,
-  type AgentCloudRegisterInput,
   type AgentCloudRotateInput,
   type AgentCloudRevokeInput
 } from '../agent-cloud-runtime.js'
@@ -76,7 +75,7 @@ export function createIdentityAgentCloudRuntime(
   options.bindAuthorityInvalidator?.((reason) => implementation.invalidateIdentityAuthority(reason))
   return defineAgentCloudRuntime({
     authorityStatus: (agentId) => implementation.authorityStatus(agentId),
-    registerAgent: (input) => implementation.registerAgent(input),
+    ensureAgent: () => implementation.ensureAgent(),
     rotateAgent: (input) => implementation.rotateAgent(input),
     revokeAgent: (input) => implementation.revokeAgent(input),
     fenceAgent: (agentId) => implementation.fenceAgent(agentId),
@@ -169,7 +168,7 @@ class IdentityAgentCloudRuntime {
     }
   }
 
-  async registerAgent(input: AgentCloudRegisterInput): Promise<AgentNode> {
+  async ensureAgent(): Promise<AgentNode> {
     await this.#requireRevalidatedIdentityAuthority()
     const readiness = await this.#requireRuntimeReady()
     return this.#withLifecycle(async () => {
@@ -178,18 +177,65 @@ class IdentityAgentCloudRuntime {
       const response = await this.#executeAsUser(restRequestSchema.parse({
         protocolVersion: '1.0',
         requestId: requestId(),
-        type: 'agent.register',
-        idempotencyKey: input.idempotencyKey,
+        type: 'agent.ensure',
+        idempotencyKey: lifecycleIdempotencyKey('ensure'),
         deviceId: identity.deviceId,
-        displayName: input.displayName,
-        nodeType: input.nodeType,
         capabilities: readiness.capabilityTags,
         credentialBootstrapPublicKey: bootstrap.publicKey
       }))
-      if (response.type !== 'agent.registered') {
-        throw unexpected(response, 'Agent registration')
+      if (response.type !== 'agent.ensured') {
+        throw unexpected(response, 'Device Agent ensure')
       }
-      return this.#commitEnvelope(response.agent, response.sealedCredential, bootstrap.open)
+      if (response.sealedCredential) {
+        return this.#commitEnvelope(response.agent, response.sealedCredential, bootstrap.open)
+      }
+      const agent = agentNodeSchema.parse(response.agent)
+      if (agent.ownerUserId !== identity.userId || agent.deviceId !== identity.deviceId ||
+          agent.lifecycleStatus !== 'active') {
+        throw new AgentCloudRuntimeError(
+          'agent_authority_invalid',
+          'Cloud returned a Device Agent for a different User or Device.'
+        )
+      }
+      let authority: StoredAgentAuthority | null = null
+      try {
+        authority = await this.#readAuthority(agent.agentId)
+      } catch (error) {
+        if (!(error instanceof AgentCloudRuntimeError) || error.code !== 'agent_authority_invalid') {
+          throw error
+        }
+      }
+      if (authority && (
+        authority.userId !== identity.userId || authority.deviceId !== identity.deviceId
+      )) {
+        throw new AgentCloudRuntimeError(
+          'agent_authority_invalid',
+          'Stored Agent authority does not belong to the current User and Device.'
+        )
+      }
+      const authorityState = this.#authorityState(agent.agentId)
+      if (authority?.generation === agent.credentialVersion && authorityState.enabled) {
+        return agent
+      }
+      const replacement = this.#createBootstrap()
+      const rotated = await this.#executeAsUser(restRequestSchema.parse({
+        protocolVersion: '1.0',
+        requestId: requestId(),
+        type: 'agent.rotate_credential',
+        idempotencyKey: lifecycleIdempotencyKey('ensure-rotate'),
+        agentId: agent.agentId,
+        expectedRevision: agent.revision,
+        credentialBootstrapPublicKey: replacement.publicKey
+      }))
+      if (rotated.type !== 'agent.credential_rotated') {
+        throw unexpected(rotated, 'Device Agent authority recovery')
+      }
+      return this.#commitEnvelope(
+        rotated.agent,
+        rotated.sealedCredential,
+        replacement.open,
+        authorityState.epoch
+      )
     })
   }
 
@@ -806,6 +852,10 @@ function ensureTrailingSlash(value: string): string {
 
 function requestId(): `req_${string}` {
   return `req_${randomUUID().replaceAll('-', '')}`
+}
+
+function lifecycleIdempotencyKey(operation: string): `idem_${string}` {
+  return `idem_agent.${operation}.${randomUUID().replaceAll('-', '')}`
 }
 
 function abortPromise(signal: AbortSignal): Promise<never> {

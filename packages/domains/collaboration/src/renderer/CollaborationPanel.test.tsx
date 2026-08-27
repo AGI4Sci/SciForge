@@ -9,7 +9,6 @@ import {
   collaborationStatusSnapshotSchema
 } from '../contract.js'
 import {
-  buildAgentRegistrationInput,
   buildEndpointChallengeInput,
   buildProjectionLinkInput,
   CurrentSessionBindingSummary,
@@ -73,17 +72,13 @@ test('renders phone endpoint and owned Agents as one Participant card', () => {
       providerOptions={snapshot.providerOptions}
       selectedProviderKey="provider.fixture"
       locator={{}}
-      agentDisplayName="Laptop A"
+      localAgentId="agent-a"
+      agentAuthorityReady
       pairing={null}
       busyKey={null}
       onProviderChange={NOOP}
       onLocatorChange={NOOP}
-      onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
-      onRegisterAgent={NOOP}
-      authorityRecoveryAgent={undefined}
-      onRecoverAgentAuthority={NOOP}
-      onSelectPrimary={NOOP}
       onWorkerAcceptanceModeChange={NOOP}
     />
   )
@@ -96,21 +91,22 @@ test('renders phone endpoint and owned Agents as one Participant card', () => {
   assert.match(html, /Laptop A/u)
   assert.match(html, /Server A/u)
   assert.match(html, /data-agent-owner="user-a"/u)
-  assert.match(html, /data-primary-agent="true"/u)
-  assert.match(html, /data-primary-agent="false"/u)
+  assert.match(html, /data-current-device-agent="true"/u)
+  assert.match(html, /data-current-device-agent="false"/u)
   assert.match(html, /data-worker-acceptance-agent-id="agent-a"/u)
   assert.match(html, /value="manual" selected=""/u)
-  assert.match(html, /collaborationSetPrimary/u)
+  assert.match(html, /collaborationAgentAutomatic/u)
+  assert.match(html, /collaborationOtherDeviceAgents/u)
+  assert.doesNotMatch(html, /collaborationSetPrimary|collaborationRegisterAgent/u)
 })
 
-test('allows Agent registration after phone verification without any Project', () => {
+test('shows automatic preparation without rendering Agent registration controls', () => {
   const fixture = statusFixture()
   const snapshot = collaborationStatusSnapshotSchema.parse({
     ...fixture,
     participant: {
       ...fixture.participant,
       agents: [],
-      primaryAgentId: undefined,
       complete: false
     },
     projects: []
@@ -121,106 +117,49 @@ test('allows Agent registration after phone verification without any Project', (
       providerOptions={snapshot.providerOptions}
       selectedProviderKey="provider.fixture"
       locator={{}}
-      agentDisplayName="Laptop A"
       pairing={null}
       busyKey={null}
       onProviderChange={NOOP}
       onLocatorChange={NOOP}
-      onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
-      onRegisterAgent={NOOP}
-      authorityRecoveryAgent={undefined}
-      onRecoverAgentAuthority={NOOP}
-      onSelectPrimary={NOOP}
       onWorkerAcceptanceModeChange={NOOP}
     />
   )
 
-  assert.match(html, /collaborationRegisterAgent/u)
-  assert.match(html, /data-collaboration-agent-name="true"/u)
-  assert.match(html, /value="Laptop A"/u)
-  assert.doesNotMatch(html, /disabled=""[^>]*>[^<]*collaborationRegisterAgent/u)
+  assert.match(html, /data-collaboration-agent-preparing="true"/u)
+  assert.match(html, /collaborationAgentPreparing/u)
+  assert.doesNotMatch(html, /data-collaboration-agent-name|collaborationRegisterAgent/u)
   assert.doesNotMatch(html, /projectId/u)
 })
 
-test('allows Agent registration without a verified phone endpoint', () => {
-  const fixture = statusFixture()
-  const snapshot = collaborationStatusSnapshotSchema.parse({
-    ...fixture,
-    participant: {
-      ...fixture.participant,
-      complete: false,
-      primaryHumanEndpointId: undefined,
-      primaryAgentId: undefined,
-      endpoints: [],
-      agents: []
-    },
-    projects: []
-  })
-  const html = renderToStaticMarkup(
-    <ParticipantSection
-      participant={snapshot.participant}
-      providerOptions={snapshot.providerOptions}
-      selectedProviderKey="provider.fixture"
-      locator={{}}
-      agentDisplayName="Laptop A"
-      pairing={null}
-      busyKey={null}
-      onProviderChange={NOOP}
-      onLocatorChange={NOOP}
-      onAgentDisplayNameChange={NOOP}
-      onStartPairing={NOOP}
-      onRegisterAgent={NOOP}
-      authorityRecoveryAgent={undefined}
-      onRecoverAgentAuthority={NOOP}
-      onSelectPrimary={NOOP}
-      onWorkerAcceptanceModeChange={NOOP}
-    />
-  )
-
-  assert.match(html, /collaborationRegisterAgent/u)
-  const registerButton = html.match(/<button[^>]*>[\s\S]*?<\/button>/gu)
-    ?.find((button) => button.includes('collaborationRegisterAgent'))
-  assert.ok(registerButton)
-  assert.doesNotMatch(registerButton, /disabled=""/u)
-})
-
-test('offers authority recovery only for the identified local Agent', () => {
+test('marks an unavailable local authority without exposing manual recovery', () => {
   const fixture = statusFixture()
   const snapshot = collaborationStatusSnapshotSchema.parse({
     ...fixture,
     connection: {
       ...fixture.connection,
       state: 'disconnected',
-      agentAuthorityReady: false,
-      localAgentId: 'agent-a'
+      agentAuthorityReady: false
     }
   })
-  const localAgent = snapshot.participant?.agents.find(({ agentId }) => agentId === 'agent-a')
   const html = renderToStaticMarkup(
     <ParticipantSection
       participant={snapshot.participant}
       providerOptions={snapshot.providerOptions}
       selectedProviderKey="provider.fixture"
       locator={{}}
-      agentDisplayName=""
+      agentAuthorityReady={false}
       pairing={null}
       busyKey={null}
       onProviderChange={NOOP}
       onLocatorChange={NOOP}
-      onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
-      onRegisterAgent={NOOP}
-      authorityRecoveryAgent={localAgent}
-      onRecoverAgentAuthority={NOOP}
-      onSelectPrimary={NOOP}
       onWorkerAcceptanceModeChange={NOOP}
     />
   )
 
-  assert.match(html, /data-collaboration-agent-authority-recover="true"/u)
-  assert.match(html, /collaborationRecoverAgentAuthority/u)
-  assert.doesNotMatch(html, /data-collaboration-agent-name="true"/u)
+  assert.match(html, /collaborationAgentUnavailable/u)
+  assert.doesNotMatch(html, /collaborationRecoverAgentAuthority|collaborationRegisterAgent/u)
 })
 
 test('renders controlled first-binding inputs and builds typed commands without browser dialogs', () => {
@@ -231,17 +170,11 @@ test('renders controlled first-binding inputs and builds typed commands without 
       providerOptions={fixture.providerOptions}
       selectedProviderKey="provider.fixture"
       locator={{ realm: 'realm-cn' }}
-      agentDisplayName="桌面 Agent"
       pairing={null}
       busyKey={null}
       onProviderChange={NOOP}
       onLocatorChange={NOOP}
-      onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
-      onRegisterAgent={NOOP}
-      authorityRecoveryAgent={undefined}
-      onRecoverAgentAuthority={NOOP}
-      onSelectPrimary={NOOP}
       onWorkerAcceptanceModeChange={NOOP}
     />
   )
@@ -254,15 +187,10 @@ test('renders controlled first-binding inputs and builds typed commands without 
     providerKey: 'provider.fixture',
     locator: { realm: 'realm-cn' }
   })
-  assert.deepEqual(buildAgentRegistrationInput(' 桌面 Agent '), {
-    displayName: '桌面 Agent',
-    nodeType: 'desktop'
-  })
   assert.equal(buildEndpointChallengeInput({
     providerKey: ' ',
     locator: { realm: 'realm-cn' }
   }), undefined)
-  assert.equal(buildAgentRegistrationInput(' '), undefined)
 })
 
 test('copies the complete pairing command only through the renderer Clipboard API', async () => {
@@ -766,6 +694,8 @@ test('keeps the challenge poll handle out of render state and has no provider br
   assert.doesNotMatch(source, /data-[^=]*(?:challenge|secret|token)/iu)
   assert.doesNotMatch(source, /\bzulip\b/iu)
   assert.doesNotMatch(source, /promptValue|confirmAction|(?:globalThis|window)\.(?:prompt|confirm)/u)
+  assert.doesNotMatch(source, /registerAgent|selectPrimaryAgent|primaryAgent/u)
+  assert.match(source, /agentId: localAgent\.agentId/u)
 })
 
 test('renders accessible controlled editors for projection mutations', () => {
@@ -897,6 +827,8 @@ function statusFixture() {
       configured: true,
       baseUrl: 'https://collaboration.example.com',
       state: 'connected' as const,
+      localAgentId: 'agent-a',
+      agentAuthorityReady: true,
       lastConnectedAt: '2026-08-15T03:50:00.000Z',
       lastInboxSequence: 42,
       pendingOutboxCount: 1
@@ -923,7 +855,6 @@ function statusFixture() {
       revision: 3,
       complete: true,
       primaryHumanEndpointId: 'endpoint-a',
-      primaryAgentId: 'agent-a',
       endpoints: [{
         humanEndpointId: 'endpoint-a',
         providerKey: 'provider.fixture',
@@ -948,7 +879,6 @@ function statusFixture() {
         nodeType: 'desktop' as const,
         status: 'online' as const,
         capabilities: ['agent-runtime'],
-        primary: true,
         workerAcceptanceMode: 'manual' as const,
         lastSeenAt: '2026-08-15T04:00:00.000Z'
       }, {
@@ -957,8 +887,7 @@ function statusFixture() {
         displayName: 'Server A',
         nodeType: 'server' as const,
         status: 'offline' as const,
-        capabilities: ['agent-runtime'],
-        primary: false
+        capabilities: ['agent-runtime']
       }]
     },
     projections: [],

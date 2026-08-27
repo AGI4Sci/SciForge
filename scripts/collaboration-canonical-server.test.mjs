@@ -133,15 +133,13 @@ async function activatePersonalContainer(rig, owner, containerId) {
   })
 }
 
-async function registerAgent(rig, participant, slot) {
+async function ensureAgent(rig, participant, slot) {
   const bootstrap = createAgentCredentialBootstrap()
-  const registered = await rig.service.registerAgent(participant.actor, {
+  const registered = await rig.service.ensureAgent(participant.actor, {
     deviceId: participant.deviceId,
-    displayName: `SciForge ${slot}`,
-    nodeType: 'desktop',
     capabilities: ['agent-runtime', 'research.execute'],
     credentialBootstrapPublicKey: bootstrap.publicKey,
-    idempotencyKey: `register-agent-${slot}`
+    idempotencyKey: `idem_ensure-agent-${slot}`
   })
   const credential = bootstrap.open(registered.sealedCredential)
   return {
@@ -332,23 +330,19 @@ test('2.5 canonical service rejects identity theft/replay, keeps stable identity
     assurance: 'strong'
   }))
 
-  const agentA = await registerAgent(rig, a, 'A')
-  await expectCode('permission_denied', () => rig.service.registerAgent(b.actor, {
+  const agentA = await ensureAgent(rig, a, 'A')
+  await expectCode('permission_denied', () => rig.service.ensureAgent(b.actor, {
     deviceId: a.deviceId,
-    displayName: '不得接管',
-    nodeType: 'desktop',
     capabilities: ['agent-runtime', 'research.execute'],
     credentialBootstrapPublicKey: createAgentCredentialBootstrap().publicKey,
     idempotencyKey: 'agent-theft-attempt'
   }))
 
-  const registrationReplay = await rig.service.registerAgent(a.actor, {
+  const registrationReplay = await rig.service.ensureAgent(a.actor, {
     deviceId: a.deviceId,
-    displayName: 'SciForge A',
-    nodeType: 'desktop',
     capabilities: ['agent-runtime', 'research.execute'],
     credentialBootstrapPublicKey: agentA.bootstrapPublicKey,
-    idempotencyKey: 'register-agent-A'
+    idempotencyKey: 'idem_ensure-agent-A'
   })
   assert.equal(registrationReplay.agent.agentId, agentA.agent.agentId)
   assert.equal(registrationReplay.sealedCredential, undefined)
@@ -408,8 +402,8 @@ test('2.6 canonical receipts, repository rows, audit and replay responses never 
   const rig = createServiceRig()
   const a = await bindUser(rig, 'A')
   const b = await bindUser(rig, 'B')
-  const agentA = await registerAgent(rig, a, 'A')
-  const agentB = await registerAgent(rig, b, 'B')
+  const agentA = await ensureAgent(rig, a, 'A')
+  const agentB = await ensureAgent(rig, b, 'B')
   const rotationBootstrap = createAgentCredentialBootstrap()
   const rotated = await rig.service.rotateAgentCredential(a.actor, {
     agentId: agentA.agent.agentId,
@@ -442,10 +436,10 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
   const a = await bindUser(rig, 'A')
   const b = await bindUser(rig, 'B')
   const c = await bindUser(rig, 'C')
-  const agentA = await registerAgent(rig, a, 'A')
-  const agentA2 = await registerAgent(rig, await addActiveDevice(rig, a, 'A2'), 'A2')
-  const agentB = await registerAgent(rig, b, 'B')
-  const agentC = await registerAgent(rig, c, 'C')
+  const agentA = await ensureAgent(rig, a, 'A')
+  const agentA2 = await ensureAgent(rig, await addActiveDevice(rig, a, 'A2'), 'A2')
+  const agentB = await ensureAgent(rig, b, 'B')
+  const agentC = await ensureAgent(rig, c, 'C')
   const availabilityA2 = await publishAvailability(rig, agentA2, 'ledger_a2')
   const availabilityB = await publishAvailability(rig, agentB, 'ledger_b')
   const availabilityC = await publishAvailability(rig, agentC, 'ledger_c')
@@ -589,7 +583,7 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
 test('8.4 canonical service bounds payloads and blocks sensitive Project Record material', async () => {
   const rig = createServiceRig()
   const a = await bindUser(rig, 'A')
-  const agentA = await registerAgent(rig, a, 'A')
+  const agentA = await ensureAgent(rig, a, 'A')
   assert.throws(() => projectCreateCommandSchema.parse({
     protocolVersion: '1.0', type: 'project.create', requestId: 'req_oversized_project',
     displayName: '超限 Project',
@@ -631,9 +625,9 @@ test('8.3 and 10.2 canonical human routes bind provider input and verified Owner
   const a = await bindUser(rig, 'A')
   const b = await bindUser(rig, 'B')
   const c = await bindUser(rig, 'C')
-  const agentA = await registerAgent(rig, a, 'A')
-  const agentB = await registerAgent(rig, b, 'B')
-  const agentC = await registerAgent(rig, c, 'C')
+  const agentA = await ensureAgent(rig, a, 'A')
+  const agentB = await ensureAgent(rig, b, 'B')
+  const agentC = await ensureAgent(rig, c, 'C')
   const endpointA = await endpointActor(rig, a)
   const endpointB = await endpointActor(rig, b)
   const endpointC = await endpointActor(rig, c)
