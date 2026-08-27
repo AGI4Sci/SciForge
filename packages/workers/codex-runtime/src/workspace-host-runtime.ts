@@ -575,6 +575,7 @@ export class CodexWorkspaceHostRuntime {
     const workspace = await this.#containedWorkspace(
       stringValue(input.workspace) || binding?.workspace
     )
+    const outputSchema = optionalRecordValue(input.outputSchema, 'startTurn.outputSchema')
     let response: unknown
     try {
       response = await client.startTurn({
@@ -586,6 +587,7 @@ export class CodexWorkspaceHostRuntime {
         }),
         cwd: workspace,
         ...(stringValue(input.model) ? { model: stringValue(input.model) } : {}),
+        ...(outputSchema ? { outputSchema } : {}),
         approvalPolicy: 'on-request',
         sandboxPolicy: {
           type: 'workspaceWrite',
@@ -1790,6 +1792,17 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {}
+}
+
+function optionalRecordValue(
+  value: unknown,
+  field: string
+): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${field} must be a JSON object.`)
+  }
+  return value as Record<string, unknown>
 }
 
 function arrayValue(value: unknown): unknown[] {

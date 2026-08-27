@@ -3,7 +3,10 @@ import { createHash } from 'node:crypto'
 import test from 'node:test'
 import type { CoordinatorCloudCommandService } from '@sciforge/domain-collaboration/coordinator-cloud-command'
 import type { AuthenticatedCloudTransport } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
-import type { DomainMainAgentExecutionHost } from '@sciforge/domain-sdk/agent-execution'
+import type {
+  DomainMainAgentExecutionHost,
+  DomainMainAgentExecutionRequest
+} from '@sciforge/domain-sdk/agent-execution'
 import type { DomainMainPackageSettingsHost } from '@sciforge/domain-sdk/package-storage'
 import {
   restResponseSchema,
@@ -16,15 +19,18 @@ import {
 
 import {
   createProjectCoordinatorPlanPort,
-  defineProjectCoordinatorWorkspacePort
+  defineProjectCoordinatorWorkspacePort,
+  ProjectCoordinatorPlanGenerationError
 } from './ports.js'
 import { ProjectCoordinatorStateStore } from './state.js'
 
 test('local Coordinator Runtime creates an editable durable Plan draft with exact Agent assignment', async () => {
   const settings = inMemorySettings()
   const prompts: string[] = []
+  const requests: DomainMainAgentExecutionRequest[] = []
   const agentExecution: DomainMainAgentExecutionHost = {
     run: async (request) => {
+      requests.push(request)
       prompts.push(request.prompt)
       return {
         runtimeId: 'codex-runtime',
@@ -66,6 +72,16 @@ test('local Coordinator Runtime creates an editable durable Plan draft with exac
   assert.equal(generated.runtimeProvenance.generatedByCoordinatorAgentId, 'agt_Coordinator01')
   assert.equal(generated.assignments[0]?.selectedAgentId, null)
   assert.match(prompts[0] ?? '', /Created meeting.*meeting\.review/su)
+  assert.match(prompts[0] ?? '', /Do not emit id, description, assignee, dependencies, status/u)
+  assert.equal(requests[0]?.clientDirectiveId, 'project-plan:v2:prj_ProjectCreated01:1')
+  assert.equal(requests[0]?.outputSchema?.type, 'object')
+  assert.match(JSON.stringify(requests[0]?.outputSchema), /"planItemId"/u)
+  assert.match(JSON.stringify(requests[0]?.outputSchema), /"completionCriteria"/u)
+  assert.match(JSON.stringify(requests[0]?.outputSchema), /"dependencyPlanItemIds"/u)
+  assert.doesNotMatch(JSON.stringify(requests[0]?.outputSchema), /"assignee"/u)
+  assert.doesNotMatch(JSON.stringify(requests[0]?.outputSchema), /"propertyNames"/u)
+  assert.doesNotMatch(JSON.stringify(requests[0]?.outputSchema), /"\$ref"/u)
+  assert.doesNotMatch(JSON.stringify(requests[0]?.outputSchema), /"definitions"/u)
 
   const edited = await port.editDraft({
     projectId: generated.projectId,
@@ -96,6 +112,133 @@ test('local Coordinator Runtime creates an editable durable Plan draft with exac
       recommendationReason: 'An invented candidate must be rejected.'
     }]
   }), /active Project member/u)
+})
+
+test('generic task JSON is rejected without persisting a Plan draft', async () => {
+  const settings = inMemorySettings()
+  const port = createProjectCoordinatorPlanPort({
+    settings,
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => workspaceFixture()
+    }),
+    getAgentExecution: () => ({
+      run: async () => ({
+        runtimeId: 'codex-runtime',
+        threadId: 'thread-plan-invalid-1',
+        turnId: 'turn-plan-invalid-1',
+        state: 'completed',
+        text: JSON.stringify({
+          tasks: [{
+            id: 'task-1',
+            title: 'Summarize decisions',
+            description: 'Produce a summary.',
+            assignee: 'agt_WorkerAgent001',
+            dependencies: [],
+            status: 'pending'
+          }],
+          rationale: 'Assign the available Worker.'
+        })
+      })
+    }),
+    now: () => new Date('2026-08-25T01:06:00.000Z')
+  })
+
+  await assert.rejects(
+    port.generateDraft({
+      projectId: 'prj_ProjectCreated01',
+      instruction: 'Split the meeting into independently reviewable work.',
+      sourceInputLocators: [],
+      modelId: null
+    }),
+    (error: unknown) => (
+      error instanceof ProjectCoordinatorPlanGenerationError &&
+      error.reason === 'invalid_structured_output'
+    )
+  )
+  assert.equal(await port.readDraft({ projectId: 'prj_ProjectCreated01' }), null)
+})
+
+test('file selections bind only exact supplied locators and the Cloud provisioning revision', async () => {
+  const settings = inMemorySettings()
+  const sourceLocator = {
+    contractVersion: 1 as const,
+    kind: 'content-space.file-reference' as const,
+    authority: 'opencontent.test',
+    identity: { fileId: 'agenda-1' }
+  }
+  let request: DomainMainAgentExecutionRequest | undefined
+  const port = createProjectCoordinatorPlanPort({
+    settings,
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => fileWorkspaceFixture()
+    }),
+    getAgentExecution: () => ({
+      run: async (input) => {
+        request = input
+        return {
+          runtimeId: 'codex-runtime',
+          threadId: 'thread-plan-file-1',
+          turnId: 'turn-plan-file-1',
+          state: 'completed',
+          text: JSON.stringify({
+            tasks: [{
+              planItemId: 'item_file_summary',
+              title: 'Write summary',
+              objective: 'Read the agenda and write a reviewable summary.',
+              completionCriteria: ['One Markdown summary is uploaded.'],
+              dependencyPlanItemIds: [],
+              requiredCapabilityTags: ['meeting.review'],
+              fileIntent: {
+                inputs: [{
+                  sourceInputIndex: 0,
+                  destinationName: 'agenda.md',
+                  expectedSemanticRevision: null,
+                  expectedMediaType: 'text/markdown'
+                }],
+                output: {
+                  fileName: 'summary.md',
+                  mediaType: 'text/markdown',
+                  maxBytes: 100_000
+                }
+              }
+            }],
+            rationale: 'The supplied agenda is the exact source for the summary.'
+          })
+        }
+      }
+    }),
+    now: () => new Date('2026-08-25T01:06:00.000Z')
+  })
+
+  const draft = await port.generateDraft({
+    projectId: 'prj_ProjectCreated01',
+    instruction: 'Create one file-backed summary task.',
+    sourceInputLocators: [sourceLocator],
+    modelId: null
+  })
+
+  assert.deepEqual(draft.tasks[0]?.fileIntent, {
+    schemaVersion: 1,
+    bindingRevision: 2,
+    inputs: [{
+      kind: 'content-space.input-file',
+      locator: sourceLocator,
+      destinationName: 'agenda.md',
+      expectedSemanticRevision: null,
+      expectedMediaType: 'text/markdown'
+    }],
+    output: {
+      kind: 'content-space.output-new',
+      target: 'project-binding-root',
+      mode: 'upload-new',
+      fileName: 'summary.md',
+      mediaType: 'text/markdown',
+      maxBytes: 100_000
+    }
+  })
+  assert.match(JSON.stringify(request?.outputSchema), /"sourceInputIndex"/u)
+  assert.doesNotMatch(JSON.stringify(request?.outputSchema), /"identity"/u)
+  assert.match(request?.prompt ?? '', /Never copy or invent a locator identity/u)
 })
 
 test('immutable Plan submit uses Coordinator Agent authority before Owner confirmation and activation', async () => {
@@ -385,6 +528,55 @@ function workspaceFixture() {
         recoveryActions: []
       }
     }]
+  }
+}
+
+function fileWorkspaceFixture() {
+  const base = workspaceFixture()
+  const now = base.observedAt
+  return {
+    ...base,
+    projects: base.projects.map((project) => ({
+      ...project,
+      project: {
+        ...project.project,
+        contentMode: 'required' as const
+      },
+      provisioning: {
+        ...project.provisioning,
+        binding: {
+          schemaVersion: 1 as const,
+          revision: 3,
+          createdAt: now,
+          updatedAt: now,
+          type: 'project_content_space_binding' as const,
+          projectContentBindingId: 'pcb_PlanFileBinding01',
+          projectId: project.project.projectId,
+          contentOwnerUserId: 'usr_Owner0000001',
+          providerInstance: {
+            schemaVersion: 1 as const,
+            type: 'provider_instance_reference' as const,
+            providerInstanceRef: 'opencontent.test'
+          },
+          rootLocator: {
+            contractVersion: 1 as const,
+            kind: 'content-space.container-reference' as const,
+            authority: 'opencontent.test',
+            identity: { containerId: 'project-root-1' }
+          },
+          rootLocatorDigest: 'a'.repeat(64),
+          provisioningIntentId: 'pci_PlanFileIntent01',
+          provisioningRevision: 2,
+          attestationId: 'pca_PlanFileAttest01',
+          attestationDigest: 'b'.repeat(64),
+          status: 'active' as const,
+          statusReason: null,
+          activatedAt: now,
+          degradedAt: null,
+          closedAt: null
+        }
+      }
+    }))
   }
 }
 

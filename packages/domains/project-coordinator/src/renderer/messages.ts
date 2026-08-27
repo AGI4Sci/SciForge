@@ -45,6 +45,12 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorCloudUnavailable: 'The Cloud coordination service is unavailable.',
     projectCoordinatorReadFailed: 'Project coordination state could not be read.',
     projectCoordinatorActionFailed: 'The requested Project action failed.',
+    projectCoordinatorPlanRuntimeUnavailable:
+      'Plan generation needs a ready local Agent Runtime. Check Runtime settings and try again.',
+    projectCoordinatorPlanRuntimeExecutionFailed:
+      'The local Agent Runtime could not finish Plan generation. Check the Runtime connection and try again.',
+    projectCoordinatorPlanInvalidStructuredOutput:
+      'The Agent returned an invalid Plan structure. No draft was saved; try generating it again.',
     projectCoordinatorCreateProject: 'Create Project',
     projectCoordinatorCreateProjectHint: 'Start a durable Agent collaboration',
     projectCoordinatorProjectName: 'Project name',
@@ -274,6 +280,12 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorCloudUnavailable: 'Cloud 协调服务不可用。',
     projectCoordinatorReadFailed: '无法读取 Project 协调状态。',
     projectCoordinatorActionFailed: '请求的 Project 操作失败。',
+    projectCoordinatorPlanRuntimeUnavailable:
+      '生成 Plan 需要可用的本地 Agent Runtime，请检查 Runtime 设置后重试。',
+    projectCoordinatorPlanRuntimeExecutionFailed:
+      '本地 Agent Runtime 未能完成 Plan 生成，请检查 Runtime 连接后重试。',
+    projectCoordinatorPlanInvalidStructuredOutput:
+      'Agent 返回的 Plan 结构不符合要求，系统未保存草稿，请重新生成。',
     projectCoordinatorCreateProject: '创建 Project',
     projectCoordinatorCreateProjectHint: '发起可持久恢复的 Agent 协作',
     projectCoordinatorProjectName: 'Project 名称',

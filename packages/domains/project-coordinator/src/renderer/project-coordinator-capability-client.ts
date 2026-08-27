@@ -15,6 +15,7 @@ import {
   projectCoordinatorPlanConfirmActivateInputSchema,
   projectCoordinatorPlanDraftEditInputSchema,
   projectCoordinatorPlanDraftGenerateInputSchema,
+  projectCoordinatorPlanDraftGenerateResultSchema,
   projectCoordinatorPlanDraftReadInputSchema,
   projectCoordinatorPlanDraftSchema,
   projectCoordinatorPlanDraftSubmitInputSchema,
@@ -42,6 +43,7 @@ import {
   type ProjectCoordinatorPlanDraft,
   type ProjectCoordinatorPlanDraftEditInput,
   type ProjectCoordinatorPlanDraftGenerateInput,
+  type ProjectCoordinatorPlanDraftGenerateFailureReason,
   type ProjectCoordinatorPlanDraftReadInput,
   type ProjectCoordinatorPlanDraftSubmitInput,
   type ProjectCoordinatorPlanSubmitResult,
@@ -81,8 +83,31 @@ const planDraftGenerateContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate,
   effect: 'workspace-write' as const,
   inputSchema: projectCoordinatorPlanDraftGenerateInputSchema,
-  outputSchema: projectCoordinatorPlanDraftSchema
+  outputSchema: projectCoordinatorPlanDraftGenerateResultSchema
 })
+
+export class ProjectCoordinatorPlanDraftGenerationClientError extends Error {
+  readonly reason: ProjectCoordinatorPlanDraftGenerateFailureReason
+
+  constructor(reason: ProjectCoordinatorPlanDraftGenerateFailureReason) {
+    super(planDraftGenerationFailureMessage(reason))
+    this.name = 'ProjectCoordinatorPlanDraftGenerationClientError'
+    this.reason = reason
+  }
+}
+
+function planDraftGenerationFailureMessage(
+  reason: ProjectCoordinatorPlanDraftGenerateFailureReason
+): string {
+  switch (reason) {
+    case 'runtime_unavailable':
+      return 'The local Agent Runtime is unavailable for Plan generation.'
+    case 'runtime_execution_failed':
+      return 'The local Agent Runtime could not complete structured Plan generation.'
+    case 'invalid_structured_output':
+      return 'The Agent returned a Plan that does not match the required task structure.'
+  }
+}
 
 const planDraftEditContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftEdit,
@@ -239,7 +264,13 @@ export function createProjectCoordinatorRendererClient(
     readWorkspace: (input = {}) => invoker.invoke(workspaceReadContract, input),
     createProject: (input) => invoker.invoke(projectCreateContract, input, confirmationApproval),
     readPlanDraft: (input) => invoker.invoke(planDraftReadContract, input),
-    generatePlanDraft: (input) => invoker.invoke(planDraftGenerateContract, input),
+    generatePlanDraft: async (input) => {
+      const result = await invoker.invoke(planDraftGenerateContract, input)
+      if (result.status === 'failed') {
+        throw new ProjectCoordinatorPlanDraftGenerationClientError(result.reason)
+      }
+      return result.draft
+    },
     editPlanDraft: (input) => invoker.invoke(planDraftEditContract, input),
     submitPlanDraft: (input) => invoker.invoke(planSubmitContract, input, confirmationApproval),
     confirmPlanAndActivate: (input) => invoker.invoke(

@@ -2,7 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { createProjectCoordinatorCapabilityFactory } from '../main.js'
-import { createProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
+import {
+  createProjectCoordinatorRendererClient,
+  ProjectCoordinatorPlanDraftGenerationClientError
+} from './project-coordinator-capability-client.js'
+import { PROJECT_COORDINATOR_CAPABILITY_IDS } from '../contract.js'
 
 test('renderer invocation approvals stay aligned with the main capability definitions', async () => {
   const definitions = createProjectCoordinatorCapabilityFactory({
@@ -17,6 +21,9 @@ test('renderer invocation approvals stay aligned with the main capability defini
         actionId: contract.actionId,
         approval: options?.approval?.mode ?? 'none'
       })
+      if (contract.actionId === PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate) {
+        return { status: 'generated', draft: undefined } as never
+      }
       return undefined as never
     }
   })
@@ -45,5 +52,22 @@ test('renderer invocation approvals stay aligned with the main capability defini
   assert.deepEqual(
     invoked,
     definitions.map(({ id: actionId, approval }) => ({ actionId, approval }))
+  )
+})
+
+test('renderer maps bounded Plan generation failure reasons without exposing Runtime details', async () => {
+  const client = createProjectCoordinatorRendererClient({
+    observe: async () => { throw new Error('not observed') },
+    invoke: async () => ({
+      status: 'failed',
+      reason: 'invalid_structured_output'
+    }) as never
+  })
+
+  await assert.rejects(
+    client.generatePlanDraft(undefined as never),
+    (error) => error instanceof ProjectCoordinatorPlanDraftGenerationClientError &&
+      error.reason === 'invalid_structured_output' &&
+      !error.message.includes('provider')
   )
 })

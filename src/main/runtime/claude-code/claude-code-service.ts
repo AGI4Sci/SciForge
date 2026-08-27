@@ -448,6 +448,7 @@ export class ClaudeCodeRuntimeService {
     displayText?: string
     workspace?: string
     reasoningEffort?: string
+    outputSchema?: Readonly<Record<string, unknown>>
     fileReferences?: AgentRuntimeFileReference[]
     allowedTools?: string[]
     brokerScope?: Readonly<{ providerFamily: 'managed-mcp'; packageName?: string }>
@@ -556,6 +557,14 @@ export class ClaudeCodeRuntimeService {
                   tools: scopedClaudeTools,
                   allowedTools: scopedClaudeTools
                 }),
+            ...(payload.outputSchema
+              ? {
+                  outputFormat: {
+                    type: 'json_schema' as const,
+                    schema: { ...payload.outputSchema }
+                  }
+                }
+              : {}),
             hooks: appendClaudePreToolUseHook(
               launch.sdkOptions.hooks,
               this.createPreToolUseGovernanceHook({
@@ -592,7 +601,8 @@ export class ClaudeCodeRuntimeService {
         turnId,
         assistantItemId,
         startedAtMs: Date.now(),
-        fallbackThread: storedThread.guiThreadId
+        fallbackThread: storedThread.guiThreadId,
+        structuredOutputExpected: Boolean(payload.outputSchema)
       })
       return { ok: true, threadId: payload.threadId, turnId, userMessageItemId }
     } catch (error) {
@@ -1138,6 +1148,7 @@ export class ClaudeCodeRuntimeService {
     assistantItemId: string
     startedAtMs: number
     fallbackThread: string
+    structuredOutputExpected: boolean
   }): Promise<void> {
     const state: ClaudeSdkTurnState = {
       assistantTextSeen: false,
@@ -1177,6 +1188,7 @@ export class ClaudeCodeRuntimeService {
       turnId: string
       assistantItemId: string
       startedAtMs: number
+      structuredOutputExpected: boolean
     },
     state: ClaudeSdkTurnState
   ): Promise<void> {
@@ -1217,6 +1229,7 @@ export class ClaudeCodeRuntimeService {
       turnId: string
       assistantItemId: string
       startedAtMs: number
+      structuredOutputExpected: boolean
     },
     state: ClaudeSdkTurnState
   ): Promise<void> {
@@ -1306,6 +1319,7 @@ export class ClaudeCodeRuntimeService {
       turnId: string
       assistantItemId: string
       startedAtMs: number
+      structuredOutputExpected: boolean
     },
     state: ClaudeSdkTurnState
   ): Promise<void> {
@@ -1610,6 +1624,7 @@ export class ClaudeCodeRuntimeService {
       turnId: string
       assistantItemId: string
       startedAtMs: number
+      structuredOutputExpected: boolean
     },
     state: ClaudeSdkTurnState
   ): Promise<void> {
@@ -1640,6 +1655,32 @@ export class ClaudeCodeRuntimeService {
         code: stringField(record.subtype) || undefined,
         detail: stringifyUnknown(record)
       })
+      return
+    }
+    if (options.structuredOutputExpected) {
+      if (record.structured_output === undefined) {
+        state.terminalState = 'failed'
+        state.terminalMessage = 'Claude Code completed without the required structured output.'
+        await this.emit({
+          threadId: options.threadId,
+          turnId: options.turnId,
+          kind: 'error',
+          itemId: `claude-error-${randomUUID()}`,
+          recoverable: false,
+          severity: 'error',
+          message: state.terminalMessage,
+          code: 'claude_structured_output_missing'
+        })
+        return
+      }
+      await this.emitAssistantText(
+        JSON.stringify(record.structured_output),
+        {
+          ...options,
+          assistantItemId: `${options.assistantItemId}-structured`
+        },
+        state
+      )
       return
     }
     const text = stringField(record.result)

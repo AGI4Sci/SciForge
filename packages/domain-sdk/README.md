@@ -204,9 +204,13 @@ operation:
   limits; packages cannot submit DOM selectors or redaction bounds.
 - `@sciforge/domain-sdk/agent-execution` runs an agent thread through a host-owned runtime while
   exposing only stable request and terminal result data, an optional Host-enforced tool allowlist,
-  plus optional cancellation. A request either starts a thread (with or without a workspace) or
+  an optional bounded provider-neutral JSON Schema for the exact final assistant message, plus
+  optional cancellation. A request either starts a thread (with or without a workspace) or
   names an exact runtime/thread pair. Retryable callers reuse one `clientDirectiveId`, which enters
   the same Host directive ledger as desktop messages instead of creating a second execution path.
+  When a caller supplies `outputSchema`, the selected Runtime adapter must apply native structured
+  output and fail closed if it cannot do so; prompt-only JSON instructions are not an equivalent
+  guarantee. The caller still validates the returned JSON against its own domain schema.
   The Host may also publish a strict token-free Runtime readiness observation containing only the
   selected runtime ID and bounded capability tags. Consumers that require executable Agent work
   fail closed when that observation is absent, unavailable, or not configured; endpoints, model

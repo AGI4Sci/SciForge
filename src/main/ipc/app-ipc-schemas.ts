@@ -47,6 +47,7 @@ import {
   DOMAIN_EXTENSION_VERIFICATIONS
 } from '../../shared/domain-extensions'
 import {
+  domainPackageJsonValueSchema,
   domainPackageContributionKindSchema,
   domainPackageModuleIdSchema,
   domainPackageNameSchema,
@@ -296,6 +297,10 @@ export const agentRuntimeStartTurnPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: trimmedString(MAX_ID_LENGTH),
   text: z.string().trim().min(1).max(MAX_CHANNEL_TEXT_LENGTH),
+  outputSchema: z.record(
+    z.string().trim().min(1).max(192),
+    domainPackageJsonValueSchema
+  ).optional(),
   clientDirectiveId: optionalTrimmedString(MAX_ID_LENGTH),
   executionIntent: agentRuntimeExecutionIntentSchema.optional(),
   workspace: defaultPathSchema,

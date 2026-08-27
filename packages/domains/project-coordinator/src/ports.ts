@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import type { DomainMainAgentExecutionHost } from '@sciforge/domain-sdk/agent-execution'
+import {
+  domainMainAgentExecutionOutputSchemaSchema,
+  type DomainMainAgentExecutionHost
+} from '@sciforge/domain-sdk/agent-execution'
 import type { DomainMainPackageSettingsHost } from '@sciforge/domain-sdk/package-storage'
 import {
   AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
@@ -14,6 +17,7 @@ import {
   projectSchema,
   projectPlanSchema,
   projectPlanTaskSchema,
+  taskFileDestinationNameSchema,
   humanAnswerSchema,
   humanNeededSchema,
   type Project,
@@ -77,6 +81,7 @@ import {
   type ProjectCoordinatorPlanDraft,
   type ProjectCoordinatorPlanDraftEditInput,
   type ProjectCoordinatorPlanDraftGenerateInput,
+  type ProjectCoordinatorPlanDraftGenerateFailureReason,
   type ProjectCoordinatorPlanDraftReadInput,
   type ProjectCoordinatorPlanDraftSubmitInput,
   type ProjectCoordinatorPlanSubmitResult,
@@ -325,7 +330,131 @@ async function readCurrentDeviceAgent(
 const generatedPlanContentSchema = z.object({
   tasks: z.array(projectPlanTaskSchema).min(1).max(1_000),
   rationale: projectCoordinatorPlanDraftSchema.unwrap().shape.rationale
+}).strict().superRefine((content, context) => {
+  const planItemIds = content.tasks.map(({ planItemId }) => planItemId)
+  if (new Set(planItemIds).size !== planItemIds.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['tasks'],
+      message: 'Generated Plan item IDs must be unique.'
+    })
+  }
+  const knownPlanItemIds = new Set(planItemIds)
+  for (const [index, task] of content.tasks.entries()) {
+    if (task.dependencyPlanItemIds.some((dependency) => !knownPlanItemIds.has(dependency))) {
+      context.addIssue({
+        code: 'custom',
+        path: ['tasks', index, 'dependencyPlanItemIds'],
+        message: 'Generated dependencies must name another item in the same Plan.'
+      })
+    }
+  }
+}).readonly()
+
+const generatedPlanFileIntentSelectionSchema = z.object({
+  inputs: z.array(z.object({
+    sourceInputIndex: z.number().int().min(0).max(99),
+    destinationName: taskFileDestinationNameSchema,
+    expectedSemanticRevision: z.string().trim().min(1).max(256).nullable(),
+    expectedMediaType: z.string().trim().min(1).max(256).nullable()
+  }).strict()).max(100),
+  output: z.object({
+    fileName: taskFileDestinationNameSchema,
+    mediaType: z.string().trim().min(1).max(256),
+    maxBytes: z.number().int().min(1).max(1_073_741_824)
+  }).strict()
+}).strict()
+
+const generatedPlanModelTaskShape = {
+  planItemId: projectPlanTaskSchema.shape.planItemId,
+  title: projectPlanTaskSchema.shape.title,
+  objective: projectPlanTaskSchema.shape.objective,
+  completionCriteria: projectPlanTaskSchema.shape.completionCriteria,
+  dependencyPlanItemIds: projectPlanTaskSchema.shape.dependencyPlanItemIds,
+  requiredCapabilityTags: projectPlanTaskSchema.shape.requiredCapabilityTags
+}
+
+const generatedPlanModelContentSchema = z.object({
+  tasks: z.array(z.object({
+    ...generatedPlanModelTaskShape,
+    fileIntent: generatedPlanFileIntentSelectionSchema.nullable()
+  }).strict()).min(1).max(1_000),
+  rationale: projectCoordinatorPlanDraftSchema.unwrap().shape.rationale
 }).strict().readonly()
+
+const generatedPlanModelContentWithoutFileIntentSchema = z.object({
+  tasks: z.array(z.object({
+    ...generatedPlanModelTaskShape,
+    fileIntent: z.null()
+  }).strict()).min(1).max(1_000),
+  rationale: projectCoordinatorPlanDraftSchema.unwrap().shape.rationale
+}).strict().readonly()
+
+function generatedPlanOutputJsonSchema(fileIntentAllowed: boolean) {
+  return domainMainAgentExecutionOutputSchemaSchema.parse(z.toJSONSchema(
+    fileIntentAllowed
+      ? generatedPlanModelContentSchema
+      : generatedPlanModelContentWithoutFileIntentSchema,
+    {
+    target: 'draft-07',
+    unrepresentable: 'throw'
+    }
+  ))
+}
+
+function generatedTaskFileIntent(options: Readonly<{
+  selection: z.infer<typeof generatedPlanFileIntentSelectionSchema>
+  contentBinding: ProjectCoordinatorProject['provisioning']['binding']
+  fileSourceInputs: readonly Readonly<{
+    sourceInputIndex: number
+    locator: ProjectCoordinatorPlanDraftGenerateInput['sourceInputLocators'][number]
+  }>[]
+}>) {
+  if (!options.contentBinding || options.contentBinding.status === 'closed') {
+    throw new Error('Generated file intent requires a non-closed Project content binding.')
+  }
+  return {
+    schemaVersion: 1 as const,
+    bindingRevision: options.contentBinding.provisioningRevision,
+    inputs: options.selection.inputs.map((input) => {
+      const source = options.fileSourceInputs.find(
+        ({ sourceInputIndex }) => sourceInputIndex === input.sourceInputIndex
+      )
+      if (!source) {
+        throw new Error('Generated file intent selected an unavailable exact input locator.')
+      }
+      return {
+        kind: 'content-space.input-file' as const,
+        locator: source.locator,
+        destinationName: input.destinationName,
+        expectedSemanticRevision: input.expectedSemanticRevision,
+        expectedMediaType: input.expectedMediaType
+      }
+    }),
+    output: {
+      kind: 'content-space.output-new' as const,
+      target: 'project-binding-root' as const,
+      mode: 'upload-new' as const,
+      fileName: options.selection.output.fileName,
+      mediaType: options.selection.output.mediaType,
+      maxBytes: options.selection.output.maxBytes
+    }
+  }
+}
+
+export class ProjectCoordinatorPlanGenerationError extends Error {
+  readonly reason: ProjectCoordinatorPlanDraftGenerateFailureReason
+
+  constructor(
+    reason: ProjectCoordinatorPlanDraftGenerateFailureReason,
+    message: string,
+    options?: ErrorOptions
+  ) {
+    super(message, options)
+    this.name = 'ProjectCoordinatorPlanGenerationError'
+    this.reason = reason
+  }
+}
 
 export function createProjectCoordinatorPlanPort(options: Readonly<{
   settings: DomainMainPackageSettingsHost
@@ -357,7 +486,12 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       const input = projectCoordinatorPlanDraftGenerateInputSchema.parse(rawInput)
       const project = await readProject(input.projectId)
       const agentExecution = options.getAgentExecution()
-      if (!agentExecution) throw new Error('The local Agent Runtime is unavailable.')
+      if (!agentExecution) {
+        throw new ProjectCoordinatorPlanGenerationError(
+          'runtime_unavailable',
+          'The local Agent Runtime is unavailable.'
+        )
+      }
       const candidates = project.workerGroups.flatMap((group) => group.agents
         .filter(({ projectAvailability }) => projectAvailability.membership?.state === 'active')
         .map((agent) => ({
@@ -367,30 +501,104 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
           runtimeCapabilityTags: agent.projectAvailability.availability.runtimeCapabilityTags,
           acceptsNewOffers: agent.projectAvailability.availability.acceptsNewOffers
         })))
-      const generated = await agentExecution.run({
-        clientDirectiveId: `project-plan:${project.project.projectId}:${project.project.revision}`,
-        prompt: [
-          `Project: ${project.project.displayName}`,
-          `Goal: ${project.project.goal}`,
-          `Owner instruction: ${input.instruction}`,
-          `Budget: ${JSON.stringify(project.project.budget)}`,
-          `Exact Worker candidates: ${JSON.stringify(candidates)}`,
-          'Return only strict JSON with {tasks,rationale}. Each task must use a stable item_* ID and canonical Project Plan Task fields.'
-        ].join('\n'),
-        ...(input.modelId ? { model: input.modelId } : {}),
-        interaction: 'reviewable',
-        mode: 'plan'
-      })
+      const contentBinding = project.provisioning.binding
+      const fileIntentAllowed = contentBinding !== null && contentBinding.status !== 'closed'
+      const fileSourceInputs = input.sourceInputLocators
+        .filter((locator) => locator.kind === 'content-space.file-reference')
+        .map((locator, sourceInputIndex) => ({ sourceInputIndex, locator }))
+      let generated: Awaited<ReturnType<DomainMainAgentExecutionHost['run']>>
+      try {
+        generated = await agentExecution.run({
+          clientDirectiveId: `project-plan:v2:${project.project.projectId}:${project.project.revision}`,
+          prompt: [
+            `Project: ${project.project.displayName}`,
+            `Goal: ${project.project.goal}`,
+            `Owner instruction: ${input.instruction}`,
+            `Budget: ${JSON.stringify(project.project.budget)}`,
+            `Source input locators: ${JSON.stringify(input.sourceInputLocators)}`,
+            `Content binding: ${JSON.stringify(contentBinding
+              ? {
+                  status: contentBinding.status,
+                  provisioningRevision: contentBinding.provisioningRevision
+                }
+              : null)}`,
+            `Exact file input choices: ${JSON.stringify(fileSourceInputs)}`,
+            `Exact Worker candidates: ${JSON.stringify(candidates)}`,
+            'The final response is constrained by the supplied JSON Schema. Return exactly one object with tasks and rationale.',
+            'Every task must contain only planItemId, title, objective, completionCriteria, dependencyPlanItemIds, requiredCapabilityTags, and fileIntent.',
+            'Use a unique stable item_* planItemId. Dependencies must reference another item in this same response. Capability tags must describe actual requirements and use the lowercase tag format.',
+            'Do not emit id, description, assignee, dependencies, status, or any other convenience fields. Exact Agent assignment is a later Human decision.',
+            fileIntentAllowed
+              ? 'A non-null fileIntent selects existing inputs only by sourceInputIndex from Exact file input choices. Never copy or invent a locator identity; main binds the exact locator and provisioning revision. Use an empty inputs array for an output-only task.'
+              : 'Every fileIntent must be null because this Project has no non-closed content binding.'
+          ].join('\n'),
+          outputSchema: generatedPlanOutputJsonSchema(fileIntentAllowed),
+          ...(input.modelId ? { model: input.modelId } : {}),
+          interaction: 'reviewable',
+          mode: 'plan'
+        })
+      } catch (cause) {
+        throw new ProjectCoordinatorPlanGenerationError(
+          'runtime_execution_failed',
+          'The local Plan Runtime could not complete the structured-output turn.',
+          { cause }
+        )
+      }
       if (generated.state !== 'completed') {
-        throw new Error(`Local Plan Runtime ended in ${generated.state}.`)
+        throw new ProjectCoordinatorPlanGenerationError(
+          'runtime_execution_failed',
+          `Local Plan Runtime ended in ${generated.state}.`
+        )
       }
       let decoded: unknown
       try {
         decoded = JSON.parse(generated.text)
       } catch (cause) {
-        throw new Error('Local Plan Runtime returned non-JSON output.', { cause })
+        throw new ProjectCoordinatorPlanGenerationError(
+          'invalid_structured_output',
+          'Local Plan Runtime returned non-JSON structured output.',
+          { cause }
+        )
       }
-      const content = generatedPlanContentSchema.parse(decoded)
+      const parsedModelContent = generatedPlanModelContentSchema.safeParse(decoded)
+      if (!parsedModelContent.success) {
+        throw new ProjectCoordinatorPlanGenerationError(
+          'invalid_structured_output',
+          'Local Plan Runtime returned output that violates the structured generation contract.',
+          { cause: parsedModelContent.error }
+        )
+      }
+      let canonicalContent: unknown
+      try {
+        canonicalContent = {
+          tasks: parsedModelContent.data.tasks.map((task) => ({
+            ...task,
+            fileIntent: task.fileIntent === null
+              ? null
+              : generatedTaskFileIntent({
+                  selection: task.fileIntent,
+                  contentBinding,
+                  fileSourceInputs
+                })
+          })),
+          rationale: parsedModelContent.data.rationale
+        }
+      } catch (cause) {
+        throw new ProjectCoordinatorPlanGenerationError(
+          'invalid_structured_output',
+          'Local Plan Runtime returned an invalid Project file selection.',
+          { cause }
+        )
+      }
+      const parsedContent = generatedPlanContentSchema.safeParse(canonicalContent)
+      if (!parsedContent.success) {
+        throw new ProjectCoordinatorPlanGenerationError(
+          'invalid_structured_output',
+          'Local Plan Runtime returned output that violates the Project Plan contract.',
+          { cause: parsedContent.error }
+        )
+      }
+      const content = parsedContent.data
       const timestamp = now().toISOString()
       const next = projectCoordinatorPlanDraftSchema.parse({
         draftId: draftId(),

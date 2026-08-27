@@ -57,6 +57,8 @@
 - [x] 6.4 实现 Owner Desktop provisioning/reconcile orchestrator、Device-signed attestation、dynamic add/removal pending 和 Owner root loss recovery HCI。
 - [x] 6.5 实现 outcome_unknown exact observation/link-or-abandon 流程，禁止无 observation 的 mark-success。
 - [x] 6.6 实现 Coordinator transfer HCI 和旧 Coordinator fencing 反馈；与 identity/collaboration/content-space 只通过标准 contracts/contributions 组合。
+- [x] 6.7 修复 Runtime 返回通用 task JSON 导致 Plan draft 生成失败：由 generic Agent execution Host 传递版本化 strict JSON Schema，Codex/Claude 使用原生 structured output，Project Coordinator 最终严格校验且只向 Renderer 返回有界失败原因；增加错误 `id/description/assignee/status` 形状不得落盘的回归测试。
+  - Project Coordinator `71/71`、Codex Runtime `14/14`、Domain SDK、Claude/Host focused tests、root Vitest `371/371` files / `3427/3427` tests、Node/Web/domain typecheck、capability/generated composition、package version audit、OpenSpec strict validation、ESLint 与 production build 均通过；本机 Codex `0.150.0-alpha.8` 使用修订后的完整 content-free Schema 返回 7 个 canonical task 字段并再次通过 Project Zod。同步最新 `test_colab` 并重新构建、重启 SciForge Desktop 后，又通过真实 `AgentRuntime -> local Codex adapter -> Codex app-server` 路径完成 turn `01a043c3-2919-7381-9dd2-34edf774ff6d`，实际生成 2 个 task / 194 output tokens，并通过正式 `projectPlanTaskSchema`、唯一 ID 与依赖闭包校验；临时测试 thread 已删除。文件选择回归证明模型只提交 `sourceInputIndex`，main 绑定原始 locator 与 Cloud provisioning revision。开发进程重启后现有 OIDC authority 已失效，因此真实 Cloud 草稿持久化 UI 复测仍待重新登录，不冒充已通过。硬编码 changed-path gate 引用的 `e0038b8c7109390445dccb691052fec74a153c09` 在当前仓库对象库中不存在，无法运行；直接复用其 source-audit 函数检查相对 `origin/test_colab` 的当前变更路径，findings 为空。
 
 ## 7. 既有 A 测试环境蓝绿升级
 

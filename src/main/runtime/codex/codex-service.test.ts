@@ -3674,7 +3674,13 @@ process.stdout.write(JSON.stringify({
       service.startTurn({
         threadId: 'thread-1',
         text: 'think carefully',
-        reasoningEffort: 'high'
+        reasoningEffort: 'high',
+        outputSchema: {
+          type: 'object',
+          properties: { answer: { type: 'string' } },
+          required: ['answer'],
+          additionalProperties: false
+        }
       })
     ).resolves.toMatchObject({
       ok: true,
@@ -3693,7 +3699,13 @@ process.stdout.write(JSON.stringify({
     expect(client.startTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         effort: 'high',
-        summary: 'detailed'
+        summary: 'detailed',
+        outputSchema: {
+          type: 'object',
+          properties: { answer: { type: 'string' } },
+          required: ['answer'],
+          additionalProperties: false
+        }
       })
     )
   })
@@ -3722,13 +3734,26 @@ process.stdout.write(JSON.stringify({
       createClient: () => client
     })
 
-    await expect(service.startTurn({ threadId: 'gui-thread-1', text: 'hello' })).resolves.toMatchObject({
+    const outputSchema = {
+      type: 'object',
+      properties: { answer: { type: 'string' } },
+      required: ['answer'],
+      additionalProperties: false
+    }
+    await expect(service.startTurn({
+      threadId: 'gui-thread-1',
+      text: 'hello',
+      outputSchema
+    })).resolves.toMatchObject({
       ok: true,
       threadId: 'gui-thread-1',
       turnId: 'turn-1'
     })
 
-    expect(client.startTurn).toHaveBeenNthCalledWith(1, expect.objectContaining({ threadId: 'codex-thread-old' }))
+    expect(client.startTurn).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      threadId: 'codex-thread-old',
+      outputSchema
+    }))
     expect(client.startThread).toHaveBeenCalledWith(
       expect.objectContaining({
         cwd: '/tmp/workspace',
@@ -3736,7 +3761,10 @@ process.stdout.write(JSON.stringify({
         ephemeral: false
       })
     )
-    expect(client.startTurn).toHaveBeenNthCalledWith(2, expect.objectContaining({ threadId: 'codex-thread-new' }))
+    expect(client.startTurn).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      threadId: 'codex-thread-new',
+      outputSchema
+    }))
     await expect(threadStore.get('gui-thread-1')).resolves.toMatchObject({
       guiThreadId: 'gui-thread-1',
       codexThreadId: 'codex-thread-new'

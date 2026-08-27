@@ -15,6 +15,11 @@ input. Compact, fork, resume, relation updates, usage aggregation, remote MCP,
 skills, memories, and subagents are reported unavailable until their canonical
 backend contracts are implemented.
 
+`startTurn` also accepts a bounded provider-neutral JSON Schema and forwards it
+as Codex app-server `turn/start.outputSchema`. The schema is part of the Host's
+stable directive identity; unsupported structured output fails closed instead
+of silently reverting to prompt-only JSON instructions.
+
 Remote Codex starts only with valid workspace-scoped Model Router access. The
 Workspace Host supplies a loopback `/v1` endpoint, short-lived bearer token, and
 expiry through its trusted operation context. The runtime writes only the

@@ -155,6 +155,23 @@ export const projectCoordinatorPlanDraftGenerateInputSchema = z.object({
   modelId: z.string().trim().min(1).max(256).nullable()
 }).strict().readonly()
 
+export const projectCoordinatorPlanDraftGenerateFailureReasonSchema = z.enum([
+  'runtime_unavailable',
+  'runtime_execution_failed',
+  'invalid_structured_output'
+])
+
+export const projectCoordinatorPlanDraftGenerateResultSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('generated'),
+    draft: projectCoordinatorPlanDraftSchema
+  }).strict().readonly(),
+  z.object({
+    status: z.literal('failed'),
+    reason: projectCoordinatorPlanDraftGenerateFailureReasonSchema
+  }).strict().readonly()
+])
+
 export const projectCoordinatorPlanDraftReadInputSchema = z.object({
   projectId: projectIdSchema
 }).strict().readonly()
@@ -800,6 +817,12 @@ export type ProjectCoordinatorPlanAssignment = z.infer<
 >
 export type ProjectCoordinatorPlanDraftGenerateInput = z.infer<
   typeof projectCoordinatorPlanDraftGenerateInputSchema
+>
+export type ProjectCoordinatorPlanDraftGenerateFailureReason = z.infer<
+  typeof projectCoordinatorPlanDraftGenerateFailureReasonSchema
+>
+export type ProjectCoordinatorPlanDraftGenerateResult = z.infer<
+  typeof projectCoordinatorPlanDraftGenerateResultSchema
 >
 export type ProjectCoordinatorPlanDraftReadInput = z.infer<
   typeof projectCoordinatorPlanDraftReadInputSchema

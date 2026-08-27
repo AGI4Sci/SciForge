@@ -120,6 +120,12 @@ describe('createCodexAgentRuntimeAdapter', () => {
       runtimeId: 'codex',
       threadId: 'thread-1',
       text: 'capture the exact figure',
+      outputSchema: {
+        type: 'object',
+        properties: { answer: { type: 'string' } },
+        required: ['answer'],
+        additionalProperties: false
+      },
       metadata: {
         source: 'collaboration.remote-session-projection',
         sourceLabel: '手机 Zulip · 私人 Channel / Topic 22',
@@ -150,6 +156,12 @@ describe('createCodexAgentRuntimeAdapter', () => {
       workspace: undefined,
       model: undefined,
       reasoningEffort: undefined,
+      outputSchema: {
+        type: 'object',
+        properties: { answer: { type: 'string' } },
+        required: ['answer'],
+        additionalProperties: false
+      },
       fileReferences: [{
         path: 'papers',
         relativePath: 'papers',

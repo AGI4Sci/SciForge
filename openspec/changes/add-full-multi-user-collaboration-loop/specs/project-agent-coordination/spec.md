@@ -83,6 +83,8 @@ Cloud SHALL 权威保存 Project、Membership、Task、execution fence、Project
 
 Coordinator 的 Project plan 与 Worker 的 Task transformation SHALL 通过 runtime-neutral AgentRuntime 使用当前 Device 配置的真实 Runtime/模型完成。生产路径 SHALL NOT 使用预计算计划、脚本输出、fixture response、Cloud-hosted 特殊 LLM 或协作专属 Runtime；Cloud MAY 记录 runtime/model ID 和结果 provenance，但不得记录秘密或隐藏 prompt material。
 
+Coordinator Plan 的最终响应 SHALL 由 generic Agent execution Host 传递的版本化、provider-neutral JSON Schema 约束为 canonical Project Plan task 字段，并由 Project Coordinator 再执行严格 domain validation 后才能持久化。Runtime adapter SHALL 使用 provider 原生 structured-output 能力；若无法兑现该约束则 SHALL fail closed，不得把 prompt-only JSON 指令、宽松解析或自动猜字段作为 fallback。任意 Provider-owned portable locator identity SHALL NOT 进入模型 Schema；文件任务只可选择 exact supplied source list 的有界 index，main SHALL 将该选择绑定为原始 locator 和当前 Cloud provisioning revision 后再形成 canonical file intent。生成内容 SHALL NOT 指定 exact Agent assignment；assignment 仍由 Human 在可编辑草稿中完成。Renderer 只可收到 package-owned bounded failure reason，不得收到 Provider 响应或内部 schema diagnostic。
+
 #### Scenario: Coordinator 生成会议任务计划
 
 - **WHEN** Human 提供真实合成议程与需求文件
@@ -95,6 +97,12 @@ Coordinator 的 Project plan 与 Worker 的 Task transformation SHALL 通过 run
 - **THEN** Coordinator main SHALL 为每个无依赖的初始 Plan item 创建一个指向所选精确 Agent 的 Task offer
 - **AND** 每次写入前 SHALL 重新读取该 Agent 的 active Device、online/ready、接单状态、Task Authority、capability、content readiness 与 availability revision
 - **AND** 任一事实过期或不合格 SHALL fail closed，而不得使用 Plan 编辑时缓存的 revision。
+
+#### Scenario: Runtime 返回通用任务对象而非 canonical Plan task
+
+- **WHEN** Runtime 返回包含 `id`、`description`、`assignee`、`dependencies` 或 `status` 的通用任务对象，且缺少 canonical `planItemId`、`objective`、`completionCriteria`、`dependencyPlanItemIds`、`requiredCapabilityTags` 或 `fileIntent`
+- **THEN** Project Coordinator SHALL 拒绝该响应且不得持久化 Plan draft
+- **AND** HCI SHALL 显示有界、可操作的失败原因，不得暴露 Provider 原始错误或内部 schema diagnostic。
 
 ### Requirement: HumanNeeded 使用统一 scope 合同且权威回答者是 Project Owner
 

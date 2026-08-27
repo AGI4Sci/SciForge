@@ -78,7 +78,16 @@ writer. OIDC material never enters this package. Local Plan drafts are
 non-secret package settings guarded by revision compare-and-set. Plan generation
 uses the Host-provided Agent Runtime only after the runtime lifecycle has
 activated; missing Runtime, identity, Device, Cloud, or exact Project facts fail
-closed.
+closed. The package supplies a versioned, provider-neutral JSON Schema for the
+canonical Project Plan task fields; Codex and Claude adapters apply their native
+structured-output mechanism, and the package performs final strict Zod validation
+before persisting anything. Generic task shapes such as `id`, `description`, or
+`assignee` are rejected, because exact Agent assignment remains a later Human
+decision. Portable locator identities never enter the provider Schema: for a
+file task the model may select only a bounded `sourceInputIndex`, while main
+binds the exact caller-supplied locator and Cloud provisioning revision before
+the final domain validation. Renderer-visible failures contain only a bounded
+package-owned reason, never a provider response or schema diagnostic.
 
 Project Content provisioning is a package-owned saga over existing ordinary
 Content Space capabilities. The runtime lifecycle requests only
