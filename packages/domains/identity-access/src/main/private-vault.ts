@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import { agentIdSchema, installationIdSchema } from '@sciforge/collaboration-contracts'
+import type { DomainMainPackageSecretStoreHost } from '@sciforge/domain-sdk/package-storage'
 
 import {
   loadNativeIdentityPrivateVaultBinding,
@@ -47,18 +48,57 @@ export function createNativeIdentityPrivateVault(options: Readonly<{
   const vault: IdentityPrivateVault = {
     read: async (ref) => requireBinding().readSecret(vaultKey(installationId, ref)),
     write: async (ref, value) => {
-      if (typeof value !== 'string' || value.length < 1 || value.length > 262_144) {
-        throw new IdentityPrivateVaultError(
-          'secure_storage_unavailable',
-          'Identity secret value is outside the supported size bounds.'
-        )
-      }
+      assertSecretValue(value)
       requireBinding().storeSecret(vaultKey(installationId, ref), value)
     },
     has: async (ref) => requireBinding().hasSecret(vaultKey(installationId, ref)),
     remove: async (ref) => requireBinding().deleteSecret(vaultKey(installationId, ref))
   }
   return Object.freeze(vault)
+}
+
+export function createPlatformIdentityPrivateVault(options: Readonly<{
+  installationId: string
+  packageSecrets?: DomainMainPackageSecretStoreHost
+  platform?: NodeJS.Platform
+  nativeBinding?: NativeIdentityPrivateVaultBinding
+}>): IdentityPrivateVault {
+  const platform = options.platform ?? process.platform
+  if (platform === 'darwin') {
+    return createNativeIdentityPrivateVault({
+      installationId: options.installationId,
+      ...(options.nativeBinding ? { binding: options.nativeBinding } : {})
+    })
+  }
+  if ((platform !== 'win32' && platform !== 'linux') || !options.packageSecrets) {
+    throw new IdentityPrivateVaultError(
+      'secure_storage_unavailable',
+      'Identity requires the Host package-scoped secret store on this platform.'
+    )
+  }
+  const installationId = installationIdSchema.parse(options.installationId)
+  const secrets = options.packageSecrets
+  const packageKey = (ref: IdentityPrivateSecretRef): string => (
+    `identity.${vaultKey(installationId, ref)}`
+  )
+  return Object.freeze<IdentityPrivateVault>({
+    read: (ref) => secrets.read(packageKey(ref)),
+    write: async (ref, value) => {
+      assertSecretValue(value)
+      await secrets.write(packageKey(ref), value)
+    },
+    has: (ref) => secrets.has(packageKey(ref)),
+    remove: (ref) => secrets.remove(packageKey(ref))
+  })
+}
+
+function assertSecretValue(value: string): void {
+  if (typeof value !== 'string' || value.length < 1 || value.length > 262_144) {
+    throw new IdentityPrivateVaultError(
+      'secure_storage_unavailable',
+      'Identity secret value is outside the supported size bounds.'
+    )
+  }
 }
 
 function vaultKey(installationId: string, rawRef: IdentityPrivateSecretRef): string {

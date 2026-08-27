@@ -125,7 +125,7 @@ An execution identity owned by one SciForge User and hosted by one Agent Host. A
 _Avoid_: SciForge User, Device, Coordinator product, Worker product
 
 **Device Agent Binding**:
-The Cloud-authoritative one-to-one binding from an exact ACTIVE Desktop Device to its single active Agent. Identity ensures it automatically after the canonical Agent Runtime is ready, and the Agent display name mirrors the Device display name. A matching hostname is not Device identity and never merges separately enrolled Devices.
+The Cloud-authoritative one-to-one binding from an exact ACTIVE Desktop Device to its single active Agent. Identity ensures it automatically after the canonical Agent Runtime is ready, and the Agent display name mirrors the Device display name. Agent authority stays in the Identity private vault: device-only Keychain on macOS or Host package secrets on Windows/Linux, with insecure Linux storage rejected. A matching hostname is not Device identity and never merges separately enrolled Devices.
 _Avoid_: manual Agent registration, primary Agent selection, hostname fingerprint, hardware-account merge
 
 **Agent Bootstrap**:

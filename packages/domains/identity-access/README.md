@@ -48,9 +48,12 @@ verification metadata only. No renderer capability, arbitrary-byte signing
 surface, Token, Agent authority, or Device private key crosses any service
 contract.
 
-OIDC refresh material, the Device signing key, and per-Agent authority are
-stored by the Identity-owned in-process Node-API adapter in the macOS Keychain
-with `WhenUnlockedThisDeviceOnly` and non-synchronizable accessibility. Vault
-keys bind the installation and typed secret purpose. Missing native support
-fails closed; there is no environment, file, subprocess, Host storage, IPC, or
-renderer fallback.
+OIDC refresh material, the Device signing key, and per-Agent authority remain
+behind one Identity private-vault interface. On macOS the vault uses the
+in-process Node-API Keychain adapter with `WhenUnlockedThisDeviceOnly` and
+non-synchronizable accessibility, preserving the existing Device identity. On
+Windows and Linux it uses the public package-scoped Host secret store; Electron
+`safeStorage` provides DPAPI on Windows and requires an approved libsecret or
+KWallet backend on Linux. Vault keys bind the installation and typed secret
+purpose. Missing or insecure platform storage fails closed; there is no
+environment, plaintext file, subprocess, IPC, renderer, or alternate fallback.

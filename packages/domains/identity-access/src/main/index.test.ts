@@ -49,6 +49,7 @@ describe('Identity main contributions', () => {
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
+      packageSecrets: memoryPackageSecrets(),
       internalServices: {
         register: register as never,
         acquire: vi.fn() as never
@@ -177,6 +178,7 @@ describe('Identity main contributions', () => {
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
+      packageSecrets: memoryPackageSecrets(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -216,6 +218,7 @@ describe('Identity main contributions', () => {
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
+      packageSecrets: memoryPackageSecrets(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -417,6 +420,7 @@ describe('Identity main contributions', () => {
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
+      packageSecrets: memoryPackageSecrets(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -446,6 +450,24 @@ describe('Identity main contributions', () => {
     }
   })
 
+  it.each(['win32', 'linux'] as const)(
+    'fails closed on %s when the Host encrypted package store is unavailable',
+    (platform) => {
+      const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!
+      Object.defineProperty(process, 'platform', { ...descriptor, value: platform })
+      try {
+        expect(() => createDomainMainEntry({
+          getUserDataDir: () => '/private/tmp/sciforge-identity-missing-secrets',
+          getDeviceId: () => 'device-1',
+          internalServices: memoryInternalServices(),
+          defineCapability: (definition) => definition
+        })).toThrow('Identity requires the Host package-scoped secret store')
+      } finally {
+        Object.defineProperty(process, 'platform', descriptor)
+      }
+    }
+  )
+
   it('fails Cloud activation before construction when the Host application version is unavailable', async () => {
     const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-version-'))
     roots.push(root)
@@ -453,6 +475,7 @@ describe('Identity main contributions', () => {
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
+      packageSecrets: memoryPackageSecrets(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -476,6 +499,7 @@ describe('Identity main contributions', () => {
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
+      packageSecrets: memoryPackageSecrets(),
       getAppVersion,
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
@@ -503,6 +527,7 @@ describe('Identity main contributions', () => {
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
+      packageSecrets: memoryPackageSecrets(),
       getAppVersion: () => '1.0.0',
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
@@ -535,6 +560,7 @@ describe('Identity main contributions', () => {
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
+      packageSecrets: memoryPackageSecrets(),
       getAppVersion: () => '1.0.0',
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
@@ -577,6 +603,7 @@ describe('Identity main contributions', () => {
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
+      packageSecrets: memoryPackageSecrets(),
       getAppVersion: () => '1.0.0',
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
@@ -621,6 +648,7 @@ describe('Identity main contributions', () => {
       const entry = createDomainMainEntry({
         getUserDataDir: () => root,
         getDeviceId: () => 'device-1',
+        packageSecrets: memoryPackageSecrets(),
         getAppVersion: () => '1.0.0',
         internalServices: memoryInternalServices(),
         defineCapability: (definition) => definition
@@ -664,6 +692,16 @@ function memoryInternalServices() {
       if (!service) throw new Error('Internal service is not registered.')
       return service as Service
     }
+  }
+}
+
+function memoryPackageSecrets() {
+  const values = new Map<string, string>()
+  return {
+    has: async (key: string) => values.has(key),
+    read: async (key: string) => values.get(key) ?? null,
+    write: async (key: string, value: string) => { values.set(key, value) },
+    remove: async (key: string) => { values.delete(key) }
   }
 }
 
