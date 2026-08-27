@@ -13,15 +13,18 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import test from 'node:test'
 
-import { discoverDomainPackages } from './domain-packages.mjs'
+import {
+  discoverDomainPackages,
+  domainPackageNpmInvocation
+} from './domain-packages.mjs'
 
 const run = promisify(execFile)
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const npm = domainPackageNpmInvocation()
 
 const sourceExtensionPattern = /\.(?:[cm]?[jt]sx?)$/u
 const testSourcePattern = /\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/u
@@ -286,7 +289,7 @@ test('publishable domain packages resolve every public export from independent t
 
     const archives = []
     for (const { packageRoot, packageJson } of packages) {
-      const { stdout } = await run(npm, [
+      const { stdout } = await run(npm.command, [...npm.leadingArguments,
         'pack',
         '--json',
         '--ignore-scripts',
@@ -342,7 +345,7 @@ test('publishable domain packages resolve every public export from independent t
       archives.push(join(tarballs, packed[0].filename))
     }
 
-    await run(npm, [
+    await run(npm.command, [...npm.leadingArguments,
       'install',
       '--prefer-offline',
       '--ignore-scripts',
@@ -433,7 +436,7 @@ test('publishable domain packages resolve every public export from independent t
       '--import',
       import.meta.resolve('tsx'),
       '--experimental-loader',
-      cssLoader,
+      pathToFileURL(cssLoader).href,
       entry
     ], {
       cwd: installation,

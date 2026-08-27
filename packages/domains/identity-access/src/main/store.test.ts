@@ -443,7 +443,9 @@ describe('IdentityService', () => {
     service.close()
   })
 
-  it('refuses reset without overwriting the original when backup creation fails', () => {
+  it.skipIf(process.platform === 'win32')(
+    'refuses reset without overwriting the original when POSIX backup permissions deny creation',
+    () => {
     const root = temporaryRoot()
     const store = IdentityStore.open(root)
     const path = store.databasePath
@@ -461,5 +463,6 @@ describe('IdentityService', () => {
       chmodSync(directory, 0o700)
       service.close()
     }
-  })
+    }
+  )
 })
