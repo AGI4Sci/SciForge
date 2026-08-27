@@ -21,7 +21,10 @@ afterEach(async () => {
   })))
 })
 
-async function fixture(currentPrincipal?: () => PrincipalSnapshot | undefined) {
+async function fixture(
+  currentPrincipal?: () => PrincipalSnapshot | undefined,
+  getExecutionNodeId: () => string = () => 'test-device'
+) {
   const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-domain-storage-'))
   temporaryDirectories.push(userDataDir)
   const encryption = {
@@ -43,7 +46,7 @@ async function fixture(currentPrincipal?: () => PrincipalSnapshot | undefined) {
     factory: createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId,
       currentPrincipal: currentPrincipal ?? (() => undefined),
       secretRedaction: new ManagedSecretRedactionRegistry()
     })
@@ -183,6 +186,72 @@ describe('domain package storage', () => {
     }, async (secret) => secret.length)).resolves.toBe(12)
   })
 
+  it('binds a cloud-authenticated Principal independently from the Host execution node', async () => {
+    const cloudPrincipal: PrincipalSnapshot = Object.freeze({
+      authority: 'sciforge-cloud',
+      subject: 'cloud-user-a',
+      assurance: 'cloud-authenticated',
+      deviceId: 'cloud-device-a',
+      identityVersion: 4
+    })
+    const cloudAccess = Object.freeze({
+      ...accessA,
+      expectedPrincipal: cloudPrincipal
+    })
+    const { factory } = await fixture(() => cloudPrincipal)
+    const credentials = factory.forOwner({
+      moduleId: 'example.cloud-principal',
+      moduleVersion: '1.0.0'
+    }).secrets.providerCredentials!
+
+    await expect(credentials.status(cloudAccess)).resolves.toEqual({ state: 'absent' })
+    await credentials.replace(cloudAccess, 'cloud-principal-token')
+    await expect(credentials.use(cloudAccess, (secret) => secret)).resolves
+      .toBe('cloud-principal-token')
+  })
+
+  it('does not reuse a provider credential after the Cloud Principal moves to another Device', async () => {
+    const cloudPrincipalA: PrincipalSnapshot = Object.freeze({
+      authority: 'sciforge-cloud',
+      subject: 'cloud-user-a',
+      assurance: 'cloud-authenticated',
+      deviceId: 'cloud-device-a',
+      identityVersion: 4
+    })
+    let currentPrincipal: PrincipalSnapshot | undefined = cloudPrincipalA
+    const { factory } = await fixture(() => currentPrincipal)
+    const credentials = factory.forOwner({
+      moduleId: 'example.cloud-device-binding',
+      moduleVersion: '1.0.0'
+    }).secrets.providerCredentials!
+    const accessFor = (expectedPrincipal: PrincipalSnapshot) => Object.freeze({
+      ...accessA,
+      expectedPrincipal
+    })
+    await credentials.replace(accessFor(cloudPrincipalA), 'cloud-device-a-token')
+
+    const cloudPrincipalB: PrincipalSnapshot = Object.freeze({
+      ...cloudPrincipalA,
+      deviceId: 'cloud-device-b',
+      identityVersion: 5
+    })
+    currentPrincipal = cloudPrincipalB
+    await expect(credentials.status(accessFor(cloudPrincipalB))).resolves
+      .toEqual({ state: 'absent' })
+    await expect(credentials.use(accessFor(cloudPrincipalB), () => undefined)).rejects
+      .toMatchObject({ code: 'credential_unavailable' })
+
+    const renewedCloudPrincipalA: PrincipalSnapshot = Object.freeze({
+      ...cloudPrincipalA,
+      identityVersion: 6
+    })
+    currentPrincipal = renewedCloudPrincipalA
+    await expect(credentials.use(
+      accessFor(renewedCloudPrincipalA),
+      (secret) => secret
+    )).resolves.toBe('cloud-device-a-token')
+  })
+
   it('does not commit an expected Principal credential into a Principal that wins the storage lock', async () => {
     let currentPrincipal: PrincipalSnapshot | undefined = principalA
     const { factory } = await fixture(() => currentPrincipal)
@@ -228,7 +297,7 @@ describe('domain package storage', () => {
     const restarted = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal
     }).forOwner({ ...owner, moduleVersion: '2.0.0' }).secrets.providerCredentials!
     await expect(restarted.use(accessA, (secret) => secret)).resolves.toBe('first-opaque-value')
@@ -237,7 +306,7 @@ describe('domain package storage', () => {
     const afterReplace = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal
     }).forOwner(owner).secrets.providerCredentials!
     await expect(afterReplace.use(accessA, (secret) => secret)).resolves.toBe('second-opaque-value')
@@ -246,7 +315,7 @@ describe('domain package storage', () => {
     const afterRemove = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal
     }).forOwner(owner).secrets.providerCredentials!
     await expect(afterRemove.status(accessA)).resolves.toEqual({ state: 'absent' })
@@ -255,7 +324,7 @@ describe('domain package storage', () => {
     })
   })
 
-  it('fails closed for absent, wrong-node, and mismatched expected principals', async () => {
+  it('fails closed for absent and mismatched expected principals', async () => {
     let current: PrincipalSnapshot | undefined
     const { factory } = await fixture(() => current)
     const credentials = factory.forOwner({
@@ -266,7 +335,7 @@ describe('domain package storage', () => {
     await expect(credentials.status(accessA)).rejects.toMatchObject({ code: 'principal_unavailable' })
     current = { ...principalA, deviceId: 'other-device' }
     await expect(credentials.status(accessA)).rejects.toMatchObject({
-      code: 'principal_device_mismatch'
+      code: 'credential_binding_mismatch'
     })
     current = principalA
     await expect(credentials.status({
@@ -300,7 +369,7 @@ describe('domain package storage', () => {
     const otherOwner = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal: () => current
     }).forOwner({ moduleId: 'example.owner-b', moduleVersion: '1.0.0' })
       .secrets.providerCredentials!
@@ -317,6 +386,24 @@ describe('domain package storage', () => {
     await credentials.replace(accessA, 'lease-secret')
     await expect(credentials.use(accessA, () => {
       current = { ...principalA, identityVersion: 2 }
+      return 'must-not-return'
+    })).rejects.toMatchObject({ code: 'credential_binding_mismatch' })
+  })
+
+  it('rejects an execution-node lease change during bounded secret use', async () => {
+    let executionNodeId = 'test-device'
+    const { factory } = await fixture(
+      () => principalA,
+      () => executionNodeId
+    )
+    const credentials = factory.forOwner({
+      moduleId: 'example.execution-node-lease-change',
+      moduleVersion: '1.0.0'
+    }).secrets.providerCredentials!
+    await credentials.replace(accessA, 'execution-node-secret')
+
+    await expect(credentials.use(accessA, () => {
+      executionNodeId = 'other-execution-node'
       return 'must-not-return'
     })).rejects.toMatchObject({ code: 'credential_binding_mismatch' })
   })
@@ -355,7 +442,7 @@ describe('domain package storage', () => {
         ...encryption,
         decryptString: () => { throw new Error('keychain locked') }
       },
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal: () => principalA
     })
     const decryptingCredentials = decryptingFactory.forOwner({
@@ -376,7 +463,7 @@ describe('domain package storage', () => {
     const interrupted = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal,
       atomicWrite: async () => { throw new Error('simulated interruption') }
     }).forOwner(owner).secrets.providerCredentials!
@@ -388,7 +475,7 @@ describe('domain package storage', () => {
     const restarted = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal
     }).forOwner(owner).secrets.providerCredentials!
     await expect(restarted.use(accessA, (secret) => secret)).resolves
@@ -483,7 +570,7 @@ describe('domain package storage', () => {
     const credentials = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal,
       atomicWrite: async (path, value) => {
         markWriteStarted()
@@ -505,7 +592,7 @@ describe('domain package storage', () => {
     const restarted = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal
     }).forOwner(owner).secrets.providerCredentials!
     await expect(restarted.use(accessA, (secret) => secret)).resolves
@@ -518,7 +605,7 @@ describe('domain package storage', () => {
     const credentials = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal: () => principalA,
       secretRedaction: registry
     }).forOwner({ moduleId: 'example.redaction', moduleVersion: '1.0.0' })
@@ -546,7 +633,7 @@ describe('domain package storage', () => {
     const credentials = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal: () => principalA,
       secretRedaction: registry
     }).forOwner({ moduleId: 'example.bounded-redaction', moduleVersion: '1.0.0' })
@@ -598,7 +685,7 @@ describe('domain package storage', () => {
     const credentials = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal: () => principalA,
       secretRedaction: registry
     }).forOwner({ moduleId: 'example.redacted-failure', moduleVersion: '1.0.0' })

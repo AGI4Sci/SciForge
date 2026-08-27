@@ -1035,8 +1035,8 @@ app
     traceStartup('settings load:start')
     const initial = await store.load()
     traceStartup('settings load:done')
-    const hostDeviceId = initial.installationId?.trim()
-    if (!hostDeviceId) {
+    const hostExecutionNodeId = initial.installationId?.trim()
+    if (!hostExecutionNodeId) {
       throw new Error('Application settings did not provide a stable Host installation identity.')
     }
     appBehavior = initial.appBehavior
@@ -1126,7 +1126,7 @@ app
     const domainPackageStorage = createDomainPackageStorageFactory({
       userDataDir: app.getPath('userData'),
       encryption: createPlatformPackageEncryption({ safeStorage }),
-      getDeviceId: () => hostDeviceId,
+      getExecutionNodeId: () => hostExecutionNodeId,
       currentPrincipal: () => principalContextForDomainServices?.current(),
       secretRedaction: managedSecretRedaction
     })
@@ -1152,7 +1152,7 @@ app
     hostExternalNavigationForShutdown = hostExternalNavigation
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => app.getPath('userData'),
-      getDeviceId: () => hostDeviceId,
+      getDeviceId: () => hostExecutionNodeId,
       getAppVersion: () => app.getVersion(),
       getAppRoot: () => app.getAppPath(),
       getExecutablePath: () => process.execPath,
