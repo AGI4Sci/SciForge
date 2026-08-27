@@ -28,7 +28,7 @@ test('launches npm scripts without a Windows command-shell shim', () => {
     leadingArguments: []
   })
   assert.throws(
-    () => domainPackageNpmInvocation({ platform: 'win32', npmExecPath: undefined }),
+    () => domainPackageNpmInvocation({ platform: 'win32', npmExecPath: '' }),
     /absolute npm_execpath/
   )
 })
