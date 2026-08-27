@@ -964,7 +964,11 @@ export class FakeCollaborationRepository {
 
   async listAvailableWorkers(now) {
     return copy([...this.state.workerAvailability.values()].filter((item) => (
-      item.expiresAt > now && item.acceptsNewOffers
+      item.expiresAt > now &&
+      item.agentActive &&
+      item.deviceActive &&
+      item.connectionStatus === 'online' &&
+      item.runtimeReadiness === 'ready'
     )))
   }
 

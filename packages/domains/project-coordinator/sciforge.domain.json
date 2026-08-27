@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.project-coordinator",
     "displayName": "Project Coordinator",
-    "version": "1.4.3",
+    "version": "2.0.0",
     "hostApi": {
       "minimum": "1.5.0",
       "maximumExclusive": "2.0.0"

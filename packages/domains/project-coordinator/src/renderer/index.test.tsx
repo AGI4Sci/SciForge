@@ -21,6 +21,7 @@ import {
 } from '../definition.js'
 import {
   PROJECT_COORDINATOR_PANEL_SECTION_IDS,
+  ProjectCreateForm,
   ProjectCoordinatorDecisionSection,
   ProjectCoordinatorPanel,
   ProjectCoordinatorPlanSection,
@@ -150,6 +151,7 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
       readWorkspace: async () => ({
         connection: { state: 'identity_required' as const },
         observedAt: '2026-08-24T09:00:00.000Z',
+        availableWorkerGroups: [],
         projects: []
       }),
       createProject: async () => { throw new Error('unused') },
@@ -183,6 +185,38 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
   assert.match(markup, /id="project-coordinator-tab-files"/u)
   assert.doesNotMatch(markup, /id="project-coordinator-tab-connections"/u)
   assert.doesNotMatch(markup, /password|access token|refresh token|register agent|enroll device/iu)
+})
+
+test('New Project auto-binds only this Project Coordinator and lists Cloud Worker Users', () => {
+  const project = coordinatorTransferProjectFixture()
+  const workerGroups = project.workerGroups.map((group) => ({
+    userId: group.userId,
+    displayName: group.displayName,
+    agents: group.agents.map((agent) => ({
+      displayName: agent.displayName,
+      availability: agent.projectAvailability.availability
+    }))
+  }))
+  const markup = renderToStaticMarkup(createElement(ProjectCreateForm, {
+    defaultExpanded: true,
+    busy: false,
+    creatorUserId: project.project.ownerUserId,
+    displayName: '',
+    goal: '',
+    selectedWorkerUserIds: [],
+    workerGroups,
+    onDisplayName: () => undefined,
+    onGoal: () => undefined,
+    onSubmit: () => undefined,
+    onWorkerUserToggle: () => undefined
+  }))
+
+  assert.match(markup, /projectCoordinatorCreatorRole/u)
+  assert.match(markup, /Project Member/u)
+  assert.match(markup, /Member Desktop/u)
+  assert.match(markup, /type="checkbox"/u)
+  assert.doesNotMatch(markup, /placeholder="agt_/u)
+  assert.doesNotMatch(markup, /type="number"/u)
 })
 
 test('workspace section collector discovers package-neutral sections and fails closed on duplicates', () => {
@@ -434,6 +468,7 @@ test('renderer Project create applies the exact Cloud-returned workspace focus w
     },
     observedAt: '2026-08-25T01:08:00.000Z',
     focusedProjectId: 'prj_ProjectCreated01',
+    availableWorkerGroups: [],
     projects: [awaitingConfirmationProjectFixture()]
   }
   const client = createProjectCoordinatorRendererClient({
@@ -449,8 +484,6 @@ test('renderer Project create applies the exact Cloud-returned workspace focus w
   const result = await client.createProject({
     displayName: 'Meeting',
     goal: 'Run a realistic meeting.',
-    coordinatorAgentId: 'agt_Coordinator01',
-    expectedCoordinatorAgentRevision: 1,
     budget: {
       maxTasks: 4,
       maxTasksPerRound: 4,
@@ -470,8 +503,6 @@ test('renderer Project create applies the exact Cloud-returned workspace focus w
     input: {
       displayName: 'Meeting',
       goal: 'Run a realistic meeting.',
-      coordinatorAgentId: 'agt_Coordinator01',
-      expectedCoordinatorAgentRevision: 1,
       budget: {
         maxTasks: 4,
         maxTasksPerRound: 4,
@@ -493,6 +524,7 @@ test('renderer Coordinator transfer invokes one governed Owner command without c
     },
     observedAt: '2026-08-25T01:08:00.000Z',
     focusedProjectId: 'prj_ProjectCreated01',
+    availableWorkerGroups: [],
     projects: [awaitingConfirmationProjectFixture()]
   }
   const client = createProjectCoordinatorRendererClient({
@@ -599,6 +631,7 @@ test('renderer decision HCI invokes only the four governed canonical actions', a
     connection: { state: 'ready' as const, userId: 'usr_Owner0000001', deviceId: 'dev_Device0000001' },
     observedAt: '2026-08-25T01:08:00.000Z',
     focusedProjectId: 'prj_ProjectCreated01',
+    availableWorkerGroups: [],
     projects: [awaitingConfirmationProjectFixture()]
   }
   const client = createProjectCoordinatorRendererClient({
@@ -668,6 +701,7 @@ test('renderer provisioning client keeps the reviewed full plan behind its confi
     connection: { state: 'ready' as const, userId: 'usr_Owner0000001', deviceId: 'dev_Device0000001' },
     observedAt: '2026-08-25T01:08:00.000Z',
     focusedProjectId: 'prj_ProjectCreated01',
+    availableWorkerGroups: [],
     projects: [contentProvisioningProjectFixture()]
   }
   const client = createProjectCoordinatorRendererClient({

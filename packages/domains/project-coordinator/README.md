@@ -18,9 +18,12 @@ removes only its declared section.
 
 This package owns only the Human-facing coordination surfaces for:
 
-- creating a Cloud-authoritative Project as the current OIDC User;
+- creating a Cloud-authoritative Project as the current OIDC User, while main
+  resolves the already-bound Agent of that User's current Cloud Device as this
+  Project's Coordinator;
 - generating, editing, submitting, and confirming a Project Plan;
-- grouping Worker candidates by User while selecting an exact Agent;
+- browsing the Cloud-global online Worker directory, selecting Project members
+  by User, and selecting an exact Agent for each Task;
 - transferring Coordinator authority only to another exact active Agent owned
   by the same Project Owner, with durable old-authority fencing feedback;
 - reviewing immutable Task results, asking/answering Project HumanNeeded, and
@@ -52,6 +55,14 @@ attestation signer as a narrow main-process port. This package supplies only a
 factual payload digest, provisioning revision and observation time; it never
 receives a Device key, performs signing itself, or exposes signing to the
 renderer.
+
+Project creation never registers or chooses an account-wide Coordinator. The
+Collaboration runtime owns the one canonical current Cloud Device-to-Agent
+binding; this package freshly reads that exact active Agent and its Cloud
+revision immediately before `project.create`. A Cloud Device ID is an Identity
+authority fact and is never treated as the Host installation/execution node ID.
+The creator Agent is Coordinator only for the created Project and may remain a
+Worker Agent in another Project.
 
 Coordinator Agent Plan submission, HumanNeeded, result review, decision, and
 final completion acquire Collaboration's versioned, main-only command service.
@@ -93,7 +104,8 @@ factual Owner observation, stops before all member writes, and exposes Cloud's
 safe recovery action without deleting Provider content.
 
 `./contract` contains the strict renderer-safe coordination read model. It
-composes the canonical Cloud Project Plan, Worker Availability, Membership,
+composes the Cloud-global online Worker directory and the canonical Project
+Plan, Project-scoped Worker Availability, Membership,
 Task Authority, execution, result/review, content readiness, provisioning and
 recovery records; it adds only UI-specific grouping, exact selection and focus
 wrappers rather than redefining those state machines.
@@ -108,3 +120,9 @@ and atomic final completion. Pending confirmation, provisioning, HumanNeeded,
 review, completion, Coordinator fencing, membership fences, and root recovery
 cards are default-visible. There is no renderer transport, HTTP client,
 Provider adapter, or second Cloud DTO.
+
+Owner confirmation activates the Project and dispatches each dependency-free
+initial Plan item through the canonical Coordinator Agent command service. Main
+re-reads the exact Agent availability immediately before every offer and sends
+the fresh availability revision; an offline, unready, non-member, ineligible,
+busy, expired, capability-mismatched, or content-unready Agent fails closed.

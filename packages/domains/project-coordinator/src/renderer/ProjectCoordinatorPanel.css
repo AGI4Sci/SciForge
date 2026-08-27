@@ -1330,14 +1330,95 @@
   resize: vertical;
 }
 
-.project-coordinator-create-agent-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 70px;
-  gap: 6px;
+.project-coordinator-create-role {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  border: 1px solid color-mix(in srgb, var(--pc-relay) 22%, var(--pc-border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--pc-relay-soft) 55%, var(--pc-raised));
+  padding: 7px;
 }
 
-.project-coordinator-mono-input {
-  font-family: "SFMono-Regular", Consolas, monospace !important;
+.project-coordinator-create-role > svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: var(--pc-relay);
+}
+
+.project-coordinator-create-role > span,
+.project-coordinator-create-worker > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.project-coordinator-create-role strong,
+.project-coordinator-create-worker strong {
+  color: var(--pc-ink);
+  font-size: 9px;
+}
+
+.project-coordinator-create-role small,
+.project-coordinator-create-worker small {
+  color: var(--pc-faint);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.project-coordinator-create-workers {
+  gap: 6px !important;
+}
+
+.project-coordinator-create-worker {
+  display: grid !important;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: start;
+  gap: 7px !important;
+  border: 1px solid var(--pc-border) !important;
+  border-radius: 7px;
+  background: var(--pc-raised);
+  padding: 7px !important;
+  cursor: pointer;
+}
+
+.project-coordinator-create-worker input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  margin: 1px 0 0;
+  padding: 0;
+  accent-color: var(--pc-relay);
+}
+
+.project-coordinator-create-worker-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.project-coordinator-create-worker-agents > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: 999px;
+  background: var(--pc-surface);
+  color: var(--pc-muted);
+  padding: 2px 5px;
+  font-size: 8px;
+}
+
+.project-coordinator-create-worker-agents svg {
+  width: 8px;
+  height: 8px;
+  color: var(--pc-presence);
+}
+
+.project-coordinator-create-workers-empty {
+  border: 1px dashed var(--pc-border);
+  border-radius: 7px;
+  padding: 7px;
 }
 
 .project-coordinator-primary-button {

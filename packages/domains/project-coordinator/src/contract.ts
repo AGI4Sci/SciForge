@@ -31,6 +31,7 @@ import {
   projectRecordSchema,
   projectSchema,
   projectWorkerAvailabilityViewSchema,
+  workerAvailabilityProjectionSchema,
   taskExecutionSchema,
   taskFileDestinationNameSchema,
   taskResultOutputSchema,
@@ -74,7 +75,9 @@ export const projectCoordinatorProjectCreateInputSchema = projectCreateCommandSc
   protocolVersion: true,
   requestId: true,
   type: true,
-  idempotencyKey: true
+  idempotencyKey: true,
+  coordinatorAgentId: true,
+  expectedCoordinatorAgentRevision: true
 }).readonly()
 
 export const projectCoordinatorConnectionSchema = z.discriminatedUnion('state', [
@@ -406,6 +409,31 @@ export const projectCoordinatorWorkerAgentSchema = z.object({
   projectAvailability: projectWorkerAvailabilityViewSchema
 }).strict().readonly()
 
+export const projectCoordinatorAvailableWorkerAgentSchema = z.object({
+  displayName: displayNameSchema,
+  availability: workerAvailabilityProjectionSchema
+}).strict().readonly()
+
+/** Cloud-global online Worker directory grouped by User; selection remains exact Agent. */
+export const projectCoordinatorAvailableWorkerGroupSchema = z.object({
+  userId: userIdSchema,
+  displayName: displayNameSchema,
+  agents: z.array(projectCoordinatorAvailableWorkerAgentSchema).max(64)
+}).strict().superRefine((group, context) => {
+  const agentIds = group.agents.map(({ availability }) => availability.agentId)
+  if (new Set(agentIds).size !== agentIds.length) {
+    context.addIssue({ code: 'custom', path: ['agents'], message: 'Available Worker Agent IDs must be unique per User.' })
+  }
+  group.agents.forEach((agent, index) => {
+    if (agent.availability.userId === group.userId) return
+    context.addIssue({
+      code: 'custom',
+      path: ['agents', index, 'availability', 'userId'],
+      message: 'Available Worker User must match its Cloud directory group.'
+    })
+  })
+}).readonly()
+
 /** User is the grouping key; availability and selection remain exact Agent facts. */
 export const projectCoordinatorWorkerGroupSchema = z.object({
   userId: userIdSchema,
@@ -665,6 +693,7 @@ export const projectCoordinatorWorkspaceSchema = z.object({
   connection: projectCoordinatorConnectionSchema,
   observedAt: timestampSchema,
   focusedProjectId: projectIdSchema.optional(),
+  availableWorkerGroups: z.array(projectCoordinatorAvailableWorkerGroupSchema).max(1_000),
   projects: z.array(projectCoordinatorProjectSchema).max(1_000)
 }).strict().superRefine((workspace, context) => {
   if (workspace.connection.state !== 'ready' && workspace.projects.length > 0) {
@@ -672,6 +701,13 @@ export const projectCoordinatorWorkspaceSchema = z.object({
       code: 'custom',
       path: ['projects'],
       message: 'Unavailable coordination state cannot claim Project data.'
+    })
+  }
+  if (workspace.connection.state !== 'ready' && workspace.availableWorkerGroups.length > 0) {
+    context.addIssue({
+      code: 'custom',
+      path: ['availableWorkerGroups'],
+      message: 'Unavailable coordination state cannot claim Cloud Worker directory data.'
     })
   }
   if (workspace.connection.state !== 'ready' && workspace.focusedProjectId) {
@@ -694,6 +730,24 @@ export const projectCoordinatorWorkspaceSchema = z.object({
   const projectIds = workspace.projects.map(({ project }) => project.projectId)
   if (new Set(projectIds).size !== projectIds.length) {
     context.addIssue({ code: 'custom', path: ['projects'], message: 'Project IDs must be unique.' })
+  }
+  const workerUserIds = workspace.availableWorkerGroups.map(({ userId }) => userId)
+  if (new Set(workerUserIds).size !== workerUserIds.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['availableWorkerGroups'],
+      message: 'Available Worker groups must be unique by User.'
+    })
+  }
+  const workerAgentIds = workspace.availableWorkerGroups.flatMap(({ agents }) => (
+    agents.map(({ availability }) => availability.agentId)
+  ))
+  if (new Set(workerAgentIds).size !== workerAgentIds.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['availableWorkerGroups'],
+      message: 'Each available Agent must occur in exactly one User group.'
+    })
   }
 }).readonly()
 

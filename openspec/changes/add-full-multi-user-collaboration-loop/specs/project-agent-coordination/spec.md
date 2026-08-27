@@ -10,13 +10,15 @@
 
 #### Scenario: Owner 创建 Project
 
-- **WHEN** Owner 通过 HCI 创建 Project 并选择一个合格 Agent
-- **THEN** Cloud SHALL 将该 Agent 记录为唯一 Coordinator
-- **AND** SHALL NOT 根据最近在线、同一 User 的其他 Device 或显示名猜测 Agent。
+- **WHEN** Owner 在已登录、已绑定 Agent 的当前 Cloud Device 上通过 HCI 创建 Project
+- **THEN** Desktop main SHALL 在写入前重新读取该 User 当前 Cloud Device 的唯一 active Agent 及 revision，并由 Cloud 将它记录为该 Project 的唯一 Coordinator
+- **AND** renderer SHALL NOT 接收或提交 `coordinatorAgentId`、Agent revision 或手工注册输入
+- **AND** 该身份 SHALL 仅建立此 Project 的 Coordinator 关系，不得把 User、Device 或 Agent 标记为账号级 Coordinator
+- **AND** Cloud Device ID SHALL 与 Host installation/execution node ID 保持不同语义，不得通过令二者相等来建立绑定。
 
 ### Requirement: Worker 由 Coordinator HCI 选择精确 Agent
 
-Coordinator HCI SHALL 按 User 分组展示所有可见 Agent，并让 Human 为 Task 选择精确 `assigneeAgentId`。User 和 Worker 集合 SHALL 是动态的；Cloud SHALL NOT 固定角色账号、验收 fixture 用户或每 User 只有一个 Agent。
+Coordinator HCI SHALL 从 Cloud-global online Worker directory 按 User 分组展示 active、online、Runtime-ready Agent；创建 Project 时 Human SHALL 选择 Worker Member User，在 Plan 中 SHALL 为每个 Task 选择精确 `assigneeAgentId`。候选 SHALL NOT 限于当前 Project Member 或当前 OIDC User 的 `participant.get` self-Agent 列表。User 和 Worker 集合 SHALL 是动态的；Cloud SHALL NOT 固定角色账号、验收 fixture 用户或每 User 只有一个 Agent。
 
 #### Scenario: 一个 User 有两台可用 Desktop
 
@@ -34,12 +36,13 @@ Cloud SHALL 为 Coordinator 提供包含 Agent/Device active 状态、online/off
 - **THEN** Worker SHALL 拒绝或保持未接受并返回有界原因
 - **AND** Cloud SHALL NOT 因旧 projection 强制其执行。
 
-#### Scenario: Coordinator 查看真实在线人数
+#### Scenario: Coordinator 查看 Cloud 全局在线候选
 
-- **WHEN** Coordinator HCI 读取一个包含多个 User 和多个 Agent/Device 的 Project availability projection
-- **THEN** HCI SHALL 把至少有一个 `online` Agent 的每个可见 User 精确计为一名在线成员
-- **AND** SHALL 同时显示在线 Agent 数与可见 Agent 总数，使同一 User 的多个 Device 不会虚增在线人数
-- **AND** 所有计数 SHALL 直接派生自本次 Cloud projection，不得使用本地窗口、轮询旁路或猜测的 heartbeat 统计。
+- **WHEN** Coordinator HCI 读取包含多个 User 和多个 Agent/Device 的 Cloud-global availability page
+- **THEN** Cloud SHALL 为该页返回每个可见 User 和 Agent 的安全显示标签、所有权与 Device 关系，但不得返回凭据或 Runtime 配置
+- **AND** HCI SHALL 把至少有一个 `online` Agent 的每个可见 User 精确计为一名在线候选
+- **AND** SHALL 同时显示在线 Agent 数与可接新 Task 的 Agent 数，使同一 User 的多个 Device 不会虚增 User 数
+- **AND** 所有候选与计数 SHALL 直接派生自本次 Cloud projection，不得使用 Project Member 列表、本地窗口、轮询旁路或猜测的 heartbeat 统计。
 
 ### Requirement: 接单策略是每 Agent Device 的本地持久策略
 
@@ -85,6 +88,13 @@ Coordinator 的 Project plan 与 Worker 的 Task transformation SHALL 通过 run
 - **WHEN** Human 提供真实合成议程与需求文件
 - **THEN** Coordinator Agent SHALL 调用本机选定 Runtime 生成可编辑计划
 - **AND** Human SHALL 能在 HCI 中确认或修改后再创建 Task。
+
+#### Scenario: Owner 确认 Plan 后派发初始 Task
+
+- **WHEN** Owner 确认 Plan 且 Project 激活
+- **THEN** Coordinator main SHALL 为每个无依赖的初始 Plan item 创建一个指向所选精确 Agent 的 Task offer
+- **AND** 每次写入前 SHALL 重新读取该 Agent 的 active Device、online/ready、接单状态、Task Authority、capability、content readiness 与 availability revision
+- **AND** 任一事实过期或不合格 SHALL fail closed，而不得使用 Plan 编辑时缓存的 revision。
 
 ### Requirement: HumanNeeded 使用统一 scope 合同且权威回答者是 Project Owner
 

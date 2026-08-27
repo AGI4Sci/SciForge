@@ -73,6 +73,8 @@ import {
 import {
   projectWorkerAvailabilityViewSchema,
   projectMembershipSchema,
+  workerDirectoryAgentLabelSchema,
+  workerDirectoryUserLabelSchema,
   workerAvailabilityProjectionSchema
 } from './project-coordination.js'
 import {
@@ -661,6 +663,70 @@ export const restEntitySchema = z.union([
 ])
 export type RestEntity = z.infer<typeof restEntitySchema>
 
+const restWorkerAvailabilityPageSchema = z.object({
+  protocolVersion: protocolVersionSchema,
+  type: z.literal('rest.worker_availability_page'),
+  requestId: requestIdSchema,
+  observedAt: timestampSchema,
+  items: z.array(workerAvailabilityProjectionSchema).max(500),
+  userLabels: z.array(workerDirectoryUserLabelSchema).max(500),
+  agentLabels: z.array(workerDirectoryAgentLabelSchema).max(500),
+  nextAgentId: agentIdSchema.optional()
+}).strict().superRefine((page, context) => {
+  const userIds = [...new Set(page.items.map(({ userId }) => userId))]
+  const agentIds = page.items.map(({ agentId }) => agentId)
+  if (new Set(agentIds).size !== agentIds.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['items'],
+      message: 'A global Worker directory page contains each Agent at most once.'
+    })
+  }
+  if (
+    page.userLabels.length !== userIds.length ||
+    page.userLabels.some(({ userId }) => !userIds.includes(userId))
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['userLabels'],
+      message: 'A global Worker directory page contains one safe label for every visible User.'
+    })
+  }
+  if (
+    page.agentLabels.length !== agentIds.length ||
+    page.agentLabels.some(({ agentId }) => !agentIds.includes(agentId))
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['agentLabels'],
+      message: 'A global Worker directory page contains one safe label for every visible Agent.'
+    })
+  }
+  for (const [index, availability] of page.items.entries()) {
+    const user = page.userLabels.find(({ userId }) => userId === availability.userId)
+    const agent = page.agentLabels.find(({ agentId }) => agentId === availability.agentId)
+    if (user?.status !== 'active') {
+      context.addIssue({
+        code: 'custom',
+        path: ['userLabels'],
+        message: `Worker availability item ${index} requires its active User label.`
+      })
+    }
+    if (
+      !agent ||
+      agent.ownerUserId !== availability.userId ||
+      agent.deviceId !== availability.deviceId ||
+      agent.lifecycleStatus !== 'active'
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['agentLabels'],
+        message: `Worker availability item ${index} requires its exact active Agent ownership label.`
+      })
+    }
+  }
+}).readonly()
+
 export const restResponseSchema = z.discriminatedUnion('type', [
   restProjectPageResponseSchema,
   restProjectCoordinationResponseSchema,
@@ -688,7 +754,7 @@ export const restResponseSchema = z.discriminatedUnion('type', [
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('rest.entity'), requestId: requestIdSchema, entity: restEntitySchema }).strict(),
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('rest.collection'), requestId: requestIdSchema, items: z.array(restEntitySchema).max(10_000), nextCursor: z.string().min(1).max(2_048).optional() }).strict(),
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('rest.inbox_page'), requestId: requestIdSchema, messages: z.array(inboxMessageSchema).max(1_000), nextSequence: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict(),
-  z.object({ protocolVersion: protocolVersionSchema, type: z.literal('rest.worker_availability_page'), requestId: requestIdSchema, items: z.array(workerAvailabilityProjectionSchema).max(500), nextAgentId: agentIdSchema.optional() }).strict(),
+  restWorkerAvailabilityPageSchema,
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('rest.project_worker_availability_page'), requestId: requestIdSchema, projectId: projectIdSchema, items: z.array(projectWorkerAvailabilityViewSchema).max(500), nextAgentId: agentIdSchema.optional() }).strict(),
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('rest.provider_directory_principal_page'), requestId: requestIdSchema, items: z.array(providerDirectoryPrincipalFactSchema).max(1_000), nextFactId: providerPrincipalFactIdSchema.optional() }).strict(),
   z.object({

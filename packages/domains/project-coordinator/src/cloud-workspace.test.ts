@@ -7,8 +7,11 @@ import type {
 } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import {
   TEST_IDS,
+  agentNodeFixture,
   humanNeededFixture,
-  projectRecordFixture
+  participantProfileFixture,
+  projectRecordFixture,
+  userPrincipalFixture
 } from '@sciforge/collaboration-contracts/testing'
 
 import {
@@ -23,6 +26,32 @@ test('OIDC Project create returns a workspace focused on the exact new Project a
   const project = projectFixture('prj_ProjectCreated01', 'Created meeting')
   const existing = projectFixture('prj_ProjectExisting1', 'Existing meeting')
   const responses = [
+    response(200, {
+      protocolVersion: '1.0',
+      type: 'participant.snapshot',
+      requestId: 'req_CurrentDeviceAgent1',
+      user: {
+        ...userPrincipalFixture,
+        userId: 'usr_Owner0000001',
+        displayName: 'Owner'
+      },
+      participant: {
+        ...participantProfileFixture,
+        participantId: 'par_OwnerProfile001',
+        userId: 'usr_Owner0000001',
+        primaryHumanEndpointId: null,
+        primaryAgentId: 'agt_Coordinator01',
+        status: 'incomplete'
+      },
+      humanEndpoints: [],
+      agents: [{
+        ...agentNodeFixture,
+        agentId: 'agt_Coordinator01',
+        ownerUserId: 'usr_Owner0000001',
+        deviceId: 'dev_Device0000001',
+        revision: 3
+      }]
+    }),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_created',
@@ -49,6 +78,7 @@ test('OIDC Project create returns a workspace focused on the exact new Project a
       projects: [project],
       observedAt: updatedAt
     }),
+    emptyWorkerDirectoryResponse('req_ListWorkers00001'),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_coordination',
@@ -101,8 +131,6 @@ test('OIDC Project create returns a workspace focused on the exact new Project a
   const result = await port.createProject({
     displayName: 'Created meeting',
     goal: 'Run one realistic multi-user meeting.',
-    coordinatorAgentId: 'agt_Coordinator01',
-    expectedCoordinatorAgentRevision: 3,
     budget: {
       maxTasks: 8,
       maxTasksPerRound: 4,
@@ -127,25 +155,107 @@ test('OIDC Project create returns a workspace focused on the exact new Project a
   assert.deepEqual(
     requests.map(({ payload }) => payload.type),
     [
+      'participant.get',
       'project.create',
       'project.list',
       'project.list',
+      'worker.availability.list',
       'project.coordination.read',
       'project.coordination.read'
     ]
   )
+  assert.deepEqual(requests[1]?.payload.type === 'project.create' ? {
+    coordinatorAgentId: requests[1].payload.coordinatorAgentId,
+    expectedCoordinatorAgentRevision: requests[1].payload.expectedCoordinatorAgentRevision
+  } : null, {
+    coordinatorAgentId: 'agt_Coordinator01',
+    expectedCoordinatorAgentRevision: 3
+  })
   assert.deepEqual(
-    requests.slice(3).map(({ payload }) => (
+    requests.slice(5).map(({ payload }) => (
       payload.type === 'project.coordination.read' ? payload.collections : []
     )),
     [
-      expectAllCollections(),
+      expectProjectCollections(),
       [{ collection: 'user_label_facts', cursor: 'cursor-user-page-2', limit: 250 }]
     ]
   )
 })
 
-test('Cloud flat availability facts are grouped by dynamic User while preserving exact Agent choice', async () => {
+test('OIDC Project create rejects a Cloud response that changes the exact creator authority', async () => {
+  for (const project of [{
+    ...projectFixture('prj_ProjectWrongOwner1', 'Wrong owner'),
+    ownerUserId: 'usr_OtherOwner0001'
+  }, {
+    ...projectFixture('prj_ProjectWrongAgent1', 'Wrong Coordinator'),
+    coordinatorAgentId: 'agt_OtherAgent0001'
+  }]) {
+    const responses = [
+      response(200, {
+        protocolVersion: '1.0',
+        type: 'participant.snapshot',
+        requestId: 'req_CurrentDeviceAgent2',
+        user: {
+          ...userPrincipalFixture,
+          userId: 'usr_Owner0000001',
+          displayName: 'Owner'
+        },
+        participant: {
+          ...participantProfileFixture,
+          participantId: 'par_OwnerProfile001',
+          userId: 'usr_Owner0000001',
+          primaryHumanEndpointId: null,
+          primaryAgentId: 'agt_Coordinator01',
+          status: 'incomplete'
+        },
+        humanEndpoints: [],
+        agents: [{
+          ...agentNodeFixture,
+          agentId: 'agt_Coordinator01',
+          ownerUserId: 'usr_Owner0000001',
+          deviceId: 'dev_Device0000001',
+          revision: 3
+        }]
+      }),
+      response(200, {
+        protocolVersion: '1.0',
+        type: 'rest.project_created',
+        requestId: 'req_CreateProject0002',
+        project,
+        memberships: [membershipFixture(project.projectId)],
+        provisioningIntent: null
+      })
+    ]
+    const transport: AuthenticatedCloudTransport = {
+      status: () => ({
+        state: 'ready',
+        baseUrl: 'https://cloud.run0.invalid/',
+        userId: 'usr_Owner0000001',
+        deviceId: 'dev_Device0000001'
+      }),
+      execute: async () => {
+        const next = responses.shift()
+        if (!next) throw new Error('Unexpected Cloud request.')
+        return next
+      }
+    }
+
+    await assert.rejects(
+      createProjectCoordinatorCloudWorkspacePort({ transport }).createProject({
+        displayName: project.displayName,
+        goal: project.goal,
+        budget: project.budget,
+        content: {
+          mode: 'none',
+          members: [{ userId: 'usr_Owner0000001' }]
+        }
+      }, `idem_${project.projectId}`),
+      /exact current User and Device Agent authority/
+    )
+  }
+})
+
+test('Cloud-global online Workers stay visible outside current Project membership with exact Agent choice', async () => {
   const project = projectFixture('prj_ProjectCreated01', 'Created meeting')
   const responses = [
     response(200, {
@@ -158,28 +268,47 @@ test('Cloud flat availability facts are grouped by dynamic User while preserving
     }),
     response(200, {
       protocolVersion: '1.0',
+      type: 'rest.worker_availability_page',
+      requestId: 'req_ListGlobalWorkers1',
+      observedAt: updatedAt,
+      items: [
+        availabilityFixture('agt_WorkerAgent001', true, 7),
+        availabilityFixture('agt_WorkerAgent002', false, 8)
+      ],
+      userLabels: [{
+        userId: 'usr_Worker000001',
+        displayName: 'Worker User',
+        status: 'active',
+        revision: 1
+      }],
+      agentLabels: [{
+        agentId: 'agt_WorkerAgent001',
+        ownerUserId: 'usr_Worker000001',
+        deviceId: 'dev_WorkerDevice01',
+        displayName: 'Worker Desktop A',
+        nodeType: 'desktop',
+        lifecycleStatus: 'active',
+        revision: 1
+      }, {
+        agentId: 'agt_WorkerAgent002',
+        ownerUserId: 'usr_Worker000001',
+        deviceId: 'dev_WorkerDevice02',
+        displayName: 'Worker Desktop B',
+        nodeType: 'desktop',
+        lifecycleStatus: 'active',
+        revision: 1
+      }]
+    }),
+    response(200, {
+      protocolVersion: '1.0',
       type: 'rest.project_coordination',
       requestId: 'req_ReadCandidates001',
       project,
       observedAt: updatedAt,
       pages: [{
-        collection: 'user_label_facts',
+        collection: 'memberships',
         limit: 250,
-        items: [userLabelFixture('usr_Worker000001', 'Worker User')]
-      }, {
-        collection: 'agent_label_facts',
-        limit: 250,
-        items: [
-          agentLabelFixture('agt_WorkerAgent001', 'Worker Desktop A'),
-          agentLabelFixture('agt_WorkerAgent002', 'Worker Desktop B')
-        ]
-      }, {
-        collection: 'worker_availability',
-        limit: 250,
-        items: [
-          availabilityFixture('agt_WorkerAgent001', true, 7),
-          availabilityFixture('agt_WorkerAgent002', false, 8)
-        ]
+        items: []
       }],
       finalSummary: null
     })
@@ -205,12 +334,22 @@ test('Cloud flat availability facts are grouped by dynamic User while preserving
 
   const workspace = await port.readWorkspace({ projectId: project.projectId })
 
+  assert.deepEqual(workspace.availableWorkerGroups.map((group) => ({
+    userId: group.userId,
+    displayName: group.displayName,
+    agentIds: group.agents.map(({ availability }) => availability.agentId)
+  })), [{
+    userId: 'usr_Worker000001',
+    displayName: 'Worker User',
+    agentIds: ['agt_WorkerAgent001', 'agt_WorkerAgent002']
+  }])
   assert.deepEqual(workspace.projects[0]?.workerGroups.map((group) => ({
     userId: group.userId,
     displayName: group.displayName,
     agents: group.agents.map(({ displayName, projectAvailability }) => ({
       displayName,
       agentId: projectAvailability.agentId,
+      membership: projectAvailability.membership,
       acceptsNewOffers: projectAvailability.availability.acceptsNewOffers
     }))
   })), [{
@@ -219,10 +358,12 @@ test('Cloud flat availability facts are grouped by dynamic User while preserving
     agents: [{
       displayName: 'Worker Desktop A',
       agentId: 'agt_WorkerAgent001',
+      membership: null,
       acceptsNewOffers: true
     }, {
       displayName: 'Worker Desktop B',
       agentId: 'agt_WorkerAgent002',
+      membership: null,
       acceptsNewOffers: false
     }]
   }])
@@ -249,6 +390,7 @@ test('Project read selects the one non-superseded Plan instead of relying on pag
       projects: [project],
       observedAt: updatedAt
     }),
+    emptyWorkerDirectoryResponse('req_ListHumanWorkers1'),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_coordination',
@@ -324,6 +466,7 @@ test('Project read projects pending Owner HumanNeeded and accepted Coordinator d
       projects: [project],
       observedAt: updatedAt
     }),
+    emptyWorkerDirectoryResponse('req_ListContentWorkers'),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_coordination',
@@ -493,6 +636,7 @@ test('Project read keeps membership, Provider observation, readiness, and recove
       projects: [project],
       observedAt: updatedAt
     }),
+    emptyWorkerDirectoryResponse('req_ListContentFactsWorkers'),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_coordination',
@@ -539,6 +683,18 @@ function response(
   body: AuthenticatedCloudResponse['body']
 ): AuthenticatedCloudResponse {
   return { contractVersion: 1 as const, status, body }
+}
+
+function emptyWorkerDirectoryResponse(requestId: `req_${string}`): AuthenticatedCloudResponse {
+  return response(200, {
+    protocolVersion: '1.0',
+    type: 'rest.worker_availability_page',
+    requestId,
+    observedAt: updatedAt,
+    items: [],
+    userLabels: [],
+    agentLabels: []
+  })
 }
 
 function projectFixture(projectId: string, displayName: string) {
@@ -677,13 +833,10 @@ function planFixture(input: Readonly<{
   }
 }
 
-function expectAllCollections() {
+function expectProjectCollections() {
   return [
-    'user_label_facts',
-    'agent_label_facts',
     'memberships',
     'task_authorities',
-    'worker_availability',
     'provider_principal_facts',
     'content_readiness',
     'provider_membership_observations',

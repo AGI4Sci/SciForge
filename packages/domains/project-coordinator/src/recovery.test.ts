@@ -484,6 +484,7 @@ function recoveryWorkspace(
     },
     observedAt: now,
     focusedProjectId: projectId,
+    availableWorkerGroups: [],
     projects: [{
       project: {
         schemaVersion: 1,

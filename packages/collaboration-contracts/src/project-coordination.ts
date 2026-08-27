@@ -3,6 +3,7 @@ import { z } from 'zod'
 import {
   agentIdSchema,
   deviceIdSchema,
+  displayNameSchema,
   entityMetadataShape,
   projectIdSchema,
   projectMembershipIdSchema,
@@ -12,6 +13,11 @@ import {
   timestampSchema,
   userIdSchema
 } from './core.js'
+import {
+  agentLifecycleStatusSchema,
+  agentNodeTypeSchema,
+  userStatusSchema
+} from './entities.js'
 import {
   projectContentReadinessSchema,
   providerDirectoryPrincipalFactSchema
@@ -167,6 +173,27 @@ export const workerAvailabilityProjectionSchema = z.object({
   }
 })
 export type WorkerAvailabilityProjection = z.infer<typeof workerAvailabilityProjectionSchema>
+
+/** Human-safe identity labels returned only for Agents on one global availability page. */
+export const workerDirectoryUserLabelSchema = z.object({
+  userId: userIdSchema,
+  displayName: displayNameSchema,
+  status: userStatusSchema,
+  revision: revisionSchema
+}).strict().readonly()
+export type WorkerDirectoryUserLabel = z.infer<typeof workerDirectoryUserLabelSchema>
+
+/** Safe Agent ownership/Device label; credentials and Runtime configuration are excluded. */
+export const workerDirectoryAgentLabelSchema = z.object({
+  agentId: agentIdSchema,
+  ownerUserId: userIdSchema,
+  deviceId: deviceIdSchema,
+  displayName: displayNameSchema,
+  nodeType: agentNodeTypeSchema,
+  lifecycleStatus: agentLifecycleStatusSchema,
+  revision: revisionSchema
+}).strict().readonly()
+export type WorkerDirectoryAgentLabel = z.infer<typeof workerDirectoryAgentLabelSchema>
 
 /** Project-scoped composition; it nests rather than duplicates global heartbeat facts. */
 export const projectWorkerAvailabilityViewSchema = z.object({

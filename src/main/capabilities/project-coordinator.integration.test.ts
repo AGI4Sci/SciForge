@@ -29,6 +29,7 @@ const created: ProjectCoordinatorProjectCreateResult = {
     },
     observedAt: '2026-08-27T01:30:00.000Z',
     focusedProjectId: TEST_IDS.projectId,
+    availableWorkerGroups: [],
     projects: [{
       project: projectFixture,
       coordinatorTransferFeedback: null,
@@ -95,8 +96,6 @@ describe('Project Coordinator Host capability integration', () => {
       input: {
         displayName: 'Meeting',
         goal: 'Run the meeting.',
-        coordinatorAgentId: 'agt_Coordinator01',
-        expectedCoordinatorAgentRevision: 1,
         budget: {
           maxTasks: 4,
           maxTasksPerRound: 4,

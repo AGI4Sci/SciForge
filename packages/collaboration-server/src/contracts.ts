@@ -17,6 +17,8 @@ import {
   projectContentReadinessSchema,
   projectWorkerAvailabilityViewSchema,
   providerDirectoryPrincipalFactSchema,
+  workerDirectoryAgentLabelSchema,
+  workerDirectoryUserLabelSchema,
   workerAvailabilityProjectionSchema,
   projectPlanSchema,
   taskExecutionSchema,
@@ -47,6 +49,8 @@ import {
   type ProjectContentReadiness,
   type ProjectWorkerAvailabilityView,
   type ProviderDirectoryPrincipalFact,
+  type WorkerDirectoryAgentLabel,
+  type WorkerDirectoryUserLabel,
   type WorkerAvailabilityProjection,
   type ProjectPlan,
   type TaskExecution,
@@ -329,6 +333,27 @@ export function toWorkerAvailability(
     schemaVersion: 1,
     type: 'worker_availability_projection',
     ...availability
+  })
+}
+
+export function toWorkerDirectoryUserLabel(user: StoredUser): WorkerDirectoryUserLabel {
+  return workerDirectoryUserLabelSchema.parse({
+    userId: user.userId,
+    displayName: user.displayName,
+    status: user.status,
+    revision: user.revision
+  })
+}
+
+export function toWorkerDirectoryAgentLabel(agent: StoredAgent): WorkerDirectoryAgentLabel {
+  return workerDirectoryAgentLabelSchema.parse({
+    agentId: agent.agentId,
+    ownerUserId: agent.ownerUserId,
+    deviceId: agent.deviceId,
+    displayName: agent.displayName,
+    nodeType: agent.nodeType,
+    lifecycleStatus: agent.status === 'revoked' ? 'revoked' : 'active',
+    revision: agent.revision
   })
 }
 
