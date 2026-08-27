@@ -60,18 +60,18 @@ Credential create or rotation SHALL commit one versioned record atomically, and 
 
 #### Scenario: Rotation succeeds
 - **WHEN** the owner replaces a credential
-- **THEN** new uses SHALL select only the committed new record and the replaced value SHALL enter the bounded retired-secret redaction set
+- **THEN** new uses SHALL select only the committed new record and the replaced plaintext SHALL NOT be retained by the credential store or redaction registry after the atomic commit
 
 #### Scenario: Replacement or deletion is interrupted
 - **WHEN** the process or OS key service fails during the operation
 - **THEN** restart recovery SHALL resolve to one well-defined usable or absent state and SHALL not expose partial secret data
 
-### Requirement: Secret redaction follows credential lifetime
-Active and recently retired credential values SHALL participate in the canonical managed-log and trace secret-redaction path for a bounded in-flight retention window. Redaction registration SHALL contain only values necessary for matching and SHALL not become another durable secret store.
+### Requirement: Secret redaction is scoped to bounded credential use
+Credential plaintext SHALL participate in the canonical managed-log and trace secret-redaction path only while the owning `use` callback is executing. The Host SHALL scrub a callback failure while that redaction lease is active, return only a bounded Host-owned error, and release the plaintext immediately when the callback settles. Status, replacement, and deletion SHALL NOT register or retain credential plaintext in the redaction registry.
 
-#### Scenario: In-flight request finishes after rotation
-- **WHEN** a late error contains the recently retired credential
-- **THEN** persistence SHALL still redact it during the retention window
+#### Scenario: Credential use overlaps rotation
+- **WHEN** a credential use is active while replacement or deletion is requested
+- **THEN** the mutation SHALL wait for the bounded use callback to settle, any callback failure SHALL be scrubbed before its redaction lease is released, and the replaced plaintext SHALL NOT remain registered afterward
 
 ### Requirement: Source development behavior is verified
 Enrollment storage, restart recovery, bounded use, rotation, deletion, principal/node isolation, redaction, and unavailable-key-service behavior SHALL be verified through a real Electron source-development application lifecycle on the current supported development platform. Automated platform-policy tests SHALL cover approved Windows, macOS, and Linux secure-storage backends plus insecure, unavailable, and unsupported fail-closed outcomes. Installed or distribution package acceptance is outside this open-source development change.

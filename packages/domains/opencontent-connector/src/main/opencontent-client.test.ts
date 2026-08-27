@@ -131,7 +131,7 @@ describe('OpenContent client enrollment', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
-  it('authenticates through RSA login then validates the Token and stable account identity', async () => {
+  it('authenticates through RSA login and returns only the validated Token', async () => {
     const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
     const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
     const requests: Array<Readonly<{ url: string; init?: RequestInit }>> = []
@@ -157,20 +157,6 @@ describe('OpenContent client enrollment', () => {
         expect(url).toContain('token=opaque-token-value-0001')
         return jsonResponse({ result: 0, msg: '', data: true })
       }
-      if (url.endsWith('/flatsdk/api/services/User/GetUserInfoByToken')) {
-        expect(JSON.parse(String(init?.body))).toEqual({ token: 'opaque-token-value-0001' })
-        return jsonResponse({
-          result: 0,
-          msg: '',
-          data: {
-            id: 'external-user-guid',
-            identityId: 42,
-            account: 'fixture-user',
-            name: 'Fixture User',
-            topPersonalFolderId: 2213
-          }
-        })
-      }
       throw new Error(`Unexpected request ${url}`)
     })
     const client = createOpenContentClient({
@@ -178,23 +164,22 @@ describe('OpenContent client enrollment', () => {
       fetch
     })
     const assertPrincipalCurrent = vi.fn(async () => { await Promise.resolve() })
+    const fill = vi.spyOn(Buffer.prototype, 'fill')
 
-    await expect(client.authenticateExistingAccount({
-      username: 'fixture-user',
-      password: 'fixture-password',
-      assertPrincipalCurrent
-    })).resolves.toEqual({
-      token: 'opaque-token-value-0001',
-      account: {
-        id: 'external-user-guid',
-        identityId: 42,
-        account: 'fixture-user',
-        name: 'Fixture User',
-        topPersonalFolderId: '2213'
-      }
-    })
-    expect(requests).toHaveLength(4)
-    expect(assertPrincipalCurrent).toHaveBeenCalledTimes(4)
+    try {
+      await expect(client.authenticateExistingAccount({
+        username: 'fixture-user',
+        password: 'fixture-password',
+        assertPrincipalCurrent
+      })).resolves.toEqual({
+        token: 'opaque-token-value-0001'
+      })
+      expect(fill.mock.calls.filter(([value]) => value === 0)).toHaveLength(2)
+      expect(requests).toHaveLength(3)
+      expect(assertPrincipalCurrent).toHaveBeenCalledTimes(3)
+    } finally {
+      fill.mockRestore()
+    }
   })
 
   it('classifies an invalid post-login Token as reauthentication required', async () => {
@@ -212,7 +197,7 @@ describe('OpenContent client enrollment', () => {
     expect(fetch).toHaveBeenCalledTimes(3)
   })
 
-  it('classifies a rejected post-login account-info lookup as reauthentication required', async () => {
+  it('does not fetch account metadata in the credential-bearing authentication stage', async () => {
     const fetch = postLoginValidationTransport({ tokenValid: true, accountResult: 1 })
     const client = createOpenContentClient({
       baseUrl: 'https://opencontent.invalid',
@@ -223,8 +208,55 @@ describe('OpenContent client enrollment', () => {
       username: 'fixture-user',
       password: 'fixture-password',
       assertPrincipalCurrent: principalIsCurrent
-    })).rejects.toMatchObject({ code: 'reauthentication_required' })
-    expect(fetch).toHaveBeenCalledTimes(4)
+    })).resolves.toEqual({ token: 'opaque-token-value-0001' })
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('projects current account observation to binding identity and display name only', async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      result: 0,
+      msg: '',
+      data: {
+        id: 'external-user-a',
+        identityId: 9000041,
+        account: 'scientist@example.org',
+        name: 'Research Library',
+        topPersonalFolderId: 2213
+      }
+    }))
+    const client = createOpenContentClient({
+      baseUrl: 'https://opencontent.invalid',
+      fetch
+    })
+
+    await expect(client.observeCurrentExternalAccount({
+      token: 'fixture-token-value',
+      assertPrincipalCurrent: principalIsCurrent
+    })).resolves.toEqual({
+      id: 'external-user-a',
+      identityId: 9000041,
+      name: 'Research Library'
+    })
+  })
+
+  it('clears the parsed credential fields before dispatching the login request', () => {
+    const source = readFileSync(
+      new URL('./opencontent-client.ts', import.meta.url),
+      'utf8'
+    )
+    const enrollmentStart = source.indexOf('authenticateExistingAccount: async')
+    const enrollmentEnd = source.indexOf('listPersonalRootFolder:', enrollmentStart)
+    const enrollmentSource = source.slice(enrollmentStart, enrollmentEnd)
+    const offsets = [
+      'userNameCiphertext = rsaOaepSha256',
+      'passwordCiphertext = rsaOaepSha256',
+      "input.username = ''",
+      "input.password = ''",
+      "path: '/flatsdk/api/services/Auth/UserLogin'"
+    ].map((marker) => enrollmentSource.indexOf(marker))
+
+    expect(offsets.every((offset) => offset >= 0)).toBe(true)
+    expect(offsets).toEqual([...offsets].sort((left, right) => left - right))
   })
 
   it('fails before credential submission when the RSA-key envelope drifts from the verified contract', async () => {

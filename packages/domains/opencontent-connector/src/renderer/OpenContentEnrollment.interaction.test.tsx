@@ -49,7 +49,7 @@ describe('OpenContent enrollment fragment', () => {
     expect(status).not.toHaveBeenCalled()
   })
 
-  it('keeps account authentication out of the Renderer and opens only the native action', async () => {
+  it('renders an accessible one-use account and password form', async () => {
     const client = connectionClient()
     const mounted = await mountEnrollment({ client })
 
@@ -58,66 +58,168 @@ describe('OpenContent enrollment fragment', () => {
     expect(mounted.container.querySelector('[role="status"]')?.textContent)
       .toContain('Ready to connect')
 
-    expect(mounted.container.querySelectorAll('input')).toHaveLength(0)
-    expect(mounted.container.textContent).toContain('private operating-system prompt')
-    expect(buttonByText(mounted.container, 'Connect account').disabled).toBe(false)
+    const account = inputByLabel(mounted.container, 'OpenContent account')
+    const password = inputByLabel(mounted.container, 'Password')
+    expect(account.autocomplete).toBe('off')
+    expect(password.autocomplete).toBe('off')
+    expect(password.type).toBe('password')
+    expect(account.getAttribute('data-visual-context-sensitive')).toBe('true')
+    expect(password.getAttribute('data-visual-context-sensitive')).toBe('true')
+    expect(account.value).toBe('')
+    expect(password.value).toBe('')
+    expect(buttonByText(mounted.container, 'Connect account').disabled).toBe(true)
   })
 
-  it('sends only the Provider Instance and translates authentication failure safely', async () => {
-    const bind = vi.fn(async (): Promise<OpenContentConnectionResult> => ({
-      outcome: 'error',
-      error: { code: 'invalid_credentials', action: 'check_credentials' }
-    }))
+  it('clears submitted fields immediately and blocks concurrent credential attempts', async () => {
+    const pendingBind = deferred<OpenContentConnectionResult>()
+    let submittedCredentials: { account: string; password: string } | undefined
+    let submittedSnapshot: { account: string; password: string } | undefined
+    let bindSignal: AbortSignal | undefined
+    const bind = vi.fn(async (_providerInstanceRef, credentials, options) => {
+      submittedCredentials = credentials
+      submittedSnapshot = { ...credentials }
+      bindSignal = options?.signal
+      return pendingBind.promise
+    })
     const client = connectionClient({ bind })
     const mounted = await mountEnrollment({ client })
 
-    await click(buttonByText(mounted.container, 'Connect account'))
+    const account = inputByLabel(mounted.container, 'OpenContent account')
+    const password = inputByLabel(mounted.container, 'Password')
+    await setInputValue(account, '  scientist@example.org  ')
+    await setInputValue(password, 'one-use-secret')
+    await clickWithoutSettling(buttonByText(mounted.container, 'Connect account'))
 
-    expect(bind).toHaveBeenCalledWith(
-      OPENCONTENT_PROVIDER_INSTANCE_REF,
-      { signal: expect.any(AbortSignal) }
-    )
+    expect(submittedSnapshot).toEqual({
+      account: 'scientist@example.org',
+      password: 'one-use-secret'
+    })
+    expect(submittedCredentials).toEqual({ account: '', password: '' })
+    expect(bindSignal).toBeInstanceOf(AbortSignal)
+    expect(account.value).toBe('')
+    expect(password.value).toBe('')
+    expect(account.disabled).toBe(true)
+    expect(password.disabled).toBe(true)
+    expect(buttonByText(mounted.container, 'Connecting…').disabled).toBe(true)
+
+    await clickWithoutSettling(buttonByText(mounted.container, 'Connecting…'))
+    expect(bind).toHaveBeenCalledTimes(1)
+
+    pendingBind.resolve({
+      outcome: 'error',
+      error: { code: 'invalid_credentials', action: 'check_credentials' }
+    })
+    await settleReact()
+
+    expect(submittedCredentials).toEqual({ account: '', password: '' })
     const alert = mounted.container.querySelector('[role="alert"]')
     expect(alert?.textContent).toContain('did not accept')
     expect(alert?.textContent).not.toContain('invalid_credentials')
-    expect(mounted.container.querySelectorAll('input')).toHaveLength(0)
+    expect(mounted.container.textContent).not.toContain('scientist@example.org')
+    expect(mounted.container.textContent).not.toContain('one-use-secret')
+    expect(account.getAttribute('aria-invalid')).toBe('true')
+    expect(password.getAttribute('aria-invalid')).toBe('true')
+    expect(password.getAttribute('aria-describedby')).toContain('privacy')
+    expect(password.getAttribute('aria-describedby')).toContain('notice')
+    expect(document.activeElement).toBe(password)
+    expect(account.disabled).toBe(false)
+    expect(password.disabled).toBe(false)
   })
 
-  it('shows the connected external account and notifies Content Space after binding', async () => {
+  it('returns a cancelled attempt to the same blank form without notifying Content Space', async () => {
     const onConnectionChanged = vi.fn()
     const client = connectionClient({
-      bind: vi.fn(async () => connectedResult('Research Library', 'scientist'))
+      bind: vi.fn(async (): Promise<OpenContentConnectionResult> => ({
+        outcome: 'error',
+        error: { code: 'cancelled', action: 'none' }
+      }))
     })
     const mounted = await mountEnrollment({ client, onConnectionChanged })
 
+    await setInputValue(
+      inputByLabel(mounted.container, 'OpenContent account'),
+      'scientist@example.org'
+    )
+    await setInputValue(inputByLabel(mounted.container, 'Password'), 'one-use-secret')
+    await click(buttonByText(mounted.container, 'Connect account'))
+
+    expect(mounted.container.querySelector('[role="alert"]')?.textContent)
+      .toContain('cancelled')
+    expect(inputByLabel(mounted.container, 'OpenContent account').value).toBe('')
+    expect(inputByLabel(mounted.container, 'Password').value).toBe('')
+    expect(mounted.container.textContent).not.toContain('scientist@example.org')
+    expect(mounted.container.textContent).not.toContain('one-use-secret')
+    expect(onConnectionChanged).not.toHaveBeenCalled()
+  })
+
+  it('reports an existing enrollment safely and keeps the retry form blank', async () => {
+    const onConnectionChanged = vi.fn()
+    const client = connectionClient({
+      bind: vi.fn(async (): Promise<OpenContentConnectionResult> => ({
+        outcome: 'error',
+        error: { code: 'enrollment_in_progress', action: 'retry' }
+      }))
+    })
+    const mounted = await mountEnrollment({ client, onConnectionChanged })
+
+    await setInputValue(
+      inputByLabel(mounted.container, 'OpenContent account'),
+      'scientist@example.org'
+    )
+    await setInputValue(inputByLabel(mounted.container, 'Password'), 'one-use-secret')
+    await click(buttonByText(mounted.container, 'Connect account'))
+
+    const alert = mounted.container.querySelector('[role="alert"]')
+    expect(alert?.textContent).toContain('connection is already in progress')
+    expect(alert?.textContent).toContain('Try again shortly')
+    expect(alert?.textContent).not.toContain('enrollment_in_progress')
+    expect(alert?.textContent).not.toContain('scientist@example.org')
+    expect(alert?.textContent).not.toContain('one-use-secret')
+    expect(inputByLabel(mounted.container, 'OpenContent account').value).toBe('')
+    expect(inputByLabel(mounted.container, 'Password').value).toBe('')
+    expect(onConnectionChanged).not.toHaveBeenCalled()
+  })
+
+  it('shows a provider-free connected state and notifies Content Space after binding', async () => {
+    const onConnectionChanged = vi.fn()
+    const client = connectionClient({
+      bind: vi.fn(async () => connectedResult())
+    })
+    const mounted = await mountEnrollment({ client, onConnectionChanged })
+
+    await setInputValue(
+      inputByLabel(mounted.container, 'OpenContent account'),
+      'scientist@example.org'
+    )
+    await setInputValue(inputByLabel(mounted.container, 'Password'), 'one-use-secret')
     await click(buttonByText(mounted.container, 'Connect account'))
 
     expect(mounted.container.textContent).toContain('Account connected')
-    expect(mounted.container.textContent).toContain('Research Library')
-    expect(mounted.container.textContent).toContain('scientist')
+    expect(mounted.container.textContent).not.toContain('Research Library')
+    expect(mounted.container.textContent).not.toContain('scientist@example.org')
+    expect(mounted.container.textContent).not.toContain('one-use-secret')
+    expect(mounted.container.textContent).not.toContain('OpenContent account')
     expect(onConnectionChanged).toHaveBeenCalledTimes(1)
   })
 
-  it('presents a secret-free native reconnect action when reauthentication is required', async () => {
+  it('presents the same blank one-use form when reauthentication is required', async () => {
     const client = connectionClient()
     const mounted = await mountEnrollment({
       client,
-      viewState: resolvedViewState(connectedResult(
-        'Research Library',
-        'returning-scientist',
-        'reauthentication_required'
-      ))
+      viewState: resolvedViewState(reauthenticationRequiredResult())
     })
 
     expect(mounted.container.textContent).toContain('Reconnect OpenContent')
     expect(mounted.container.querySelector('[role="alert"]')?.textContent)
       .toContain('sign in again')
-    expect(mounted.container.querySelectorAll('input')).toHaveLength(0)
-    expect(buttonByText(mounted.container, 'Reconnect account')).toBeTruthy()
+    expect(inputByLabel(mounted.container, 'OpenContent account').value).toBe('')
+    expect(inputByLabel(mounted.container, 'Password').value).toBe('')
+    expect(buttonByText(mounted.container, 'Reconnect account').disabled).toBe(true)
+    expect(mounted.container.textContent).not.toContain('returning-scientist')
   })
 
   it('fails closed when a successful status belongs to a different Provider Instance', async () => {
-    const drifted = connectedResult('Wrong Library', 'wrong-account')
+    const drifted = connectedResult()
     if (drifted.outcome !== 'success' || drifted.status.state === 'disconnected') {
       throw new Error('Invalid test fixture.')
     }
@@ -150,7 +252,7 @@ describe('OpenContent enrollment fragment', () => {
     const mounted = await mountEnrollment({
       client,
       onConnectionChanged,
-      viewState: resolvedViewState(connectedResult('Research Library', 'scientist'))
+      viewState: resolvedViewState(connectedResult())
     })
 
     const disconnectButton = buttonByText(mounted.container, 'Disconnect')
@@ -185,7 +287,7 @@ describe('OpenContent enrollment fragment', () => {
       outcome: 'error',
       error: { code: 'provider_unavailable', action: 'retry' }
     }))
-    const bind = vi.fn(async () => connectedResult('Research Library', 'scientist'))
+    const bind = vi.fn(async () => connectedResult())
     const unbind = vi.fn(async (): Promise<OpenContentUnbindResult> => ({
       outcome: 'success',
       state: 'disconnected',
@@ -242,14 +344,18 @@ describe('OpenContent enrollment fragment', () => {
     const pendingBind = deferred<OpenContentConnectionResult>()
     const onConnectionChanged = vi.fn()
     let bindSignal: AbortSignal | undefined
+    let submittedCredentials: { account: string; password: string } | undefined
     const client = connectionClient({
-      bind: vi.fn(async (_providerInstanceRef, options) => {
+      bind: vi.fn(async (_providerInstanceRef, credentials, options) => {
+        submittedCredentials = credentials
         bindSignal = options?.signal
         return pendingBind.promise
       })
     })
     const mounted = await mountEnrollment({ client, onConnectionChanged })
 
+    await setInputValue(inputByLabel(mounted.container, 'OpenContent account'), 'scientist')
+    await setInputValue(inputByLabel(mounted.container, 'Password'), 'one-use-secret')
     await clickWithoutSettling(buttonByText(mounted.container, 'Connect account'))
 
     await act(async () => {
@@ -267,12 +373,15 @@ describe('OpenContent enrollment fragment', () => {
       await tick()
       await tick()
     })
-    pendingBind.resolve(connectedResult('Stale Research Library', 'stale-scientist'))
+    pendingBind.resolve(connectedResult())
     await settleReact()
 
     expect(bindSignal?.aborted).toBe(true)
+    expect(submittedCredentials).toEqual({ account: '', password: '' })
     expect(mounted.container.textContent).toContain('Connect OpenContent')
     expect(mounted.container.textContent).not.toContain('Stale Research Library')
+    expect(inputByLabel(mounted.container, 'OpenContent account').value).toBe('')
+    expect(inputByLabel(mounted.container, 'Password').value).toBe('')
     expect(onConnectionChanged).not.toHaveBeenCalled()
   })
 })
@@ -282,7 +391,7 @@ function connectionClient(
 ): OpenContentConnectionRendererClient {
   return {
     status: async () => ({ outcome: 'success', status: { state: 'disconnected' } }),
-    bind: async () => connectedResult('Research Library', 'scientist'),
+    bind: async () => connectedResult(),
     unbind: async () => ({
       outcome: 'success',
       state: 'disconnected',
@@ -292,22 +401,22 @@ function connectionClient(
   }
 }
 
-function connectedResult(
-  name: string,
-  account: string,
-  state: 'connected' | 'reauthentication_required' = 'connected'
-): OpenContentConnectionResult {
+function connectedResult(): OpenContentConnectionResult {
   return {
     outcome: 'success',
     status: {
-      state,
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      externalAccount: {
-        id: 'external-account-id',
-        identityId: 42,
-        account,
-        name
-      }
+      state: 'connected',
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+    }
+  }
+}
+
+function reauthenticationRequiredResult(): OpenContentConnectionResult {
+  return {
+    outcome: 'success',
+    status: {
+      state: 'reauthentication_required',
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
     }
   }
 }
@@ -358,6 +467,14 @@ function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
   return button as HTMLButtonElement
 }
 
+function inputByLabel(container: HTMLElement, text: string): HTMLInputElement {
+  const label = [...container.querySelectorAll('label')]
+    .find((candidate) => candidate.textContent?.includes(text))
+  const input = label?.querySelector('input')
+  expect(input, `Missing input: ${text}`).toBeInstanceOf(HTMLInputElement)
+  return input as HTMLInputElement
+}
+
 async function click(button: HTMLButtonElement): Promise<void> {
   await act(async () => {
     button.click()
@@ -370,6 +487,17 @@ async function click(button: HTMLButtonElement): Promise<void> {
 async function clickWithoutSettling(button: HTMLButtonElement): Promise<void> {
   await act(async () => {
     button.click()
+    await tick()
+  })
+}
+
+async function setInputValue(input: HTMLInputElement, value: string): Promise<void> {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    expect(setter).toBeTypeOf('function')
+    setter?.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new Event('change', { bubbles: true }))
     await tick()
   })
 }

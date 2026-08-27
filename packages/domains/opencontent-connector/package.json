@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-opencontent-connector",
-  "version": "4.0.3",
+  "version": "4.0.4",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -95,7 +95,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sciforge/domain-sdk": "^0.2.3",
+    "@sciforge/domain-sdk": "^0.2.7",
     "@sciforge/internal-runtime-integrity": "0.1.1",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",

@@ -60,15 +60,53 @@ describe('secure provider credential architecture', () => {
     expect(providerIpc.map(({ path }) => path)).toEqual([])
   })
 
-  it('keeps the retired provider facade out of the Connector and collaboration packages', () => {
+  it('limits Host provider credential access to the canonical Host and Connector main paths', () => {
     const users = productionSources()
       .filter(({ source }) => /providerCredentials|DomainMainProviderCredential/u.test(source))
       .map(({ path }) => path)
     expect(users).toEqual([
       'src/main/domain-package-storage.ts',
       'src/main/provider-credential-acceptance.ts',
+      'packages/domains/opencontent-connector/src/main/index.ts',
+      'packages/domains/opencontent-connector/src/main/provider-credential-runtime.ts',
       'packages/domain-sdk/src/package-storage.ts'
     ])
+
+    const connectorUsers = users.filter((path) => (
+      path.startsWith('packages/domains/opencontent-connector/')
+    ))
+    expect(connectorUsers).toEqual([
+      'packages/domains/opencontent-connector/src/main/index.ts',
+      'packages/domains/opencontent-connector/src/main/provider-credential-runtime.ts'
+    ])
+  })
+
+  it('keeps one UI-sensitive bind contract and removes the native enrollment path', () => {
+    const sources = productionSources()
+    const publicCredentialUsers = sources
+      .filter(({ path }) => (
+        path === 'packages/domains/opencontent-connector/src/contract.ts' ||
+        path.startsWith('packages/domains/opencontent-connector/src/renderer/')
+      ))
+      .filter(({ source }) => /\bpassword\b/u.test(source))
+      .map(({ path }) => path)
+    expect(publicCredentialUsers).toEqual([
+      'packages/domains/opencontent-connector/src/contract.ts',
+      'packages/domains/opencontent-connector/src/renderer/OpenContentEnrollment.tsx',
+      'packages/domains/opencontent-connector/src/renderer/client.ts'
+    ])
+
+    const capabilitySource = sources.find(({ path }) => (
+      path === 'packages/domains/opencontent-connector/src/main/connection-capabilities.ts'
+    ))?.source
+    expect(capabilitySource).toContain("audiences: ['ui']")
+    expect(capabilitySource).toContain("tags: ['opencontent', 'provider-connection', 'sensitive-input']")
+    expect(capabilitySource).toContain('inputSchema: openContentBindInputSchema')
+
+    const nativeEnrollmentSources = sources
+      .filter(({ path }) => path.includes('/opencontent-connector/src/main/native-enrollment/'))
+      .map(({ path }) => path)
+    expect(nativeEnrollmentSources).toEqual([])
   })
 
   it('keeps Collaboration outside every Host secret lifecycle', () => {

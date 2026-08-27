@@ -1317,7 +1317,10 @@ app
       createApplicationCapabilityRegistry(catalog, appCapabilityDependencies),
       { resolveCurrentPrincipalContext: () => principalContext.snapshot() }
     )
-    installProviderCredentialAcceptance(domainPackageStorage)
+    installProviderCredentialAcceptance(
+      domainPackageStorage,
+      () => principalContext.current()
+    )
     capabilityBrokerForDomainServices = capabilityBroker
     portableResourceReferences = createPortableResourceReferenceService(
       capabilityBroker,
@@ -1894,6 +1897,8 @@ app
               ? capabilityIpcRegistration.invoke(channel, payload, sender)
               : appBridgeDispatcher.invoke(channel, payload, sender)
         },
+        resolveCapabilityTags: (actionId) =>
+          capabilityBroker.registry.get(actionId)?.descriptor.tags,
         resourceContent: capabilityIpcRegistration.resourceContent,
         instanceId: devBrowserBridgeInstanceId
       })

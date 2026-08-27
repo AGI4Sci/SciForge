@@ -31,7 +31,7 @@ import {
 } from './connection-capabilities.js'
 import { createOpenContentConnectionService } from './connection-service.js'
 import { createOpenContentClient } from './opencontent-client.js'
-import { createNativeOpenContentPrivateAccountRuntime } from './native-enrollment/index.js'
+import { createOpenContentPrivateAccountRuntime } from './provider-credential-runtime.js'
 import { createOpenContentTeamAdministration } from './team-administration.js'
 import {
   createOpenContentSupplierRuntimeSession,
@@ -73,21 +73,18 @@ type OpenContentMainContribution =
 export function createDomainMainEntry(
   host: DomainMainHost
 ): TrustedDomainProcessEntryInput<OpenContentMainContribution> {
-  if (!host.packageSettings) {
-    throw new Error('OpenContent Connector requires owner-scoped package settings.')
-  }
   if (!host.internalServices) {
     throw new Error('OpenContent Connector requires Host internal-service mediation.')
   }
   let runtime: OpenContentDeploymentRuntime | undefined
   const getRuntime: OpenContentDeploymentRuntimeGetter = () => runtime
-  const accounts = createNativeOpenContentPrivateAccountRuntime({
+  const accounts = createOpenContentPrivateAccountRuntime({
     providerInstanceRef: instance.providerInstanceRef,
+    credentials: host.packageSecrets?.providerCredentials,
     getRuntime
   })
   const connections = createOpenContentConnectionService({
     providerInstanceRef: instance.providerInstanceRef,
-    settings: host.packageSettings,
     accounts,
     getRuntime
   })

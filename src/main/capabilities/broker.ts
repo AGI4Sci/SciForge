@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, createHmac, createSecretKey, randomBytes, type KeyObject } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { z } from 'zod'
 import {
@@ -69,6 +69,8 @@ const MAX_HANDLE_TTL_MS = 24 * 60 * 60_000
 const DEFAULT_MAX_AUDIT_RECORDS = 2_000
 const DEFAULT_MAX_EVENTS = 2_000
 const DEFAULT_MAX_IDEMPOTENCY_ENTRIES = 2_000
+const SENSITIVE_INPUT_FINGERPRINT_KEY_BYTES = 32
+const SENSITIVE_INPUT_FINGERPRINT_DOMAIN = 'sciforge.capability-broker.sensitive-input.v1\u0000'
 const MAX_RESOURCE_RETIREMENT_ATTEMPTS = 3
 const RESOURCE_RETIREMENT_RETRY_MS = 1_000
 
@@ -282,6 +284,15 @@ function canonicalDigest(value: CapabilityJsonValue): string {
   return createHash('sha256').update(stableJson(value)).digest('hex')
 }
 
+function createSensitiveInputFingerprintKey(): KeyObject {
+  const keyBytes = randomBytes(SENSITIVE_INPUT_FINGERPRINT_KEY_BYTES)
+  try {
+    return createSecretKey(keyBytes)
+  } finally {
+    keyBytes.fill(0)
+  }
+}
+
 function batchOutputSelectorKey(
   selector: Extract<
     NonNullable<DomainMainFiniteCapabilityBatchPlan['operations'][number]['resource']>,
@@ -324,17 +335,21 @@ function batchOutputPathValue(
 
 /**
  * Sensitive capability input is needed by the handler but must not be retained
- * verbatim by the broker's restart-bounded idempotency journal. The digest still
- * preserves exact retry/conflict semantics without turning that journal into a
- * credential store.
+ * verbatim by the broker's restart-bounded idempotency journal. A Broker-lifetime
+ * random HMAC preserves exact retry/conflict semantics without leaving an
+ * offline-guessable or cross-lifetime credential verifier in that journal.
  */
 function idempotencyInput(
   definition: CapabilityDefinition,
-  input: CapabilityJsonValue
+  input: CapabilityJsonValue,
+  sensitiveInputFingerprintKey: KeyObject
 ): CapabilityJsonValue {
   if (!definition.descriptor.tags.includes('sensitive-input')) return input
   return {
-    sensitiveInputSha256: createHash('sha256').update(stableJson(input)).digest('hex')
+    sensitiveInputHmacSha256: createHmac('sha256', sensitiveInputFingerprintKey)
+      .update(SENSITIVE_INPUT_FINGERPRINT_DOMAIN)
+      .update(stableJson(input))
+      .digest('hex')
   }
 }
 
@@ -450,6 +465,7 @@ export class CapabilityBroker {
   readonly #maxEvents: number
   readonly #maxIdempotencyEntries: number
   readonly #reportCleanupError: (error: unknown) => void
+  readonly #sensitiveInputFingerprintKey = createSensitiveInputFingerprintKey()
   readonly #resources = new Map<string, ResourceState>()
   readonly #resourcesByRef = new Map<string, ResourceState>()
   readonly #retiredResourcesByRef = new Map<string, RetiredResourceState>()
@@ -1321,7 +1337,7 @@ export class CapabilityBroker {
         ...(principalScopedIdempotency ? { workspaceScope: workspaceInvocationScope(caller) } : {}),
         resourceRef: resource?.resourceRef ?? null,
         expectedRevision: request.expectedRevision ?? null,
-        input: idempotencyInput(definition, request.input)
+        input: idempotencyInput(definition, request.input, this.#sensitiveInputFingerprintKey)
       })
       const idempotencyKey = request.invocationId
         ? `${caller.audience}\u0000${caller.callerId}\u0000${principalScopedIdempotency ? workspaceInvocationScope(caller) : 'global'}\u0000${principalScopedIdempotency ? callerLease : 'host-principal-transition'}\u0000${request.actionId}\u0000${request.invocationId}`

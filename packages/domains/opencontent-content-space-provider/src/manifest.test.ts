@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  DOMAIN_PACKAGE_HOST_API_VERSION,
+  isDomainPackageHostApiCompatible
+} from '@sciforge/domain-sdk/contract'
+
+import {
   domainPackageDefinition as connectorDefinition
 } from '@sciforge/domain-opencontent-connector/definition'
 
@@ -11,6 +16,19 @@ import {
 } from './definition.js'
 
 describe('OpenContent Content Space adapter manifest', () => {
+  it('requires the exact Principal-bound Host API for both composed packages', () => {
+    expect(connectorDefinition.module.hostApi.minimum).toBe('1.9.0')
+    expect(domainPackageDefinition.module.hostApi.minimum).toBe('1.9.0')
+    expect(isDomainPackageHostApiCompatible(
+      connectorDefinition.module.hostApi,
+      DOMAIN_PACKAGE_HOST_API_VERSION
+    )).toBe(true)
+    expect(isDomainPackageHostApiCompatible(
+      domainPackageDefinition.module.hostApi,
+      DOMAIN_PACKAGE_HOST_API_VERSION
+    )).toBe(true)
+  })
+
   it('declares the exact provider-neutral Content Space enrollment contract', () => {
     expect(OPENCONTENT_CONTENT_SPACE_ENROLLMENT_CONTRIBUTION).toMatchObject({
       id: 'opencontent-content-space.provider-enrollment',

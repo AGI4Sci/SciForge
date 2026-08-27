@@ -149,8 +149,8 @@ describe('domain package packaging contract', () => {
     }).composition, 'development-only')
   })
 
-  it('publishes Host API 1.8 while preserving compatible 1.1 package ranges', () => {
-    assert.equal(DOMAIN_PACKAGE_HOST_API_VERSION, '1.8.0')
+  it('publishes Host API 1.9 while preserving compatible 1.1 package ranges', () => {
+    assert.equal(DOMAIN_PACKAGE_HOST_API_VERSION, '1.9.0')
     assert.equal(isDomainPackageHostApiCompatible({
       minimum: '1.1.0',
       maximumExclusive: '2.0.0'

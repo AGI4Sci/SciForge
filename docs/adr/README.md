@@ -18,7 +18,7 @@ This directory preserves architectural decisions together with their lifecycle. 
 | 0024 | accepted | Domain-specific Provider composition is implemented for Content Space and reserved separately for future Shared Documents. |
 | 0025 | accepted | Current authority for OpenContent staging and Shared Documents deferral. |
 | 0026 | accepted | External Provider access always uses the executing node owner's current Principal-owned connection. |
-| 0027 | accepted | Provider integration owns Human enrollment UI while credentials and transport stay main-process only. |
+| 0027 | accepted | OpenContent owns one macOS/Windows sensitive enrollment path; credentials are one-use, and only the encrypted, Principal/Provider-bound Session Token persists through Host secure storage. |
 | 0028 | accepted | Cloud Collaboration owns exclusive Project-to-shared-directory bindings; Provider ACL and content lifecycle remain external. |
 | 0029 | accepted | Agent content access begins at a Human-confirmed Broker root resource and expands only through authorized directory descendants. |
 | 0030 | accepted, amended by 0037 | Provider-native documents run through Content Space; the Provider owns semantic adapters, the Connector owns supplier transport, and the optional private overlay changes inventory without changing readiness or authority. |

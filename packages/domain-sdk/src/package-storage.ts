@@ -4,7 +4,7 @@ import {
   domainPackageJsonValueSchema,
   type DomainPackageJsonValue
 } from './contract.js'
-import { principalAssuranceSchema } from './principal.js'
+import { principalSnapshotSchema } from './principal.js'
 
 export const domainMainPackageSettingsSnapshotSchema = z.object({
   revision: z.number().int().nonnegative().safe(),
@@ -62,20 +62,9 @@ export type DomainMainProviderCredentialBinding = z.infer<
 
 export const domainMainProviderCredentialAccessSchema = z.object({
   binding: domainMainProviderCredentialBindingSchema,
-  acceptedPrincipalAssurances: z.array(principalAssuranceSchema)
-    .min(1)
-    .max(principalAssuranceSchema.options.length)
-    .readonly()
-}).strict().superRefine((access, context) => {
-  if (new Set(access.acceptedPrincipalAssurances).size !==
-    access.acceptedPrincipalAssurances.length) {
-    context.addIssue({
-      code: 'custom',
-      path: ['acceptedPrincipalAssurances'],
-      message: 'Accepted Principal assurances must be unique.'
-    })
-  }
-}).readonly()
+  /** Host-captured lease assertion; the Host-current Principal still selects the namespace. */
+  expectedPrincipal: principalSnapshotSchema
+}).strict().readonly()
 
 export type DomainMainProviderCredentialAccess = z.infer<
   typeof domainMainProviderCredentialAccessSchema
@@ -93,10 +82,13 @@ export type DomainMainProviderCredentialStatus = z.infer<
   typeof domainMainProviderCredentialStatusSchema
 >
 
+export type DomainMainProviderCredentialOperationOptions = Readonly<{
+  signal?: AbortSignal
+}>
+
 export type DomainMainProviderCredentialErrorCode =
   | 'principal_unavailable'
   | 'principal_device_mismatch'
-  | 'principal_assurance_insufficient'
   | 'credential_unavailable'
   | 'credential_binding_mismatch'
   | 'secure_storage_unavailable'
@@ -117,21 +109,28 @@ export class DomainMainProviderCredentialError extends Error {
 /**
  * Bounded provider-credential use on top of the package's canonical encrypted
  * secret store. Owner, node, and current Principal are supplied by Host
- * composition; package input names only its local provider binding.
+ * composition. A package names its local provider binding and presents the
+ * exact Principal lease that the Host must atomically re-verify.
  */
 export type DomainMainProviderCredentialStoreHost = Readonly<{
   status: (
-    access: DomainMainProviderCredentialAccess
+    access: DomainMainProviderCredentialAccess,
+    options?: DomainMainProviderCredentialOperationOptions
   ) => Promise<DomainMainProviderCredentialStatus>
   replace: (
     access: DomainMainProviderCredentialAccess,
-    secret: string
+    secret: string,
+    options?: DomainMainProviderCredentialOperationOptions
   ) => Promise<void>
   use: <T>(
     access: DomainMainProviderCredentialAccess,
-    operation: (secret: string) => T | Promise<T>
+    operation: (secret: string) => T | Promise<T>,
+    options?: DomainMainProviderCredentialOperationOptions
   ) => Promise<T>
-  remove: (access: DomainMainProviderCredentialAccess) => Promise<void>
+  remove: (
+    access: DomainMainProviderCredentialAccess,
+    options?: DomainMainProviderCredentialOperationOptions
+  ) => Promise<void>
 }>
 
 /**

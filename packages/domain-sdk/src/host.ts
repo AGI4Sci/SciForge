@@ -1209,6 +1209,11 @@ export type DomainRendererCapabilityInvoker = Readonly<{
     resource: DomainCapabilityResourceHandle,
     options?: Readonly<{ workspaceId?: string; signal?: AbortSignal }>
   ): Promise<DomainRendererCapabilityObservation<TState>>
+  /**
+   * Validates and snapshots `input` synchronously before returning. A caller
+   * may therefore clear its own mutable sensitive-input container as soon as
+   * this method returns the invocation Promise.
+   */
   invoke<TInput, TOutput>(
     contract: DomainRendererCapabilityContract<TInput, TOutput>,
     input: TInput,

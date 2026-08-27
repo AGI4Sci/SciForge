@@ -30,7 +30,7 @@ describe('logger', () => {
     expect(content).toContain('<redacted>')
   })
 
-  it('redacts an opaque active or recently retired credential by exact value', async () => {
+  it('redacts an opaque active credential by exact value', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'sciforge-managed-secret-logs-'))
     tempDirs.push(dir)
     const canary = 'opaque-provider-canary-without-a-secret-looking-prefix'

@@ -49,16 +49,12 @@ A provider-specific main-process boundary that owns trusted endpoint and tenant 
 _Avoid_: Provider Contract, Agent tool, renderer client, Host routing switch
 
 **Provider Deployment Configuration**:
-A package-declared, deployment-owned private binding between one fixed Provider Instance Reference and the HTTPS origin required to construct its Connector runtime. Its absence or invalidity leaves discovery installed but makes Provider-backed calls unavailable before Connection storage, credentials, network, or supplier execution; confirmed node-local unbind and credential retirement remain available without a Provider call.
+A public package-owned fixed binding between one Provider Instance Reference and the HTTPS origin required to construct its Connector runtime. Callers cannot override it. Its absence or invalidity leaves discovery installed but makes Provider-backed calls unavailable before Connection storage, credentials, network, or supplier execution; confirmed node-local unbind remains available to delete the fixed-slot local credential without a Provider call.
 _Avoid_: compiled demo endpoint, environment override, caller-selected URL, package setting, fallback Provider
 
 **Provider Binding Attestation**:
 Token-free evidence binding one Provider Instance and complete current Principal to an opaque stable external subject and opaque Connection revision. It is re-attested against the actual current session before business dispatch and is neither a credential, portable authority, Project provisioning fact, nor Provider ACL grant. Provider account and display-name metadata may refresh without changing that stable subject; they never participate in identity continuity.
 _Avoid_: Project Content Provisioning Attestation, Host assurance, raw external account ID, cached login claim, portable Connection
-
-**Provider Connection Retirement**:
-The irreversible local invalidation of a Provider Connection whose trusted Provider Instance is no longer installed or admitted. A retired connection never authorizes another Provider Instance; its integration owner remains responsible for deleting the credential while the owning Human Principal is current.
-_Avoid_: Provider Migration, credential reuse, implicit rebinding, abandoned credential
 
 **Provider Connection ID**:
 The node-local identity of one Provider Connection. It never travels in a portable resource reference.

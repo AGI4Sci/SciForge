@@ -2,6 +2,50 @@
 
 Owns existing-account enrollment, Principal-bound connection state, secure Token use, pinned OpenContent schemas, and main-process transport. It exposes no Content Space or Shared Documents business semantics.
 
+## Enrollment and session boundary
+
+macOS and Windows use the same canonical Connector path:
+
+1. Content Space mounts the OpenContent package-owned enrollment view for the
+   selected Provider Instance.
+2. The view collects the Human's OpenContent account and password and sends
+   them once through the strict, schema-validated `opencontent.connection.bind`
+   capability. The capability is tagged `sensitive-input`, is callable only by
+   the package-owned UI, and has no parallel IPC or native-addon entrypoint.
+3. Connector main authenticates against the absolute HTTPS origin and fixed
+   Provider Instance from the package deployment configuration. It discards
+   the account and password immediately after that attempt.
+4. Connector main persists only the returned Session Token through
+   `DomainMainHost.packageSecrets.providerCredentials`. The Host encrypts that
+   record through Electron `safeStorage`, backed by Keychain on macOS and DPAPI
+   on Windows, and binds it to the exact node, Principal, Provider Instance,
+   and Connection. Host API `1.9.0` atomically re-verifies the complete expected
+   Principal and cancellation inside the storage lock before credential
+   mutations. The Connector re-observes the external subject before it
+   reports connected status or issues a binding attestation.
+5. On restart, the Connector uses that encrypted Token only inside the Host's
+   bounded credential callback and validates it against OpenContent. A valid
+   Token restores the connection automatically; an invalid or expired Token
+   moves the connection to reauthentication-required and the UI asks for the
+   account and password again.
+
+The account and password exist only in the active form/request. Owned mutable
+references are cleared when authentication settles, is cancelled, or the view
+changes; immutable JavaScript strings cannot be reliably memory-zeroized. They
+are never saved in package settings or `localStorage`, and account, password, and Token values
+never enter logs, traces, capability receipts, or portable references. The
+Session Token never reaches the renderer. The sensitive capability's
+idempotency journal retains only a digest of its input, not the input itself. If
+Host secure storage is unavailable, enrollment fails closed; the Connector adds
+no plaintext file or long-lived credential cache, legacy native enrollment
+fallback, or second Connector.
+
+The account and password inputs are sensitive visible-context regions and are
+excluded from retained window captures. The Host exact-value redaction registry
+holds a Session Token only while a bounded credential-use callback is active;
+it scrubs any callback failure before releasing the lease and retains no Token
+after status, replace, use, or remove completes.
+
 The package manifest declares one public, package-owned deployment-configuration
 contract: contract version `1`, source path
 `packages/domains/opencontent-connector/config/opencontent-connector.json`,
@@ -16,8 +60,8 @@ regular-file identity. It checks that descriptor before and after a
 change-time, or birth-time drift, closes it, and freezes the parsed value.
 Missing, oversized, malformed, non-canonical, non-HTTPS, or
 symlinked configuration makes Provider-backed calls unavailable before package
-settings, credentials, network, or supplier-process access; local unbind and
-credential retirement remain available. The integration-owned unavailable view
+settings, credentials, network, or supplier-process access; local credential
+deletion through unbind remains available. The integration-owned unavailable view
 exposes that same local cleanup only after explicit Human confirmation; it does
 not contact the Provider or delete remote files. Provider discovery, capability
 definitions, and the internal service descriptor remain registered.
@@ -79,10 +123,9 @@ exposes no public member-role/ownership operation and no revision/CAS field; the
 supplier Team surface provides no atomic expected-state input for SciForge to
 promote into an Administration concurrency promise.
 
-Connection records and credentials are bound to their exact Provider Instance.
-The Connector never reuses a Token across Provider Instance identities and
-retains bounded cleanup metadata until the owning current Principal can delete
-an obsolete credential from secure storage.
+The single fixed connection slot is bound to its exact Provider Instance and
+current Principal. The Connector never reuses a Token across either identity;
+local unbind deletes only that exact Host-managed credential binding.
 
 ## Provider binding attestation
 

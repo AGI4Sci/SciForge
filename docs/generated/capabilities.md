@@ -187,9 +187,9 @@ Registered actions: **292**
 | `identity.local.list-accounts` | 1.0.0 | ui | read | none | global |
 | `identity.local.rename-account` | 1.0.0 | ui | external-write | none | global |
 | `identity.local.select-account` | 1.0.0 | ui | external-write | none | global |
-| `opencontent.connection.bind` | 1.0.0 | ui | external-write | none | global |
-| `opencontent.connection.status` | 1.0.0 | ui | read | none | global |
-| `opencontent.connection.unbind` | 1.0.0 | ui | external-write | none | global |
+| `opencontent.connection.bind` | 2.0.0 | ui | external-write | none | global |
+| `opencontent.connection.status` | 2.0.0 | ui | read | none | global |
+| `opencontent.connection.unbind` | 2.0.0 | ui | external-write | none | global |
 | `paper-radar.digest` | 1.0.0 | ui, agent, system | read | none | global |
 | `paper-radar.profiles.list` | 1.0.0 | ui, agent, system | read | none | global |
 | `paper-radar.profiles.save` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
@@ -73732,7 +73732,7 @@ Selects an existing display-only Local Account on this installation.
 
 Validates and binds one existing OpenContent account to the current Principal.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui
 - Effect: `external-write`
 - Approval: none
@@ -73751,6 +73751,16 @@ Validates and binds one existing OpenContent account to the current Principal.
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
     "properties": {
+      "account": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "password": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
       "providerInstanceRef": {
         "maxLength": 256,
         "minLength": 3,
@@ -73759,7 +73769,9 @@ Validates and binds one existing OpenContent account to the current Principal.
     },
     "readOnly": true,
     "required": [
-      "providerInstanceRef"
+      "providerInstanceRef",
+      "account",
+      "password"
     ],
     "type": "object"
   },
@@ -73792,57 +73804,40 @@ Validates and binds one existing OpenContent account to the current Principal.
               {
                 "additionalProperties": false,
                 "properties": {
-                  "externalAccount": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "account": {
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "id": {
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "identityId": {
-                        "maximum": 9007199254740991,
-                        "minimum": -9007199254740991,
-                        "type": "integer"
-                      },
-                      "name": {
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "type": "string"
-                      }
-                    },
-                    "readOnly": true,
-                    "required": [
-                      "id",
-                      "identityId",
-                      "account",
-                      "name"
-                    ],
-                    "type": "object"
-                  },
                   "providerInstanceRef": {
                     "maxLength": 256,
                     "minLength": 3,
                     "type": "string"
                   },
                   "state": {
-                    "enum": [
-                      "connected",
-                      "reauthentication_required"
-                    ],
+                    "const": "connected",
                     "type": "string"
                   }
                 },
                 "readOnly": true,
                 "required": [
                   "state",
-                  "providerInstanceRef",
-                  "externalAccount"
+                  "providerInstanceRef"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  "state": {
+                    "const": "reauthentication_required",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "state",
+                  "providerInstanceRef"
                 ],
                 "type": "object"
               }
@@ -73979,11 +73974,11 @@ Validates and binds one existing OpenContent account to the current Principal.
                 "additionalProperties": false,
                 "properties": {
                   "action": {
-                    "const": "install_native_support",
+                    "const": "retry",
                     "type": "string"
                   },
                   "code": {
-                    "const": "native_enrollment_unavailable",
+                    "const": "enrollment_in_progress",
                     "type": "string"
                   }
                 },
@@ -74033,7 +74028,7 @@ Validates and binds one existing OpenContent account to the current Principal.
   "tags": [
     "opencontent",
     "provider-connection",
-    "native-enrollment"
+    "sensitive-input"
   ],
   "title": "Bind Existing OpenContent Account"
 }
@@ -74043,7 +74038,7 @@ Validates and binds one existing OpenContent account to the current Principal.
 
 Reads the current Principal connection status for OpenContent.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui
 - Effect: `read`
 - Approval: none
@@ -74103,57 +74098,40 @@ Reads the current Principal connection status for OpenContent.
               {
                 "additionalProperties": false,
                 "properties": {
-                  "externalAccount": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "account": {
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "id": {
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "identityId": {
-                        "maximum": 9007199254740991,
-                        "minimum": -9007199254740991,
-                        "type": "integer"
-                      },
-                      "name": {
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "type": "string"
-                      }
-                    },
-                    "readOnly": true,
-                    "required": [
-                      "id",
-                      "identityId",
-                      "account",
-                      "name"
-                    ],
-                    "type": "object"
-                  },
                   "providerInstanceRef": {
                     "maxLength": 256,
                     "minLength": 3,
                     "type": "string"
                   },
                   "state": {
-                    "enum": [
-                      "connected",
-                      "reauthentication_required"
-                    ],
+                    "const": "connected",
                     "type": "string"
                   }
                 },
                 "readOnly": true,
                 "required": [
                   "state",
-                  "providerInstanceRef",
-                  "externalAccount"
+                  "providerInstanceRef"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  "state": {
+                    "const": "reauthentication_required",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "state",
+                  "providerInstanceRef"
                 ],
                 "type": "object"
               }
@@ -74290,11 +74268,11 @@ Reads the current Principal connection status for OpenContent.
                 "additionalProperties": false,
                 "properties": {
                   "action": {
-                    "const": "install_native_support",
+                    "const": "retry",
                     "type": "string"
                   },
                   "code": {
-                    "const": "native_enrollment_unavailable",
+                    "const": "enrollment_in_progress",
                     "type": "string"
                   }
                 },
@@ -74351,9 +74329,9 @@ Reads the current Principal connection status for OpenContent.
 
 ## `opencontent.connection.unbind`
 
-Removes this node-local OpenContent credential and connection metadata.
+Removes this Principal-bound, node-local OpenContent Session Token.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui
 - Effect: `external-write`
 - Approval: none
@@ -74534,11 +74512,11 @@ Removes this node-local OpenContent credential and connection metadata.
                 "additionalProperties": false,
                 "properties": {
                   "action": {
-                    "const": "install_native_support",
+                    "const": "retry",
                     "type": "string"
                   },
                   "code": {
-                    "const": "native_enrollment_unavailable",
+                    "const": "enrollment_in_progress",
                     "type": "string"
                   }
                 },

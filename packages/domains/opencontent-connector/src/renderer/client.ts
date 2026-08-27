@@ -23,6 +23,10 @@ export type OpenContentConnectionRendererClient = Readonly<{
   ): Promise<OpenContentConnectionResult>
   bind(
     providerInstanceRef: string,
+    credentials: {
+      account: string
+      password: string
+    },
     options?: OpenContentConnectionRequestOptions
   ): Promise<OpenContentConnectionResult>
   unbind(
@@ -47,17 +51,31 @@ export function createOpenContentConnectionRendererClient(
         ? invoker.invoke(contract, input, { signal: options.signal })
         : invoker.invoke(contract, input)
     },
-    bind: (providerInstanceRef, options) => {
+    bind: async (providerInstanceRef, credentials, options) => {
       const contract = {
         actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind,
         effect: 'external-write' as const,
         inputSchema: openContentBindInputSchema,
         outputSchema: openContentConnectionResultSchema
       }
-      const input = { providerInstanceRef }
-      return options?.signal
-        ? invoker.invoke(contract, input, { signal: options.signal })
-        : invoker.invoke(contract, input)
+      const input = {
+        providerInstanceRef,
+        account: credentials.account,
+        password: credentials.password
+      }
+      const invocation = (() => {
+        try {
+          return options?.signal
+            ? invoker.invoke(contract, input, { signal: options.signal })
+            : invoker.invoke(contract, input)
+        } finally {
+          credentials.account = ''
+          credentials.password = ''
+          input.account = ''
+          input.password = ''
+        }
+      })()
+      return await invocation
     },
     unbind: (providerInstanceRef, options) => {
       const contract = {

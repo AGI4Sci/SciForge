@@ -14,43 +14,49 @@ export type OpenContentPrivateAccountOperation = Readonly<{
   assertPrincipalCurrent(): void | Promise<void>
 }>
 
-export type OpenContentPrivateEnrollmentReceipt = Readonly<{
-  externalAccount: Readonly<{
-    id: string
-    identityId: number
-    account: string
-    name: string
-  }>
+/** Ephemeral enrollment input. Implementations must clear both fields after authentication. */
+export type OpenContentPrivateEnrollmentCredentials = {
+  account: string
+  password: string
+}
+
+export type OpenContentPrivateAccountRequestOptions = Readonly<{
+  signal?: AbortSignal
 }>
 
 export type OpenContentPrivateAccountRuntime = Readonly<{
   /**
-   * Collects account authentication in the Connector-owned native prompt,
-   * authenticates through the canonical Provider client, and stores the
-   * resulting session in the Connector-owned native vault. Only non-secret
-   * connection metadata leaves this method.
+   * Authenticates through the canonical Provider client and stores only the
+   * resulting session Token in the Host provider-credential store. No
+   * Provider-returned profile field leaves this method.
    */
   enroll(
-    input: OpenContentPrivateAccountOperation
-  ): Promise<OpenContentPrivateEnrollmentReceipt>
+    input: OpenContentPrivateAccountOperation & Readonly<{
+      credentials: OpenContentPrivateEnrollmentCredentials
+    }>
+  ): Promise<void>
   status(
-    binding: OpenContentPrivateAccountBinding
+    binding: OpenContentPrivateAccountBinding,
+    options?: OpenContentPrivateAccountRequestOptions
   ): Promise<Readonly<{ state: 'absent' | 'available' }>>
   withSession<T>(
     binding: OpenContentPrivateAccountBinding,
-    operation: (session: Readonly<{ token: string }>) => T | Promise<T>
+    operation: (session: Readonly<{ token: string }>) => T | Promise<T>,
+    options?: OpenContentPrivateAccountRequestOptions
   ): Promise<T>
-  remove(binding: OpenContentPrivateAccountBinding): Promise<void>
+  remove(
+    binding: OpenContentPrivateAccountBinding,
+    options?: OpenContentPrivateAccountRequestOptions
+  ): Promise<void>
 }>
 
 export type OpenContentPrivateAccountErrorCode =
-  | 'native_enrollment_unavailable'
   | 'secure_storage_unavailable'
   | 'session_unavailable'
   | 'binding_mismatch'
   | 'cancelled'
 
-/** Bounded, non-secret diagnostics from the Connector-owned native boundary. */
+/** Bounded, non-secret diagnostics from the Connector-owned account runtime. */
 export class OpenContentPrivateAccountError extends Error {
   readonly code: OpenContentPrivateAccountErrorCode
 

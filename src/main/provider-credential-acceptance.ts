@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto'
 import { app } from 'electron'
 
-import { DomainMainProviderCredentialError } from '@sciforge/domain-sdk/package-storage'
+import {
+  DomainMainProviderCredentialError,
+  type DomainMainProviderCredentialAccess
+} from '@sciforge/domain-sdk/package-storage'
+import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 
 import type { DomainPackageStorageFactory } from './domain-package-storage'
 
@@ -9,12 +13,9 @@ const ACCEPTANCE_OWNER = Object.freeze({
   moduleId: 'sciforge.provider-credential-acceptance',
   moduleVersion: '1.0.0'
 })
-const ACCEPTANCE_ACCESS = Object.freeze({
-  binding: Object.freeze({
-    providerInstanceRef: 'provider-credential-acceptance',
-    connectionId: 'provider-credential-acceptance-connection'
-  }),
-  acceptedPrincipalAssurances: Object.freeze(['local-selection'] as const)
+const ACCEPTANCE_BINDING = Object.freeze({
+  providerInstanceRef: 'provider-credential-acceptance',
+  connectionId: 'provider-credential-acceptance-connection'
 })
 
 export type ProviderCredentialAcceptancePhase =
@@ -42,33 +43,35 @@ declare global {
 }
 
 export function installProviderCredentialAcceptance(
-  storageFactory: DomainPackageStorageFactory
+  storageFactory: DomainPackageStorageFactory,
+  currentPrincipal: () => PrincipalSnapshot | undefined
 ): void {
   if (process.env.SCIFORGE_PROVIDER_CREDENTIAL_ACCEPTANCE !== '1') return
   const credentials = storageFactory.forOwner(ACCEPTANCE_OWNER).secrets.providerCredentials
   if (!credentials) throw new Error('Provider credential acceptance requires the canonical Host facade.')
 
   globalThis.__SCIFORGE_PROVIDER_CREDENTIAL_ACCEPTANCE__ = async (phase) => {
+    const access = acceptanceAccess(currentPrincipal())
     const first = acceptanceSecret('first')
     const second = acceptanceSecret('second')
     if (phase === 'store') {
-      assertState(await credentials.status(ACCEPTANCE_ACCESS), 'absent', phase)
-      await credentials.replace(ACCEPTANCE_ACCESS, first)
-      await assertSecret(credentials, first, phase)
+      assertState(await credentials.status(access), 'absent', phase)
+      await credentials.replace(access, first)
+      await assertSecret(credentials, access, first, phase)
     } else if (phase === 'rotate') {
-      assertState(await credentials.status(ACCEPTANCE_ACCESS), 'available', phase)
-      await assertSecret(credentials, first, phase)
-      await credentials.replace(ACCEPTANCE_ACCESS, second)
-      await assertSecret(credentials, second, phase)
+      assertState(await credentials.status(access), 'available', phase)
+      await assertSecret(credentials, access, first, phase)
+      await credentials.replace(access, second)
+      await assertSecret(credentials, access, second, phase)
     } else if (phase === 'delete') {
-      assertState(await credentials.status(ACCEPTANCE_ACCESS), 'available', phase)
-      await assertSecret(credentials, second, phase)
-      await credentials.remove(ACCEPTANCE_ACCESS)
-      assertState(await credentials.status(ACCEPTANCE_ACCESS), 'absent', phase)
+      assertState(await credentials.status(access), 'available', phase)
+      await assertSecret(credentials, access, second, phase)
+      await credentials.remove(access)
+      assertState(await credentials.status(access), 'absent', phase)
     } else if (phase === 'restart-absent') {
-      assertState(await credentials.status(ACCEPTANCE_ACCESS), 'absent', phase)
+      assertState(await credentials.status(access), 'absent', phase)
       try {
-        await credentials.use(ACCEPTANCE_ACCESS, () => true)
+        await credentials.use(access, () => true)
         throw new Error('Deleted provider credential unexpectedly remained usable after restart.')
       } catch (error) {
         if (!(error instanceof DomainMainProviderCredentialError) ||
@@ -99,17 +102,33 @@ function acceptanceSecret(label: 'first' | 'second'): string {
 
 async function assertSecret(
   credentials: NonNullable<ReturnType<DomainPackageStorageFactory['forOwner']>['secrets']['providerCredentials']>,
+  access: DomainMainProviderCredentialAccess,
   expected: string,
   phase: ProviderCredentialAcceptancePhase
 ): Promise<void> {
   const expectedDigest = createHash('sha256').update(expected).digest('hex')
   const actualDigest = await credentials.use(
-    ACCEPTANCE_ACCESS,
+    access,
     (secret) => createHash('sha256').update(secret).digest('hex')
   )
   if (actualDigest !== expectedDigest) {
     throw new Error(`Provider credential acceptance ${phase} read the wrong committed value.`)
   }
+}
+
+function acceptanceAccess(
+  principal: PrincipalSnapshot | undefined
+): DomainMainProviderCredentialAccess {
+  if (!principal) {
+    throw new DomainMainProviderCredentialError(
+      'principal_unavailable',
+      'Provider credential acceptance requires a current Host principal.'
+    )
+  }
+  return Object.freeze({
+    binding: ACCEPTANCE_BINDING,
+    expectedPrincipal: principal
+  })
 }
 
 function assertState(

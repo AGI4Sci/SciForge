@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { describe, expect, it, vi } from 'vitest'
 import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
@@ -2104,6 +2105,58 @@ describe('CapabilityBroker', () => {
     })).rejects.toSatisfy((error) => expectBrokerCode(error, 'idempotency_conflict'))
     expect(handler).toHaveBeenCalledOnce()
     expect(JSON.stringify(broker.listAuditRecords())).not.toContain('fixture-secret')
+  })
+
+  it('does not retain an offline-guessable or Broker-stable verifier for sensitive input', async () => {
+    const password = 'fixture-low-entropy-password'
+    const offlineVerifier = createHash('sha256')
+      .update(JSON.stringify({ password }))
+      .digest('hex')
+    const capability = defineCapability({
+      id: 'provider-connection.bind',
+      version: '1',
+      title: 'Bind provider connection',
+      description: 'Validates a provider credential without retaining a reusable verifier.',
+      audiences: ['ui'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      tags: ['sensitive-input'],
+      inputSchema: z.object({ password: z.string().min(1) }).strict(),
+      outputSchema: z.object({ accepted: z.boolean() }).strict(),
+      handler: async () => ({ output: { accepted: true } })
+    })
+    const request = {
+      actionId: capability.descriptor.id,
+      invocationId: 'bind-sensitive-verifier-1',
+      input: { password }
+    }
+    const setSpy = vi.spyOn(Map.prototype, 'set')
+
+    try {
+      await new CapabilityBroker(new CapabilityRegistry([capability])).invoke(ui, request)
+      await new CapabilityBroker(new CapabilityRegistry([capability])).invoke(ui, request)
+
+      const fingerprints = setSpy.mock.calls.flatMap(([, value]) => {
+        if (!value || typeof value !== 'object') return []
+        const fingerprint = Reflect.get(value, 'fingerprint')
+        const promise = Reflect.get(value, 'promise')
+        return typeof fingerprint === 'string' && promise instanceof Promise
+          ? [fingerprint]
+          : []
+      })
+      expect(fingerprints).toHaveLength(2)
+      expect({
+        retainsOfflineVerifier: fingerprints.some((fingerprint) => fingerprint.includes(offlineVerifier)),
+        correlatesAcrossBrokerLifetimes: fingerprints[0] === fingerprints[1]
+      }).toEqual({
+        retainsOfflineVerifier: false,
+        correlatesAcrossBrokerLifetimes: false
+      })
+    } finally {
+      setSpy.mockRestore()
+    }
   })
 
   it('never evicts pending idempotency work or redispatches a failed write', async () => {
