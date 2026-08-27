@@ -49,7 +49,7 @@ describe('Identity private vault', () => {
     })
   })
 
-  it('uses the Host encrypted package store outside macOS and preserves existing keys', async () => {
+  it('uses the Host encrypted package store on Windows', async () => {
     const values = new Map<string, string>()
     const seen: string[] = []
     const vault = createPlatformIdentityPrivateVault({
@@ -81,7 +81,21 @@ describe('Identity private vault', () => {
     expect(await vault.has({ kind: 'device-key' })).toBe(false)
   })
 
-  it('fails closed outside macOS when the Host secret store is absent', () => {
+  it('keeps macOS on the native Keychain-backed vault', async () => {
+    const seen: string[] = []
+    const vault = createPlatformIdentityPrivateVault({
+      installationId: INSTALLATION_ID,
+      platform: 'darwin',
+      nativeBinding: memoryBinding(new Map(), seen)
+    })
+
+    await vault.write({ kind: 'oidc-session' }, 'session-secret-material')
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatch(/^[a-f0-9]{64}$/u)
+  })
+
+  it('fails closed on Windows when the Host secret store is absent', () => {
     expect(() => createPlatformIdentityPrivateVault({
       installationId: INSTALLATION_ID,
       platform: 'win32'
