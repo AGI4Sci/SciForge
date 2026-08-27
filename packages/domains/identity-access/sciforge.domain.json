@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.identity-access",
     "displayName": "Identity and Access",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "hostApi": {
       "minimum": "1.6.0",
       "maximumExclusive": "2.0.0"

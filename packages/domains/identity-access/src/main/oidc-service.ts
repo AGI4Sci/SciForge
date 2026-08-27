@@ -586,6 +586,16 @@ export class DesktopIdentityService {
       return await this.refreshSession(generation)
     } catch (error) {
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
+      if (error instanceof DesktopIdentitySessionStoreError) {
+        try {
+          await this.enqueueSessionPersistence(() => this.options.sessionStore.clear())
+        } catch (clearError) {
+          if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
+          return this.failure(this.normalizeError(clearError))
+        }
+        if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
+        return { ok: true, status: this.status }
+      }
       return this.failure(this.normalizeError(error))
     }
   }

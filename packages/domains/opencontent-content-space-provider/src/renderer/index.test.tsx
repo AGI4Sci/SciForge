@@ -187,13 +187,7 @@ function connectedResult() {
     outcome: 'success',
     status: {
       state: 'connected',
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      externalAccount: {
-        id: 'external-account-id',
-        identityId: 42,
-        account: 'scientist',
-        name: 'Research Library'
-      }
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
     }
   } as const satisfies OpenContentConnectionResult
 }

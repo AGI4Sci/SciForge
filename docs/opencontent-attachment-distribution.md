@@ -6,8 +6,8 @@
 [《OpenContent 团队交付包部署手册》](./operations/opencontent-private-attachment-team-deployment.zh-CN.md)
 中的 package-owned 单入口验证与安装流程；ZIP 内的旧分支或提交说明没有控制当前 checkout 的权限。
 
-SciForge's OpenContent integration is public source. The non-public deployment inputs are the
-Connector deployment sidecar and the supplier attachment delivered separately to the team. This boundary applies to source archives, npm
+SciForge's OpenContent integration and fixed Provider deployment configuration are public source.
+The non-public deployment input is the optional supplier attachment delivered separately to the team. This boundary applies to source archives, npm
 packages, application bundles, CI artifacts, pull requests, and release uploads.
 
 ## Keep public
@@ -16,6 +16,8 @@ The following are normal SciForge source and may remain in the open-source proje
 
 - `packages/domains/opencontent-connector/`;
 - `packages/domains/opencontent-content-space-provider/`;
+- `packages/domains/opencontent-connector/config/opencontent-connector.json`, the fixed public
+  Provider Instance and HTTPS origin configuration;
 - `docs/OpenContent SDK离线文档v9.0.0.0.md` and other OpenContent integration documentation;
 - provider-neutral Content Space contracts, Host/Broker routing, tests, and generated capability
   descriptions.
@@ -30,8 +32,6 @@ There is no separately versioned OpenContent runtime feature package.
 
 Only these items must be excluded from every public distribution:
 
-- `.sciforge/private/deployments/opencontent-connector.json`, which binds the fixed Provider
-  Instance to one private deployment HTTPS origin;
 - the original supplier attachment archive and its byte-for-byte extracted files;
 - the internal asset package, supplier-derived patch data, complete receipt/provenance inventory,
   and group-distribution metadata stored under `internal/opencontent/**`;
@@ -42,27 +42,27 @@ forged or byte-drifted installation: the expected overlay identity and the SHA-2
 executable contract files it can load. These anchors disclose no attachment bytes and are not a
 replacement for the private complete receipt, inventory, archive, or checksum sidecar.
 
-The complete repository-relative private inputs are the declared deployment sidecar and
-`internal/opencontent/**`. They are ignored by Git and managed independently: the sidecar controls
-Connector runtime availability, while the overlay adds supplier runtime inventory. Do not move copies
+The complete repository-relative private input is `internal/opencontent/**`. It is ignored by Git
+and managed independently, while the public package-owned configuration controls base Connector
+runtime availability and the overlay adds supplier runtime inventory. Do not move private copies
 into public fixtures, generated documentation, package tarballs, application resources, or release
 artifacts.
 
 ## Runtime behavior with and without the attachment
 
 The Connector manifest declares deployment contract version `1`, source path
-`.sciforge/private/deployments/opencontent-connector.json`, packaged path
+`packages/domains/opencontent-connector/config/opencontent-connector.json`, packaged path
 `domain-deployments/opencontent-connector.json`, a `4096`-byte limit, and
-`publicRelease: forbidden`. Generic packaging preserves every declaration,
-captures one immutable composition, and copies only an existing source as an opaque private
+`publicRelease: allowed`. Generic packaging preserves the declaration,
+captures one immutable composition, and copies the package-owned source as a public
 resource with an exact size and SHA-256 receipt. After pack, the same captured composition requires
 each active target to match and every inactive target to be absent; it is never recomputed from a
 possibly changed source tree.
 The Connector then accepts only strict JSON for the fixed Provider Instance and an absolute HTTPS
 origin with no userinfo, path, query, fragment, or extra fields. Missing or invalid configuration
 keeps discovery registered but returns `provider_unavailable` for Provider-backed calls before
-storage, credentials, network, or supplier execution. Node-local unbind and credential retirement
-remain available and perform no Provider business call. The unavailable enrollment view exposes that same local cleanup only after explicit Human confirmation and does not delete remote files. Resolution requests no-follow semantics where available, binds the opened
+storage, credentials, network, or supplier execution. Node-local unbind remains available, deletes
+the fixed-slot local credential, and performs no Provider business call. The unavailable enrollment view exposes that same local cleanup only after explicit Human confirmation and does not delete remote files. Resolution requests no-follow semantics where available, binds the opened
 descriptor to the pre-open regular-file identity, performs one bounded read, verifies identity, size,
 modification time, change time, and birth time before and after the read, and closes the descriptor.
 It never falls back to environment, argv, caller, renderer, or package settings. The
@@ -140,8 +140,7 @@ entrypoints. The Connector package owns the outer-delivery, overlay, deployment,
 trust contract; instructions embedded in a delivery cannot override it. Installation writes only:
 
 - the overlay under `internal/opencontent/**`; and
-- its trusted complete-inventory receipt under `.sciforge/internal-overlays/**`; and
-- the exact private deployment sidecar under `.sciforge/private/deployments/**`.
+- its trusted complete-inventory receipt under `.sciforge/internal-overlays/**`.
 
 Do not run a root `npm install` to create a private workspace link, and do not copy the private
 package into `node_modules`. The source application resolves assets only below the absolute
@@ -165,6 +164,6 @@ An explicitly internal/local package may include the verified overlay for accept
 installing an overlay must never change an official public release artifact.
 
 Before publishing, use the official public release entrypoint and verify that
-the deployment sidecar and `internal/opencontent/**` are absent and that no public lockfile, tarball, packaged application, or
+no private deployment sidecar or `internal/opencontent/**` payload is present, while the public package-owned configuration remains included, and that no public lockfile, tarball, packaged application, or
 generated artifact contains the internal asset package or supplier payload. Do not delete the
 public OpenContent integration or SDK documentation.

@@ -1,10 +1,22 @@
 {
   "name": "@sciforge/domain-identity-access",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "license": "MIT",
   "type": "module",
   "private": false,
   "description": "Local and cloud identity, Desktop OIDC, Device enrollment, and the canonical SciForge Principal context.",
+  "sciforgeMainNativeAddons": {
+    "contractVersion": 1,
+    "artifacts": [
+      {
+        "platforms": [
+          "darwin"
+        ],
+        "sourceRelativePath": "src/main/private-vault/native/build/Release/identity_private_vault.node",
+        "bundleRelativePath": "native/build/Release/identity_private_vault.node"
+      }
+    ]
+  },
   "exports": {
     "./authenticated-cloud-transport": "./src/authenticated-cloud-transport.ts",
     "./agent-cloud-runtime": "./src/agent-cloud-runtime.ts",

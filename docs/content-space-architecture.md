@@ -25,7 +25,7 @@ promotes readiness or changes a sibling operation's evidence.
 | **Shared Content Container Member** | A Provider directory `user` reference associated with one exact shared root. It is separate from Cloud Project membership and carries no Project authority. |
 | **Connection** | A Connector-owned, node-local binding between the current Principal and one Provider Instance, including protected credentials. It is never portable or caller-selected. |
 | **Connector** | The provider-specific main-process boundary that owns endpoint/tenant policy, enrollment, credentials, session validation, transport, and Provider schema validation. It owns no Content Space business semantics. |
-| **Provider Deployment Configuration** | A package-declared private binding from one fixed Provider Instance to its HTTPS origin. It controls Connector runtime availability, not discovery, readiness, admission, Connection selection, or supplier inventory. |
+| **Provider Deployment Configuration** | A package-owned fixed binding from one Provider Instance to its HTTPS origin. It controls Connector runtime availability, not discovery, readiness, admission, Connection selection, or supplier inventory; its release policy is declared by the owning package. |
 | **Supplier-backed Connector Transport** | Connector-owned wire protocol, reviewed allowlist, asset verification, and process isolation. Provider-owned receipt-to-Content-Space semantics consume it through the token-free main contract. It is not a separate release unit, supplier payload, or second capability path. |
 | **Private Overlay** | Optional receipt-backed supplier assets under `internal/opencontent/**` in source mode and one fixed resources directory in an internal packaged build. It is runtime data, not a domain package or authorization switch. |
 | **Broker Resource** | A process-local, caller/Principal/audience-bound executable resource issued after selection or portable-reference reauthorization. Raw Provider IDs and portable references are not Broker authority. |
@@ -70,16 +70,17 @@ when installed, the private overlay. These
 are branches behind the same Provider/Connector boundary, not parallel Agent or
 authorization paths.
 
-The OpenContent Connector reads one strict package-owned deployment sidecar
-exactly once during activation. Source builds use
-`.sciforge/private/deployments/opencontent-connector.json`; packaged builds use
-`resources/domain-deployments/opencontent-connector.json`. No mode falls
+The OpenContent Connector reads one strict public package-owned deployment
+configuration exactly once during activation. Source builds use
+`packages/domains/opencontent-connector/config/opencontent-connector.json`;
+packaged builds use `resources/domain-deployments/opencontent-connector.json`.
+The manifest declares `publicRelease: allowed`. No mode falls
 back to the other, and environment, argv, caller, renderer, or package settings
-cannot supply an origin. Missing or invalid configuration leaves the Provider
+cannot supply or override its fixed HTTPS origin. Missing or invalid configuration leaves the Provider
 Instance, capability factory, and service descriptor composed, but every
 Provider-backed call fails `provider_unavailable` before settings, credentials,
-network, or supplier-process work. Node-local unbind and credential retirement
-remain available without the sidecar and perform no Provider business call.
+network, or supplier-process work. Node-local unbind remains available without
+the sidecar, deletes the fixed-slot local credential, and performs no Provider business call.
 The integration-owned unavailable enrollment view exposes that local cleanup
 only after explicit Human confirmation and makes clear that remote files are
 unchanged.
@@ -238,8 +239,8 @@ not depend on a Host identity reverse map.
 
 SciForge, Content Space, Provider discovery/enrollment, the public Connector,
 ordinary file candidates, and Team administration remain composed. They are
-usable according to their own admission state only when the Connector's private
-deployment configuration is valid. Native-document support is not
+usable according to their own admission state only when the Connector's public
+package-owned deployment configuration is valid. Native-document support is not
 registered. Session-backed `getCurrentPrincipal` remains the only extended PoC
 candidate without supplier assets; the other 49 extended operations fail closed as
 `provider_contract_missing` before supplier dispatch. Startup, build, and

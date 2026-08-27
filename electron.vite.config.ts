@@ -1,8 +1,12 @@
 import { resolve } from 'path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { installedMainSourcePackageNames } from './src/main/modules/installed-main-source-packages'
+import { stageDomainMainNativeAddons } from './scripts/domain-main-native-addons.mjs'
+
+const repositoryRoot = fileURLToPath(new URL('.', import.meta.url))
 
 type MainBundleOutput = Readonly<Record<string, Readonly<{
   type: string
@@ -41,6 +45,22 @@ function mainSourcePackageBundleGuard(): Plugin {
   }
 }
 
+function domainMainNativeAddonStaging(): Plugin {
+  return {
+    name: 'sciforge:stage-domain-main-native-addons',
+    async writeBundle(outputOptions) {
+      if (!outputOptions.dir) {
+        throw new Error('Electron main output directory is required for native addon staging.')
+      }
+      await stageDomainMainNativeAddons({
+        repositoryRoot,
+        mainOutputDirectory: resolve(repositoryRoot, outputOptions.dir),
+        platform: process.platform
+      })
+    }
+  }
+}
+
 export default defineConfig({
   main: {
     // The generated list is the public TypeScript workspace dependency closure
@@ -50,7 +70,8 @@ export default defineConfig({
       externalizeDepsPlugin({
         exclude: [...installedMainSourcePackageNames]
       }),
-      mainSourcePackageBundleGuard()
+      mainSourcePackageBundleGuard(),
+      domainMainNativeAddonStaging()
     ],
     build: {
       rollupOptions: {

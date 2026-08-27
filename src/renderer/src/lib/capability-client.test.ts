@@ -95,6 +95,78 @@ describe('RendererCapabilityClient', () => {
     expect(bridge.invoke.mock.calls[0]?.[0].transportRequestId).toMatch(/^[0-9a-f-]{36}$/u)
   })
 
+  it('snapshots invocation input synchronously before asynchronous readiness', async () => {
+    const bridge = transport({ accepted: true })
+    let releaseReadiness!: () => void
+    const readinessGate = new Promise<void>((resolve) => { releaseReadiness = resolve })
+    bridge.readiness.mockImplementation(async () => {
+      await readinessGate
+      return READY
+    })
+    const client = new RendererCapabilityClient({
+      getTransport: () => bridge,
+      createInvocationId: () => 'invocation-sync-snapshot-1',
+      createTransportRequestId: () => '123e4567-e89b-42d3-a456-426614174010'
+    })
+    const contract = {
+      actionId: 'example.compute',
+      effect: 'compute' as const,
+      inputSchema: z.object({ mutableValue: z.string() }).strict(),
+      outputSchema: z.object({ accepted: z.boolean() }).strict()
+    }
+    const input = { mutableValue: 'captured-before-readiness' }
+
+    const invocation = client.invoke(contract, input)
+    input.mutableValue = ''
+    releaseReadiness()
+
+    await expect(invocation).resolves.toEqual({ accepted: true })
+    expect(bridge.invoke.mock.calls[0]?.[0].request.input).toEqual({
+      mutableValue: 'captured-before-readiness'
+    })
+  })
+
+  it('releases an aborted sensitive invocation without waiting for readiness to settle', async () => {
+    const bridge = transport({ accepted: true })
+    let releaseReadiness!: (value: CapabilityReadiness) => void
+    bridge.readiness.mockImplementation(() => new Promise((resolve) => {
+      releaseReadiness = resolve
+    }))
+    const client = new RendererCapabilityClient({
+      getTransport: () => bridge,
+      createInvocationId: () => 'invocation-abort-readiness-1'
+    })
+    const controller = new AbortController()
+    const invocation = client.invoke({
+      actionId: 'example.compute',
+      effect: 'compute',
+      inputSchema: z.object({
+        account: z.string(),
+        password: z.string()
+      }).strict(),
+      outputSchema: z.object({ accepted: z.boolean() }).strict()
+    }, {
+      account: 'readiness-account-canary',
+      password: 'readiness-password-canary'
+    }, { signal: controller.signal })
+    await vi.waitFor(() => expect(bridge.readiness).toHaveBeenCalledOnce())
+
+    controller.abort()
+    const cancelledBeforeReadiness = await Promise.race([
+      invocation.then(
+        () => false,
+        (error: unknown) => error instanceof Error && error.name === 'AbortError'
+      ),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 25))
+    ])
+    releaseReadiness(READY)
+    await invocation.catch(() => undefined)
+
+    expect(cancelledBeforeReadiness).toBe(true)
+    expect(bridge.invoke).not.toHaveBeenCalled()
+    expect(bridge.cancel).not.toHaveBeenCalled()
+  })
+
   it('forwards AbortSignal cancellation by transport request ID without replacing provider output', async () => {
     const bridge = transport({ ok: true })
     let resolveInvocation: ((value: ReturnType<typeof result>) => void) | undefined

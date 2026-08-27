@@ -20,6 +20,7 @@ import {
   requireOpenContentDeploymentRuntime,
   type OpenContentDeploymentRuntimeGetter
 } from './runtime.js'
+import { assertNoOpenContentSessionTokenEcho } from './session-material-guard.js'
 
 type OpenContentRootFolder = Awaited<ReturnType<
   OpenContentContentSpaceFacade['listRootFolders']
@@ -282,6 +283,7 @@ export function createOpenContentContentSpaceFacade(options: Readonly<{
         signal: input.signal,
         assertPrincipalCurrent: input.assertPrincipalCurrent
       })
+      assertNoOpenContentSessionTokenEcho(authorization, token)
       let state: 'available' | 'consumed' | 'retired' = 'available'
       return Object.freeze({
         consume: async ({ write }) => {

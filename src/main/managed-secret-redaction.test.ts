@@ -5,33 +5,14 @@ import { ManagedSecretRedactionRegistry } from './managed-secret-redaction'
 import { redactExactSensitiveValues } from '../shared/secret-redaction'
 
 describe('managed secret redaction registry', () => {
-  it('keeps active and recently replaced values, then retires them on a bounded clock', () => {
-    let now = 1_000
-    const registry = new ManagedSecretRedactionRegistry({
-      now: () => now,
-      retirementMs: 2_000
-    })
-
+  it('releases only the exact active value without retaining plaintext', () => {
+    const registry = new ManagedSecretRedactionRegistry()
     registry.activate({ recordId: 'owner:record', secret: 'active-secret-one' })
     expect(registry.values()).toEqual(['active-secret-one'])
 
-    registry.activate({
-      recordId: 'owner:record',
-      secret: 'active-secret-two',
-      replacedSecret: 'active-secret-one'
-    })
-    expect(new Set(registry.values())).toEqual(new Set([
-      'active-secret-two',
-      'active-secret-one'
-    ]))
-
-    registry.retire({ recordId: 'owner:record', secret: 'active-secret-two' })
-    now += 1_999
-    expect(new Set(registry.values())).toEqual(new Set([
-      'active-secret-two',
-      'active-secret-one'
-    ]))
-    now += 1
+    registry.release({ recordId: 'owner:record', secret: 'different-secret' })
+    expect(registry.values()).toEqual(['active-secret-one'])
+    registry.release({ recordId: 'owner:record', secret: 'active-secret-one' })
     expect(registry.values()).toEqual([])
   })
 

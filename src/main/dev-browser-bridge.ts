@@ -196,6 +196,12 @@ export type DevBrowserBridgeResourceContent = {
 
 type StartDevBrowserBridgeServerOptions = {
   dispatcher: DevBrowserBridgeDispatcher
+  /**
+   * Resolves authoritative registry tags for HTTP transport policy. When it is
+   * absent, capability invocations fail closed while non-capability channels
+   * remain available to focused transport tests and tooling.
+   */
+  resolveCapabilityTags?: (actionId: string) => readonly string[] | undefined
   resourceContent?: DevBrowserBridgeResourceContent
   host?: string
   port?: number
@@ -391,6 +397,14 @@ function parseInvokeBody(value: unknown): { channel: string; payload: unknown } 
     channel: body.channel.trim(),
     payload: body.payload
   }
+}
+
+function capabilityInvocationActionId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined
+  const request = (payload as { request?: unknown }).request
+  if (!request || typeof request !== 'object' || Array.isArray(request)) return undefined
+  const actionId = (request as { actionId?: unknown }).actionId
+  return typeof actionId === 'string' && actionId.trim() ? actionId.trim() : undefined
 }
 
 function parseSurfaceCaptureUpload(value: unknown): SurfaceCaptureUpload {
@@ -752,6 +766,24 @@ export async function startDevBrowserBridgeServer(
               message: `Dev browser bridge channel is not allowed: ${body.channel}`
             })
             return
+          }
+          if (body.channel === 'capability:invoke') {
+            const actionId = capabilityInvocationActionId(body.payload)
+            const tags = actionId ? options.resolveCapabilityTags?.(actionId) : undefined
+            if (!tags) {
+              writeJson(response, 403, {
+                ok: false,
+                message: 'Dev browser capability transport could not resolve the requested capability.'
+              })
+              return
+            }
+            if (tags.includes('sensitive-input')) {
+              writeJson(response, 403, {
+                ok: false,
+                message: 'Capabilities tagged sensitive-input require the Electron preload transport.'
+              })
+              return
+            }
           }
           const clientId = normalizeClientId(request.headers['x-sciforge-client'])
           const payload = await options.dispatcher.invoke(body.channel, body.payload, getClient(clientId))

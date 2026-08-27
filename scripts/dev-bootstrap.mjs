@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { createRequire } from 'node:module'
+import { parseEnv } from 'node:util'
 import { fileURLToPath } from 'node:url'
 
 const scriptPath = await realpath(fileURLToPath(import.meta.url))
@@ -14,6 +15,12 @@ const projectRoot = await realpath(join(dirname(scriptPath), '..'))
 const workspaceId = createHash('sha256').update(projectRoot).digest('hex').slice(0, 16)
 const lockDir = join(tmpdir(), 'sciforge-dev-instances')
 const lockPath = join(lockDir, `${workspaceId}.json`)
+const developmentEnvironmentPath = join(
+  projectRoot,
+  'deployments',
+  'development',
+  'sciforge.env'
+)
 const instanceId = randomUUID()
 let lockOwned = false
 let child = null
@@ -25,6 +32,18 @@ const requiredDevDependencies = [
 ]
 
 export const DEV_FORWARD_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP'])
+export const DEV_PREPARATION_SCRIPTS = Object.freeze([
+  'build:domain-native-addons',
+  'build:agent-support'
+])
+
+export function mergeDevelopmentEnvironment(source, currentEnvironment) {
+  const merged = { ...parseEnv(source) }
+  for (const [key, value] of Object.entries(currentEnvironment)) {
+    if (value !== undefined) merged[key] = value
+  }
+  return merged
+}
 
 export function devChildSpawnOptions(platform = process.platform) {
   return {
@@ -196,16 +215,19 @@ async function main() {
     await assertDevDependenciesInstalled()
     await acquireLock()
     ensureElectronBinaryInstalled()
+    const deploymentEnvironment = await readFile(developmentEnvironmentPath, 'utf8')
     const env = {
-      ...process.env,
+      ...mergeDevelopmentEnvironment(deploymentEnvironment, process.env),
       SCIFORGE_DEV_INSTANCE_ID: instanceId,
       SCIFORGE_DEV_WORKSPACE_ID: workspaceId
     }
     throwIfInterrupted()
     const npmCli = process.env.npm_execpath
-    if (npmCli) await run(process.execPath, [npmCli, 'run', 'build:agent-support'], env)
-    else await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:agent-support'], env)
-    throwIfInterrupted()
+    for (const script of DEV_PREPARATION_SCRIPTS) {
+      if (npmCli) await run(process.execPath, [npmCli, 'run', script], env)
+      else await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', script], env)
+      throwIfInterrupted()
+    }
     await run(process.execPath, [join(projectRoot, 'node_modules/electron-vite/bin/electron-vite.js'), 'dev'], env)
   } catch (error) {
     console.error(`[sciforge dev] ${error instanceof Error ? error.message : String(error)}`)

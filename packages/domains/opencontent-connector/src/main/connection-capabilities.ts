@@ -59,10 +59,9 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
   connections: OpenContentConnectionService
 }>): OpenContentCapabilityFactoryContribution<CapabilityDefinition> {
   const define = (
-    input: Omit<OpenContentCapabilityOptions, 'version' | 'audiences' | 'scope'>
+    input: Omit<OpenContentCapabilityOptions, 'audiences' | 'scope'>
   ): CapabilityDefinition => options.defineCapability({
     ...input,
-    version: '1.0.0',
     audiences: ['ui'],
     scope: 'global'
   })
@@ -77,6 +76,7 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
     createDefinitions: () => [
       define({
         id: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
+        version: '2.0.0',
         title: 'Inspect OpenContent Connection',
         description: 'Reads the current Principal connection status for OpenContent.',
         effect: 'read',
@@ -104,12 +104,13 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
       }),
       define({
         id: OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind,
+        version: '2.0.0',
         title: 'Bind Existing OpenContent Account',
         description: 'Validates and binds one existing OpenContent account to the current Principal.',
         effect: 'external-write',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'required' },
-        tags: ['opencontent', 'provider-connection', 'native-enrollment'],
+        tags: ['opencontent', 'provider-connection', 'sensitive-input'],
         inputSchema: openContentBindInputSchema,
         outputSchema: openContentConnectionResultSchema,
         handler: async (input, context) => {
@@ -119,20 +120,31 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
             options.providerInstanceRef
           )
           if (targetError) return { output: targetError }
-          return {
-            output: await connectionCapabilityResult(() => options.connections.enroll({
-              principal,
-              providerInstanceRef: input.providerInstanceRef,
-              signal: context.signal,
-              assertPrincipalCurrent: context.assertPrincipalCurrent
-            }))
+          const credentials = {
+            account: input.account,
+            password: input.password
+          }
+          try {
+            return {
+              output: await connectionCapabilityResult(() => options.connections.enroll({
+                principal,
+                providerInstanceRef: input.providerInstanceRef,
+                credentials,
+                signal: context.signal,
+                assertPrincipalCurrent: context.assertPrincipalCurrent
+              }))
+            }
+          } finally {
+            credentials.account = ''
+            credentials.password = ''
           }
         }
       }),
       define({
         id: OPENCONTENT_CONNECTION_CAPABILITY_IDS.unbind,
+        version: '2.0.0',
         title: 'Unbind OpenContent Account',
-        description: 'Removes this node-local OpenContent credential and connection metadata.',
+        description: 'Removes this Principal-bound, node-local OpenContent Session Token.',
         effect: 'external-write',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'required' },
@@ -150,6 +162,7 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
             output: await unbindCapabilityResult(() => options.connections.unbind({
               principal,
               providerInstanceRef: input.providerInstanceRef,
+              signal: context.signal,
               assertPrincipalCurrent: context.assertPrincipalCurrent
             }))
           }
@@ -226,6 +239,7 @@ function toPublicEnrollmentError(error: unknown) {
         code: 'provider_contract_violation',
         action: 'contact_support'
       },
+      conflict: { code: 'enrollment_in_progress', action: 'retry' },
       cancelled: { code: 'cancelled', action: 'none' }
     } as const
     const result = error.code in mapped
@@ -234,12 +248,6 @@ function toPublicEnrollmentError(error: unknown) {
     return result ? Object.freeze(result) : undefined
   }
   if (error instanceof OpenContentPrivateAccountError) {
-    if (error.code === 'native_enrollment_unavailable') {
-      return Object.freeze({
-        code: 'native_enrollment_unavailable' as const,
-        action: 'install_native_support' as const
-      })
-    }
     if (error.code === 'secure_storage_unavailable') {
       return Object.freeze({
         code: 'secure_storage_unavailable' as const,

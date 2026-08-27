@@ -63,7 +63,7 @@ const accessA = Object.freeze({
     providerInstanceRef: 'opencontent.demo',
     connectionId: 'connection-a'
   }),
-  acceptedPrincipalAssurances: ['local-selection'] as const
+  expectedPrincipal: principalA
 })
 
 async function storedSecretsPath(userDataDir: string): Promise<string> {
@@ -153,22 +153,69 @@ describe('domain package storage', () => {
     await credentials.replace(accessA, 'opaque-token')
     await expect(credentials.use(accessA, async (secret) => secret.length)).resolves.toBe(12)
 
-    currentPrincipal = {
+    const principalB: PrincipalSnapshot = {
       ...currentPrincipal,
       subject: 'local-account-b',
       identityVersion: 2
     }
-    await expect(credentials.status(accessA)).resolves.toEqual({ state: 'absent' })
-    await expect(credentials.use(accessA, async () => undefined)).rejects.toMatchObject({
+    currentPrincipal = principalB
+    await expect(credentials.status(accessA)).rejects.toMatchObject({
+      code: 'credential_binding_mismatch'
+    })
+    const accessB = { ...accessA, expectedPrincipal: principalB }
+    await expect(credentials.status(accessB)).resolves.toEqual({ state: 'absent' })
+    await expect(credentials.use(accessB, async () => undefined)).rejects.toMatchObject({
       code: 'credential_unavailable'
     })
 
-    currentPrincipal = {
+    const renewedPrincipalA: PrincipalSnapshot = {
       ...currentPrincipal,
       subject: 'local-account-a',
       identityVersion: 3
     }
-    await expect(credentials.use(accessA, async (secret) => secret.length)).resolves.toBe(12)
+    currentPrincipal = renewedPrincipalA
+    await expect(credentials.use(accessA, async () => undefined)).rejects.toMatchObject({
+      code: 'credential_binding_mismatch'
+    })
+    await expect(credentials.use({
+      ...accessA,
+      expectedPrincipal: renewedPrincipalA
+    }, async (secret) => secret.length)).resolves.toBe(12)
+  })
+
+  it('does not commit an expected Principal credential into a Principal that wins the storage lock', async () => {
+    let currentPrincipal: PrincipalSnapshot | undefined = principalA
+    const { factory } = await fixture(() => currentPrincipal)
+    const credentials = factory.forOwner({
+      moduleId: 'example.principal-lock-race',
+      moduleVersion: '1.0.0'
+    }).secrets.providerCredentials!
+    await credentials.replace(accessA, 'principal-a-token')
+
+    let releaseUse!: () => void
+    let markUseStarted!: () => void
+    const useGate = new Promise<void>((resolve) => { releaseUse = resolve })
+    const useStarted = new Promise<void>((resolve) => { markUseStarted = resolve })
+    const activeUse = credentials.use(accessA, async () => {
+      markUseStarted()
+      await useGate
+    })
+    await useStarted
+    const queuedReplace = credentials.replace(accessA, 'must-not-bind-to-principal-b')
+    const principalB = Object.freeze({
+      ...principalA,
+      subject: 'local-account-b',
+      identityVersion: 2
+    })
+    currentPrincipal = principalB
+    releaseUse()
+
+    await expect(activeUse).rejects.toMatchObject({ code: 'credential_binding_mismatch' })
+    await expect(queuedReplace).rejects.toMatchObject({ code: 'credential_binding_mismatch' })
+    await expect(credentials.status({
+      ...accessA,
+      expectedPrincipal: principalB
+    })).resolves.toEqual({ state: 'absent' })
   })
 
   it('persists one atomic credential across replace, restart, remove, and restart', async () => {
@@ -208,7 +255,7 @@ describe('domain package storage', () => {
     })
   })
 
-  it('fails closed for absent, wrong-node, and insufficient-assurance principals', async () => {
+  it('fails closed for absent, wrong-node, and mismatched expected principals', async () => {
     let current: PrincipalSnapshot | undefined
     const { factory } = await fixture(() => current)
     const credentials = factory.forOwner({
@@ -224,8 +271,8 @@ describe('domain package storage', () => {
     current = principalA
     await expect(credentials.status({
       ...accessA,
-      acceptedPrincipalAssurances: ['cloud-authenticated']
-    })).rejects.toMatchObject({ code: 'principal_assurance_insufficient' })
+      expectedPrincipal: { ...principalA, assurance: 'cloud-authenticated' }
+    })).rejects.toMatchObject({ code: 'credential_binding_mismatch' })
   })
 
   it('does not enumerate another principal, binding, node, or package owner', async () => {
@@ -244,7 +291,10 @@ describe('domain package storage', () => {
       binding: { ...accessA.binding, connectionId: 'connection-b' }
     })).resolves.toEqual({ state: 'absent' })
     current = { ...principalA, subject: 'local-account-b', identityVersion: 2 }
-    await expect(credentials.status(accessA)).resolves.toEqual({ state: 'absent' })
+    await expect(credentials.status({
+      ...accessA,
+      expectedPrincipal: current
+    })).resolves.toEqual({ state: 'absent' })
 
     current = principalA
     const otherOwner = createDomainPackageStorageFactory({
@@ -345,7 +395,124 @@ describe('domain package storage', () => {
       .toBe('committed-before-interruption')
   })
 
-  it('keeps canaries out of persistence and registers active and retired values', async () => {
+  it('does not commit queued provider mutations after their signal aborts', async () => {
+    const { factory } = await fixture(() => principalA)
+    const credentials = factory.forOwner({
+      moduleId: 'example.aborted-mutation',
+      moduleVersion: '1.0.0'
+    }).secrets.providerCredentials!
+    await credentials.replace(accessA, 'committed-token')
+
+    const holdLock = async (): Promise<() => void> => {
+      let release!: () => void
+      let started!: () => void
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      const active = new Promise<void>((resolve) => { started = resolve })
+      const use = credentials.use(accessA, async () => {
+        started()
+        await gate
+      })
+      await active
+      return () => {
+        release()
+        void use
+      }
+    }
+
+    const releaseReplaceLock = await holdLock()
+    const replaceController = new AbortController()
+    const replace = credentials.replace(
+      accessA,
+      'must-not-commit',
+      { signal: replaceController.signal }
+    )
+    let replaceSettled = false
+    let replaceFailure: unknown
+    void replace.then(
+      () => { replaceSettled = true },
+      (error: unknown) => {
+        replaceSettled = true
+        replaceFailure = error
+      }
+    )
+    replaceController.abort(new Error('replace aborted before commit'))
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+    try {
+      expect(replaceSettled).toBe(true)
+      expect(replaceFailure).toMatchObject({ message: 'replace aborted before commit' })
+    } finally {
+      releaseReplaceLock()
+    }
+    await expect(replace).rejects.toThrow('replace aborted before commit')
+    await expect(credentials.use(accessA, (secret) => secret)).resolves.toBe('committed-token')
+
+    const releaseRemoveLock = await holdLock()
+    const removeController = new AbortController()
+    const remove = credentials.remove(accessA, { signal: removeController.signal })
+    let removeSettled = false
+    let removeFailure: unknown
+    void remove.then(
+      () => { removeSettled = true },
+      (error: unknown) => {
+        removeSettled = true
+        removeFailure = error
+      }
+    )
+    removeController.abort(new Error('remove aborted before commit'))
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+    try {
+      expect(removeSettled).toBe(true)
+      expect(removeFailure).toMatchObject({ message: 'remove aborted before commit' })
+    } finally {
+      releaseRemoveLock()
+    }
+    await expect(remove).rejects.toThrow('remove aborted before commit')
+    await expect(credentials.use(accessA, (secret) => secret)).resolves.toBe('committed-token')
+  })
+
+  it('finishes an atomic provider mutation once commit dispatch has started', async () => {
+    const currentPrincipal = () => principalA
+    const { userDataDir, encryption, factory } = await fixture(currentPrincipal)
+    const owner = { moduleId: 'example.commit-boundary', moduleVersion: '1.0.0' }
+    await factory.forOwner(owner).secrets.providerCredentials!
+      .replace(accessA, 'before-commit-boundary')
+    let markWriteStarted!: () => void
+    let releaseWrite!: () => void
+    const writeStarted = new Promise<void>((resolve) => { markWriteStarted = resolve })
+    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve })
+    const credentials = createDomainPackageStorageFactory({
+      userDataDir,
+      encryption,
+      getDeviceId: () => 'test-device',
+      currentPrincipal,
+      atomicWrite: async (path, value) => {
+        markWriteStarted()
+        await writeGate
+        await writeFile(path, `${JSON.stringify(value)}\n`, 'utf8')
+      }
+    }).forOwner(owner).secrets.providerCredentials!
+    const controller = new AbortController()
+    const replace = credentials.replace(
+      accessA,
+      'after-commit-boundary',
+      { signal: controller.signal }
+    )
+    await writeStarted
+    controller.abort(new Error('abort arrived after commit dispatch'))
+    releaseWrite()
+
+    await expect(replace).resolves.toBeUndefined()
+    const restarted = createDomainPackageStorageFactory({
+      userDataDir,
+      encryption,
+      getDeviceId: () => 'test-device',
+      currentPrincipal
+    }).forOwner(owner).secrets.providerCredentials!
+    await expect(restarted.use(accessA, (secret) => secret)).resolves
+      .toBe('after-commit-boundary')
+  })
+
+  it('keeps non-use provider credential operations free of retained plaintext', async () => {
     const registry = new ManagedSecretRedactionRegistry()
     const { userDataDir, encryption } = await fixture(() => principalA)
     const credentials = createDomainPackageStorageFactory({
@@ -359,12 +526,107 @@ describe('domain package storage', () => {
     const first = 'opaque-canary-alpha-9d22'
     const second = 'opaque-canary-beta-17c4'
     await credentials.replace(accessA, first)
+    expect(registry.values()).toEqual([])
+    await expect(credentials.status(accessA)).resolves.toEqual({
+      state: 'available',
+      recordVersion: 1
+    })
+    expect(registry.values()).toEqual([])
     await credentials.replace(accessA, second)
-    expect(registry.values()).toEqual(expect.arrayContaining([first, second]))
+    expect(registry.values()).toEqual([])
     expect(await readFile(await storedSecretsPath(userDataDir), 'utf8')).not.toContain(first)
     expect(await readFile(await storedSecretsPath(userDataDir), 'utf8')).not.toContain(second)
     await credentials.remove(accessA)
-    expect(registry.values()).toEqual(expect.arrayContaining([first, second]))
+    expect(registry.values()).toEqual([])
+  })
+
+  it('registers provider credential plaintext only for the bounded use callback', async () => {
+    const registry = new ManagedSecretRedactionRegistry()
+    const { userDataDir, encryption } = await fixture(() => principalA)
+    const credentials = createDomainPackageStorageFactory({
+      userDataDir,
+      encryption,
+      getDeviceId: () => 'test-device',
+      currentPrincipal: () => principalA,
+      secretRedaction: registry
+    }).forOwner({ moduleId: 'example.bounded-redaction', moduleVersion: '1.0.0' })
+      .secrets.providerCredentials!
+    const secret = 'opaque-use-canary-32b1'
+    await credentials.replace(accessA, secret)
+
+    await expect(credentials.use(accessA, (value) => {
+      expect(value).toBe(secret)
+      expect(registry.values()).toEqual([secret])
+      return 'used'
+    })).resolves.toBe('used')
+    expect(registry.values()).toEqual([])
+
+    const safeFailure = new Error('bounded use failed')
+    const outwardFailure = await credentials.use(accessA, () => {
+      expect(registry.values()).toEqual([secret])
+      throw safeFailure
+    }).catch((error: unknown) => error)
+    expect(outwardFailure).not.toBe(safeFailure)
+    expect(outwardFailure).toMatchObject({ name: 'Error', message: 'bounded use failed' })
+    expect(registry.values()).toEqual([])
+  })
+
+  it('scrubs callback failures before releasing the provider credential redaction lease', async () => {
+    class FixtureProviderError extends Error {
+      readonly code = 'provider_unavailable'
+      readonly detail: Readonly<{ url: string }>
+      readonly #capturedSecret: string
+
+      constructor(secret: string) {
+        super(`Provider echoed ${secret}`)
+        this.name = 'FixtureProviderError'
+        this.#capturedSecret = secret
+        this.detail = Object.freeze({ url: `https://provider.invalid/failure?value=${secret}` })
+      }
+
+      get leakedFromPrototype(): string {
+        return this.#capturedSecret
+      }
+
+      revealFromPrototype(): string {
+        return this.#capturedSecret
+      }
+    }
+
+    const registry = new ManagedSecretRedactionRegistry()
+    const { userDataDir, encryption } = await fixture(() => principalA)
+    const credentials = createDomainPackageStorageFactory({
+      userDataDir,
+      encryption,
+      getDeviceId: () => 'test-device',
+      currentPrincipal: () => principalA,
+      secretRedaction: registry
+    }).forOwner({ moduleId: 'example.redacted-failure', moduleVersion: '1.0.0' })
+      .secrets.providerCredentials!
+    const secret = 'opaque-error-canary-7c14'
+    await credentials.replace(accessA, secret)
+
+    let failure: unknown
+    try {
+      await credentials.use(accessA, (value) => {
+        throw new FixtureProviderError(value)
+      })
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(Error)
+    expect(failure).not.toBeInstanceOf(FixtureProviderError)
+    expect(failure).toMatchObject({ code: 'provider_unavailable' })
+    expect(typeof failure === 'object' && failure !== null
+      ? Reflect.get(failure, 'leakedFromPrototype')
+      : undefined).toBeUndefined()
+    expect(typeof failure === 'object' && failure !== null
+      ? Reflect.get(failure, 'revealFromPrototype')
+      : undefined).toBeUndefined()
+    expect(JSON.stringify(failure)).not.toContain(secret)
+    expect(String(failure)).not.toContain(secret)
+    expect(failure instanceof Error ? failure.stack : '').not.toContain(secret)
+    expect(registry.values()).toEqual([])
   })
 
   it('approves only supported platform secure-storage backends', () => {
@@ -377,6 +639,8 @@ describe('domain package storage', () => {
       decryptString: (value: Buffer) => value.toString()
     }
     expect(createPlatformPackageEncryption({ safeStorage, platform: 'darwin' }).state())
+      .toBe('available')
+    expect(createPlatformPackageEncryption({ safeStorage, platform: 'win32' }).state())
       .toBe('available')
     expect(createPlatformPackageEncryption({ safeStorage, platform: 'linux' }).state())
       .toBe('available')

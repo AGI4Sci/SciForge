@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -53,6 +54,14 @@ describe('OpenContent deployment runtime availability', () => {
       write: vi.fn(async (value: DomainPackageJsonValue) => ({ revision: 1, value })),
       clear: vi.fn(async () => ({ revision: 1, value: null }))
     })
+    const providerCredentials = Object.freeze({
+      status: vi.fn(async () => ({ state: 'absent' as const })),
+      replace: vi.fn(async () => undefined),
+      use: vi.fn(async () => {
+        throw new Error('Synthetic credential is unavailable.')
+      }) as unknown as DomainMainProviderCredentialStoreHost['use'] & ReturnType<typeof vi.fn>,
+      remove: vi.fn(async () => undefined)
+    })
     let facade: OpenContentContentSpaceFacade | undefined
     const host: DomainMainHost = Object.freeze({
       getUserDataDir: () => join(root, 'user-data'),
@@ -61,6 +70,13 @@ describe('OpenContent deployment runtime availability', () => {
       isPackaged: () => false,
       defineCapability: (options: unknown) => options,
       packageSettings: settings,
+      packageSecrets: Object.freeze({
+        has: vi.fn(async () => false),
+        read: vi.fn(async () => null),
+        write: vi.fn(async () => undefined),
+        remove: vi.fn(async () => undefined),
+        providerCredentials
+      }),
       internalServices: Object.freeze({
         register<Service extends object>(
           registration: DomainMainInternalServiceRegistration<Service>
@@ -96,7 +112,9 @@ describe('OpenContent deployment runtime availability', () => {
       }
     })
     await expect(bind.handler({
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      account: 'deployment-unavailable-user',
+      password: 'one-use-password'
     }, capabilityContext())).resolves.toEqual({
       output: {
         outcome: 'error',
@@ -160,6 +178,8 @@ describe('OpenContent deployment runtime availability', () => {
     expect(settings.read).not.toHaveBeenCalled()
     expect(settings.write).not.toHaveBeenCalled()
     expect(settings.clear).not.toHaveBeenCalled()
+    expect(providerCredentials.status).not.toHaveBeenCalled()
+    expect(providerCredentials.replace).not.toHaveBeenCalled()
     expect(fetch).not.toHaveBeenCalled()
     expect(getExecutablePath).not.toHaveBeenCalled()
   })
@@ -197,7 +217,7 @@ describe('OpenContent deployment runtime availability', () => {
     expect(read).not.toHaveBeenCalled()
   })
 
-  it('fails closed without native account support and never reads legacy Host credentials', async () => {
+  it('exercises the packaged bind/status path under a simulated win32 platform contract', async () => {
     const resourcesRoot = mkdtempSync(join(tmpdir(), 'sciforge-opencontent-packaged-'))
     tempRoots.push(resourcesRoot)
     const appRoot = join(resourcesRoot, 'app.asar')
@@ -217,10 +237,29 @@ describe('OpenContent deployment runtime availability', () => {
       }
     )
 
+    const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+    let tokenValid = true
     const fetch = vi.fn(async (rawUrl: string | URL | Request) => {
       const url = new URL(typeof rawUrl === 'string' ? rawUrl : rawUrl.toString())
+      if (url.pathname.endsWith('/inbiz/org/api/auth/GetLoginRsaPublicKey')) {
+        return jsonResponse({
+          result: 0,
+          message: null,
+          data: { PublicKey: publicKeyPem, Algorithm: 'RSA', Padding: 'OAEP-SHA256' },
+          totalCount: 0
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/Auth/UserLogin')) {
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: 'packaged-session-token-must-be-encrypted',
+          clientId: null
+        })
+      }
       if (url.pathname.endsWith('/Auth/CheckUserTokenValidity')) {
-        return jsonResponse({ result: 0, msg: '', data: true })
+        return jsonResponse({ result: 0, msg: '', data: tokenValid })
       }
       if (url.pathname.endsWith('/User/GetUserInfoByToken')) {
         return jsonResponse({
@@ -239,16 +278,29 @@ describe('OpenContent deployment runtime availability', () => {
     })
     vi.stubGlobal('fetch', fetch)
     const getExecutablePath = vi.fn(() => process.execPath)
-    const legacyUse = vi.fn(async (
+    let storedSession: string | undefined
+    const use = vi.fn(async (
       _access: DomainMainProviderCredentialAccess,
       operation: (secret: string) => unknown | Promise<unknown>
-    ) => operation('legacy-host-token-must-not-be-used')) as unknown as
+    ) => {
+      if (storedSession === undefined) throw new Error('Synthetic credential is unavailable.')
+      return operation(storedSession)
+    }) as unknown as
       DomainMainProviderCredentialStoreHost['use'] & ReturnType<typeof vi.fn>
-    const legacyProviderCredentials = Object.freeze({
-      status: vi.fn(async () => ({ state: 'available' as const, recordVersion: 1 as const })),
-      replace: vi.fn(async () => undefined),
-      use: legacyUse,
-      remove: vi.fn(async () => undefined)
+    const providerCredentials = Object.freeze({
+      status: vi.fn(async () => storedSession === undefined
+        ? ({ state: 'absent' as const })
+        : ({ state: 'available' as const, recordVersion: 1 as const })),
+      replace: vi.fn(async (_access: DomainMainProviderCredentialAccess, secret: string) => {
+        storedSession = secret
+      }),
+      use,
+      remove: vi.fn(async () => { storedSession = undefined })
+    })
+    const packageSettings = Object.freeze({
+      read: vi.fn(async () => ({ revision: 0, value: null })),
+      write: vi.fn(async (value: DomainPackageJsonValue) => ({ revision: 1, value })),
+      clear: vi.fn(async () => ({ revision: 1, value: null }))
     })
     let facade: OpenContentContentSpaceFacade | undefined
     const host: DomainMainHost = Object.freeze({
@@ -257,40 +309,13 @@ describe('OpenContent deployment runtime availability', () => {
       getExecutablePath,
       isPackaged: () => true,
       defineCapability: (options: unknown) => options,
-      packageSettings: Object.freeze({
-        read: vi.fn(async () => ({
-          revision: 1,
-          value: {
-            version: 2,
-            connections: [{
-              principal: {
-                authority: principal.authority,
-                subject: principal.subject,
-                assurance: principal.assurance,
-                deviceId: principal.deviceId
-              },
-              providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-              connectionId: 'packaged-connection',
-              externalAccount: {
-                id: 'packaged-external-account',
-                identityId: 42,
-                account: 'packaged-user',
-                name: 'Packaged User'
-              },
-              state: 'connected',
-              updatedAt: '2026-08-23T00:00:00.000Z'
-            }],
-          } satisfies DomainPackageJsonValue
-        })),
-        write: vi.fn(async (value: DomainPackageJsonValue) => ({ revision: 2, value })),
-        clear: vi.fn(async () => ({ revision: 2, value: null }))
-      }),
+      packageSettings,
       packageSecrets: Object.freeze({
         has: vi.fn(async () => false),
         read: vi.fn(async () => null),
         write: vi.fn(async () => undefined),
         remove: vi.fn(async () => undefined),
-        providerCredentials: legacyProviderCredentials
+        providerCredentials
       }),
       internalServices: Object.freeze({
         register: (registration: DomainMainInternalServiceRegistration<object>) => {
@@ -306,27 +331,65 @@ describe('OpenContent deployment runtime availability', () => {
     if (!platformDescriptor) throw new Error('Node.js process.platform is unavailable.')
     Object.defineProperty(process, 'platform', {
       ...platformDescriptor,
-      value: 'linux'
+      value: 'win32'
     })
     try {
-      expect(() => createDomainMainEntry(host)).not.toThrow()
+      const entry = createDomainMainEntry(host)
+      const capabilityFactory = entry.contributions.find(
+        ({ kind }) => kind === 'main.capability-factory'
+      )?.value as Readonly<{ createDefinitions(): readonly CapabilityDefinition[] }>
+      const definitions = capabilityFactory.createDefinitions()
+      const bind = requireCapability(
+        definitions,
+        OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind
+      )
+      const status = requireCapability(
+        definitions,
+        OPENCONTENT_CONNECTION_CAPABILITY_IDS.status
+      )
+      expect(facade?.useSupplierTransport).toBeUndefined()
+      await expect(bind.handler({
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        account: 'packaged-user',
+        password: 'packaged-password-must-never-persist'
+      }, capabilityContext())).resolves.toMatchObject({
+        output: {
+          outcome: 'success',
+          status: {
+            state: 'connected',
+            providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+          }
+        }
+      })
+      expect(storedSession).toBe('packaged-session-token-must-be-encrypted')
+      expect(storedSession).not.toContain('packaged-password')
+      expect(providerCredentials.replace).toHaveBeenCalledOnce()
+      expect(JSON.stringify(providerCredentials.replace.mock.calls)).not.toContain(
+        'packaged-password-must-never-persist'
+      )
+      expect(packageSettings.read).not.toHaveBeenCalled()
+      expect(packageSettings.write).not.toHaveBeenCalled()
+      expect(packageSettings.clear).not.toHaveBeenCalled()
+      expect(fetch).toHaveBeenCalledTimes(4)
+
+      tokenValid = false
+      await expect(status.handler({
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+      }, capabilityContext())).resolves.toEqual({
+        output: {
+          outcome: 'success',
+          status: {
+            state: 'reauthentication_required',
+            providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+          }
+        }
+      })
+      expect(providerCredentials.replace).toHaveBeenCalledOnce()
+      expect(fetch).toHaveBeenCalledTimes(5)
+      expect(getExecutablePath).not.toHaveBeenCalled()
     } finally {
       Object.defineProperty(process, 'platform', platformDescriptor)
     }
-    expect(facade?.useSupplierTransport).toBeUndefined()
-    await expect(facade!.useTeamAdministration({
-      principal,
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      assertPrincipalCurrent: () => undefined
-    }, ({ administration }) => typeof administration.listTeams)).rejects.toMatchObject({
-      code: 'native_enrollment_unavailable'
-    })
-    expect(fetch).not.toHaveBeenCalled()
-    expect(getExecutablePath).not.toHaveBeenCalled()
-    expect(legacyProviderCredentials.status).not.toHaveBeenCalled()
-    expect(legacyProviderCredentials.replace).not.toHaveBeenCalled()
-    expect(legacyProviderCredentials.use).not.toHaveBeenCalled()
-    expect(legacyProviderCredentials.remove).not.toHaveBeenCalled()
   })
 })
 

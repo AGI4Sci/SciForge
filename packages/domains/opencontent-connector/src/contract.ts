@@ -30,11 +30,14 @@ export const openContentConnectionTargetInputSchema = z.object({
   providerInstanceRef: z.string().trim().min(3).max(256)
 }).strict().readonly()
 
-/**
- * Public enrollment is a non-secret action trigger. Account authentication is
- * owned entirely by the Connector's private native runtime.
- */
-export const openContentBindInputSchema = openContentConnectionTargetInputSchema
+/** One-use Human enrollment input accepted only by the sensitive UI capability. */
+export const openContentBindInputSchema = z.object({
+  providerInstanceRef: z.string().trim().min(3).max(256),
+  account: z.string().trim().min(1).max(256),
+  password: z.string().min(1).max(4096)
+}).strict().readonly()
+
+export type OpenContentBindInput = z.infer<typeof openContentBindInputSchema>
 
 const openContentUnbindSuccessOutputSchema = z.object({
   outcome: z.literal('success'),
@@ -42,19 +45,15 @@ const openContentUnbindSuccessOutputSchema = z.object({
   remoteRevocation: z.literal('unsupported')
 }).strict().readonly()
 
-const openContentExternalAccountSummarySchema = z.object({
-  id: z.string().trim().min(1).max(256),
-  identityId: z.number().int().nonnegative().safe(),
-  account: z.string().trim().min(1).max(256),
-  name: z.string().trim().min(1).max(256)
-}).strict().readonly()
-
 export const openContentConnectionStatusSchema = z.discriminatedUnion('state', [
   z.object({ state: z.literal('disconnected') }).strict().readonly(),
   z.object({
-    state: z.enum(['connected', 'reauthentication_required']),
-    providerInstanceRef: z.string().trim().min(3).max(256),
-    externalAccount: openContentExternalAccountSummarySchema
+    state: z.literal('connected'),
+    providerInstanceRef: z.string().trim().min(3).max(256)
+  }).strict().readonly(),
+  z.object({
+    state: z.literal('reauthentication_required'),
+    providerInstanceRef: z.string().trim().min(3).max(256)
   }).strict().readonly()
 ])
 
@@ -91,8 +90,8 @@ export const openContentEnrollmentErrorSchema = z.discriminatedUnion('code', [
     action: z.literal('repair_secure_storage')
   }).strict().readonly(),
   z.object({
-    code: z.literal('native_enrollment_unavailable'),
-    action: z.literal('install_native_support')
+    code: z.literal('enrollment_in_progress'),
+    action: z.literal('retry')
   }).strict().readonly(),
   z.object({
     code: z.literal('cancelled'),

@@ -23,6 +23,27 @@ import {
   runElectronDomainSmoke,
   validateSmokeResult
 } from './electron-domain-smoke-support.mjs'
+import { providerCredentialSmokeLaunchArgs } from './electron-provider-credential-smoke-support.mjs'
+
+test('packaged credential smoke selects the mock Keychain before Electron startup on macOS', () => {
+  assert.deepEqual(providerCredentialSmokeLaunchArgs({
+    applicationPath: '/tmp/SciForge.app',
+    userDataDirectory: '/tmp/sciforge-provider-profile',
+    platform: 'darwin'
+  }), [
+    '/tmp/SciForge.app',
+    '--user-data-dir=/tmp/sciforge-provider-profile',
+    '--use-mock-keychain',
+    '--hidden'
+  ])
+  assert.deepEqual(providerCredentialSmokeLaunchArgs({
+    userDataDirectory: 'C:\\sciforge-provider-profile',
+    platform: 'win32'
+  }), [
+    `--user-data-dir=${resolve('C:\\sciforge-provider-profile')}`,
+    '--hidden'
+  ])
+})
 
 test('supervised source smoke keeps its profile inside the owned run directory', async () => {
   const runDirectory = await mkdtemp(join(tmpdir(), 'sciforge-electron-supervised-run-'))

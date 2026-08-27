@@ -29,6 +29,10 @@ type CapabilityObservationResult = Awaited<
 type CapabilityInvocationResult = Awaited<
   ReturnType<SciForgeApi['capabilities']['invoke']>
 >
+type CapabilityInvocationInput = Parameters<SciForgeApi['capabilities']['invoke']>[0]
+type CapabilityDiscoveryResult = Awaited<
+  ReturnType<SciForgeApi['capabilities']['discover']>
+>
 
 type ChannelHandler = (payload: never) => void
 
@@ -126,6 +130,31 @@ async function invoke<T>(channel: string, payload?: unknown): Promise<T> {
     throw new Error(`Bridge returned HTTP ${response.status} for ${channel}.`)
   }
   return envelope.payload
+}
+
+async function assertPlainBrowserCapabilityTransportAllowed(
+  input: CapabilityInvocationInput
+): Promise<void> {
+  // Resolve the generic descriptor before serializing caller input. This
+  // discovery request contains only the action ID and optional workspace ID,
+  // so credentials can never enter Vite's HTTP proxy or browser network logs.
+  const descriptors = await invoke<CapabilityDiscoveryResult>('capability:discover', {
+    ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+    query: { capabilityId: input.request.actionId }
+  })
+  const matchingDescriptors = descriptors.filter(
+    (candidate) => candidate.id === input.request.actionId
+  )
+  if (matchingDescriptors.length !== 1) {
+    throw new Error(
+      'Dev browser capability transport could not resolve exactly one capability descriptor.'
+    )
+  }
+  if (matchingDescriptors[0].tags.includes('sensitive-input')) {
+    throw new Error(
+      'Capabilities tagged sensitive-input require the Electron preload transport.'
+    )
+  }
 }
 
 async function submitSurfaceCapture(request: DevBrowserSurfaceCaptureRequest): Promise<void> {
@@ -259,12 +288,15 @@ function createApi(): SciForgeApi {
         })
       ),
       bind: (input) => invoke('capability:bind', input),
-      invoke: async (input) => unwrapCapabilityTransportEnvelope<CapabilityInvocationResult>(
-        await invoke('capability:invoke', {
-          ...input,
-          transportRequestId: input.transportRequestId ?? createCapabilityTransportRequestId()
-        })
-      ),
+      invoke: async (input) => {
+        await assertPlainBrowserCapabilityTransportAllowed(input)
+        return unwrapCapabilityTransportEnvelope<CapabilityInvocationResult>(
+          await invoke('capability:invoke', {
+            ...input,
+            transportRequestId: input.transportRequestId ?? createCapabilityTransportRequestId()
+          })
+        )
+      },
       cancel: (transportRequestId) => invoke('capability:cancel', { transportRequestId }),
       events: (input = {}) => invoke('capability:events', input),
       subscribe: (workspaceId) => invoke('capability:subscribe', { workspaceId }),

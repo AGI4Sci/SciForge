@@ -16,7 +16,7 @@ import {
   type IpcMainInvokeEvent,
   type WebContents
 } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
@@ -27,6 +27,7 @@ import sciforgeTrayPng from '../asset/img/sciforge_tray.png?url'
 import { createAppIcon, pickTrayIcon } from './app-icon'
 import { configureLinuxWaylandImeSwitches } from './app-command-line'
 import { APP_PRODUCT_NAME, configureAppIdentity } from './app-identity'
+import { resolveDevelopmentUserDataPath } from './development-user-data'
 import {
   applyCodexRuntimePatch,
   applyClaudeRuntimePatch,
@@ -376,6 +377,16 @@ traceStartup('main module evaluated')
 // 抽到 app-identity.ts 是为了让测试可以直接 import,不被 main 的
 // whenReady 副作用污染。
 configureAppIdentity()
+const developmentUserDataPath = resolveDevelopmentUserDataPath({
+  isPackaged: app.isPackaged,
+  appDataPath: app.getPath('appData'),
+  workspaceId: process.env.SCIFORGE_DEV_WORKSPACE_ID,
+  argv: process.argv
+})
+if (developmentUserDataPath) {
+  mkdirSync(developmentUserDataPath, { recursive: true, mode: 0o700 })
+  app.setPath('userData', developmentUserDataPath)
+}
 configureLinuxWaylandImeSwitches()
 registerCapabilityResourceContentScheme(protocol)
 
@@ -1317,7 +1328,10 @@ app
       createApplicationCapabilityRegistry(catalog, appCapabilityDependencies),
       { resolveCurrentPrincipalContext: () => principalContext.snapshot() }
     )
-    installProviderCredentialAcceptance(domainPackageStorage)
+    installProviderCredentialAcceptance(
+      domainPackageStorage,
+      () => principalContext.current()
+    )
     capabilityBrokerForDomainServices = capabilityBroker
     portableResourceReferences = createPortableResourceReferenceService(
       capabilityBroker,
@@ -1894,6 +1908,8 @@ app
               ? capabilityIpcRegistration.invoke(channel, payload, sender)
               : appBridgeDispatcher.invoke(channel, payload, sender)
         },
+        resolveCapabilityTags: (actionId) =>
+          capabilityBroker.registry.get(actionId)?.descriptor.tags,
         resourceContent: capabilityIpcRegistration.resourceContent,
         instanceId: devBrowserBridgeInstanceId
       })

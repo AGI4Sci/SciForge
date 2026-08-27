@@ -6,14 +6,69 @@ import {
   openContentBindInputSchema,
   openContentConnectionResultSchema,
   openContentConnectionTargetInputSchema,
-  openContentUnbindOutputSchema
+  openContentUnbindOutputSchema,
+  type OpenContentConnectionResult
 } from '../contract.js'
 import { createOpenContentConnectionRendererClient } from './client.js'
 
 const OPENCONTENT_PROVIDER_INSTANCE_REF = 'test-opencontent-provider'
 
 describe('OpenContent connection renderer client', () => {
-  it('targets the selected Provider Instance for status, bind, and unbind', async () => {
+  it('clears one-use bind credentials and invocation input as soon as invocation is accepted', async () => {
+    const pendingResult = deferred<OpenContentConnectionResult>()
+    let invocationInput: Record<string, string> | undefined
+    let invocationSnapshot: Record<string, string> | undefined
+    const invoke = vi.fn((_contract: unknown, input: unknown, _options?: unknown) => {
+      invocationInput = input as Record<string, string>
+      invocationSnapshot = { ...invocationInput }
+      return pendingResult.promise
+    })
+    const client = createOpenContentConnectionRendererClient({
+      invoke,
+      observe: vi.fn()
+    } as unknown as DomainRendererCapabilityInvoker)
+    const credentials = {
+      account: 'scientist@example.org',
+      password: 'one-use-secret'
+    }
+    const controller = new AbortController()
+
+    const binding = client.bind(OPENCONTENT_PROVIDER_INSTANCE_REF, credentials, {
+      signal: controller.signal
+    })
+
+    expect(invoke).toHaveBeenCalledOnce()
+    expect(invoke.mock.calls[0]?.[0]).toEqual({
+      actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind,
+      effect: 'external-write',
+      inputSchema: openContentBindInputSchema,
+      outputSchema: openContentConnectionResultSchema
+    })
+    expect(invocationSnapshot).toEqual({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      account: 'scientist@example.org',
+      password: 'one-use-secret'
+    })
+    expect(invoke.mock.calls[0]?.[2]).toEqual({
+      signal: controller.signal
+    })
+    expect(credentials).toEqual({ account: '', password: '' })
+    expect(invocationInput).toEqual({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      account: '',
+      password: ''
+    })
+
+    pendingResult.resolve({
+      outcome: 'success',
+      status: { state: 'disconnected' }
+    })
+    await binding
+
+    expect(credentials).toEqual({ account: '', password: '' })
+  })
+
+  it('targets the selected Provider Instance for status and unbind', async () => {
     const invoke = vi.fn(async (contract: Readonly<{ actionId: string }>) =>
       contract.actionId === OPENCONTENT_CONNECTION_CAPABILITY_IDS.unbind
         ? {
@@ -34,7 +89,6 @@ describe('OpenContent connection renderer client', () => {
     await client.status(OPENCONTENT_PROVIDER_INSTANCE_REF, {
       signal: controller.signal
     })
-    await client.bind(OPENCONTENT_PROVIDER_INSTANCE_REF)
     await client.unbind(OPENCONTENT_PROVIDER_INSTANCE_REF)
 
     expect(invoke).toHaveBeenNthCalledWith(1, {
@@ -46,12 +100,6 @@ describe('OpenContent connection renderer client', () => {
       signal: controller.signal
     })
     expect(invoke).toHaveBeenNthCalledWith(2, {
-      actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind,
-      effect: 'external-write',
-      inputSchema: openContentBindInputSchema,
-      outputSchema: openContentConnectionResultSchema
-    }, { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF })
-    expect(invoke).toHaveBeenNthCalledWith(3, {
       actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.unbind,
       effect: 'external-write',
       inputSchema: openContentConnectionTargetInputSchema,
@@ -71,15 +119,62 @@ describe('OpenContent connection renderer client', () => {
       invoke: vi.fn(async () => failure),
       observe: vi.fn()
     } as unknown as DomainRendererCapabilityInvoker)
+    const credentials = {
+      account: 'scientist@example.org',
+      password: 'one-use-secret'
+    }
 
-    await expect(client.bind(OPENCONTENT_PROVIDER_INSTANCE_REF)).resolves.toBe(failure)
+    await expect(client.bind(OPENCONTENT_PROVIDER_INSTANCE_REF, credentials))
+      .resolves.toBe(failure)
+    expect(credentials).toEqual({ account: '', password: '' })
   })
 
-  it('rejects secret-shaped public bind inputs at the Renderer boundary', () => {
+  it('keeps the public bind schema strict', () => {
+    expect(openContentBindInputSchema.safeParse({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      account: 'scientist@example.org',
+      password: 'one-use-secret'
+    }).success).toBe(true)
     expect(openContentBindInputSchema.safeParse({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       username: 'must-not-cross',
       password: 'must-not-cross'
     }).success).toBe(false)
   })
+
+  it('clears one-use bind objects when capability invocation throws', async () => {
+    let invocationInput: Record<string, string> | undefined
+    const client = createOpenContentConnectionRendererClient({
+      invoke: vi.fn(async (_contract: unknown, input: unknown) => {
+        invocationInput = input as Record<string, string>
+        throw new Error('transport unavailable')
+      }),
+      observe: vi.fn()
+    } as unknown as DomainRendererCapabilityInvoker)
+    const credentials = {
+      account: 'scientist@example.org',
+      password: 'one-use-secret'
+    }
+
+    await expect(client.bind(OPENCONTENT_PROVIDER_INSTANCE_REF, credentials))
+      .rejects.toThrow('transport unavailable')
+
+    expect(credentials).toEqual({ account: '', password: '' })
+    expect(invocationInput).toEqual({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      account: '',
+      password: ''
+    })
+  })
 })
+
+function deferred<Value>(): Readonly<{
+  promise: Promise<Value>
+  resolve: (value: Value) => void
+}> {
+  let resolve!: (value: Value) => void
+  const promise = new Promise<Value>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}

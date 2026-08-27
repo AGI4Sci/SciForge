@@ -24,14 +24,11 @@ const MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 const openContentExternalAccountSchema = z.object({
   id: z.string().trim().min(1).max(256),
   identityId: z.number().int().nonnegative().safe(),
-  account: z.string().trim().min(1).max(256),
-  name: z.string().trim().min(1).max(256),
-  topPersonalFolderId: z.string().regex(/^\d+$/u)
+  name: z.string().trim().min(1).max(256)
 }).strict().readonly()
 
 const openContentAuthenticatedSessionSchema = z.object({
-  token: z.string().trim().min(16).max(4096),
-  account: openContentExternalAccountSchema
+  token: z.string().trim().min(16).max(4096)
 }).strict().readonly()
 
 type OpenContentExternalAccount = z.infer<typeof openContentExternalAccountSchema>
@@ -380,10 +377,11 @@ export function createOpenContentClient(options: Readonly<{
         'provider_contract_violation'
       )
       requireBusinessSuccess(envelope.result, 'reauthentication_required')
-      return Object.freeze({
-        ...envelope.data,
-        topPersonalFolderId: String(envelope.data.topPersonalFolderId)
-      })
+      return Object.freeze(openContentExternalAccountSchema.parse({
+        id: envelope.data.id,
+        identityId: envelope.data.identityId,
+        name: envelope.data.name
+      }))
     }
 
   return Object.freeze({
@@ -408,72 +406,78 @@ export function createOpenContentClient(options: Readonly<{
     observeCurrentExternalAccount,
     authenticateExistingAccount: async (rawInput) => {
       const input = parseClientInput(enrollmentInputSchema, rawInput)
-      const publicKeyResponse = await requestJson({
-        baseUrl,
-        fetchImplementation,
-        path: '/inbiz/org/api/auth/GetLoginRsaPublicKey',
-        method: 'GET',
-        signal: rawInput.signal,
-        assertPrincipalCurrent: input.assertPrincipalCurrent
-      })
-      const publicKeyEnvelope = parseProviderResponse(
-        publicKeyResponseSchema,
-        publicKeyResponse,
-        'provider_contract_violation'
-      )
-      requireBusinessSuccess(publicKeyEnvelope.result, 'provider_unavailable')
-      assertRsaOaepSha256(publicKeyEnvelope.data)
+      try {
+        const publicKeyResponse = await requestJson({
+          baseUrl,
+          fetchImplementation,
+          path: '/inbiz/org/api/auth/GetLoginRsaPublicKey',
+          method: 'GET',
+          signal: rawInput.signal,
+          assertPrincipalCurrent: input.assertPrincipalCurrent
+        })
+        const publicKeyEnvelope = parseProviderResponse(
+          publicKeyResponseSchema,
+          publicKeyResponse,
+          'provider_contract_violation'
+        )
+        requireBusinessSuccess(publicKeyEnvelope.result, 'provider_unavailable')
+        assertRsaOaepSha256(publicKeyEnvelope.data)
 
-      const key = normalizePublicKey(publicKeyEnvelope.data.PublicKey)
-      const loginResponse = await requestJson({
-        baseUrl,
-        fetchImplementation,
-        path: '/flatsdk/api/services/Auth/UserLogin',
-        method: 'POST',
-        body: {
-          userName: rsaOaepSha256(input.username, key),
-          password: rsaOaepSha256(input.password, key),
-          clientType: 4,
-          secure: false,
-          rsaSecure: true
-        },
-        signal: rawInput.signal,
-        assertPrincipalCurrent: input.assertPrincipalCurrent
-      })
-      const loginEnvelope = parseProviderResponse(
-        loginResponseSchema,
-        loginResponse,
-        'provider_contract_violation'
-      )
-      requireBusinessSuccess(loginEnvelope.result, 'unauthorized')
-      const token = loginEnvelope.data
+        const key = normalizePublicKey(publicKeyEnvelope.data.PublicKey)
+        let userNameCiphertext = ''
+        let passwordCiphertext = ''
+        try {
+          userNameCiphertext = rsaOaepSha256(input.username, key)
+          passwordCiphertext = rsaOaepSha256(input.password, key)
+        } finally {
+          input.username = ''
+          input.password = ''
+        }
+        const loginResponse = await requestJson({
+          baseUrl,
+          fetchImplementation,
+          path: '/flatsdk/api/services/Auth/UserLogin',
+          method: 'POST',
+          body: {
+            userName: userNameCiphertext,
+            password: passwordCiphertext,
+            clientType: 4,
+            secure: false,
+            rsaSecure: true
+          },
+          signal: rawInput.signal,
+          assertPrincipalCurrent: input.assertPrincipalCurrent
+        })
+        const loginEnvelope = parseProviderResponse(
+          loginResponseSchema,
+          loginResponse,
+          'provider_contract_violation'
+        )
+        requireBusinessSuccess(loginEnvelope.result, 'unauthorized')
+        const token = loginEnvelope.data
 
-      const validityResponse = await requestJson({
-        baseUrl,
-        fetchImplementation,
-        path: '/flatsdk/api/services/Auth/CheckUserTokenValidity',
-        method: 'POST',
-        query: { token },
-        signal: rawInput.signal,
-        assertPrincipalCurrent: input.assertPrincipalCurrent
-      })
-      const validityEnvelope = parseProviderResponse(
-        tokenValidityResponseSchema,
-        validityResponse,
-        'provider_contract_violation'
-      )
-      requireBusinessSuccess(validityEnvelope.result, 'reauthentication_required')
-      if (!validityEnvelope.data) throw connectorError('reauthentication_required')
+        const validityResponse = await requestJson({
+          baseUrl,
+          fetchImplementation,
+          path: '/flatsdk/api/services/Auth/CheckUserTokenValidity',
+          method: 'POST',
+          query: { token },
+          signal: rawInput.signal,
+          assertPrincipalCurrent: input.assertPrincipalCurrent
+        })
+        const validityEnvelope = parseProviderResponse(
+          tokenValidityResponseSchema,
+          validityResponse,
+          'provider_contract_violation'
+        )
+        requireBusinessSuccess(validityEnvelope.result, 'reauthentication_required')
+        if (!validityEnvelope.data) throw connectorError('reauthentication_required')
 
-      const account = await observeCurrentExternalAccount({
-        token,
-        signal: rawInput.signal,
-        assertPrincipalCurrent: input.assertPrincipalCurrent
-      })
-      return Object.freeze(openContentAuthenticatedSessionSchema.parse({
-        token,
-        account
-      }))
+        return Object.freeze(openContentAuthenticatedSessionSchema.parse({ token }))
+      } finally {
+        input.username = ''
+        input.password = ''
+      }
     },
     listPersonalRootFolder: async (rawInput) => {
       const input = parseClientInput(personalRootFolderRequestSchema, rawInput)
@@ -1355,14 +1359,17 @@ function normalizePublicKey(value: string): string {
 }
 
 function rsaOaepSha256(value: string, publicKey: string): string {
+  const plaintext = Buffer.from(value, 'utf8')
   try {
     return publicEncrypt({
       key: publicKey,
       padding: constants.RSA_PKCS1_OAEP_PADDING,
       oaepHash: 'sha256'
-    }, Buffer.from(value, 'utf8')).toString('base64')
+    }, plaintext).toString('base64')
   } catch {
     throw connectorError('provider_contract_violation')
+  } finally {
+    plaintext.fill(0)
   }
 }
 

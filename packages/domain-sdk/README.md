@@ -215,6 +215,9 @@ operation:
   optimistic revisions and a main-process-only secret store. Generated composition binds both
   stores to the manifest owner; packages cannot choose another namespace. Renderer code changes
   settings only through the canonical capability invoker and never receives secret-store access.
+  Host API `1.9.0` requires every provider-credential operation to present the complete expected
+  Principal lease. The Host re-verifies that lease inside its encrypted-storage lock before use or
+  mutation, so a Principal transition cannot redirect another Principal's credential operation.
 - `@sciforge/domain-sdk/workflow-template` defines the versioned workflow-template bundle and the
   package-owned execution-receipt adapter used by workflow engines. Engines consume these generic
   contracts instead of another domain's private artifact directories or receipt layout.
