@@ -187,7 +187,7 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
   assert.doesNotMatch(markup, /password|access token|refresh token|register agent|enroll device/iu)
 })
 
-test('New Project auto-binds only this Project Coordinator and lists Cloud Worker Users', () => {
+test('New Project auto-binds only this Project Coordinator and lists only Cloud Worker Users', () => {
   const project = coordinatorTransferProjectFixture()
   const workerGroups = project.workerGroups.map((group) => ({
     userId: group.userId,
@@ -213,9 +213,8 @@ test('New Project auto-binds only this Project Coordinator and lists Cloud Worke
 
   assert.match(markup, /projectCoordinatorCreatorRole/u)
   assert.match(markup, /Project Member/u)
-  assert.match(markup, /Member Desktop/u)
   assert.match(markup, /type="checkbox"/u)
-  assert.doesNotMatch(markup, /placeholder="agt_/u)
+  assert.doesNotMatch(markup, /Member Desktop|agt_MemberAgent001/u)
   assert.doesNotMatch(markup, /type="number"/u)
 })
 

@@ -30,6 +30,7 @@ import {
   Settings2,
   ShieldAlert,
   SquareKanban,
+  UserRound,
   UserRoundCheck,
   UsersRound,
   Warehouse,
@@ -1411,35 +1412,22 @@ export function ProjectCreateForm({
             <p className="project-coordinator-create-workers-empty">
               {t('projectCoordinatorNoOnlineWorkerUsers')}
             </p>
-          ) : candidates.map((group) => {
-            const accepting = group.agents.filter(({ availability }) => (
-              availability.acceptsNewOffers
-            )).length
-            return (
-              <label className="project-coordinator-create-worker" key={group.userId}>
-                <input
-                  type="checkbox"
-                  checked={selectedWorkerUserIds.includes(group.userId)}
-                  onChange={(event) => onWorkerUserToggle(group.userId, event.currentTarget.checked)}
-                />
-                <span>
-                  <strong>{group.displayName}</strong>
-                  <small>{t('projectCoordinatorWorkerAgentSummary', {
-                    online: group.agents.length,
-                    accepting
-                  })}</small>
-                  <span className="project-coordinator-create-worker-agents">
-                    {group.agents.map(({ displayName: agentName, availability }) => (
-                      <span key={availability.agentId} title={availability.agentId}>
-                        <Wifi aria-hidden="true" />
-                        {agentName}
-                      </span>
-                    ))}
-                  </span>
-                </span>
-              </label>
-            )
-          })}
+          ) : candidates.map((group) => (
+            <label className="project-coordinator-create-worker" key={group.userId}>
+              <input
+                type="checkbox"
+                checked={selectedWorkerUserIds.includes(group.userId)}
+                onChange={(event) => onWorkerUserToggle(group.userId, event.currentTarget.checked)}
+              />
+              <span className="project-coordinator-create-worker-avatar" aria-hidden="true">
+                <UserRound />
+              </span>
+              <span className="project-coordinator-create-worker-copy">
+                <strong>{group.displayName}</strong>
+                <small>{t('projectCoordinatorWorkerUserStatus')}</small>
+              </span>
+            </label>
+          ))}
         </fieldset>
         <button disabled={busy} type="submit" className="project-coordinator-primary-button">
           {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Zap aria-hidden="true" />}
