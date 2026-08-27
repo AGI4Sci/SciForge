@@ -175,7 +175,7 @@ export async function generateDomainPackageFiles(root, { check = false } = {}) {
     const target = path.join(root, relativePath)
     if (check) {
       const current = await readFile(target, 'utf8').catch(() => '')
-      if (current !== content) stale.push(relativePath)
+      if (!generatedDomainPackageContentMatches(current, content)) stale.push(relativePath)
     } else {
       await mkdir(path.dirname(target), { recursive: true })
       await writeFile(target, content)
@@ -188,6 +188,10 @@ export async function generateDomainPackageFiles(root, { check = false } = {}) {
     )
   }
   return packages
+}
+
+export function generatedDomainPackageContentMatches(current, generated) {
+  return current.replaceAll('\r\n', '\n') === generated.replaceAll('\r\n', '\n')
 }
 
 export async function discoverMainBundlePackageNames(root, packages) {

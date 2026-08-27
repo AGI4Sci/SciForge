@@ -8,8 +8,20 @@ import { fileURLToPath } from 'node:url'
 import {
   discoverMainBundlePackageNames,
   discoverDomainPackages,
+  generatedDomainPackageContentMatches,
   renderGeneratedDomainPackageFiles
 } from './domain-packages.mjs'
+
+test('treats Git CRLF checkout conversion as the same generated composition', () => {
+  assert.equal(generatedDomainPackageContentMatches(
+    '// generated\r\nexport const value = 1\r\n',
+    '// generated\nexport const value = 1\n'
+  ), true)
+  assert.equal(generatedDomainPackageContentMatches(
+    '// generated\r\nexport const value = 2\r\n',
+    '// generated\nexport const value = 1\n'
+  ), false)
+})
 
 test('sorts packages by packageName and omits undeclared process imports', async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
