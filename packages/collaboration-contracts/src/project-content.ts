@@ -1,7 +1,5 @@
 import { z } from 'zod'
 
-import { providerInstanceRefSchema } from '@sciforge/domain-sdk/provider-composition'
-
 import {
   agentIdSchema,
   contentRecoveryJournalEntryIdSchema,
@@ -41,8 +39,35 @@ const canonicalOpaqueSchema = (maximum: number) => z.string()
     'Opaque values cannot contain control characters.'
   )
 
-export { providerInstanceRefSchema }
-export type { ProviderInstanceRef } from '@sciforge/domain-sdk/provider-composition'
+const providerInstanceRefPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$/u
+const forbiddenInstanceRefPattern =
+  /(?:^|[._-])(?:conn(?:ection)?|credential|endpoint|host|origin|password|secret|token|url|uri)(?:[._-]|$)/iu
+const processLocalBrokerRefPattern = /^(?:cap|res)_[A-Za-z0-9._-]+$/u
+const hostOwnedRuntimeHandlePattern = /^(?:xfer|portal)_[A-Za-z0-9_-]{32}$/u
+
+/**
+ * Wire-compatible copy of Domain SDK's canonical Provider Instance Ref.
+ * Keep the parity test in project-content.test.ts in sync. The collaboration
+ * contract package must remain directly executable from an npm tarball and
+ * therefore cannot import the Domain SDK package's TypeScript source at runtime.
+ */
+export const providerInstanceRefSchema = z.string()
+  .min(3)
+  .max(256)
+  .regex(providerInstanceRefPattern, 'Use an opaque bounded Provider Instance Reference.')
+  .refine(
+    (value) => !forbiddenInstanceRefPattern.test(value),
+    'Provider Instance References cannot identify local access or secret material.'
+  )
+  .refine(
+    (value) => !processLocalBrokerRefPattern.test(value),
+    'Provider Instance References cannot be process-local Broker handles.'
+  )
+  .refine(
+    (value) => !hostOwnedRuntimeHandlePattern.test(value),
+    'Provider Instance References cannot be Host-owned runtime handles.'
+  )
+export type ProviderInstanceRef = string & { readonly __brand: 'ProviderInstanceRef' }
 
 const sameProviderInstance = (
   left: z.infer<typeof providerInstanceReferenceSchema>,

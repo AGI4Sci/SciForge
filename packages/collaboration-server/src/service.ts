@@ -208,6 +208,7 @@ export class CollaborationService {
         referenceDigest: digestSecret(approvalReference),
         safeSummary: input.safeSummary,
         effect: input.effect,
+        interactionMode: 'reaction_v1',
         remoteEligible: input.remoteEligible,
         status: input.remoteEligible ? 'pending' : 'desktop_only',
         revision: 1,
@@ -217,8 +218,8 @@ export class CollaborationService {
       }
       await tx.insertRemoteApproval(approval)
       const cardText = input.remoteEligible
-        ? remoteApprovalCard(approval, approvalReference, projection.displayName)
-        : remoteApprovalTerminalText('desktop_only')
+        ? remoteApprovalCard(approval)
+        : remoteApprovalDesktopRequiredNotice(approval)
       const message = await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
         'provider.notification.outbound', {
           protocolVersion: '1.0',
@@ -256,6 +257,9 @@ export class CollaborationService {
         await tx.getRemoteApprovalByReferenceDigest(digestSecret(input.approvalReference)),
         'Remote approval'
       )
+      if (approval.interactionMode !== 'command_v1') {
+        fail('permission_denied', 'This approval card does not accept command replies.')
+      }
       authorize({
         actor,
         operation: 'capability_approval',
@@ -325,6 +329,105 @@ export class CollaborationService {
         response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(updated) },
         resourceKind: 'remote_capability_approval',
         resourceId: approval.remoteApprovalId,
+        notifications: [{ recipient: message.recipient, sequence: message.sequence }]
+      }
+    })
+  }
+
+  async decideRemoteCapabilityApprovalFromMessageAction(actor: HumanEndpointActor, input: {
+    provider: string
+    realmId: string
+    providerMessageId: string
+    operation: 'add' | 'remove'
+    action: 'allow_once' | 'deny_once'
+    providerEventId: string
+  }): Promise<Record<string, unknown>> {
+    assertText(input.provider, 'provider', 1, 64)
+    assertText(input.realmId, 'realmId', 1, 512)
+    assertText(input.providerMessageId, 'providerMessageId', 1, 512)
+    assertText(input.providerEventId, 'providerEventId', 1, 512)
+    const idempotencyKey = `idem_remote_approval_${stableDigest(input.providerEventId)}`
+    return this.commit(actor, 'capability.approval.decide', idempotencyKey, {
+      action: input.action,
+      operation: input.operation,
+      providerEventId: input.providerEventId,
+      provider: input.provider,
+      realmId: input.realmId,
+      providerMessageId: input.providerMessageId
+    }, async (tx, at) => {
+      const approval = required(
+        await tx.getRemoteApprovalByProviderMessage(input.provider, input.realmId, input.providerMessageId),
+        'Remote approval'
+      )
+      if (approval.interactionMode !== 'reaction_v1' || input.operation !== 'add') {
+        fail('permission_denied', 'This approval card does not accept the requested message action.')
+      }
+      authorize({
+        actor,
+        operation: 'capability_approval',
+        targetUserId: approval.ownerUserId,
+        requiredAssurance: 'verified',
+        remoteApprovalAllowed: input.action === 'deny_once' || approval.remoteEligible
+      })
+      const agent = required(await tx.getAgent(approval.agentId), 'Agent')
+      if (agent.status !== 'active' || agent.ownerUserId !== approval.ownerUserId) {
+        fail('credential_revoked', 'The approval Agent is no longer active for its owner.')
+      }
+      const projection = required(await tx.getProjection(approval.projectionId), 'Projection')
+      if (projection.status !== 'active' || projection.agentId !== approval.agentId) {
+        fail('revision_conflict', 'The approval Projection is no longer active for its Agent.')
+      }
+      if (projection.locatorRevision !== approval.locatorRevision || !sameLocator(projection.locator, approval.locator)) {
+        fail('revision_conflict', 'The approval locator revision is no longer current.')
+      }
+      if (actor.humanEndpointId !== projection.humanEndpointId) {
+        fail('permission_denied', 'The approval belongs to another human endpoint.')
+      }
+      if (approval.expiresAt <= at) {
+        const expired = { ...approval, status: 'expired' as const, revision: approval.revision + 1, updatedAt: at }
+        await tx.updateRemoteApproval(expired, approval.revision)
+        const notifications = approval.providerCardMessageId
+          ? [await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+              'provider.message.update.outbound', {
+                protocolVersion: '1.0', type: 'provider.message.update.outbound',
+                remoteApprovalId: approval.remoteApprovalId, locator: approval.locator,
+                providerMessageId: approval.providerCardMessageId,
+                text: remoteApprovalTerminalText('expired'), fallbackText: remoteApprovalTerminalText('expired')
+              }, at)]
+          : []
+        return {
+          response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(expired) },
+          resourceKind: 'remote_capability_approval', resourceId: approval.remoteApprovalId,
+          notifications: notifications.map((message) => ({ recipient: message.recipient, sequence: message.sequence }))
+        }
+      }
+      if (approval.status !== 'pending') {
+        return {
+          response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(approval) },
+          resourceKind: 'remote_capability_approval', resourceId: approval.remoteApprovalId
+        }
+      }
+      const decisionId = `decision-${stableDigest(input.providerEventId)}`
+      const updated: StoredRemoteCapabilityApproval = {
+        ...approval,
+        status: input.action === 'allow_once' ? 'approved' : 'denied',
+        decisionEventId: input.providerEventId,
+        decisionId,
+        revision: approval.revision + 1,
+        updatedAt: at
+      }
+      await tx.updateRemoteApproval(updated, approval.revision)
+      const message = await this.appendInbox(tx, { kind: 'agent', id: approval.agentId },
+        'capability.approval.decision', {
+          protocolVersion: '1.0', type: 'capability.approval.decision',
+          remoteApprovalId: approval.remoteApprovalId, desktopApprovalId: approval.desktopApprovalId,
+          projectionId: approval.projectionId, runtimeId: approval.runtimeId,
+          threadId: approval.threadId, turnId: approval.turnId,
+          capabilityRequestId: approval.capabilityRequestId, decisionId, decision: input.action
+        }, at)
+      return {
+        response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(updated) },
+        resourceKind: 'remote_capability_approval', resourceId: approval.remoteApprovalId,
         notifications: [{ recipient: message.recipient, sequence: message.sequence }]
       }
     })
@@ -417,12 +520,12 @@ export class CollaborationService {
   }
 
   async confirmRemoteApprovalCard(remoteApprovalId: string, providerMessageId: string): Promise<void> {
-    const notification = await this.repository.transaction(async (tx) => {
+    const notifications = await this.repository.transaction(async (tx) => {
       const approval = required(await tx.getRemoteApproval(remoteApprovalId), 'Remote approval')
       if (approval.providerCardMessageId && approval.providerCardMessageId !== providerMessageId) {
         fail('identity_conflict', 'The approval card message reference cannot be replaced.')
       }
-      if (approval.providerCardMessageId) return null
+      if (approval.providerCardMessageId) return []
       const updated = {
         ...approval,
         providerCardMessageId: providerMessageId,
@@ -430,17 +533,32 @@ export class CollaborationService {
         updatedAt: this.timestamp()
       }
       await tx.updateRemoteApproval(updated, approval.revision)
-      if (approval.status === 'pending' || approval.status === 'desktop_only') return null
+      if (approval.status === 'pending' && approval.interactionMode === 'reaction_v1') {
+        const projection = required(await tx.getProjection(approval.projectionId), 'Projection')
+        const messages = []
+        for (const action of ['allow_once', 'deny_once'] as const) {
+          messages.push(await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+            'provider.message.action.ensure.outbound', {
+              protocolVersion: '1.0', type: 'provider.message.action.ensure.outbound',
+              remoteApprovalId: approval.remoteApprovalId, locator: approval.locator,
+              providerMessageId, action
+            }, updated.updatedAt))
+        }
+        return messages
+      }
+      if (approval.status === 'pending' || approval.status === 'desktop_only') return []
       const projection = required(await tx.getProjection(approval.projectionId), 'Projection')
-      return this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+      return [await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
         'provider.message.update.outbound', {
           protocolVersion: '1.0', type: 'provider.message.update.outbound',
           remoteApprovalId: approval.remoteApprovalId, locator: approval.locator,
           providerMessageId, text: remoteApprovalTerminalText(approval.status),
           fallbackText: remoteApprovalTerminalText(approval.status)
-        }, updated.updatedAt)
+        }, updated.updatedAt)]
     })
-    if (notification) await this.notifier?.notifyInboxAvailable(notification.recipient, notification.sequence)
+    for (const notification of notifications) {
+      await this.notifier?.notifyInboxAvailable(notification.recipient, notification.sequence)
+    }
   }
 
   async enqueueRemoteApprovalFallback(input: {
@@ -847,8 +965,10 @@ export class CollaborationService {
       }
       if (input.status !== 'active') {
         notifications.push(...await this.pauseEndpointProjections(tx, endpoint, at, 'human_endpoint_inactive'))
-        const container = await tx.getManagedContainerForOwner(actor.userId, endpoint.provider, endpoint.realmId)
-        if (container?.humanEndpointId === endpoint.humanEndpointId && container.status !== 'archived') {
+        const containers = (await tx.listManagedContainersForOwner(actor.userId)).filter((candidate) => (
+          candidate.humanEndpointId === endpoint.humanEndpointId && candidate.status !== 'archived'
+        ))
+        for (const container of containers) {
           await tx.updateManagedContainer({
             ...container,
             status: 'suspended',
@@ -879,11 +999,14 @@ export class CollaborationService {
       const updated: StoredEndpoint = { ...endpoint, userId: target.userId, revision: endpoint.revision + 1, updatedAt: at }
       await tx.updateEndpoint(updated, endpoint.revision)
       const notifications = await this.pauseEndpointProjections(tx, endpoint, at, 'human_endpoint_transferred')
-      const container = await tx.getManagedContainerForOwner(actor.userId, endpoint.provider, endpoint.realmId)
-      if (container?.humanEndpointId === endpoint.humanEndpointId) {
+      const containers = (await tx.listManagedContainersForOwner(actor.userId)).filter((candidate) => (
+        candidate.humanEndpointId === endpoint.humanEndpointId
+      ))
+      for (const container of containers) {
         await tx.updateManagedContainer({
           ...container,
-          ownerUserId: target.userId,
+          status: 'suspended',
+          safeErrorCode: 'human_endpoint_transferred',
           revision: container.revision + 1,
           updatedAt: at
         }, container.revision)
@@ -1132,7 +1255,8 @@ export class CollaborationService {
       if (endpoint.provider !== input.locator.provider || endpoint.realmId !== input.locator.realmId) {
         fail('validation_failed', 'Projection locator must use the bound endpoint provider and realm.')
       }
-      await requireOwnedManagedLocator(tx, actor.userId, endpoint, input.locator)
+      const installationId = await requireOwnedAgentInstallation(tx, actor.userId, agent.agentId)
+      await requireOwnedPrivateLocator(tx, actor.userId, endpoint, installationId, input.locator, at)
       for (const userId of allowed) required(await tx.getUser(userId), 'Allowed sender')
       if (await tx.getProjectionByLocator(input.locator.provider, input.locator.realmId, input.locator.containerId, input.locator.topicId)) {
         fail('identity_conflict', 'This provider locator already resolves to a personal Session projection.')
@@ -1153,7 +1277,7 @@ export class CollaborationService {
     projectionId: string
     expectedRevision: number
     displayName?: string
-    status?: 'active' | 'paused' | 'closed'
+    status?: 'active' | 'paused'
     locator?: ProviderLocatorValue
     locatorRevision?: number
     allowedSenderUserIds?: string[]
@@ -1163,17 +1287,7 @@ export class CollaborationService {
       const projection = required(await tx.getProjection(input.projectionId), 'Projection')
       if (projection.ownerUserId !== actor.userId) fail('permission_denied', 'Only the projection owner may update it.')
       expectRevision(projection.revision, input.expectedRevision)
-      if (
-        projection.status === 'closed' &&
-        (
-          input.status !== 'paused' ||
-          input.displayName !== undefined ||
-          input.locator !== undefined ||
-          input.allowedSenderUserIds !== undefined
-        )
-      ) {
-        fail('invalid_state_transition', 'A closed projection can only be restored to paused before reactivation.')
-      }
+      if (projection.status === 'closed') fail('invalid_state_transition', 'A closed projection cannot be rebound.')
       if (input.displayName) assertText(input.displayName, 'displayName', 1, 200)
       let locator = projection.locator
       let locatorRevision = projection.locatorRevision
@@ -1184,7 +1298,9 @@ export class CollaborationService {
         if (endpoint.provider !== input.locator.provider || endpoint.realmId !== input.locator.realmId) {
           fail('validation_failed', 'Updated locator must remain in the verified endpoint provider realm.')
         }
-        await requireOwnedManagedLocator(tx, actor.userId, endpoint, input.locator)
+        const agent = required(await tx.getAgent(projection.agentId), 'Projection Agent')
+        const installationId = await requireOwnedAgentInstallation(tx, actor.userId, agent.agentId)
+        await requireOwnedPrivateLocator(tx, actor.userId, endpoint, installationId, input.locator, at)
         const otherProjection = await tx.getProjectionByLocator(input.locator.provider, input.locator.realmId,
           input.locator.containerId, input.locator.topicId)
         if (otherProjection && otherProjection.projectionId !== projection.projectionId) {
@@ -1336,7 +1452,8 @@ export class CollaborationService {
         }
         if (projection.status === 'closed') fail('invalid_state_transition', 'A closed projection cannot move.')
         const endpoint = required(await tx.getEndpoint(projection.humanEndpointId), 'Projection endpoint')
-        await requireOwnedManagedLocator(tx, projection.ownerUserId, endpoint, input.currentLocator)
+        const installationId = await requireOwnedAgentInstallation(tx, projection.ownerUserId, projection.agentId)
+        await requireOwnedPrivateLocator(tx, projection.ownerUserId, endpoint, installationId, input.currentLocator, at)
         const updated: StoredProjection = { ...projection, locator: input.currentLocator,
           locatorRevision: projection.locatorRevision + 1, revision: projection.revision + 1,
           lastErrorCode: undefined, updatedAt: at }
@@ -5232,20 +5349,22 @@ export class CollaborationService {
 
   async ensureManagedContainer(actor: UserActor, input: {
     humanEndpointId: string
+    agentId: string
     displayName?: string
     policy: StoredManagedContainer['policy']
     idempotencyKey: string
   }): Promise<StoredManagedContainer> {
-    const expectedName = `sciforge-${stableDigest(actor.userId).slice(0, 12)}`
-    if (input.displayName !== undefined && input.displayName !== expectedName) {
-      fail('validation_failed', 'Managed Channel name must use the server-derived stable user handle.')
-    }
     const response = await this.commit(actor, 'managed_container.ensure', input.idempotencyKey, input, async (tx, at) => {
       const endpoint = required(await tx.getEndpoint(input.humanEndpointId), 'Human endpoint')
       if (endpoint.userId !== actor.userId || endpoint.status !== 'active') {
         fail('permission_denied', 'Managed Channel requires an active endpoint owned by the authenticated user.')
       }
-      const existing = await tx.getManagedContainerForOwner(actor.userId, endpoint.provider, endpoint.realmId)
+      const installationId = await requireOwnedAgentInstallation(tx, actor.userId, input.agentId)
+      const expectedName = `sciforge-${stableDigest(actor.userId).slice(0, 8)}-${stableDigest(installationId).slice(0, 8)}`
+      if (input.displayName !== undefined && input.displayName !== expectedName) {
+        fail('validation_failed', 'Managed Channel name must use the server-derived user and installation handle.')
+      }
+      const existing = await tx.getManagedContainerForOwner(actor.userId, endpoint.provider, endpoint.realmId, installationId)
       if (existing) {
         if (existing.status === 'failed' && !existing.externalContainerId) {
           const retried: StoredManagedContainer = {
@@ -5278,10 +5397,11 @@ export class CollaborationService {
         managedContainerId,
         ownerUserId: actor.userId,
         humanEndpointId: endpoint.humanEndpointId,
+        installationId,
         provider: endpoint.provider,
         realmId: endpoint.realmId,
         ownerProviderUserId: endpoint.providerUserId,
-        stableKey: `managed-${stableDigest({ ownerUserId: actor.userId, provider: endpoint.provider, realmId: endpoint.realmId })}`,
+        stableKey: `managed-${stableDigest({ ownerUserId: actor.userId, provider: endpoint.provider, realmId: endpoint.realmId, installationId })}`,
         displayName: expectedName,
         policy: input.policy,
         status: 'requested',
@@ -5312,26 +5432,30 @@ export class CollaborationService {
     return required(await this.repository.getManagedContainer(committed.managedContainerId), 'Managed container')
   }
 
-  async getManagedContainer(actor: AuthContext, managedContainerId: string): Promise<StoredManagedContainer> {
+  async getManagedContainer(actor: AuthContext, managedContainerId: string, agentId: string): Promise<StoredManagedContainer> {
     const container = required(await this.repository.getManagedContainer(managedContainerId), 'Managed container')
     if (actor.kind === 'system' || actor.userId !== container.ownerUserId) {
       fail('permission_denied', 'Managed Channel belongs to another user.')
     }
+    const installationId = await requireOwnedAgentInstallation(this.repository, actor.userId, agentId)
+    if (container.installationId !== installationId) fail('permission_denied', 'Managed Channel belongs to another SciForge installation.')
     return container
   }
 
-  async listManagedContainers(actor: UserActor): Promise<StoredManagedContainer[]> {
-    return this.repository.listManagedContainersForOwner(actor.userId)
+  async listManagedContainers(actor: UserActor, agentId: string): Promise<StoredManagedContainer[]> {
+    const installationId = await requireOwnedAgentInstallation(this.repository, actor.userId, agentId)
+    return (await this.repository.listManagedContainersForOwner(actor.userId)).filter((container) => container.installationId === installationId)
   }
 
   async inspectManagedContainer(actor: UserActor, input: {
     managedContainerId: string
+    agentId: string
     expectedRevision: number
     idempotencyKey: string
   }): Promise<StoredManagedContainer> {
     const response = await this.commit(actor, 'managed_container.inspect', input.idempotencyKey, input, async (tx, at) => {
       const current = required(await tx.getManagedContainer(input.managedContainerId), 'Managed container')
-      await requireManagedContainerOwner(tx, actor.userId, current)
+      await requireManagedContainerOwner(tx, actor.userId, input.agentId, current)
       if (current.revision !== input.expectedRevision) fail('revision_conflict', 'Managed Channel revision changed.')
       if (!current.externalContainerId) fail('validation_failed', 'Managed Channel has not completed initial provisioning.')
       if (!['active', 'drifted', 'failed'].includes(current.status)) {
@@ -5353,12 +5477,13 @@ export class CollaborationService {
 
   async reconcileManagedContainer(actor: UserActor, input: {
     managedContainerId: string
+    agentId: string
     expectedRevision: number
     idempotencyKey: string
   }): Promise<StoredManagedContainer> {
     const response = await this.commit(actor, 'managed_container.reconcile', input.idempotencyKey, input, async (tx, at) => {
       const current = required(await tx.getManagedContainer(input.managedContainerId), 'Managed container')
-      await requireManagedContainerOwner(tx, actor.userId, current)
+      await requireManagedContainerOwner(tx, actor.userId, input.agentId, current)
       if (current.revision !== input.expectedRevision) fail('revision_conflict', 'Managed Channel revision changed.')
       if (!current.externalContainerId) fail('validation_failed', 'Managed Channel has not completed initial provisioning.')
       if (!['drifted', 'failed'].includes(current.status)) {
@@ -5385,12 +5510,13 @@ export class CollaborationService {
 
   async archiveManagedContainer(actor: UserActor, input: {
     managedContainerId: string
+    agentId: string
     expectedRevision: number
     idempotencyKey: string
   }): Promise<StoredManagedContainer> {
     const response = await this.commit(actor, 'managed_container.archive', input.idempotencyKey, input, async (tx, at) => {
       const current = required(await tx.getManagedContainer(input.managedContainerId), 'Managed container')
-      await requireManagedContainerOwner(tx, actor.userId, current)
+      await requireManagedContainerOwner(tx, actor.userId, input.agentId, current)
       if (current.revision !== input.expectedRevision) fail('revision_conflict', 'Managed Channel revision changed.')
       if (!current.externalContainerId) fail('validation_failed', 'Managed Channel has not completed initial provisioning.')
       if (!['active', 'drifted'].includes(current.status)) {
@@ -5557,26 +5683,45 @@ export class CollaborationService {
   private timestamp(): string { return this.now().toISOString() }
 }
 
-async function requireOwnedManagedLocator(
-  repository: CollaborationReadRepository,
+async function requireOwnedPrivateLocator(
+  repository: CollaborationTransaction,
   ownerUserId: string,
   endpoint: StoredEndpoint,
-  locator: ProviderLocatorValue
+  installationId: string,
+  locator: ProviderLocatorValue,
+  at: string
 ): Promise<void> {
+  await repository.lockIdempotency('provider-private-container', stableDigest({
+    provider: locator.provider, realmId: locator.realmId, containerId: locator.containerId
+  }))
   const container = await repository.getManagedContainerForOwner(
     ownerUserId,
     endpoint.provider,
-    endpoint.realmId
+    endpoint.realmId,
+    installationId
   )
-  if (
-    !container ||
-    container.humanEndpointId !== endpoint.humanEndpointId ||
-    container.status !== 'active' ||
-    !container.externalContainerId ||
-    locator.containerId !== container.externalContainerId
-  ) {
-    fail('permission_denied', 'Projection locator must belong to the authenticated user\'s active managed Channel.')
+  if (container && container.humanEndpointId === endpoint.humanEndpointId &&
+      container.status === 'active' && container.externalContainerId === locator.containerId) return
+  const existingClaim = await repository.getPrivateContainerClaim(locator.provider, locator.realmId, locator.containerId)
+  if (existingClaim) {
+    if (existingClaim.ownerUserId !== ownerUserId || existingClaim.humanEndpointId !== endpoint.humanEndpointId ||
+        existingClaim.installationId !== installationId) {
+      fail('identity_conflict', 'This private Channel is already bound to another SciForge installation.')
+    }
+    return
   }
+  const discovery = await repository.getPrivateContainerDiscovery(
+    ownerUserId, endpoint.humanEndpointId, installationId,
+    locator.provider, locator.realmId, locator.containerId
+  )
+  if (!discovery || Date.parse(discovery.expiresAt) <= Date.parse(at)) {
+    fail('permission_denied', 'Refresh private Channels before binding this Topic.')
+  }
+  await repository.insertPrivateContainerClaim({
+    claimId: newId('pcc'), ownerUserId, humanEndpointId: endpoint.humanEndpointId, installationId,
+    provider: locator.provider, realmId: locator.realmId, externalContainerId: locator.containerId,
+    displayName: discovery.displayName, claimedAt: at
+  })
 }
 
 type ProjectListCursor = Readonly<{
@@ -5840,6 +5985,7 @@ function coordinationPage<Item>(
 async function requireManagedContainerOwner(
   repository: CollaborationReadRepository,
   ownerUserId: string,
+  agentId: string,
   container: StoredManagedContainer
 ): Promise<StoredEndpoint> {
   if (container.ownerUserId !== ownerUserId) {
@@ -5855,7 +6001,27 @@ async function requireManagedContainerOwner(
   ) {
     fail('permission_denied', 'Managed Channel requires its active verified owner endpoint.')
   }
+  const installationId = await requireOwnedAgentInstallation(repository, ownerUserId, agentId)
+  if (installationId !== container.installationId) {
+    fail('permission_denied', 'Managed Channel belongs to another SciForge installation.')
+  }
   return endpoint
+}
+
+async function requireOwnedAgentInstallation(
+  repository: CollaborationReadRepository,
+  ownerUserId: string,
+  agentId: string
+): Promise<string> {
+  const agent = required(await repository.getAgent(agentId), 'Managed Channel Agent')
+  if (agent.ownerUserId !== ownerUserId || agent.status !== 'active') {
+    fail('permission_denied', 'Managed Channel requires an active Agent owned by the authenticated user.')
+  }
+  const device = required(await repository.getDevice(agent.deviceId), 'Managed Channel Agent Device')
+  if (device.userId !== ownerUserId || device.status !== 'active') {
+    fail('credential_revoked', 'Managed Channel Agent Device is no longer active.')
+  }
+  return device.installationId
 }
 
 function actorAuditIdentity(actor: AuthContext): Pick<StoredAuditEvent, 'actorUserId' | 'actorEndpointId' | 'actorAgentId'> {
@@ -6789,23 +6955,12 @@ function sameLocator(left: ProviderLocatorValue, right: ProviderLocatorValue): b
     && left.topicId === right.topicId
 }
 
-function remoteApprovalCard(
-  approval: StoredRemoteCapabilityApproval,
-  approvalReference: string,
-  sessionDisplayName: string
-): string {
-  return [
-    'SciForge 请求一次权限',
-    '',
-    `操作：${approval.safeSummary}`,
-    `Session：${sessionDisplayName}`,
-    `风险：${approval.effect}`,
-    '有效期：5 分钟',
-    '',
-    '回复：',
-    `1 ${approvalReference}    仅本次允许`,
-    `2 ${approvalReference}    拒绝`
-  ].join('\n')
+function remoteApprovalCard(approval: StoredRemoteCapabilityApproval): string {
+  return `需审批（5 分钟）：${approval.safeSummary}\n👍 允许一次 · 👎 拒绝`
+}
+
+function remoteApprovalDesktopRequiredNotice(approval: StoredRemoteCapabilityApproval): string {
+  return `需在 SciForge 电脑端审批：${approval.safeSummary}`
 }
 
 function remoteApprovalTerminalText(status: StoredRemoteCapabilityApproval['status']): string {
@@ -6836,6 +6991,7 @@ function toRemoteApprovalEntity(approval: StoredRemoteCapabilityApproval): Recor
     safeSummary: approval.safeSummary,
     effect: approval.effect,
     remoteEligible: approval.remoteEligible,
+    interactionMode: approval.interactionMode,
     status: approval.status,
     expiresAt: approval.expiresAt,
     ...(approval.providerCardMessageId ? { providerCardMessageId: approval.providerCardMessageId } : {}),

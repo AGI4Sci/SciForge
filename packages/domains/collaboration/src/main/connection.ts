@@ -509,6 +509,7 @@ export class CollaborationConnection {
   }
 
   async refreshEndpointLocators(humanEndpointId: string): Promise<number> {
+    const agentId = await this.requireLocalAgentId()
     const locators: Array<{ humanEndpointId: string; locator: ProviderLocator }> = []
     let cursor: string | undefined
     let pageCount = 0
@@ -518,6 +519,7 @@ export class CollaborationConnection {
         requestId: collaborationRequestId(),
         type: 'endpoint.locator.list',
         humanEndpointId,
+        agentId,
         ...(cursor ? { cursor } : {}),
         limit: 500
       }))
@@ -540,10 +542,12 @@ export class CollaborationConnection {
   }
 
   async refreshManagedContainers(): Promise<readonly ManagedProviderContainer[]> {
+    const agentId = await this.requireLocalAgentId()
     const response = await this.executeAsUser(restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
-      type: 'managed_container.list'
+      type: 'managed_container.list',
+      agentId
     }))
     if (response.type === 'rest.error') throw new Error(response.error.message)
     if (response.type !== 'rest.collection' || response.items.some((item) => item.type !== 'managed_provider_container')) {

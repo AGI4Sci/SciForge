@@ -93,10 +93,13 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
     topicId: 'full-path-stable-topic',
     topicDisplayName: '固定个人 Session'
   }
+  const device = await repository.getDevice(participant.deviceId)
+  assert.ok(device)
   await repository.insertManagedContainer({
     managedContainerId: 'mco-full-path',
     ownerUserId: participant.userId,
     humanEndpointId: participant.humanEndpointId,
+    installationId: device.installationId,
     provider: 'fake-im',
     realmId: 'fake-realm',
     ownerProviderUserId: 'full-path-provider-user',

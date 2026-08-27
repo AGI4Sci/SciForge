@@ -35,6 +35,8 @@ import {
   collaborationManagedContainerArchiveInputSchema,
   collaborationPrimaryAgentSelectInputSchema,
   collaborationPrimaryAgentSelectResultSchema,
+  collaborationPrivateChannelDiscoverInputSchema,
+  collaborationPrivateChannelDiscoverResultSchema,
   collaborationProjectionLinkInputSchema,
   collaborationProjectionLinkResultSchema,
   collaborationProjectionShareInputSchema,
@@ -58,6 +60,7 @@ import {
   type CollaborationEndpointChallengeStartInput,
   type CollaborationManagedContainerManageInput,
   type CollaborationPrimaryAgentSelectInput,
+  type CollaborationPrivateChannelDiscoverInput,
   type CollaborationProjectionLinkInput,
   type CollaborationProjectionShareInput,
   type CollaborationProjectionUpdateInput,
@@ -416,7 +419,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
       capability(
         COLLABORATION_CAPABILITY_IDS.projectionUpdate,
         'Update Session projection',
-        'Explicitly renames, pauses, resumes, closes, or relinks a stable projection.',
+        'Explicitly renames, pauses, or resumes a stable projection.',
         'external-write',
         collaborationProjectionUpdateInputSchema,
         collaborationProjectionUpdateResultSchema,
@@ -455,6 +458,18 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
               connection: (await options.getRuntime().status()).connection
             }
           }
+        }
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.privateChannelDiscover,
+        'Discover private collaboration Channels',
+        'Discovers Topics only from provider-attested private Channels containing the verified user and message Bot.',
+        'read',
+        collaborationPrivateChannelDiscoverInputSchema,
+        collaborationPrivateChannelDiscoverResultSchema,
+        async (raw) => {
+          const input = collaborationPrivateChannelDiscoverInputSchema.parse(raw) as CollaborationPrivateChannelDiscoverInput
+          return { output: await options.getRuntime().discoverPrivateChannels(input.humanEndpointId) }
         }
       ),
       capability(

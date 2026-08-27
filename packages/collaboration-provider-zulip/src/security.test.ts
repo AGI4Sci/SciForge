@@ -44,7 +44,7 @@ describe('Zulip provider security boundaries', () => {
     assert.equal(zulipRawEventSchema.safeParse({ ...event, flags: ['x'.repeat(129)] }).success, false)
   })
 
-  it('keeps register and events response envelopes strict', () => {
+  it('accepts bounded Zulip compatibility metadata while rejecting unknown response fields', () => {
     const register = {
       result: 'success',
       msg: '',
@@ -53,18 +53,24 @@ describe('Zulip provider security boundaries', () => {
       idle_queue_timeout_secs: 600,
       zulip_version: '12.2',
       zulip_feature_level: 481,
-      zulip_merge_base: '12.2'
+      zulip_merge_base: '12.2',
+      ignored_parameters_unsupported: ['fetch_event_types']
     }
     const events = {
       result: 'success',
       msg: '',
       queue_id: 'queue-zulip-12-2',
+      ignored_parameters_unsupported: ['dont_block'],
       events: [{ id: 0, type: 'heartbeat' }]
     }
     assert.equal(zulipRegisterResponseSchema.safeParse(register).success, true)
     assert.equal(zulipRegisterResponseSchema.safeParse({ ...register, unexpected: true }).success, false)
     assert.equal(zulipEventsResponseSchema.safeParse(events).success, true)
     assert.equal(zulipEventsResponseSchema.safeParse({ ...events, unexpected: true }).success, false)
+    assert.equal(zulipRegisterResponseSchema.safeParse({
+      ...register,
+      ignored_parameters_unsupported: Array.from({ length: 101 }, () => 'bounded')
+    }).success, false)
   })
 
   it('accepts the bounded Zulip 12.2 own-bot shape and rejects unknown fields', () => {
@@ -161,6 +167,23 @@ describe('Zulip provider security boundaries', () => {
       ...base,
       message_ids: Array.from({ length: 10_001 }, (_, index) => index + 1)
     }).success, false)
+  })
+
+  it('accepts only the bounded authenticated Zulip reaction event shape', () => {
+    const reaction = {
+      id: 3,
+      type: 'reaction',
+      op: 'add',
+      message_id: 600,
+      user_id: 42,
+      emoji_name: '+1',
+      emoji_code: '1f44d',
+      reaction_type: 'unicode_emoji'
+    }
+    assert.equal(zulipRawEventSchema.safeParse(reaction).success, true)
+    assert.equal(zulipRawEventSchema.safeParse({ ...reaction, user_id: undefined }).success, false)
+    assert.equal(zulipRawEventSchema.safeParse({ ...reaction, user: { id: 42 } }).success, false)
+    assert.equal(zulipRawEventSchema.safeParse({ ...reaction, operation: 'add' }).success, false)
   })
 
   it('redacts credentials and bounds cyclic diagnostics', () => {

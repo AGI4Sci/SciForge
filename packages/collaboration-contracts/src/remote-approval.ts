@@ -15,6 +15,7 @@ import {
 import { providerLocatorSchema } from './provider.js'
 
 export const remoteApprovalDecisionSchema = z.enum(['allow_once', 'deny_once'])
+export const remoteApprovalInteractionModeSchema = z.enum(['command_v1', 'reaction_v1'])
 export const remoteApprovalStatusSchema = z.enum([
   'pending',
   'approved',
@@ -40,6 +41,7 @@ export const remoteCapabilityApprovalSchema = z.object({
   desktopApprovalId: providerOpaqueIdSchema,
   safeSummary: z.string().trim().min(1).max(500),
   effect: z.enum(['workspace-write', 'external-write', 'destructive']),
+  interactionMode: remoteApprovalInteractionModeSchema,
   remoteEligible: z.boolean(),
   status: remoteApprovalStatusSchema,
   expiresAt: timestampSchema,
@@ -49,4 +51,5 @@ export const remoteCapabilityApprovalSchema = z.object({
 
 export type RemoteCapabilityApproval = z.infer<typeof remoteCapabilityApprovalSchema>
 export type RemoteApprovalDecision = z.infer<typeof remoteApprovalDecisionSchema>
+export type RemoteApprovalInteractionMode = z.infer<typeof remoteApprovalInteractionModeSchema>
 export type RemoteApprovalStatus = z.infer<typeof remoteApprovalStatusSchema>

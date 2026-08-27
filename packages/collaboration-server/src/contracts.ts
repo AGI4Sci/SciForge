@@ -150,6 +150,7 @@ export function toManagedContainer(container: StoredManagedContainer): ManagedPr
     managedContainerId: container.managedContainerId,
     ownerUserId: container.ownerUserId,
     humanEndpointId: container.humanEndpointId,
+    installationId: container.installationId,
     provider: container.provider,
     realmId: container.realmId,
     stableKey: container.stableKey,

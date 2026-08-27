@@ -22,6 +22,7 @@ import {
   PairingCopyFeedback,
   PairingStatus,
   ParticipantSection,
+  PhoneLinkSetup,
   ProjectionLocatorSelector,
   ProjectionCard,
   ProjectionGroup,
@@ -38,6 +39,22 @@ import {
 } from './CollaborationPanel.js'
 
 const NOOP = () => undefined
+
+test('keeps first-time Phone Link setup open and completed setup collapsible', () => {
+  const incomplete = renderToStaticMarkup(
+    <PhoneLinkSetup setupComplete={false}><span>setup-fields</span></PhoneLinkSetup>
+  )
+  assert.match(incomplete, /data-phone-link-setup="incomplete"/u)
+  assert.match(incomplete, /aria-expanded="true"/u)
+  assert.match(incomplete, /setup-fields/u)
+
+  const complete = renderToStaticMarkup(
+    <PhoneLinkSetup setupComplete><span>setup-fields</span></PhoneLinkSetup>
+  )
+  assert.match(complete, /data-phone-link-setup="complete"/u)
+  assert.match(complete, /aria-expanded="false"/u)
+  assert.doesNotMatch(complete, /setup-fields|disabled/u)
+})
 
 test('pairing poll schedule honors server retry and stops locally at expiry after rate-limit errors', () => {
   const now = Date.parse('2026-08-15T04:00:00.000Z')
@@ -329,13 +346,12 @@ test('shows a compact personal Topic card with diagnostics folded and no sharing
   assert.match(html, /data-projection-status="error"/u)
   assert.match(html, /collaborationDesktopSession.*细胞分析/u)
   assert.match(html, /collaborationPersonalControlOnly/u)
-  assert.match(html, /codex\/thread-stable/u)
+  assert.doesNotMatch(html, /codex\/thread-stable/u)
   assert.match(html, /<details/u)
   assert.doesNotMatch(html, /Researcher A|Laptop A|user-b|collaborationSharedExecutionNotice/u)
   assert.doesNotMatch(html, /collaborationRename|collaborationSaveAllowlist|collaborationAdvancedPermissions/u)
   for (const action of [
     'collaborationPause',
-    'collaborationClose',
     'collaborationRetry'
   ]) {
     assert.match(html, new RegExp(action, 'u'))
@@ -351,7 +367,8 @@ test('shows a compact personal Topic card with diagnostics folded and no sharing
       onRetry={NOOP}
     />
   )
-  assert.match(paused, /collaborationRelink/u)
+  assert.match(paused, /collaborationResume/u)
+  assert.doesNotMatch(paused, /collaborationRelink|collaborationClose/u)
 
   const closed = renderToStaticMarkup(
     <ProjectionCard
@@ -362,7 +379,7 @@ test('shows a compact personal Topic card with diagnostics folded and no sharing
       onRetry={NOOP}
     />
   )
-  assert.match(closed, /collaborationRestoreToCurrent/u)
+  assert.doesNotMatch(closed, /collaborationRestoreToCurrent|collaborationRelink|collaborationClose/u)
 
   const occupied = renderToStaticMarkup(
     <ProjectionCard
@@ -555,6 +572,7 @@ test('renders managed Channel verification and counts only Sessions in the exact
       managedContainerId: 'mco_123456789012',
       ownerUserId: 'usr_123456789012',
       humanEndpointId: 'hep_123456789012',
+      installationId: 'ins_123456789012',
       provider: 'provider.fixture',
       realmId: 'realm-a',
       stableKey: 'managed-owner-realm-a',
@@ -622,7 +640,7 @@ test('renders managed Channel verification and counts only Sessions in the exact
   assert.match(failedHtml, />\?</u)
 })
 
-test('keeps locator discovery inside the authenticated user managed container', () => {
+test('uses only locators already attested for the authenticated endpoint', () => {
   const owned = {
     type: 'provider_locator' as const,
     provider: 'provider.fixture',
@@ -647,6 +665,7 @@ test('keeps locator discovery inside the authenticated user managed container', 
       managedContainerId: 'mco_123456789012',
       ownerUserId: 'usr_123456789012',
       humanEndpointId: 'hep_123456789012',
+      installationId: 'ins_123456789012',
       provider: 'provider.fixture',
       realmId: 'realm-a',
       stableKey: 'managed-owner-realm-a',
@@ -679,10 +698,10 @@ test('keeps locator discovery inside the authenticated user managed container', 
     managed,
     'hep_123456789012'
   )
-  assert.deepEqual(filtered, [owned])
+  assert.deepEqual(filtered, [owned, crossUser])
   assert.deepEqual(
     filterProjectionLocatorsForManagedContainer([owned, crossUser], [], 'hep_123456789012'),
-    []
+    [owned, crossUser]
   )
   const html = renderToStaticMarkup(
     <ProjectionLocatorSelector locators={filtered} projections={[]}
@@ -690,7 +709,7 @@ test('keeps locator discovery inside the authenticated user managed container', 
       onSelect={NOOP} />
   )
   assert.match(html, /本人 Topic/u)
-  assert.doesNotMatch(html, /其他用户 Topic/u)
+  assert.match(html, /其他用户 Topic/u)
 })
 
 test('renders Project Coordinator, Task assignee state, ordered queue, and explicit recovery errors', () => {

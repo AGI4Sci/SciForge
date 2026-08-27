@@ -167,6 +167,19 @@ export const providerReactionEventSchema = z.object({
   operation: z.enum(['added', 'removed'])
 }).strict()
 
+export const providerMessageActionSchema = z.enum(['allow_once', 'deny_once'])
+export type ProviderMessageAction = z.infer<typeof providerMessageActionSchema>
+
+export const providerMessageActionEventSchema = z.object({
+  ...providerEventEnvelopeShape,
+  type: z.literal('provider.message.action'),
+  identity: providerIdentitySchema,
+  providerMessageId: providerMessageIdSchema,
+  operation: z.enum(['add', 'remove']),
+  action: providerMessageActionSchema
+}).strict()
+export type ProviderMessageActionEvent = z.infer<typeof providerMessageActionEventSchema>
+
 export const providerLocatorChangedEventSchema = z.object({
   ...providerEventEnvelopeShape,
   type: z.literal('provider.locator.changed'),
@@ -232,6 +245,7 @@ export const providerEventSchema = z.discriminatedUnion('type', [
   providerMessageEditedEventSchema,
   providerMessageDeletedEventSchema,
   providerReactionEventSchema,
+  providerMessageActionEventSchema,
   providerLocatorChangedEventSchema,
   providerChallengeRespondedEventSchema,
   providerChallengeInvalidEventSchema,
@@ -264,9 +278,19 @@ const providerDirectMessageSendRequestSchema = z.object({
   presentation: providerMessagePresentationSchema.optional()
 }).strict()
 
+const providerMessageActionSendRequestSchema = z.object({
+  protocolVersion: protocolVersionSchema,
+  type: z.literal('provider.ensure.message_action'),
+  locator: providerLocatorSchema,
+  providerMessageId: providerMessageIdSchema,
+  clientMessageId: providerOpaqueIdSchema,
+  action: providerMessageActionSchema
+}).strict()
+
 export const providerSendRequestSchema = z.union([
   providerLocatorMessageSendRequestSchema,
   providerDirectMessageSendRequestSchema,
+  providerMessageActionSendRequestSchema,
   z.object({
     protocolVersion: protocolVersionSchema,
     type: z.literal('provider.send.status'),
@@ -336,6 +360,7 @@ export const providerLocatorListRequestSchema = z.object({
   protocolVersion: protocolVersionSchema,
   type: z.literal('provider.locator.list'),
   realmId: providerOpaqueIdSchema,
+  ownerIdentity: providerIdentitySchema.optional(),
   container: providerManagedContainerRefSchema.optional(),
   containerDisplayName: displayNameSchema.optional(),
   query: z.string().trim().max(200).optional(),
@@ -429,7 +454,9 @@ export const humanEndpointProviderContractSchema = z.object({
     identityChallenge: z.literal(true),
     directMessages: z.literal(true),
     managedContainers: z.boolean().optional(),
-    messageUpdates: z.boolean().optional()
+    privateContainerDiscovery: z.boolean().optional(),
+    messageUpdates: z.boolean().optional(),
+    messageActions: z.boolean().optional()
   }).strict(),
   onboarding: z.object({
     realmLabel: displayNameSchema,

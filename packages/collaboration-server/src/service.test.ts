@@ -46,10 +46,12 @@ async function activateManagedContainer(
   containerId: string
 ) {
   const endpoint = (await repository.getEndpoint(owner.endpointId))!
+  const device = (await repository.getDevice(owner.deviceId))!
   await repository.insertManagedContainer({
     managedContainerId: `mco_${stableDigest(`${owner.userId}\u0000${containerId}`).slice(0, 12)}`,
     ownerUserId: owner.userId,
     humanEndpointId: owner.endpointId,
+    installationId: device.installationId,
     provider: 'zulip',
     realmId: 'realm-hk',
     ownerProviderUserId: endpoint.providerUserId,
@@ -148,7 +150,7 @@ describe('CollaborationService canonical transactions', () => {
     })).rejects.toMatchObject({ code: 'permission_denied' })
   })
 
-  it('restores a closed projection only through the safe paused state', async () => {
+  it('keeps a Session binding permanent while allowing pause and resume', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
     const authentication = new AuthenticationService(repository, now)
@@ -170,27 +172,13 @@ describe('CollaborationService canonical transactions', () => {
       allowedSenderUserIds: [owner.userId],
       idempotencyKey: 'idem_projection_restore_create'
     })
-    const closed = await service.updateProjection(owner.user, {
+    const paused = await service.updateProjection(owner.user, {
       projectionId: created.projectionId,
       expectedRevision: created.revision,
-      status: 'closed',
-      idempotencyKey: 'idem_projection_restore_close'
-    })
-
-    await expect(service.updateProjection(owner.user, {
-      projectionId: closed.projectionId,
-      expectedRevision: closed.revision,
-      status: 'active',
-      idempotencyKey: 'idem_projection_restore_direct_active'
-    })).rejects.toMatchObject({ code: 'invalid_state_transition' })
-
-    const paused = await service.updateProjection(owner.user, {
-      projectionId: closed.projectionId,
-      expectedRevision: closed.revision,
       status: 'paused',
-      idempotencyKey: 'idem_projection_restore_pause'
+      idempotencyKey: 'idem_projection_pause'
     })
-    expect(paused).toMatchObject({ status: 'paused', revision: closed.revision + 1 })
+    expect(paused).toMatchObject({ status: 'paused', revision: created.revision + 1 })
 
     const restored = await service.updateProjection(owner.user, {
       projectionId: paused.projectionId,
@@ -217,7 +205,7 @@ describe('CollaborationService canonical transactions', () => {
       displayName: 'Transfer topic', allowedSenderUserIds: [owner.userId],
       idempotencyKey: 'idem_projection_before_endpoint_transfer'
     })
-    const container = (await service.listManagedContainers(owner.user))[0]!
+    const container = (await service.listManagedContainers(owner.user, agent.agent.agentId))[0]!
     const endpointBeforeTransfer = (await repository.getEndpoint(owner.endpointId))!
 
     await service.transferEndpoint({ ...owner.user, assurance: 'strong' }, {
@@ -229,16 +217,19 @@ describe('CollaborationService canonical transactions', () => {
       status: 'paused', lastErrorCode: 'human_endpoint_transferred', revision: projection.revision + 1
     })
     expect(await repository.getManagedContainer(container.managedContainerId)).toMatchObject({
-      ownerUserId: target.userId, revision: container.revision + 1
+      ownerUserId: owner.userId, status: 'suspended', safeErrorCode: 'human_endpoint_transferred',
+      revision: container.revision + 1
     })
     await expect(service.inspectManagedContainer(owner.user, {
-      managedContainerId: container.managedContainerId, expectedRevision: container.revision + 1,
+      managedContainerId: container.managedContainerId, agentId: agent.agent.agentId,
+      expectedRevision: container.revision + 1,
       idempotencyKey: 'idem_old_owner_inspect_after_transfer'
     })).rejects.toMatchObject({ code: 'permission_denied' })
     await expect(service.inspectManagedContainer(target.user, {
-      managedContainerId: container.managedContainerId, expectedRevision: container.revision + 1,
+      managedContainerId: container.managedContainerId, agentId: agent.agent.agentId,
+      expectedRevision: container.revision + 1,
       idempotencyKey: 'idem_new_owner_inspect_after_transfer'
-    })).resolves.toMatchObject({ ownerUserId: target.userId })
+    })).rejects.toMatchObject({ code: 'permission_denied' })
     expect(notifier.notifications).toContainEqual(expect.objectContaining({
       recipient: { kind: 'agent', id: agent.agent.agentId }
     }))
@@ -250,6 +241,8 @@ describe('CollaborationService canonical transactions', () => {
     const service = new CollaborationService({ repository, notifier, now })
     const authentication = new AuthenticationService(repository)
     const owner = await onboard(repository, service, authentication, 'managed-owner', '42')
+    const registered = await registerAgent(service, owner.user, 'managedagent')
+    const device = (await repository.getDevice(owner.deviceId))!
     const policy = { version: 1 as const, visibility: 'private' as const, history: 'protected' as const,
       membership: 'owner_and_message_bot' as const, memberManagement: 'provisioning_service_only' as const,
       channelManagement: 'provisioning_service_only' as const, ownerCanSend: true as const,
@@ -257,7 +250,8 @@ describe('CollaborationService canonical transactions', () => {
       messageBotCreatesProjectTopics: false as const }
     const input = {
       humanEndpointId: owner.endpointId,
-      displayName: `sciforge-${stableDigest(owner.userId).slice(0, 12)}`,
+      agentId: registered.agent.agentId,
+      displayName: `sciforge-${stableDigest(owner.userId).slice(0, 8)}-${stableDigest(device.installationId).slice(0, 8)}`,
       policy,
       idempotencyKey: 'idem_managed_container_ensure_owner'
     }
@@ -304,9 +298,8 @@ describe('CollaborationService canonical transactions', () => {
       revision: 4,
       updatedAt: at.toISOString()
     })
-    const agent = await registerAgent(service, owner.user, 'managedagent')
     await expect(service.createProjection(owner.user, {
-      agentId: agent.agent.agentId,
+      agentId: registered.agent.agentId,
       humanEndpointId: owner.endpointId,
       locator: {
         type: 'provider_locator', provider: 'zulip', realmId: 'realm-hk',
@@ -321,6 +314,7 @@ describe('CollaborationService canonical transactions', () => {
 
     const inspected = await service.inspectManagedContainer(owner.user, {
       managedContainerId: first.managedContainerId,
+      agentId: registered.agent.agentId,
       expectedRevision: 4,
       idempotencyKey: 'idem_managed_container_inspect_owner'
     })
@@ -329,14 +323,14 @@ describe('CollaborationService canonical transactions', () => {
       operation: 'inspect', desiredRevision: 4, state: 'queued'
     }))
     const projection = await service.createProjection(owner.user, {
-      agentId: agent.agent.agentId, humanEndpointId: owner.endpointId,
+      agentId: registered.agent.agentId, humanEndpointId: owner.endpointId,
       locator: { type: 'provider_locator', provider: 'zulip', realmId: 'realm-hk',
         containerId: '123', topicId: 'topic-owned' },
       displayName: 'Owned Topic', allowedSenderUserIds: [owner.userId],
       idempotencyKey: 'idem_projection_owned_managed_container'
     })
     const archived = await service.archiveManagedContainer(owner.user, {
-      managedContainerId: first.managedContainerId, expectedRevision: 4,
+      managedContainerId: first.managedContainerId, agentId: registered.agent.agentId, expectedRevision: 4,
       idempotencyKey: 'idem_managed_container_archive_owner'
     })
     expect(archived).toMatchObject({ status: 'suspended', revision: 5 })
@@ -347,7 +341,7 @@ describe('CollaborationService canonical transactions', () => {
       operation: 'archive', desiredRevision: 5, state: 'queued'
     }))
     expect(notifier.notifications).toContainEqual(expect.objectContaining({
-      recipient: { kind: 'agent', id: agent.agent.agentId }
+      recipient: { kind: 'agent', id: registered.agent.agentId }
     }))
 
     const other = await onboard(repository, service, authentication, 'managed-other', '43')

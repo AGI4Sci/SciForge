@@ -67,6 +67,7 @@ export interface ProviderDirectory {
   listLocators(input: {
     actor: AuthContext
     humanEndpointId: string
+    agentId: string
     query?: string
     cursor?: string
     limit: number
@@ -275,7 +276,7 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     case 'endpoint.locator.list': {
       if (!options.providers) throw new CollaborationServiceError('resource_offline', 'No provider directory is running.')
       const page = await options.providers.listLocators({ actor: requiredActor(actor), humanEndpointId: command.humanEndpointId,
-        query: command.query, cursor: command.cursor, limit: command.limit })
+        agentId: command.agentId, query: command.query, cursor: command.cursor, limit: command.limit })
       return response(command, { type: 'endpoint.locator_page', ...page })
     }
     case 'managed_container.ensure': {
@@ -284,11 +285,11 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     }
     case 'managed_container.get': {
       return entityResponse(command, toManagedContainer(
-        await service.getManagedContainer(requiredActor(actor), command.managedContainerId)
+        await service.getManagedContainer(requiredActor(actor), command.managedContainerId, command.agentId)
       ))
     }
     case 'managed_container.list': {
-      return collectionResponse(command, (await service.listManagedContainers(requiredUser(actor))).map(toManagedContainer))
+      return collectionResponse(command, (await service.listManagedContainers(requiredUser(actor), command.agentId)).map(toManagedContainer))
     }
     case 'managed_container.inspect': {
       return entityResponse(command, toManagedContainer(await service.inspectManagedContainer(requiredUser(actor), command)))
