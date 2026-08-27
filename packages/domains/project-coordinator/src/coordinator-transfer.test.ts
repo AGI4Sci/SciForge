@@ -144,6 +144,7 @@ function transferWorkspace(transferred: boolean) {
     },
     observedAt: TEST_TIMESTAMP,
     focusedProjectId: TEST_IDS.projectId,
+    availableWorkerGroups: [],
     projects: [{
       project,
       plan: null,

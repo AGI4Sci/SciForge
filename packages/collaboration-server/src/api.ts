@@ -43,6 +43,8 @@ import {
   toExternalOperationRecoveryJournalEntry,
   toVisibleRecoveryAction,
   toProjectFinalSummary,
+  toWorkerDirectoryAgentLabel,
+  toWorkerDirectoryUserLabel,
   toWorkerAvailability,
   toCloudResourceRef,
   toProjectEndpointBinding,
@@ -384,8 +386,10 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
           items: page.projectItems.map((item) => toProjectWorkerAvailabilityView({ projectId: command.projectId!, ...item })),
           ...(page.nextAgentId ? { nextAgentId: page.nextAgentId } : {}) })
       }
-      return response(command, { type: 'rest.worker_availability_page',
+      return response(command, { type: 'rest.worker_availability_page', observedAt: page.observedAt,
         items: page.items.map(toWorkerAvailability),
+        userLabels: page.users.map(toWorkerDirectoryUserLabel),
+        agentLabels: page.agents.map(toWorkerDirectoryAgentLabel),
         ...(page.nextAgentId ? { nextAgentId: page.nextAgentId } : {}) })
     }
     case 'project.membership.add': {

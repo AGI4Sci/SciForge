@@ -450,9 +450,7 @@ export function ProjectCoordinatorPanel({
   const [busyAction, setBusyAction] = useState<string>()
   const [createDisplayName, setCreateDisplayName] = useState('')
   const [createGoal, setCreateGoal] = useState('')
-  const [createCoordinatorAgentId, setCreateCoordinatorAgentId] = useState('')
-  const [createCoordinatorRevision, setCreateCoordinatorRevision] = useState('1')
-  const [createWorkerUserIds, setCreateWorkerUserIds] = useState('')
+  const [createWorkerUserIds, setCreateWorkerUserIds] = useState<readonly string[]>([])
   const [activeView, setActiveView] = useState<string>('overview')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [newProjectRequest, setNewProjectRequest] = useState(0)
@@ -597,13 +595,17 @@ export function ProjectCoordinatorPanel({
   const createProject = useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (workspace?.connection.state !== 'ready') return
-    const workerUserIds = createWorkerUserIds.split(',').map((value) => value.trim()).filter(Boolean)
-    const memberUserIds = [...new Set([workspace.connection.userId, ...workerUserIds])]
+    const creatorUserId = workspace.connection.userId
+    const visibleWorkerUserIds = new Set(workspace.availableWorkerGroups.map(({ userId }) => userId))
+    const memberUserIds = [
+      creatorUserId,
+      ...createWorkerUserIds.filter((userId) => (
+        userId !== creatorUserId && visibleWorkerUserIds.has(userId)
+      ))
+    ]
     void runAction('project-create', () => client.createProject({
       displayName: createDisplayName,
       goal: createGoal,
-      coordinatorAgentId: createCoordinatorAgentId,
-      expectedCoordinatorAgentRevision: Number(createCoordinatorRevision),
       budget: {
         maxTasks: 32,
         maxTasksPerRound: 8,
@@ -621,19 +623,22 @@ export function ProjectCoordinatorPanel({
       setDraft(await client.readPlanDraft({ projectId: selected.selectedProjectId }))
       setCreateDisplayName('')
       setCreateGoal('')
-      setCreateCoordinatorAgentId('')
-      setCreateWorkerUserIds('')
+      setCreateWorkerUserIds([])
     })
   }, [
     client,
-    createCoordinatorAgentId,
-    createCoordinatorRevision,
     createDisplayName,
     createGoal,
     createWorkerUserIds,
     runAction,
     workspace
   ])
+
+  const toggleCreateWorkerUser = useCallback((userId: string, selected: boolean) => {
+    setCreateWorkerUserIds((current) => selected
+      ? [...new Set([...current, userId])]
+      : current.filter((candidate) => candidate !== userId))
+  }, [])
 
   const generateDraft = useCallback(() => {
     if (!project) return
@@ -961,17 +966,15 @@ export function ProjectCoordinatorPanel({
                     defaultExpanded={workspace.projects.length === 0}
                     requestOpen={newProjectRequest}
                     busy={busyAction === 'project-create'}
-                    coordinatorAgentId={createCoordinatorAgentId}
-                    coordinatorRevision={createCoordinatorRevision}
+                    creatorUserId={workspace.connection.userId}
                     displayName={createDisplayName}
                     goal={createGoal}
-                    workerUserIds={createWorkerUserIds}
-                    onCoordinatorAgentId={setCreateCoordinatorAgentId}
-                    onCoordinatorRevision={setCreateCoordinatorRevision}
+                    selectedWorkerUserIds={createWorkerUserIds}
+                    workerGroups={workspace.availableWorkerGroups}
                     onDisplayName={setCreateDisplayName}
                     onGoal={setCreateGoal}
                     onSubmit={createProject}
-                    onWorkerUserIds={setCreateWorkerUserIds}
+                    onWorkerUserToggle={toggleCreateWorkerUser}
                   />
                 ) : null}
                 <ProjectCoordinatorPlanSection
@@ -1321,39 +1324,36 @@ function CollaborationSettingsDrawer({
   )
 }
 
-function ProjectCreateForm({
+export function ProjectCreateForm({
   defaultExpanded = false,
   requestOpen = 0,
   busy,
-  coordinatorAgentId,
-  coordinatorRevision,
+  creatorUserId,
   displayName,
   goal,
-  workerUserIds,
-  onCoordinatorAgentId,
-  onCoordinatorRevision,
+  selectedWorkerUserIds,
+  workerGroups,
   onDisplayName,
   onGoal,
   onSubmit,
-  onWorkerUserIds
+  onWorkerUserToggle
 }: Readonly<{
   defaultExpanded?: boolean
   requestOpen?: number
   busy: boolean
-  coordinatorAgentId: string
-  coordinatorRevision: string
+  creatorUserId: string
   displayName: string
   goal: string
-  workerUserIds: string
-  onCoordinatorAgentId(value: string): void
-  onCoordinatorRevision(value: string): void
+  selectedWorkerUserIds: readonly string[]
+  workerGroups: ProjectCoordinatorWorkspace['availableWorkerGroups']
   onDisplayName(value: string): void
   onGoal(value: string): void
   onSubmit(event: FormEvent<HTMLFormElement>): void
-  onWorkerUserIds(value: string): void
+  onWorkerUserToggle(userId: string, selected: boolean): void
 }>): ReactElement {
   const { t } = useTranslation('common')
   const [expanded, setExpanded] = useState(defaultExpanded)
+  const candidates = workerGroups.filter(({ userId }) => userId !== creatorUserId)
   useEffect(() => {
     if (defaultExpanded) setExpanded(true)
   }, [defaultExpanded])
@@ -1397,42 +1397,50 @@ function ProjectCreateForm({
             placeholder={t('projectCoordinatorProjectGoalPlaceholder')}
           />
         </label>
-        <fieldset>
-          <legend>{t('projectCoordinatorCoordinatorIdentity')}</legend>
-          <p>{t('projectCoordinatorCoordinatorIdentityHint')}</p>
-          <div className="project-coordinator-create-agent-grid">
-            <label>
-              <span>{t('projectCoordinatorCoordinatorAgentId')}</span>
-              <input
-                required
-                value={coordinatorAgentId}
-                onChange={(event) => onCoordinatorAgentId(event.currentTarget.value)}
-                placeholder="agt_…"
-                className="project-coordinator-mono-input"
-              />
-            </label>
-            <label>
-              <span>{t('projectCoordinatorAgentRevision')}</span>
-              <input
-                required
-                min={1}
-                type="number"
-                value={coordinatorRevision}
-                onChange={(event) => onCoordinatorRevision(event.currentTarget.value)}
-              />
-            </label>
-          </div>
+        <div className="project-coordinator-create-role">
+          <UserRoundCheck aria-hidden="true" />
+          <span>
+            <strong>{t('projectCoordinatorCreatorRole')}</strong>
+            <small>{t('projectCoordinatorCreatorRoleHint')}</small>
+          </span>
+        </div>
+        <fieldset className="project-coordinator-create-workers">
+          <legend>{t('projectCoordinatorWorkerMembers')}</legend>
+          <p>{t('projectCoordinatorWorkerMembersHint')}</p>
+          {candidates.length === 0 ? (
+            <p className="project-coordinator-create-workers-empty">
+              {t('projectCoordinatorNoOnlineWorkerUsers')}
+            </p>
+          ) : candidates.map((group) => {
+            const accepting = group.agents.filter(({ availability }) => (
+              availability.acceptsNewOffers
+            )).length
+            return (
+              <label className="project-coordinator-create-worker" key={group.userId}>
+                <input
+                  type="checkbox"
+                  checked={selectedWorkerUserIds.includes(group.userId)}
+                  onChange={(event) => onWorkerUserToggle(group.userId, event.currentTarget.checked)}
+                />
+                <span>
+                  <strong>{group.displayName}</strong>
+                  <small>{t('projectCoordinatorWorkerAgentSummary', {
+                    online: group.agents.length,
+                    accepting
+                  })}</small>
+                  <span className="project-coordinator-create-worker-agents">
+                    {group.agents.map(({ displayName: agentName, availability }) => (
+                      <span key={availability.agentId} title={availability.agentId}>
+                        <Wifi aria-hidden="true" />
+                        {agentName}
+                      </span>
+                    ))}
+                  </span>
+                </span>
+              </label>
+            )
+          })}
         </fieldset>
-        <label>
-          <span>{t('projectCoordinatorWorkerUserIds')}</span>
-          <input
-            value={workerUserIds}
-            onChange={(event) => onWorkerUserIds(event.currentTarget.value)}
-            placeholder="usr_… , usr_…"
-            className="project-coordinator-mono-input"
-          />
-          <small>{t('projectCoordinatorWorkerUserIdsHint')}</small>
-        </label>
         <button disabled={busy} type="submit" className="project-coordinator-primary-button">
           {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Zap aria-hidden="true" />}
           {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorCreateProject')}
@@ -2029,13 +2037,20 @@ export function ProjectCoordinatorPlanSection({
                   disabled={busy}
                 >
                   <option value="">{t('projectCoordinatorChooseExactAgent')}</option>
-                  {visibleAgents.map((agent) => (
-                    <option key={agent.projectAvailability.agentId} value={agent.projectAvailability.agentId}>
-                      {agent.displayName} · {t(agentStateMessageKey(
-                        projectCoordinatorAgentOperationalState(agent).state
-                      ))} · {agent.projectAvailability.availability.runtimeCapabilityTags?.join(', ') || '—'} · {shortIdentifier(agent.projectAvailability.agentId)}
-                    </option>
-                  ))}
+                  {visibleAgents.map((agent) => {
+                    const operational = projectCoordinatorAgentOperationalState(agent)
+                    return (
+                      <option
+                        key={agent.projectAvailability.agentId}
+                        value={agent.projectAvailability.agentId}
+                        disabled={operational.state === 'blocked' || operational.state === 'offline'}
+                      >
+                        {agent.displayName} · {t(agentStateMessageKey(
+                          operational.state
+                        ))} · {agent.projectAvailability.availability.runtimeCapabilityTags?.join(', ') || '—'} · {shortIdentifier(agent.projectAvailability.agentId)}
+                      </option>
+                    )
+                  })}
                 </select>
               </fieldset>
               )

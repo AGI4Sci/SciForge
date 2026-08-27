@@ -789,7 +789,12 @@ class PostgresReadRepository implements CollaborationReadRepository {
   async listAvailableWorkers(now: string): Promise<StoredWorkerAvailability[]> {
     const result = await this.sql.query(
       `SELECT * FROM sciforge_collaboration.worker_availability
-       WHERE expires_at>$1 AND accepts_new_offers=true ORDER BY user_id,agent_id`, [now]
+       WHERE expires_at>$1
+         AND agent_active=true
+         AND device_active=true
+         AND connection_status='online'
+         AND runtime_readiness='ready'
+       ORDER BY user_id,agent_id`, [now]
     )
     return result.rows.map(mapWorkerAvailability)
   }

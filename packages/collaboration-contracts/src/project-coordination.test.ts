@@ -83,6 +83,37 @@ describe('orthogonal Project collaboration authority', () => {
     })
   })
 
+  it('returns one safe global Worker directory page for exact online Agent selection', () => {
+    const page = {
+      protocolVersion: '1.0' as const,
+      type: 'rest.worker_availability_page' as const,
+      requestId: TEST_IDS.requestId,
+      observedAt: TEST_LATER_TIMESTAMP,
+      items: [globalAvailability],
+      userLabels: [{
+        userId: TEST_IDS.userId,
+        displayName: '测试用户',
+        status: 'active' as const,
+        revision: 1
+      }],
+      agentLabels: [{
+        agentId: TEST_IDS.agentId,
+        ownerUserId: TEST_IDS.userId,
+        deviceId: TEST_IDS.deviceId,
+        displayName: '实验室桌面机',
+        nodeType: 'desktop' as const,
+        lifecycleStatus: 'active' as const,
+        revision: 1
+      }]
+    }
+
+    expect(restResponseSchema.parse(page)).toEqual(page)
+    expect(restResponseSchema.safeParse({
+      ...page,
+      agentLabels: [{ ...page.agentLabels[0], ownerUserId: TEST_IDS.secondUserId }]
+    }).success).toBe(false)
+  })
+
   it('retains activation history throughout removal pending and removed states', () => {
     const pendingRemoval = projectMembershipSchema.parse({
       ...activeMembership,

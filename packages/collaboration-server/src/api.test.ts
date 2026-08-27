@@ -39,6 +39,98 @@ afterEach(async () => {
 })
 
 describe('production HTTP OIDC-only boundary', () => {
+  it('returns Cloud-global online Workers with safe User and exact Agent labels', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const viewer = await seedOidcUserDevice(repository, 'http-directory-viewer', now())
+    const worker = await seedOidcUserDevice(repository, 'http-directory-worker', now())
+    const workerNode = {
+      agentId: 'agt_HttpDirectoryWorker01',
+      deviceId: worker.deviceId,
+      ownerUserId: worker.userId,
+      displayName: 'Worker Desktop',
+      nodeType: 'desktop',
+      capabilities: ['research.execute'],
+      status: 'active' as const,
+      connectionStatus: 'offline' as const,
+      credentialGeneration: 1,
+      revision: 1,
+      updatedAt: now().toISOString()
+    }
+    await repository.insertAgent(workerNode)
+    const workerAgent = {
+      kind: 'agent_device' as const,
+      actorKey: `agent:${workerNode.agentId}:http-directory`,
+      userId: worker.userId,
+      agentId: workerNode.agentId,
+      deviceId: worker.deviceId,
+      credentialId: 'credential_http_directory',
+      credentialGeneration: workerNode.credentialGeneration,
+      assurance: 'device' as const
+    }
+    const heartbeat = await service.heartbeatAgent(workerAgent, {
+      expectedRevision: workerNode.revision,
+      connectionStatus: 'online',
+      capabilities: ['research.execute'],
+      idempotencyKey: 'idem_http_directory_heartbeat'
+    })
+    await service.publishWorkerAvailability(workerAgent, {
+      protocolVersion: '1.0',
+      requestId: 'req_HttpDirectoryPublish1',
+      type: 'worker.availability.publish',
+      idempotencyKey: 'idem_http_directory_publish',
+      agentId: workerAgent.agentId,
+      expectedAgentRevision: heartbeat.revision,
+      connectionStatus: 'online',
+      lastHeartbeatAt: heartbeat.lastSeenAt,
+      runtimeReadiness: 'ready',
+      runtimeCapabilityTags: ['research.execute'],
+      acceptsNewOffers: false,
+      activeTaskCount: 0,
+      observedAt: now().toISOString()
+    })
+
+    const token = 'header.directory.signature'
+    const authentication = new AuthenticationService(repository, now, {
+      isCandidate: (candidate) => candidate === token,
+      resolve: async () => viewer.user
+    })
+    const server = createCollaborationHttpServer({ service, authentication, readiness: async () => true })
+    servers.push(server)
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+
+    const response = await postCommand(baseUrl, {
+      protocolVersion: '1.0',
+      requestId: 'req_HttpDirectoryList01',
+      type: 'worker.availability.list',
+      limit: 100
+    }, token)
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      type: 'rest.worker_availability_page',
+      observedAt: now().toISOString(),
+      items: [{
+        userId: worker.userId,
+        agentId: workerAgent.agentId,
+        deviceId: worker.deviceId,
+        connectionStatus: 'online',
+        acceptsNewOffers: false
+      }],
+      userLabels: [{ userId: worker.userId, displayName: 'http-directory-worker' }],
+      agentLabels: [{
+        agentId: workerAgent.agentId,
+        ownerUserId: worker.userId,
+        deviceId: worker.deviceId,
+        displayName: 'Worker Desktop'
+      }]
+    })
+  })
+
   it('requires OIDC for catalog and endpoint binding while never returning a second User credential', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })

@@ -2409,6 +2409,9 @@ export class CollaborationService {
     input: CloudCommand<'worker.availability.list'>
   ): Promise<Readonly<{
     items: StoredWorkerAvailability[]
+    users: StoredUser[]
+    agents: StoredAgent[]
+    observedAt: string
     projectItems: Array<Readonly<{
       availability: StoredWorkerAvailability
       membership: StoredProjectMember | null
@@ -2427,6 +2430,24 @@ export class CollaborationService {
     if (input.afterAgentId) rows = rows.filter(({ agentId }) => agentId > input.afterAgentId!)
     const page = rows.slice(0, input.limit + 1)
     const items = page.slice(0, input.limit)
+    const agents = await Promise.all(items.map(async (availability) => {
+      const agent = required(await this.repository.getAgent(availability.agentId), 'Worker Agent')
+      if (
+        agent.ownerUserId !== availability.userId ||
+        agent.deviceId !== availability.deviceId ||
+        agent.status !== 'active'
+      ) {
+        fail('resource_offline', 'Worker availability no longer matches its active Agent authority.')
+      }
+      return agent
+    }))
+    const users = await Promise.all([...new Set(items.map(({ userId }) => userId))].map(async (userId) => {
+      const user = required(await this.repository.getUser(userId), 'Worker User')
+      if (user.status !== 'active') {
+        fail('resource_offline', 'Worker availability belongs to a User who is no longer active.')
+      }
+      return user
+    }))
     const projectItems: Array<{
       availability: StoredWorkerAvailability
       membership: StoredProjectMember | null
@@ -2473,6 +2494,9 @@ export class CollaborationService {
     }
     return {
       items,
+      users,
+      agents,
+      observedAt: now,
       projectItems,
       ...(page.length > input.limit && items.length > 0 ? { nextAgentId: items.at(-1)!.agentId } : {})
     }
