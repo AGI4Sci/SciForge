@@ -90,8 +90,8 @@ test('publishable dependencies target the frozen Host and domain contract majors
   const packageJson = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as { dependencies: Record<string, string> }
-  assert.equal(packageJson.dependencies['@sciforge/collaboration-contracts'], '3.0.0')
-  assert.equal(packageJson.dependencies['@sciforge/domain-collaboration'], '^4.0.0')
+  assert.equal(packageJson.dependencies['@sciforge/collaboration-contracts'], '3.0.1')
+  assert.equal(packageJson.dependencies['@sciforge/domain-collaboration'], '^4.0.1')
   assert.equal(packageJson.dependencies['@sciforge/domain-content-space'], '^5.0.0')
   assert.equal(packageJson.dependencies['@sciforge/domain-identity-access'], '^3.0.0')
   assert.equal(packageJson.dependencies['@sciforge/domain-sdk'], '^0.2.3')

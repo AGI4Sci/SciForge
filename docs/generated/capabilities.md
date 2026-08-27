@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **290**
+Registered actions: **291**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -65,6 +65,7 @@ Registered actions: **290**
 | `collaboration.managed-container.archive` | 1.0.0 | ui | destructive | confirmation | global |
 | `collaboration.managed-container.inspect` | 1.0.0 | ui | read | none | global |
 | `collaboration.managed-container.provision` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.private-channel.discover` | 1.0.0 | ui | read | none | global |
 | `collaboration.projection.link` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.share` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.update` | 1.0.0 | ui | external-write | confirmation | global |
@@ -17368,6 +17369,10 @@ Destructively archives the authenticated user managed Channel and pauses its fix
                 "pattern": "^hep_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
+              "installationId": {
+                "pattern": "^ins_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
               "lastVerifiedAt": {
                 "anyOf": [
                   {
@@ -17511,6 +17516,7 @@ Destructively archives the authenticated user managed Channel and pauses its fix
               "managedContainerId",
               "ownerUserId",
               "humanEndpointId",
+              "installationId",
               "provider",
               "realmId",
               "stableKey",
@@ -17715,6 +17721,10 @@ Reads or refreshes the authenticated user managed Channel and locator status.
                 "pattern": "^hep_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
+              "installationId": {
+                "pattern": "^ins_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
               "lastVerifiedAt": {
                 "anyOf": [
                   {
@@ -17858,6 +17868,7 @@ Reads or refreshes the authenticated user managed Channel and locator status.
               "managedContainerId",
               "ownerUserId",
               "humanEndpointId",
+              "installationId",
               "provider",
               "realmId",
               "stableKey",
@@ -18074,6 +18085,10 @@ Creates or repairs the authenticated user managed Channel through the durable pr
                 "pattern": "^hep_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
+              "installationId": {
+                "pattern": "^ins_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
               "lastVerifiedAt": {
                 "anyOf": [
                   {
@@ -18217,6 +18232,7 @@ Creates or repairs the authenticated user managed Channel through the durable pr
               "managedContainerId",
               "ownerUserId",
               "humanEndpointId",
+              "installationId",
               "provider",
               "realmId",
               "stableKey",
@@ -18250,6 +18266,67 @@ Creates or repairs the authenticated user managed Channel through the durable pr
     "project"
   ],
   "title": "Provision private collaboration Channel"
+}
+```
+
+## `collaboration.private-channel.discover`
+
+Discovers Topics only from provider-attested private Channels containing the verified user and message Bot.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "humanEndpointId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "humanEndpointId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "locatorCount": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "locatorCount"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Discover private collaboration Channels"
 }
 ```
 
@@ -18859,7 +18936,7 @@ Updates the explicit sender user allowlist while retaining the original executin
 
 ## `collaboration.projection.update`
 
-Explicitly renames, pauses, resumes, closes, or relinks a stable projection.
+Explicitly renames, pauses, or resumes a stable projection.
 
 - Version: `1.0.0`
 - Audiences: ui
@@ -18916,8 +18993,7 @@ Explicitly renames, pauses, resumes, closes, or relinks a stable projection.
           "action": {
             "enum": [
               "pause",
-              "resume",
-              "close"
+              "resume"
             ],
             "type": "string"
           },
@@ -18935,90 +19011,6 @@ Explicitly renames, pauses, resumes, closes, or relinks a stable projection.
         "required": [
           "action",
           "projectionId",
-          "expectedRevision"
-        ],
-        "type": "object"
-      },
-      {
-        "additionalProperties": false,
-        "properties": {
-          "action": {
-            "const": "relink",
-            "type": "string"
-          },
-          "expectedRevision": {
-            "maximum": 9007199254740991,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "projectionId": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
-          },
-          "runtimeId": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
-          },
-          "threadId": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
-          },
-          "workspaceRoot": {
-            "maxLength": 4096,
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": [
-          "action",
-          "projectionId",
-          "runtimeId",
-          "threadId",
-          "expectedRevision"
-        ],
-        "type": "object"
-      },
-      {
-        "additionalProperties": false,
-        "properties": {
-          "action": {
-            "const": "restore",
-            "type": "string"
-          },
-          "expectedRevision": {
-            "maximum": 9007199254740991,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "projectionId": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
-          },
-          "runtimeId": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
-          },
-          "threadId": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
-          },
-          "workspaceRoot": {
-            "maxLength": 4096,
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": [
-          "action",
-          "projectionId",
-          "runtimeId",
-          "threadId",
           "expectedRevision"
         ],
         "type": "object"
@@ -19429,6 +19421,10 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
               "pattern": "^hep_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
               "type": "string"
             },
+            "installationId": {
+              "pattern": "^ins_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+              "type": "string"
+            },
             "lastVerifiedAt": {
               "anyOf": [
                 {
@@ -19572,6 +19568,7 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
             "managedContainerId",
             "ownerUserId",
             "humanEndpointId",
+            "installationId",
             "provider",
             "realmId",
             "stableKey",

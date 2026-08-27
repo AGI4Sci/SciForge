@@ -50,6 +50,8 @@ import { RemoteApprovalCoordinator } from './remote-approval-coordinator.js'
 import {
   CollaborationLocalStore,
   FileCollaborationStateBackend,
+  claimLocalSessionProjectionBinding,
+  localSessionProjectionBindingFor,
   type CollaborationLocalProjection,
   type CollaborationTaskRun,
   type CollaborationStateBackend
@@ -99,6 +101,7 @@ export class CollaborationRuntime {
   }>>()
   private active = false
   private localAgentIdentity: string | undefined
+  private projectionLinkTail: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: CollaborationRuntimeOptions) {
     this.store = new CollaborationLocalStore(
@@ -418,6 +421,18 @@ export class CollaborationRuntime {
   }
 
   async linkProjection(input: CollaborationProjectionLinkInput): Promise<CollaborationProjectionView> {
+    const previous = this.projectionLinkTail
+    let release!: () => void
+    this.projectionLinkTail = new Promise<void>((resolve) => { release = resolve })
+    await previous
+    try {
+      return await this.linkProjectionSerial(input)
+    } finally {
+      release()
+    }
+  }
+
+  private async linkProjectionSerial(input: CollaborationProjectionLinkInput): Promise<CollaborationProjectionView> {
     const state = this.store.snapshot()
     const user = state.user
     if (!user) throw new Error('Verify a human endpoint before sharing a Session.')
@@ -435,12 +450,13 @@ export class CollaborationRuntime {
     ) {
       throw new Error('Projection locator does not belong to the verified endpoint realm.')
     }
-    if (input.mode === 'existing' && state.projections.some((candidate) => (
-      candidate.projection.status !== 'closed' &&
-      candidate.runtimeId === input.runtimeId &&
-      candidate.threadId === input.threadId
-    ))) {
-      throw new Error('This local Session already has an active remote projection.')
+    if (input.mode === 'existing' && (
+      localSessionProjectionBindingFor(state, input.runtimeId, input.threadId) ||
+      state.projections.some((candidate) => (
+        candidate.runtimeId === input.runtimeId && candidate.threadId === input.threadId
+      ))
+    )) {
+      throw new Error('This local Session is permanently bound to one phone Topic.')
     }
     const idempotencyKey = `idem_projection.create.${digest(JSON.stringify({
       userId: user.userId,
@@ -464,6 +480,15 @@ export class CollaborationRuntime {
     }))
     const projection = requireProjectionResponse(response)
     await this.store.transact((draft) => {
+      if (input.mode === 'existing') {
+        claimLocalSessionProjectionBinding(
+          draft,
+          projection,
+          input.runtimeId,
+          input.threadId,
+          projection.updatedAt
+        )
+      }
       draft.projections.push(localProjectionFromRemote(projection, {
         runtimeId: input.runtimeId,
         ...(input.mode === 'existing' ? { threadId: input.threadId } : {}),
@@ -484,68 +509,6 @@ export class CollaborationRuntime {
     ))
     if (!local) throw new Error('Projection was not found.')
     if (local.projection.revision !== input.expectedRevision) throw new Error('Projection revision is stale.')
-    if (input.action === 'relink' || input.action === 'restore') {
-      const occupied = this.store.snapshot().projections.some((candidate) => (
-        candidate.projection.projectionId !== input.projectionId &&
-        candidate.projection.status !== 'closed' &&
-        candidate.runtimeId === input.runtimeId &&
-        candidate.threadId === input.threadId
-      ))
-      if (occupied) throw new Error('This local Session already has an active remote projection.')
-      if (input.action === 'restore') {
-        if (local.projection.status !== 'closed') throw new Error('Only a closed projection can be restored.')
-        const pausedResponse = await this.requireConnection().executeAsUser(restRequestSchema.parse({
-          protocolVersion: '1.0',
-          requestId: collaborationRequestId(),
-          type: 'projection.update',
-          idempotencyKey: `idem_projection.restore.${digest(`${input.projectionId}\u0000${input.expectedRevision}`).slice(0, 48)}`,
-          projectionId: input.projectionId,
-          expectedRevision: input.expectedRevision,
-          status: 'paused'
-        }))
-        const paused = requireProjectionResponse(pausedResponse)
-        await this.replaceProjection(paused)
-        await this.store.transact((draft) => {
-          const target = draft.projections.find((candidate) => (
-            candidate.projection.projectionId === input.projectionId
-          ))!
-          target.runtimeId = input.runtimeId
-          target.threadId = input.threadId
-          target.workspaceRoot = input.workspaceRoot
-          target.bindingMode = 'existing'
-          target.lastError = undefined
-        })
-        const activeResponse = await this.requireConnection().executeAsUser(restRequestSchema.parse({
-          protocolVersion: '1.0',
-          requestId: collaborationRequestId(),
-          type: 'projection.update',
-          idempotencyKey: `idem_projection.restore.activate.${digest(`${input.projectionId}\u0000${paused.revision}`).slice(0, 48)}`,
-          projectionId: input.projectionId,
-          expectedRevision: paused.revision,
-          status: 'active'
-        }))
-        const active = requireProjectionResponse(activeResponse)
-        await this.replaceProjection(active)
-        await this.requireProjections().recover()
-        await this.reconcileProjectionTranscript(input.projectionId)
-        this.syncTranscriptSubscriptions()
-        return this.projectionView(active)
-      }
-      if (local.projection.status !== 'paused') throw new Error('Pause a projection before relinking it.')
-      await this.store.transact((draft) => {
-        const target = draft.projections.find((candidate) => (
-          candidate.projection.projectionId === input.projectionId
-        ))!
-        target.runtimeId = input.runtimeId
-        target.threadId = input.threadId
-        target.workspaceRoot = input.workspaceRoot
-        target.bindingMode = 'existing'
-        target.lastError = undefined
-      })
-      await this.reconcileProjectionTranscript(input.projectionId)
-      this.syncTranscriptSubscriptions()
-      return this.projectionView(local.projection)
-    }
     const response = await this.requireConnection().executeAsUser(restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
@@ -556,7 +519,6 @@ export class CollaborationRuntime {
       ...(input.action === 'rename' ? { displayName: input.displayName } : {}),
       ...(input.action === 'pause' ? { status: 'paused' as const } : {}),
       ...(input.action === 'resume' ? { status: 'active' as const } : {}),
-      ...(input.action === 'close' ? { status: 'closed' as const } : {})
     }))
     const projection = requireProjectionResponse(response)
     await this.replaceProjection(projection)
@@ -610,95 +572,74 @@ export class CollaborationRuntime {
     if (input.scope === 'task') await this.requireTasks().recover()
   }
 
+  async discoverPrivateChannels(humanEndpointId: string): Promise<Readonly<{ locatorCount: number }>> {
+    return {
+      locatorCount: await this.requireConnection().refreshEndpointLocators(humanEndpointId)
+    }
+  }
+
   async manageContainer(input: CollaborationManagedContainerManageInput): Promise<Readonly<{
     managedContainer: ManagedProviderContainer | null
     locatorCount?: number
   }>> {
     const connection = this.requireConnection()
     if (input.action === 'refresh-locators') {
-      return {
-        managedContainer: null,
-        locatorCount: await connection.refreshEndpointLocators(input.humanEndpointId)
-      }
+      return { managedContainer: null, locatorCount: await connection.refreshEndpointLocators(input.humanEndpointId) }
     }
     if (input.action === 'refresh-status') {
       const containers = await connection.refreshManagedContainers()
+      const localAgentId = await connection.localAgentId()
+      if (!localAgentId) throw new Error('Register this computer before refreshing managed Channels.')
       const pending = new Map<string, number>()
       for (const container of containers) {
         if (!container.container || !['active', 'drifted', 'failed'].includes(container.status)) continue
         pending.set(container.managedContainerId, container.revision)
         await connection.executeAsUser(restRequestSchema.parse({
-          protocolVersion: '1.0',
-          requestId: collaborationRequestId(),
-          type: 'managed_container.inspect',
+          protocolVersion: '1.0', requestId: collaborationRequestId(), type: 'managed_container.inspect',
           idempotencyKey: `idem_managed_container.inspect.${digest(`${container.managedContainerId}\u0000${container.revision}`).slice(0, 48)}`,
-          managedContainerId: container.managedContainerId,
-          expectedRevision: container.revision
+          managedContainerId: container.managedContainerId, agentId: localAgentId, expectedRevision: container.revision
         }))
       }
       for (let attempt = 0; attempt < 40 && pending.size > 0; attempt += 1) {
         await delay(250)
-        const refreshed = await connection.refreshManagedContainers()
-        for (const container of refreshed) {
+        for (const container of await connection.refreshManagedContainers()) {
           const previousRevision = pending.get(container.managedContainerId)
-          if (previousRevision !== undefined && container.revision !== previousRevision) {
-            pending.delete(container.managedContainerId)
-          }
+          if (previousRevision !== undefined && container.revision !== previousRevision) pending.delete(container.managedContainerId)
         }
       }
       return { managedContainer: null }
     }
     const state = this.store.snapshot()
+    const localAgentId = await connection.localAgentId()
+    if (!localAgentId) throw new Error('Register this computer before managing a Channel.')
     let response: RestResponse
     if (input.action === 'ensure') {
       if (!state.user) throw new Error('A verified user is required to create a managed Channel.')
-      const provider = state.endpoints.find((endpoint) => (
-        endpoint.humanEndpointId === input.humanEndpointId
-      ))?.identity.provider
-      if (!provider || !connection.providers().some((option) => (
-        option.providerKey === provider && option.managedContainers
-      ))) {
+      const provider = state.endpoints.find((endpoint) => endpoint.humanEndpointId === input.humanEndpointId)?.identity.provider
+      if (!provider || !connection.providers().some((option) => option.providerKey === provider && option.managedContainers)) {
         throw new Error('This endpoint Provider does not offer managed Channels.')
       }
-      const existing = state.managedContainers.find((container) => (
-        container.humanEndpointId === input.humanEndpointId
-      ))
+      const existing = state.managedContainers.find((container) => container.humanEndpointId === input.humanEndpointId)
       const requestId = collaborationRequestId()
       const retryToken = existing?.status === 'failed' && !existing.container
-        ? `${existing.revision}\u0000${requestId}`
-        : undefined
+        ? `${existing.revision}\u0000${requestId}` : undefined
       response = await connection.executeAsUser(restRequestSchema.parse({
-        protocolVersion: '1.0',
-        requestId,
-        type: 'managed_container.ensure',
-        idempotencyKey: managedContainerEnsureIdempotencyKey(
-          state.user.userId,
-          input.humanEndpointId,
-          retryToken
-        ),
-        humanEndpointId: input.humanEndpointId,
+        protocolVersion: '1.0', requestId, type: 'managed_container.ensure',
+        idempotencyKey: managedContainerEnsureIdempotencyKey(state.user.userId, input.humanEndpointId, retryToken),
+        humanEndpointId: input.humanEndpointId, agentId: localAgentId,
         policy: {
-          version: 1,
-          visibility: 'private',
-          history: 'protected',
-          membership: 'owner_and_message_bot',
-          memberManagement: 'provisioning_service_only',
-          channelManagement: 'provisioning_service_only',
-          ownerCanSend: true,
-          ownerCanCreateTopics: true,
-          messageBotCanSend: true,
+          version: 1, visibility: 'private', history: 'protected', membership: 'owner_and_message_bot',
+          memberManagement: 'provisioning_service_only', channelManagement: 'provisioning_service_only',
+          ownerCanSend: true, ownerCanCreateTopics: true, messageBotCanSend: true,
           messageBotCreatesProjectTopics: false
         }
       }))
     } else {
       response = await connection.executeAsUser(restRequestSchema.parse({
-        protocolVersion: '1.0',
-        requestId: collaborationRequestId(),
-        type: input.action === 'reconcile'
-          ? 'managed_container.reconcile'
-          : 'managed_container.archive',
+        protocolVersion: '1.0', requestId: collaborationRequestId(),
+        type: input.action === 'reconcile' ? 'managed_container.reconcile' : 'managed_container.archive',
         idempotencyKey: `idem_managed_container.${input.action}.${digest(`${input.managedContainerId}\u0000${input.expectedRevision}`).slice(0, 48)}`,
-        managedContainerId: input.managedContainerId,
+        managedContainerId: input.managedContainerId, agentId: localAgentId,
         expectedRevision: input.expectedRevision
       }))
     }
@@ -709,9 +650,7 @@ export class CollaborationRuntime {
     const managedContainer = response.entity
     await this.store.transact((draft) => {
       draft.managedContainers = [
-        ...draft.managedContainers.filter((item) => (
-          item.managedContainerId !== managedContainer.managedContainerId
-        )),
+        ...draft.managedContainers.filter((item) => item.managedContainerId !== managedContainer.managedContainerId),
         managedContainer
       ]
     })
@@ -990,11 +929,9 @@ export class CollaborationRuntime {
     return this.tasks
   }
 }
-
 export function collaborationStatePath(userDataDir: string): string {
   return join(userDataDir, 'domains', 'collaboration', 'state.json')
 }
-
 export function activeProjectionBindingsForSession(
   projections: readonly CollaborationLocalProjection[],
   runtimeId: string,
@@ -1053,6 +990,15 @@ function replaceById<Value>(
   return [...values.filter((value) => id(value) !== id(replacement)), replacement]
 }
 
+export function managedContainerEnsureIdempotencyKey(
+  userId: string,
+  humanEndpointId: string,
+  retryToken?: string
+): string {
+  const attempt = retryToken ? `\u0000retry\u0000${retryToken}` : ''
+  return `idem_managed_container.ensure.${digest(`${userId}\u0000${humanEndpointId}${attempt}`).slice(0, 48)}`
+}
+
 function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
@@ -1076,13 +1022,4 @@ function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void
     const timer = setTimeout(finish, milliseconds)
     signal.addEventListener('abort', finish, { once: true })
   })
-}
-
-export function managedContainerEnsureIdempotencyKey(
-  userId: string,
-  humanEndpointId: string,
-  retryToken?: string
-): string {
-  const attempt = retryToken ? `\u0000retry\u0000${retryToken}` : ''
-  return `idem_managed_container.ensure.${digest(`${userId}\u0000${humanEndpointId}${attempt}`).slice(0, 48)}`
 }

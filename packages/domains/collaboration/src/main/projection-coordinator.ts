@@ -15,7 +15,7 @@ import type {
   CollaborationLocalState,
   CollaborationQueueItem
 } from './store.js'
-import { CollaborationLocalStore } from './store.js'
+import { CollaborationLocalStore, claimLocalSessionProjectionBinding } from './store.js'
 
 export type DesktopTranscriptEvent = Readonly<{
   runtimeId: string
@@ -492,6 +492,13 @@ export class ProjectionCoordinator {
         const projection = requireLocalProjection(draft, current.projection.projection.projectionId)
         const item = requiredQueueItem(draft, current.item.queueItemId)
         if (!projection.threadId) {
+          claimLocalSessionProjectionBinding(
+            draft,
+            projection.projection,
+            result.runtimeId,
+            result.threadId,
+            completedAt
+          )
           projection.runtimeId = result.runtimeId
           projection.threadId = result.threadId
         } else if (

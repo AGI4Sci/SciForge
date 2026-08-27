@@ -665,6 +665,7 @@ export type StoredManagedContainer = {
   managedContainerId: string
   ownerUserId: string
   humanEndpointId: string
+  installationId: string
   provider: string
   realmId: string
   ownerProviderUserId: string
@@ -688,6 +689,30 @@ export type StoredManagedContainer = {
   revision: number
   createdAt: string
   updatedAt: string
+}
+
+export type StoredPrivateContainerDiscovery = {
+  ownerUserId: string
+  humanEndpointId: string
+  installationId: string
+  provider: string
+  realmId: string
+  externalContainerId: string
+  displayName: string
+  observedAt: string
+  expiresAt: string
+}
+
+export type StoredPrivateContainerClaim = {
+  claimId: string
+  ownerUserId: string
+  humanEndpointId: string
+  installationId: string
+  provider: string
+  realmId: string
+  externalContainerId: string
+  displayName: string
+  claimedAt: string
 }
 
 export type StoredManagedContainerJob = {
@@ -781,6 +806,7 @@ export type StoredRemoteCapabilityApproval = {
   referenceDigest: string
   safeSummary: string
   effect: 'workspace-write' | 'external-write' | 'destructive'
+  interactionMode: 'command_v1' | 'reaction_v1'
   remoteEligible: boolean
   status: 'pending' | 'approved' | 'denied' | 'expired' | 'superseded' | 'desktop_only' | 'delivery_pending' | 'completed'
   providerCardMessageId?: string
