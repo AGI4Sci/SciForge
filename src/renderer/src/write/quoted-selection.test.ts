@@ -420,6 +420,16 @@ describe('write quoted selections', () => {
 })
 
 describe('write markdown preview resources', () => {
+  it('routes Mermaid fences to the diagram renderer instead of the code-block renderer', () => {
+    const html = renderToStaticMarkup(createElement(WriteMarkdownPreview, {
+      content: '```mermaid\nflowchart LR\n  A[Start] --> B[Done]\n```',
+      isMarkdown: true
+    }))
+
+    expect(html).toContain('class="write-mermaid-loading"')
+    expect(html).not.toContain('class="ds-code-block"')
+  })
+
   it('preserves complete external links without blocked placeholders', () => {
     const html = renderToStaticMarkup(createElement(WriteMarkdownPreview, {
       content: '[Agent-R1](https://github.com/AgentR1/Agent-R1)',
