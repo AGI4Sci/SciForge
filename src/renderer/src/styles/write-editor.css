@@ -255,40 +255,6 @@ summary,
   white-space: pre;
 }
 
-.write-markdown-preview .write-mermaid-diagram {
-  margin: 1rem 0;
-  overflow-x: auto;
-  border: 1px solid color-mix(in srgb, var(--ds-border) 76%, transparent);
-  border-radius: 0.75rem;
-  background: #fff;
-  padding: 1rem;
-}
-
-.write-markdown-preview .write-mermaid-diagram svg {
-  display: block;
-  min-width: 100%;
-  height: auto;
-  margin: 0 auto;
-}
-
-.write-markdown-preview .write-mermaid-loading,
-.write-markdown-preview .write-mermaid-error {
-  margin: 1rem 0;
-  border: 1px solid color-mix(in srgb, var(--ds-border) 76%, transparent);
-  border-radius: 0.75rem;
-  padding: 1rem;
-  font-size: 0.8125rem;
-}
-
-.write-markdown-preview .write-mermaid-loading {
-  color: var(--ds-text-muted);
-}
-
-.write-markdown-preview .write-mermaid-error {
-  border-color: color-mix(in srgb, var(--ds-danger) 45%, transparent);
-  color: var(--ds-danger);
-}
-
 .write-markdown-preview hr {
   margin: 2rem 0;
   border: 0;

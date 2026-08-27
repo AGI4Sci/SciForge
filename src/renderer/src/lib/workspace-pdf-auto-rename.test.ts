@@ -24,12 +24,12 @@ describe('workspace PDF auto rename fallback', () => {
       revision: 'revision-1'
     }, '2603.10165v2.pdf')
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ok: true,
       title: 'OpenClaw-RL: Train Any Agent Simply by Talking',
+      suggestedName: 'OpenClaw-RL - Train Any Agent Simply by Talking.pdf',
       source: 'metadata'
     })
-    if (result.ok) expect(result.suggestedName).toBe('202603-Arxiv-OpenClaw-RL - Train Any Agent Simply by Talking.pdf')
   })
 
   it('sanitizes reserved names and invisible formatting characters', () => {

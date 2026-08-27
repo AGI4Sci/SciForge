@@ -20,24 +20,6 @@ describe('PDF auto rename', () => {
     expect(usablePdfTitle('2603.10165v2', '2603.10165v2.pdf')).toBeNull()
   })
 
-  it('adds the publication month and venue when source text identifies them', () => {
-    expect(pdfTitleFileName('Reliable Agents for Scientific Discovery', {
-      sourceText: 'Published at ICML 2025 · arXiv:2508.12345'
-    })).toBe('202508-ICML-Reliable Agents for Scientific Discovery.pdf')
-  })
-
-  it('recognizes life-science parent and sub-journals', () => {
-    expect(pdfTitleFileName('A gene regulation study', {
-      sourceText: 'Nature Biotechnology, 2026-08'
-    })).toBe('202608-Nature-Biotechnology-A gene regulation study.pdf')
-    expect(pdfTitleFileName('A cell atlas', {
-      sourceText: 'Published in Cell Systems · 2025-12'
-    })).toBe('202512-Cell-Systems-A cell atlas.pdf')
-    expect(pdfTitleFileName('A biology study', {
-      sourceText: 'Genome Biology · 2024-07'
-    })).toBe('202407-Genome-Biology-A biology study.pdf')
-  })
-
   it('infers a wrapped title from the largest text near the top of the first page', () => {
     const title = inferPdfTitleFromFirstPage([
       { str: 'Reliable Agents for', height: 22, transform: [22, 0, 0, 22, 90, 720] },
@@ -64,12 +46,12 @@ describe('PDF auto rename', () => {
         path: '2603.10165v2.pdf'
       })
 
-      expect(result).toMatchObject({
+      expect(result).toEqual({
         ok: true,
         title: 'Auditable Workflows for Scientific Agents',
+        suggestedName: 'Auditable Workflows for Scientific Agents.pdf',
         source: 'metadata'
       })
-      if (result.ok) expect(result.suggestedName).toMatch(/^\d{6}-Arxiv-Auditable Workflows for Scientific Agents\.pdf$/u)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -127,12 +109,12 @@ describe('PDF auto rename', () => {
         path: 'large-paper.pdf'
       })
 
-      expect(result).toMatchObject({
+      expect(result).toEqual({
         ok: true,
         title: 'Large-Scale Evidence Synthesis for Scientific Agents',
+        suggestedName: 'Large-Scale Evidence Synthesis for Scientific Agents.pdf',
         source: 'metadata'
       })
-      if (result.ok) expect(result.suggestedName).toMatch(/^\d{6}-Large-Scale Evidence Synthesis for Scientific Agents\.pdf$/u)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

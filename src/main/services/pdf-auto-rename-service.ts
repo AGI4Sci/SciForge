@@ -5,9 +5,10 @@ import type {
   WorkspacePdfRenameSuggestionPayload,
   WorkspacePdfRenameSuggestionResult
 } from '../../shared/workspace-file'
-import { pdfTitleFileName as sharedPdfTitleFileName } from '../../shared/pdf-rename'
 import { resolveTargetPathWithinWorkspace } from '@sciforge/domain-sdk/node/workspace-paths'
 
+const MAX_PDF_TITLE_LENGTH = 180
+const WINDOWS_RESERVED_FILE_STEM = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu
 
 type PositionedText = {
   text: string
@@ -20,11 +21,6 @@ type TextLine = {
   text: string
   y: number
   fontSize: number
-}
-
-type PdfMetadata = {
-  info?: Record<string, unknown>
-  metadata?: { get?: (key: string) => unknown } | null
 }
 
 function stringMetadataValue(value: unknown): string {
@@ -55,7 +51,18 @@ export function usablePdfTitle(value: string, currentName = ''): string | null {
   return title
 }
 
-export const pdfTitleFileName = sharedPdfTitleFileName
+export function pdfTitleFileName(title: string): string {
+  const cleaned = normalizeTitle(title)
+    .replace(/[\\/]+/gu, ' - ')
+    .replace(/[:*?"<>|]+/gu, ' - ')
+    .replace(/\s+-\s+(?:-\s+)+/gu, ' - ')
+    .replace(/\s+/gu, ' ')
+    .replace(/(?:\s+-)?[. ]+$/gu, '')
+    .trim()
+  const truncated = [...cleaned].slice(0, MAX_PDF_TITLE_LENGTH).join('').replace(/(?:\s+-)?[. ]+$/gu, '')
+  const portableStem = WINDOWS_RESERVED_FILE_STEM.test(truncated) ? `${truncated} paper` : truncated
+  return `${portableStem || 'paper'}.pdf`
+}
 
 function positionedText(item: TextContentItem): PositionedText | null {
   const text = normalizeTitle(item.str ?? '')
@@ -129,8 +136,8 @@ export async function suggestWorkspacePdfName(
     if (extname(pdfPath).toLocaleLowerCase() !== '.pdf') {
       return { ok: false, message: 'Automatic paper naming is only available for PDF files.' }
     }
-    const fileInfo = await stat(pdfPath)
-    if (!fileInfo.isFile()) return { ok: false, message: 'The selected PDF is not a file.' }
+    const info = await stat(pdfPath)
+    if (!info.isFile()) return { ok: false, message: 'The selected PDF is not a file.' }
 
     const loadingTask = getDocument({
       url: pdfPath,
@@ -143,9 +150,8 @@ export async function suggestWorkspacePdfName(
     const pdf = await loadingTask.promise
     try {
       let metadataTitle: string | null = null
-      let metadata: PdfMetadata | null = null
       try {
-        metadata = await pdf.getMetadata() as unknown as PdfMetadata
+        const metadata = await pdf.getMetadata()
         metadataTitle = usablePdfTitle(
           stringMetadataValue(metadata.info?.['Title']) ||
             stringMetadataValue(metadata.metadata?.get?.('dc:title')),
@@ -154,54 +160,31 @@ export async function suggestWorkspacePdfName(
       } catch {
         metadataTitle = null
       }
-
-      let firstPageText = ''
-      let inferredTitle: string | null = null
-      try {
-        const firstPage = await pdf.getPage(1)
-        try {
-          const viewport = firstPage.getViewport({ scale: 1 })
-          const content = await firstPage.getTextContent()
-          firstPageText = content.items.map((item) => item.str ?? '').join(' ')
-          inferredTitle = inferPdfTitleFromFirstPage(content.items, viewport.height)
-        } finally {
-          firstPage.cleanup()
-        }
-      } catch {
-        firstPageText = ''
-      }
-
-      const info = metadata?.info ?? {}
-      const sourceText = [
-        payload.path,
-        metadataTitle ?? '',
-        firstPageText,
-        stringMetadataValue(info['Subject']),
-        stringMetadataValue(info['Keywords']),
-        stringMetadataValue(info['Author'])
-      ].filter(Boolean).join('\n')
-      const publicationDate = info['PublicationDate'] ?? info['publicationDate'] ?? info['Date'] ?? info['CreationDate']
-      const renameContext = {
-        sourceText,
-        publicationDate,
-        fallbackDate: (info['ModDate'] ?? info['CreationDate'] ?? fileInfo.mtimeMs) as string | number
-      }
       if (metadataTitle) {
         return {
           ok: true,
           title: metadataTitle,
-          suggestedName: pdfTitleFileName(metadataTitle, renameContext),
+          suggestedName: pdfTitleFileName(metadataTitle),
           source: 'metadata'
         }
       }
-      if (!inferredTitle) {
-        return { ok: false, message: 'No reliable paper title was found in this PDF.' }
-      }
-      return {
-        ok: true,
-        title: inferredTitle,
-        suggestedName: pdfTitleFileName(inferredTitle, renameContext),
-        source: 'first-page'
+
+      const firstPage = await pdf.getPage(1)
+      try {
+        const viewport = firstPage.getViewport({ scale: 1 })
+        const content = await firstPage.getTextContent()
+        const inferredTitle = inferPdfTitleFromFirstPage(content.items, viewport.height)
+        if (!inferredTitle) {
+          return { ok: false, message: 'No reliable paper title was found in this PDF.' }
+        }
+        return {
+          ok: true,
+          title: inferredTitle,
+          suggestedName: pdfTitleFileName(inferredTitle),
+          source: 'first-page'
+        }
+      } finally {
+        firstPage.cleanup()
       }
     } finally {
       await pdf.destroy().catch(() => undefined)
