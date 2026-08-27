@@ -85,6 +85,13 @@ SELECT execution_id, task_id
 FROM sciforge_collaboration.task_executions
 WHERE accepted_at IS NULL;
 
+-- The v16 projection constraint requires every terminal Task to retain a
+-- current Execution. Drop it before retiring pre-claim rows; the stricter v17
+-- projection is installed again after the canonical state has been rebuilt.
+ALTER TABLE sciforge_collaboration.tasks
+  DROP CONSTRAINT IF EXISTS tasks_current_execution_state_check,
+  DROP CONSTRAINT IF EXISTS tasks_execution_projection_check;
+
 ALTER TABLE sciforge_collaboration.task_executions
   DROP CONSTRAINT IF EXISTS task_executions_task_attempt_unique,
   DROP CONSTRAINT IF EXISTS task_executions_attempt_check;
@@ -184,8 +191,6 @@ WHERE task.task_id = counted.task_id
   AND task.execution_count IS DISTINCT FROM counted.execution_count;
 
 ALTER TABLE sciforge_collaboration.tasks
-  DROP CONSTRAINT IF EXISTS tasks_current_execution_state_check,
-  DROP CONSTRAINT IF EXISTS tasks_execution_projection_check,
   ADD CONSTRAINT tasks_current_execution_state_check CHECK (
     current_execution_state IN (
       'accepted', 'running', 'needs_human', 'result_submitted',

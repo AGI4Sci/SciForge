@@ -84,6 +84,10 @@ describe.skipIf(connectionString === undefined).sequential(
         )
         expect(tasks.rows).toEqual([
           {
+            task_id: 'tsk_stage3_v17_cancelled', status: 'cancelled',
+            current_execution_id: null, current_execution_state: null, execution_count: 0
+          },
+          {
             task_id: 'tsk_stage3_v17_pending', status: 'offered',
             current_execution_id: null, current_execution_state: null, execution_count: 0
           },
@@ -624,6 +628,9 @@ async function seedV16PreclaimExecutionFixture(pool: SqlPool): Promise<void> {
        ('tsk_stage3_v17_timedout','prj_stage3_v17','Timed out task','Remove an old timeout',
         '["done"]'::jsonb,'[]'::jsonb,'revision_requested',3,1,2,'2026-08-26T00:00:00Z',
         '2026-08-26T00:02:00Z',NULL,NULL,'agn_stage3_v17_coord',NULL,NULL,1,'[]'::jsonb),
+       ('tsk_stage3_v17_cancelled','prj_stage3_v17','Cancelled task','Retire a cancelled pre-claim row',
+        '["done"]'::jsonb,'[]'::jsonb,'revision_requested',3,1,2,'2026-08-26T00:00:00Z',
+        '2026-08-26T00:02:00Z',NULL,NULL,'agn_stage3_v17_coord',NULL,NULL,1,'[]'::jsonb),
        ('tsk_stage3_v17_pending','prj_stage3_v17','Pending task','Preserve a v16 User offer',
         '["done"]'::jsonb,'[]'::jsonb,'offered',3,1,1,'2026-08-26T00:00:00Z',
         '2026-08-26T00:00:00Z',NULL,NULL,'agn_stage3_v17_coord',NULL,NULL,0,'[]'::jsonb);
@@ -651,6 +658,12 @@ async function seedV16PreclaimExecutionFixture(pool: SqlPool): Promise<void> {
         'dev_stage3_v17_worker','timed_out',1,
         '{"schemaVersion":1,"executionId":"exe_stage3_v17_timedout","assigneeUserId":"usr_stage3_v17_worker","assigneeAgentId":"agn_stage3_v17_worker","assigneeDeviceId":"dev_stage3_v17_worker","assignmentTaskRevision":1,"projectExecutionAuthorityEpoch":1,"userTaskAuthorityEpoch":1,"bindingRevision":null,"status":"fenced","reason":"offer_timed_out","fencedAt":"2026-08-26T00:02:00Z"}'::jsonb,
         NULL,NULL,'2026-08-26T00:00:00Z',NULL,NULL,'2026-08-26T00:02:00Z',1,
+        '2026-08-26T00:00:00Z','2026-08-26T00:02:00Z'),
+       ('exe_stage3_v17_cancelled','tsk_stage3_v17_cancelled','prj_stage3_v17',1,
+        'agn_stage3_v17_coord','usr_stage3_v17_worker','agn_stage3_v17_worker',
+        'dev_stage3_v17_worker','cancelled',1,
+        '{"schemaVersion":1,"executionId":"exe_stage3_v17_cancelled","assigneeUserId":"usr_stage3_v17_worker","assigneeAgentId":"agn_stage3_v17_worker","assigneeDeviceId":"dev_stage3_v17_worker","assignmentTaskRevision":1,"projectExecutionAuthorityEpoch":1,"userTaskAuthorityEpoch":1,"bindingRevision":null,"status":"fenced","reason":"execution_cancelled","fencedAt":"2026-08-26T00:02:00Z"}'::jsonb,
+        NULL,NULL,'2026-08-26T00:00:00Z',NULL,NULL,'2026-08-26T00:02:00Z',1,
         '2026-08-26T00:00:00Z','2026-08-26T00:02:00Z');
 
      UPDATE sciforge_collaboration.tasks
@@ -660,6 +673,10 @@ async function seedV16PreclaimExecutionFixture(pool: SqlPool): Promise<void> {
      UPDATE sciforge_collaboration.tasks
      SET current_execution_id='exe_stage3_v17_timedout',current_execution_state='timed_out'
      WHERE task_id='tsk_stage3_v17_timedout';
+     UPDATE sciforge_collaboration.tasks
+     SET status='cancelled',completed_at='2026-08-26T00:02:00Z',
+         current_execution_id='exe_stage3_v17_cancelled',current_execution_state='cancelled'
+     WHERE task_id='tsk_stage3_v17_cancelled';
 
      INSERT INTO sciforge_collaboration.task_offers
        (task_offer_id,execution_id,task_id,project_id,worker_user_id,state,offered_at,
