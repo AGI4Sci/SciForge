@@ -26,6 +26,7 @@ import {
   projectMembershipRemoveCommandSchema,
   projectMembershipSchema,
   projectProviderMembershipObservationSchema,
+  projectPlanConfirmCommandSchema,
   projectPlanSchema,
   projectPlanRuntimeProvenanceSchema,
   projectPlanTaskSchema,
@@ -176,14 +177,12 @@ export const projectCoordinatorPlanDraftSubmitInputSchema = z.object({
   expectedDraftRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
 }).strict().readonly()
 
-export const projectCoordinatorPlanConfirmInputSchema = z.object({
-  projectId: projectIdSchema,
-  projectPlanId: projectPlanSchema.shape.projectPlanId,
-  expectedProjectRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
-  expectedCoordinatorAuthorityEpoch: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
-  expectedPlanRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
-  planDigest: projectPlanSchema.shape.planDigest
-}).strict().readonly()
+export const projectCoordinatorPlanConfirmInputSchema = projectPlanConfirmCommandSchema.omit({
+  protocolVersion: true,
+  requestId: true,
+  type: true,
+  idempotencyKey: true
+}).readonly()
 
 export const projectCoordinatorProvisioningAttemptIdSchema = z.string()
   .trim()

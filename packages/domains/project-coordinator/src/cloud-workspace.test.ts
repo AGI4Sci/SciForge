@@ -22,7 +22,10 @@ const updatedAt = '2026-08-25T01:05:00.000Z'
 test('current Device Agent Project create returns a workspace focused on the exact new Project after paginated Cloud reads', async () => {
   const requests: AuthenticatedCloudRequest[] = []
   const coordinatorRequests: CoordinatorCloudCommand[] = []
-  const project = projectFixture('prj_ProjectCreated01', 'Created meeting')
+  const project = {
+    ...projectFixture('prj_ProjectCreated01', 'Created meeting'),
+    status: 'draft' as const
+  }
   const existing = projectFixture('prj_ProjectExisting1', 'Existing meeting')
   const responses = [
     response(200, {
@@ -116,13 +119,6 @@ test('current Device Agent Project create returns a workspace focused on the exa
       maxTasksPerRound: 4,
       maxTaskRetries: 2,
       maxCoordinationRounds: 3
-    },
-    content: {
-      mode: 'none',
-      members: [
-        { userId: 'usr_Owner0000001' },
-        { userId: 'usr_Worker000001' }
-      ]
     }
   }, 'idem_CreateProjectTracer01')
 
@@ -159,13 +155,6 @@ test('current Device Agent Project create returns a workspace focused on the exa
       maxTasksPerRound: 4,
       maxTaskRetries: 2,
       maxCoordinationRounds: 3
-    },
-    content: {
-      mode: 'none',
-      members: [
-        { userId: 'usr_Owner0000001' },
-        { userId: 'usr_Worker000001' }
-      ]
     }
   }])
   assert.deepEqual(
@@ -182,7 +171,8 @@ test('current Device Agent Project create returns a workspace focused on the exa
 test('Agent-authored Project create rejects a Cloud response that changes the creator Owner', async () => {
   const project = {
     ...projectFixture('prj_ProjectWrongOwner1', 'Wrong owner'),
-    ownerUserId: 'usr_OtherOwner0001'
+    ownerUserId: 'usr_OtherOwner0001',
+    status: 'draft' as const
   }
   const transport: AuthenticatedCloudTransport = {
     status: () => ({
@@ -211,11 +201,7 @@ test('Agent-authored Project create rejects a Cloud response that changes the cr
     }).createProject({
       displayName: project.displayName,
       goal: project.goal,
-      budget: project.budget,
-      content: {
-        mode: 'none',
-        members: [{ userId: 'usr_Owner0000001' }]
-      }
+      budget: project.budget
     }, `idem_${project.projectId}`),
     /current Agent owner authority/
   )

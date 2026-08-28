@@ -287,7 +287,8 @@ test('Plan confirmation keeps the Project paused until the canonical workflow ac
     expectedProjectRevision: 2,
     expectedCoordinatorAuthorityEpoch: 1,
     expectedPlanRevision: submitted.plan.revision,
-    planDigest: submitted.plan.planDigest
+    planDigest: submitted.plan.planDigest,
+    initialTeam: null
   }, 'idem_PlanConfirmTracer01')
   assert.equal(confirmed.projects[0]?.project.status, 'paused')
   assert.equal(confirmed.projects[0]?.tasks.length, 0)

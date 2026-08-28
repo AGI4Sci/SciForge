@@ -188,35 +188,19 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
   assert.doesNotMatch(markup, /password|access token|refresh token|register agent|enroll device/iu)
 })
 
-test('New Project auto-binds only this Project Coordinator and lists only Cloud Worker Users', () => {
-  const project = coordinatorTransferProjectFixture()
-  const workerUsers = project.workerGroups.map((group) => ({
-    userId: group.userId,
-    displayName: group.displayName
-  }))
+test('New Project creates only the draft Project before Team/content selection', () => {
   const markup = renderToStaticMarkup(createElement(ProjectCreateForm, {
     defaultExpanded: true,
     busy: false,
-    creatorUserId: project.project.ownerUserId,
     displayName: '',
     goal: '',
-    selectedWorkerUserIds: [],
-    workerUsers,
-    providerPrincipalFacts: [],
-    contentMode: 'none',
-    providerFactId: '',
     onDisplayName: () => undefined,
     onGoal: () => undefined,
-    onContentMode: () => undefined,
-    onProviderFactId: () => undefined,
-    onSubmit: () => undefined,
-    onWorkerUserToggle: () => undefined
+    onSubmit: () => undefined
   }))
 
   assert.match(markup, /projectCoordinatorCreatorRole/u)
-  assert.match(markup, /Project Member/u)
-  assert.match(markup, /type="checkbox"/u)
-  assert.doesNotMatch(markup, /Member Desktop|agt_MemberAgent001/u)
+  assert.doesNotMatch(markup, /type="checkbox"|projectCoordinatorContentMode/u)
   assert.doesNotMatch(markup, /type="number"/u)
 })
 
@@ -489,8 +473,7 @@ test('renderer Project create applies the exact Cloud-returned workspace focus w
       maxTasksPerRound: 4,
       maxTaskRetries: 1,
       maxCoordinationRounds: 2
-    },
-    content: { mode: 'none', members: [{ userId: 'usr_Owner0000001' }] }
+    }
   })
 
   assert.deepEqual(projectCoordinatorCreatedSelection(result), {
@@ -508,8 +491,7 @@ test('renderer Project create applies the exact Cloud-returned workspace focus w
         maxTasksPerRound: 4,
         maxTaskRetries: 1,
         maxCoordinationRounds: 2
-      },
-      content: { mode: 'none', members: [{ userId: 'usr_Owner0000001' }] }
+      }
     }
   }])
 })
@@ -1044,6 +1026,12 @@ test('an awaiting-confirmation Plan renders its Owner action as a default-visibl
     onEditDraft: () => undefined,
     onSubmitDraft: () => undefined,
     canConfirm: true,
+    currentUserId: 'usr_Owner0000001',
+    providerPrincipalFacts: [],
+    initialContentMode: 'none',
+    initialProviderFactId: '',
+    onInitialContentMode: () => undefined,
+    onInitialProviderFactId: () => undefined,
     onConfirm: () => undefined
   }))
 
@@ -1080,6 +1068,12 @@ test('a local Plan draft exposes full content editing before immutable submit', 
     onEditDraft: () => undefined,
     onSubmitDraft: () => undefined,
     canConfirm: false,
+    currentUserId: 'usr_Owner0000001',
+    providerPrincipalFacts: [],
+    initialContentMode: 'none',
+    initialProviderFactId: '',
+    onInitialContentMode: () => undefined,
+    onInitialProviderFactId: () => undefined,
     onConfirm: () => undefined
   }))
 

@@ -314,18 +314,41 @@ const generatedPlanContentSchema = z.object({
   rationale: projectCoordinatorPlanDraftSchema.unwrap().shape.rationale
 }).strict().readonly()
 
-function isOnlineEligibleRuntime(
+function isOnlineRuntime(
   projectAvailability: ProjectWorkerAvailabilityView,
   observedAt: string
 ): boolean {
   const { availability } = projectAvailability
-  return projectAvailability.membership?.state === 'active' &&
-    availability.agentActive &&
+  return availability.agentActive &&
     availability.deviceActive &&
     availability.connectionStatus === 'online' &&
     availability.runtimeReadiness === 'ready' &&
     availability.acceptsNewOffers &&
     availability.expiresAt > observedAt
+}
+
+function isOnlineEligibleRuntime(
+  projectAvailability: ProjectWorkerAvailabilityView,
+  observedAt: string
+): boolean {
+  return projectAvailability.membership?.state === 'active' &&
+    isOnlineRuntime(projectAvailability, observedAt)
+}
+
+function workerRuntimeCanPlanTask(
+  project: ProjectCoordinatorProject,
+  projectAvailability: ProjectWorkerAvailabilityView,
+  task: ProjectPlanTask,
+  observedAt: string
+): boolean {
+  if (project.project.status !== 'draft') {
+    return workerRuntimeCanAcceptTask(project, projectAvailability, task, observedAt)
+  }
+  return isOnlineRuntime(projectAvailability, observedAt) &&
+    task.requiredCapabilityTags.every((tag) => (
+      projectAvailability.availability.runtimeCapabilityTags.includes(tag)
+    )) &&
+    (task.fileIntent === null || task.fileIntent.bindingRevision === 1)
 }
 
 function workerRuntimeCanAcceptTask(
@@ -370,6 +393,17 @@ function workerGroupCanAcceptTask(
   ))
 }
 
+function workerGroupCanPlanTask(
+  project: ProjectCoordinatorProject,
+  group: ProjectCoordinatorProject['workerGroups'][number],
+  task: ProjectPlanTask,
+  observedAt: string
+): boolean {
+  return group.agents.some(({ projectAvailability }) => (
+    workerRuntimeCanPlanTask(project, projectAvailability, task, observedAt)
+  ))
+}
+
 function assertTasksHaveEligibleWorker(
   project: ProjectCoordinatorProject,
   tasks: readonly ProjectPlanTask[],
@@ -377,7 +411,7 @@ function assertTasksHaveEligibleWorker(
 ): void {
   for (const task of tasks) {
     if (project.workerGroups.some((group) => (
-      workerGroupCanAcceptTask(project, group, task, observedAt)
+      workerGroupCanPlanTask(project, group, task, observedAt)
     ))) continue
     throw new Error(`Plan item ${task.planItemId} has no online eligible Runtime with one complete capability profile.`)
   }
@@ -398,7 +432,7 @@ function assertAssignmentsHaveEligibleRuntime(
     if (!task || !group) {
       throw new Error('A Plan assignment must select an active Project member User.')
     }
-    if (!workerGroupCanAcceptTask(project, group, task, observedAt)) {
+    if (!workerGroupCanPlanTask(project, group, task, observedAt)) {
       throw new Error(`Plan item ${task.planItemId} requires one online eligible Runtime owned by the selected Worker User.`)
     }
   }
@@ -439,14 +473,18 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       const candidates = project.workerGroups
         .map((group) => {
           const eligibleAgents = group.agents.filter(({ projectAvailability }) => (
-            isOnlineEligibleRuntime(projectAvailability, observedAt)
+            project.project.status === 'draft'
+              ? isOnlineRuntime(projectAvailability, observedAt)
+              : isOnlineEligibleRuntime(projectAvailability, observedAt)
           ))
           const profiles = new Map(eligibleAgents.map(({ projectAvailability }) => {
             const profile = {
-              eligibleTaskScopes: projectAvailability.taskAuthorities
-                .filter(({ state }) => state === 'eligible')
-                .map(({ scope }) => scope)
-                .sort(),
+              eligibleTaskScopes: project.project.status === 'draft'
+                ? ['file_tasks', 'text_tasks']
+                : projectAvailability.taskAuthorities
+                    .filter(({ state }) => state === 'eligible')
+                    .map(({ scope }) => scope)
+                    .sort(),
               capabilityTags: [...projectAvailability.availability.runtimeCapabilityTags].sort()
             }
             return [JSON.stringify(profile), profile] as const
@@ -467,6 +505,9 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
           `Budget: ${JSON.stringify(project.project.budget)}`,
           `Worker User candidates: ${JSON.stringify(candidates)}`,
           'Each Task must match one runtimeProfiles entry: fileIntent null requires text_tasks, a fileIntent requires file_tasks, and requiredCapabilityTags must be a subset of that same entry capabilityTags. Never combine fields across Runtime profiles.',
+          ...(project.project.status === 'draft'
+            ? ['For an initial file Task, declare bindingRevision 1; the first Plan confirmation creates that project-scoped placeholder binding before any Provider write.']
+            : []),
           'Return only strict JSON with {tasks,rationale}. Each task must use a stable item_* ID and canonical Project Plan Task fields.'
         ].join('\n'),
         ...(input.modelId ? { model: input.modelId } : {}),
@@ -599,6 +640,47 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
     confirm: async (rawInput, idempotencyKey) => {
       const input = projectCoordinatorPlanConfirmInputSchema.parse(rawInput)
       if (!options.transport) throw new Error('OIDC Cloud transport is unavailable.')
+      const currentWorkspace = await options.workspace.readWorkspace({ projectId: input.projectId })
+      const currentProject = requireReadyProject(currentWorkspace, input.projectId)
+      const currentPlan = currentProject.plan
+      if (
+        !currentPlan ||
+        currentPlan.plan.projectPlanId !== input.projectPlanId ||
+        currentPlan.plan.planDigest !== input.planDigest
+      ) {
+        throw new Error('Plan confirmation requires the exact current submitted Plan and assignments.')
+      }
+      if (currentProject.project.status === 'draft') {
+        if (input.initialTeam === null) {
+          throw new Error('The first confirmed Plan requires one exact initial Team/content configuration.')
+        }
+        const assignmentUsers = currentPlan.assignments.map(({ workerUserId }) => workerUserId)
+        if (
+          currentPlan.assignments.length !== currentPlan.plan.tasks.length ||
+          assignmentUsers.some((userId) => userId === null)
+        ) {
+          throw new Error('Initial Team confirmation requires every durable Worker User assignment.')
+        }
+        const expectedUsers = new Set([
+          currentProject.project.ownerUserId,
+          ...assignmentUsers.filter((userId): userId is string => userId !== null)
+        ])
+        const confirmedUsers = input.initialTeam.members.map(({ userId }) => userId)
+        if (
+          confirmedUsers.length !== expectedUsers.size ||
+          confirmedUsers.some((userId) => !expectedUsers.has(userId))
+        ) {
+          throw new Error('Initial Team must exactly match the Owner and durable Plan Worker User assignments.')
+        }
+        if (
+          input.initialTeam.mode === 'required' &&
+          input.initialTeam.contentOwnerUserId !== currentProject.project.ownerUserId
+        ) {
+          throw new Error('Initial Project Content ownership is fixed to the authenticated Project Owner.')
+        }
+      } else if (input.initialTeam !== null) {
+        throw new Error('Only a draft Project may establish its initial Team/content configuration.')
+      }
       const confirmed = await executeUserCloud(options.transport, {
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         requestId: requestId(),
@@ -609,7 +691,8 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
         expectedProjectRevision: input.expectedProjectRevision,
         expectedCoordinatorAuthorityEpoch: input.expectedCoordinatorAuthorityEpoch,
         expectedPlanRevision: input.expectedPlanRevision,
-        planDigest: input.planDigest
+        planDigest: input.planDigest,
+        initialTeam: input.initialTeam
       })
       if (confirmed.type !== 'rest.entity') {
         throw new Error(`Plan confirmation returned ${confirmed.type}.`)

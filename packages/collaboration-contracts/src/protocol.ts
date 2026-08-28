@@ -815,39 +815,25 @@ export const restResponseSchema = z.discriminatedUnion('type', [
     memberships: z.array(projectMembershipSchema).min(1).max(1_000),
     provisioningIntent: projectContentProvisioningIntentSchema.nullable()
   }).strict().superRefine((response, context) => {
-    if (response.project.status !== 'paused') {
-      context.addIssue({ code: 'custom', path: ['project', 'status'], message: 'A Project creation transaction returns the initial paused Project.' })
+    if (response.project.status !== 'draft') {
+      context.addIssue({ code: 'custom', path: ['project', 'status'], message: 'A Project creation transaction returns the initial draft Project.' })
     }
     if (response.memberships.some(({ projectId }) => projectId !== response.project.projectId)) {
       context.addIssue({ code: 'custom', path: ['memberships'], message: 'Created Memberships must belong to the created Project.' })
     }
-    if (response.memberships.some(({ state }) => state !== 'active')) {
-      context.addIssue({ code: 'custom', path: ['memberships'], message: 'Initial Cloud Memberships are active independently of Provider provisioning.' })
+    if (
+      response.memberships.length !== 1 ||
+      response.memberships[0]?.userId !== response.project.ownerUserId ||
+      response.memberships[0]?.state !== 'active'
+    ) {
+      context.addIssue({ code: 'custom', path: ['memberships'], message: 'Project create returns only the authenticated Owner Membership.' })
     }
-    const memberUsers = response.memberships.map(({ userId }) => userId)
-    if (new Set(memberUsers).size !== memberUsers.length || !memberUsers.includes(response.project.ownerUserId)) {
-      context.addIssue({ code: 'custom', path: ['memberships'], message: 'Created Memberships are unique and include the authenticated Agent owner User.' })
-    }
-    const requiresContent = response.project.contentMode === 'required'
-    if (requiresContent !== (response.provisioningIntent !== null)) {
-      context.addIssue({ code: 'custom', path: ['provisioningIntent'], message: 'Only a content-required Project creates a provisioning intent.' })
-    }
-    if (response.provisioningIntent !== null && response.provisioningIntent.projectId !== response.project.projectId) {
-      context.addIssue({ code: 'custom', path: ['provisioningIntent', 'projectId'], message: 'Provisioning intent must belong to the created Project.' })
-    }
-    if (response.provisioningIntent !== null) {
-      const desiredUsers = response.provisioningIntent.desiredMembers.map(({ userId }) => userId)
-      if (
-        response.provisioningIntent.state !== 'pending' ||
-        desiredUsers.length !== memberUsers.length ||
-        desiredUsers.some((userId) => !memberUsers.includes(userId))
-      ) {
-        context.addIssue({
-          code: 'custom',
-          path: ['provisioningIntent', 'desiredMembers'],
-          message: 'The initial pending intent snapshots exactly the created Project Membership roster.'
-        })
-      }
+    if (response.project.contentMode !== 'none' || response.provisioningIntent !== null) {
+      context.addIssue({
+        code: 'custom',
+        path: ['provisioningIntent'],
+        message: 'Project create precedes initial Team/content configuration and Provider provisioning.'
+      })
     }
   }),
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('rest.task_execution_preflight'), requestId: requestIdSchema, preflight: taskExecutionPreflightSchema }).strict(),

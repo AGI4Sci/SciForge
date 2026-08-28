@@ -10,7 +10,7 @@ import {
   providerDirectoryPrincipalReferenceSchema
 } from './project-content.js'
 import { restRequestSchema, restResponseSchema } from './protocol.js'
-import { projectCreateIncludesAuthenticatedOwner } from './cloud-state-protocol.js'
+import { projectInitialTeamIncludesAuthenticatedOwner } from './cloud-state-protocol.js'
 import { TEST_HASH, TEST_IDS, TEST_LATER_TIMESTAMP, TEST_TIMESTAMP, projectFixture } from './testing.js'
 
 const providerInstance = {
@@ -164,7 +164,7 @@ describe('Project content provisioning facts', () => {
     }).success).toBe(true)
   })
 
-  it('creates a content-required Project without caller-nominated Owner or Coordinator authority', () => {
+  it('creates an Owner-only draft Project before initial Team/content confirmation', () => {
     const request = {
       protocolVersion: '1.0',
       type: 'project.create',
@@ -177,44 +177,52 @@ describe('Project content provisioning facts', () => {
         maxTasksPerRound: 5,
         maxCoordinationRounds: 10,
         maxTaskRetries: 2
-      },
-      content: {
-        mode: 'required',
-        contentOwnerUserId: TEST_IDS.userId,
-        providerInstance,
-        containerDisplayName: 'Meeting PoC Team Library',
-        members: [{
-          userId: TEST_IDS.userId,
-          providerPrincipalFactId: TEST_IDS.providerPrincipalFactId,
-          expectedFactRevision: 1
-        }, {
-          userId: TEST_IDS.secondUserId,
-          providerPrincipalFactId: 'ppf_Principal00002',
-          expectedFactRevision: 2
-        }]
       }
     }
     const parsed = restRequestSchema.parse(request)
     if (parsed.type !== 'project.create') throw new Error('Expected canonical Project create command.')
-    expect(projectCreateIncludesAuthenticatedOwner(parsed, TEST_IDS.userId)).toBe(true)
-    expect(projectCreateIncludesAuthenticatedOwner(parsed, 'usr_NotAMember0001')).toBe(false)
     expect(restRequestSchema.safeParse({ ...request, ownerUserId: TEST_IDS.userId }).success).toBe(false)
     expect(restRequestSchema.safeParse({ ...request, coordinatorAgentId: TEST_IDS.agentId }).success).toBe(false)
     expect(restRequestSchema.safeParse({ ...request, expectedCoordinatorAgentRevision: 4 }).success).toBe(false)
     expect(restRequestSchema.safeParse({ ...request, memberUserIds: [TEST_IDS.userId] }).success).toBe(false)
+    expect(restRequestSchema.safeParse({ ...request, content: { mode: 'none', members: [] } }).success).toBe(false)
+
+    const initialTeam = {
+      mode: 'required' as const,
+      contentOwnerUserId: TEST_IDS.userId,
+      providerInstance,
+      containerDisplayName: 'Meeting PoC Team Library',
+      members: [{
+        userId: TEST_IDS.userId,
+        providerPrincipalFactId: TEST_IDS.providerPrincipalFactId,
+        expectedFactRevision: 1
+      }, {
+        userId: TEST_IDS.secondUserId,
+        providerPrincipalFactId: 'ppf_Principal00002',
+        expectedFactRevision: 2
+      }]
+    }
+    expect(projectInitialTeamIncludesAuthenticatedOwner(initialTeam, TEST_IDS.userId)).toBe(true)
+    expect(projectInitialTeamIncludesAuthenticatedOwner(initialTeam, 'usr_NotAMember0001')).toBe(false)
     expect(restRequestSchema.safeParse({
-      ...request,
-      content: {
-        ...request.content,
-        contentOwnerUserId: 'usr_NotAMember0001'
-      }
-    }).success).toBe(false)
+      protocolVersion: '1.0',
+      type: 'project.plan.confirm',
+      requestId: TEST_IDS.requestId,
+      idempotencyKey: 'idem_project_plan_confirm_01',
+      projectId: TEST_IDS.projectId,
+      projectPlanId: TEST_IDS.projectPlanId,
+      expectedProjectRevision: 2,
+      expectedCoordinatorAuthorityEpoch: 1,
+      expectedPlanRevision: 1,
+      planDigest: TEST_HASH,
+      initialTeam
+    }).success).toBe(true)
 
     const createdWithoutEmptyBinding = {
       protocolVersion: '1.0',
       type: 'rest.project_created',
       requestId: TEST_IDS.requestId,
-      project: { ...projectFixture, status: 'paused', contentMode: 'none' },
+      project: { ...projectFixture, status: 'draft', contentMode: 'none' },
       memberships: [{
         schemaVersion: 1,
         type: 'project_membership',

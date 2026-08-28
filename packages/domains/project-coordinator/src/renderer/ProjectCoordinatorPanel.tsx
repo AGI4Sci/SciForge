@@ -428,9 +428,8 @@ export function ProjectCoordinatorPanel({
   const [busyAction, setBusyAction] = useState<string>()
   const [createDisplayName, setCreateDisplayName] = useState('')
   const [createGoal, setCreateGoal] = useState('')
-  const [createWorkerUserIds, setCreateWorkerUserIds] = useState<readonly string[]>([])
-  const [createContentMode, setCreateContentMode] = useState<'none' | 'required'>('none')
-  const [createProviderFactId, setCreateProviderFactId] = useState('')
+  const [initialContentMode, setInitialContentMode] = useState<'none' | 'required'>('none')
+  const [initialProviderFactId, setInitialProviderFactId] = useState('')
   const [activeView, setActiveView] = useState<string>('overview')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [newProjectRequest, setNewProjectRequest] = useState(0)
@@ -575,57 +574,6 @@ export function ProjectCoordinatorPanel({
   const createProject = useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (workspace?.connection.state !== 'ready') return
-    const creatorUserId = workspace.connection.userId
-    const visibleWorkerUserIds = new Set(workspace.availableWorkerUsers.map(({ userId }) => userId))
-    const memberUserIds = [
-      creatorUserId,
-      ...createWorkerUserIds.filter((userId) => (
-        userId !== creatorUserId && visibleWorkerUserIds.has(userId)
-      ))
-    ]
-    const ownerProviderFacts = workspace.providerPrincipalFacts
-      .filter(({ userId, readiness }) => userId === creatorUserId && readiness === 'ready')
-      .sort((left, right) => right.revision - left.revision)
-    const ownerProviderFact = ownerProviderFacts.find(({ providerPrincipalFactId }) => (
-      providerPrincipalFactId === createProviderFactId
-    )) ?? ownerProviderFacts[0]
-    if (createContentMode === 'required' && !ownerProviderFact) {
-      setError(t('projectCoordinatorCreateProviderFactsMissing'))
-      return
-    }
-    const requiredMembers = createContentMode === 'required'
-      ? memberUserIds.map((userId) => {
-          const fact = workspace.providerPrincipalFacts
-            .filter((candidate) => (
-              candidate.userId === userId &&
-              candidate.readiness === 'ready' &&
-              candidate.providerPrincipal.providerInstance.providerInstanceRef ===
-                ownerProviderFact!.providerPrincipal.providerInstance.providerInstanceRef
-            ))
-            .sort((left, right) => right.revision - left.revision)[0]
-          return fact ? {
-            userId,
-            providerPrincipalFactId: fact.providerPrincipalFactId,
-            expectedFactRevision: fact.revision
-          } : null
-        })
-      : []
-    if (requiredMembers.some((member) => member === null)) {
-      setError(t('projectCoordinatorCreateProviderFactsMissing'))
-      return
-    }
-    const content = createContentMode === 'none'
-      ? {
-          mode: 'none' as const,
-          members: memberUserIds.map((userId) => ({ userId }))
-        }
-      : {
-          mode: 'required' as const,
-          contentOwnerUserId: creatorUserId,
-          providerInstance: ownerProviderFact!.providerPrincipal.providerInstance,
-          containerDisplayName: createDisplayName,
-          members: requiredMembers as Exclude<(typeof requiredMembers)[number], null>[]
-        }
     void runAction('project-create', () => client.createProject({
       displayName: createDisplayName,
       goal: createGoal,
@@ -634,8 +582,7 @@ export function ProjectCoordinatorPanel({
         maxTasksPerRound: 8,
         maxTaskRetries: 2,
         maxCoordinationRounds: 4
-      },
-      content
+      }
     }), async (result) => {
       const selected = projectCoordinatorCreatedSelection(result)
       setWorkspace(selected.workspace)
@@ -643,27 +590,14 @@ export function ProjectCoordinatorPanel({
       setDraft(await client.readPlanDraft({ projectId: selected.selectedProjectId }))
       setCreateDisplayName('')
       setCreateGoal('')
-      setCreateWorkerUserIds([])
-      setCreateContentMode('none')
-      setCreateProviderFactId('')
     })
   }, [
     client,
     createDisplayName,
     createGoal,
-    createContentMode,
-    createProviderFactId,
-    createWorkerUserIds,
     runAction,
-    t,
     workspace
   ])
-
-  const toggleCreateWorkerUser = useCallback((userId: string, selected: boolean) => {
-    setCreateWorkerUserIds((current) => selected
-      ? [...new Set([...current, userId])]
-      : current.filter((candidate) => candidate !== userId))
-  }, [])
 
   const generateDraft = useCallback(() => {
     if (!project) return
@@ -702,20 +636,87 @@ export function ProjectCoordinatorPanel({
   }, [client, draft, runAction])
 
   const confirmPlan = useCallback(() => {
-    if (!project?.plan || project.plan.plan.state !== 'awaiting_confirmation') return
+    if (
+      !project?.plan ||
+      project.plan.plan.state !== 'awaiting_confirmation' ||
+      workspace?.connection.state !== 'ready'
+    ) return
     const plan = project.plan.plan
+    const assignedUserIds = project.plan.assignments.flatMap(({ workerUserId }) => (
+      workerUserId === null ? [] : [workerUserId]
+    ))
+    const initialMemberUserIds = [...new Set([
+      project.project.ownerUserId,
+      ...assignedUserIds.filter((userId) => userId !== project.project.ownerUserId)
+    ])]
+    const ownerProviderFacts = workspace.providerPrincipalFacts
+      .filter(({ userId, readiness }) => (
+        userId === project.project.ownerUserId && readiness === 'ready'
+      ))
+      .sort((left, right) => right.revision - left.revision)
+    const ownerProviderFact = ownerProviderFacts.find(({ providerPrincipalFactId }) => (
+      providerPrincipalFactId === initialProviderFactId
+    )) ?? ownerProviderFacts[0]
+    const requiredMembers = initialContentMode === 'required' && ownerProviderFact
+      ? initialMemberUserIds.map((userId) => {
+          const fact = workspace.providerPrincipalFacts
+            .filter((candidate) => (
+              candidate.userId === userId &&
+              candidate.readiness === 'ready' &&
+              candidate.providerPrincipal.providerInstance.providerInstanceRef ===
+                ownerProviderFact.providerPrincipal.providerInstance.providerInstanceRef
+            ))
+            .sort((left, right) => right.revision - left.revision)[0]
+          return fact ? {
+            userId,
+            providerPrincipalFactId: fact.providerPrincipalFactId,
+            expectedFactRevision: fact.revision
+          } : null
+        })
+      : []
+    if (
+      project.project.status === 'draft' &&
+      initialContentMode === 'required' &&
+      (!ownerProviderFact || requiredMembers.some((member) => member === null))
+    ) {
+      setError(t('projectCoordinatorCreateProviderFactsMissing'))
+      return
+    }
+    const initialTeam = project.project.status !== 'draft'
+      ? null
+      : initialContentMode === 'none'
+        ? {
+            mode: 'none' as const,
+            members: initialMemberUserIds.map((userId) => ({ userId }))
+          }
+        : {
+            mode: 'required' as const,
+            contentOwnerUserId: project.project.ownerUserId,
+            providerInstance: ownerProviderFact!.providerPrincipal.providerInstance,
+            containerDisplayName: project.project.displayName,
+            members: requiredMembers as Exclude<(typeof requiredMembers)[number], null>[]
+          }
     void runAction('plan-confirm', () => client.confirmPlan({
       projectId: project.project.projectId,
       projectPlanId: plan.projectPlanId,
       expectedProjectRevision: project.project.revision,
       expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
       expectedPlanRevision: plan.revision,
-      planDigest: plan.planDigest
+      planDigest: plan.planDigest,
+      initialTeam
     }), (next) => {
       setWorkspace(next)
       setSelectedProjectId(project.project.projectId)
     })
-  }, [client, project, runAction])
+  }, [
+    client,
+    initialContentMode,
+    initialProviderFactId,
+    project,
+    runAction,
+    t,
+    workspace
+  ])
 
   const applyProjectWorkspace = useCallback((next: ProjectCoordinatorWorkspace) => {
     setWorkspace(next)
@@ -993,20 +994,11 @@ export function ProjectCoordinatorPanel({
                     defaultExpanded={workspace.projects.length === 0}
                     requestOpen={newProjectRequest}
                     busy={busyAction === 'project-create'}
-                    creatorUserId={workspace.connection.userId}
                     displayName={createDisplayName}
                     goal={createGoal}
-                    selectedWorkerUserIds={createWorkerUserIds}
-                    workerUsers={workspace.availableWorkerUsers}
-                    providerPrincipalFacts={workspace.providerPrincipalFacts}
-                    contentMode={createContentMode}
-                    providerFactId={createProviderFactId}
                     onDisplayName={setCreateDisplayName}
                     onGoal={setCreateGoal}
-                    onContentMode={setCreateContentMode}
-                    onProviderFactId={setCreateProviderFactId}
                     onSubmit={createProject}
-                    onWorkerUserToggle={toggleCreateWorkerUser}
                   />
                 ) : null}
                 <ProjectCoordinatorPlanSection
@@ -1018,6 +1010,14 @@ export function ProjectCoordinatorPanel({
                   onSubmitDraft={submitDraft}
                   canConfirm={workspace?.connection.state === 'ready' &&
                     workspace.connection.userId === project?.project.ownerUserId}
+                  currentUserId={workspace?.connection.state === 'ready'
+                    ? workspace.connection.userId
+                    : null}
+                  providerPrincipalFacts={workspace?.providerPrincipalFacts ?? []}
+                  initialContentMode={initialContentMode}
+                  initialProviderFactId={initialProviderFactId}
+                  onInitialContentMode={setInitialContentMode}
+                  onInitialProviderFactId={setInitialProviderFactId}
                   onConfirm={confirmPlan}
                 />
                 <TasksSection project={project} />
@@ -1367,58 +1367,23 @@ export function ProjectCreateForm({
   defaultExpanded = false,
   requestOpen = 0,
   busy,
-  creatorUserId,
   displayName,
   goal,
-  selectedWorkerUserIds,
-  workerUsers,
-  providerPrincipalFacts,
-  contentMode,
-  providerFactId,
   onDisplayName,
   onGoal,
-  onContentMode,
-  onProviderFactId,
-  onSubmit,
-  onWorkerUserToggle
+  onSubmit
 }: Readonly<{
   defaultExpanded?: boolean
   requestOpen?: number
   busy: boolean
-  creatorUserId: string
   displayName: string
   goal: string
-  selectedWorkerUserIds: readonly string[]
-  workerUsers: ProjectCoordinatorWorkspace['availableWorkerUsers']
-  providerPrincipalFacts: ProjectCoordinatorWorkspace['providerPrincipalFacts']
-  contentMode: 'none' | 'required'
-  providerFactId: string
   onDisplayName(value: string): void
   onGoal(value: string): void
-  onContentMode(value: 'none' | 'required'): void
-  onProviderFactId(value: string): void
   onSubmit(event: FormEvent<HTMLFormElement>): void
-  onWorkerUserToggle(userId: string, selected: boolean): void
 }>): ReactElement {
   const { t } = useTranslation('common')
   const [expanded, setExpanded] = useState(defaultExpanded)
-  const candidates = workerUsers.filter(({ userId }) => userId !== creatorUserId)
-  const ownerProviderFacts = providerPrincipalFacts.filter(({ userId, readiness }) => (
-    userId === creatorUserId && readiness === 'ready'
-  ))
-  const selectedOwnerFact = ownerProviderFacts.find(({ providerPrincipalFactId }) => (
-    providerPrincipalFactId === providerFactId
-  )) ?? ownerProviderFacts[0]
-  const missingSelectedProviderFacts = contentMode === 'required' && (
-    !selectedOwnerFact || selectedWorkerUserIds.some((userId) => (
-      !providerPrincipalFacts.some((fact) => (
-        fact.userId === userId &&
-        fact.readiness === 'ready' &&
-        fact.providerPrincipal.providerInstance.providerInstanceRef ===
-          selectedOwnerFact.providerPrincipal.providerInstance.providerInstanceRef
-      ))
-    ))
-  )
   useEffect(() => {
     if (defaultExpanded) setExpanded(true)
   }, [defaultExpanded])
@@ -1469,59 +1434,7 @@ export function ProjectCreateForm({
             <small>{t('projectCoordinatorCreatorRoleHint')}</small>
           </span>
         </div>
-        <label>
-          <span>{t('projectCoordinatorContentMode')}</span>
-          <select
-            value={contentMode}
-            onChange={(event) => onContentMode(event.currentTarget.value as 'none' | 'required')}
-          >
-            <option value="none">{t('projectCoordinatorContentModeNone')}</option>
-            <option value="required">{t('projectCoordinatorContentModeTeam')}</option>
-          </select>
-        </label>
-        {contentMode === 'required' ? (
-          <label>
-            <span>{t('projectCoordinatorProviderInstance')}</span>
-            <select
-              required
-              value={selectedOwnerFact?.providerPrincipalFactId ?? ''}
-              onChange={(event) => onProviderFactId(event.currentTarget.value)}
-            >
-              {ownerProviderFacts.length === 0 ? (
-                <option value="">{t('projectCoordinatorCreateProviderFactsMissing')}</option>
-              ) : ownerProviderFacts.map((fact) => (
-                <option key={fact.providerPrincipalFactId} value={fact.providerPrincipalFactId}>
-                  {fact.providerPrincipal.providerInstance.providerInstanceRef} · rev {fact.revision}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        <fieldset className="project-coordinator-create-workers">
-          <legend>{t('projectCoordinatorWorkerMembers')}</legend>
-          <p>{t('projectCoordinatorWorkerMembersHint')}</p>
-          {candidates.length === 0 ? (
-            <p className="project-coordinator-create-workers-empty">
-              {t('projectCoordinatorNoOnlineWorkerUsers')}
-            </p>
-          ) : candidates.map((group) => (
-            <label className="project-coordinator-create-worker" key={group.userId}>
-              <input
-                type="checkbox"
-                checked={selectedWorkerUserIds.includes(group.userId)}
-                onChange={(event) => onWorkerUserToggle(group.userId, event.currentTarget.checked)}
-              />
-              <span className="project-coordinator-create-worker-avatar" aria-hidden="true">
-                <UserRound />
-              </span>
-              <span className="project-coordinator-create-worker-copy">
-                <strong>{group.displayName}</strong>
-                <small>{t('projectCoordinatorWorkerUserStatus')}</small>
-              </span>
-            </label>
-          ))}
-        </fieldset>
-        <button disabled={busy || missingSelectedProviderFacts} type="submit" className="project-coordinator-primary-button">
+        <button disabled={busy} type="submit" className="project-coordinator-primary-button">
           {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Zap aria-hidden="true" />}
           {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorCreateProject')}
         </button>
@@ -2025,6 +1938,12 @@ export function ProjectCoordinatorPlanSection({
   onEditDraft,
   onSubmitDraft,
   canConfirm,
+  currentUserId,
+  providerPrincipalFacts,
+  initialContentMode,
+  initialProviderFactId,
+  onInitialContentMode,
+  onInitialProviderFactId,
   onConfirm
 }: Readonly<{
   project?: ProjectCoordinatorProject
@@ -2037,19 +1956,87 @@ export function ProjectCoordinatorPlanSection({
   >): void
   onSubmitDraft(): void
   canConfirm: boolean
+  currentUserId: string | null
+  providerPrincipalFacts: ProjectCoordinatorWorkspace['providerPrincipalFacts']
+  initialContentMode: 'none' | 'required'
+  initialProviderFactId: string
+  onInitialContentMode(value: 'none' | 'required'): void
+  onInitialProviderFactId(value: string): void
   onConfirm(): void
 }>): ReactElement {
   const { t } = useTranslation('common')
   const visibleWorkerGroups = project?.workerGroups ?? []
   const awaitingConfirmation = project?.plan?.plan.state === 'awaiting_confirmation'
+  const initialMemberUserIds = [...new Set([
+    ...(project ? [project.project.ownerUserId] : []),
+    ...(project?.plan?.assignments.flatMap(({ workerUserId }) => (
+      workerUserId === null ? [] : [workerUserId]
+    )) ?? [])
+  ])]
+  const ownerProviderFacts = providerPrincipalFacts.filter(({ userId, readiness }) => (
+    userId === currentUserId && readiness === 'ready'
+  ))
+  const selectedOwnerFact = ownerProviderFacts.find(({ providerPrincipalFactId }) => (
+    providerPrincipalFactId === initialProviderFactId
+  )) ?? ownerProviderFacts[0]
+  const missingInitialProviderFacts = project?.project.status === 'draft' &&
+    initialContentMode === 'required' && (
+      !selectedOwnerFact || initialMemberUserIds.some((userId) => (
+        !providerPrincipalFacts.some((fact) => (
+          fact.userId === userId &&
+          fact.readiness === 'ready' &&
+          fact.providerPrincipal.providerInstance.providerInstanceRef ===
+            selectedOwnerFact.providerPrincipal.providerInstance.providerInstanceRef
+        ))
+      ))
+    )
   return (
     <Section id="plan" title={t('projectCoordinatorPlan')} icon={<ListChecks className="h-4 w-4" />}>
       {!project ? <Empty /> : awaitingConfirmation ? (
         <div className="space-y-2 rounded border border-amber-500/40 p-2" data-default-visible-card="plan-confirmation">
           <Status value="awaiting_confirmation" />
           <p className="text-[11px] text-ds-muted">{project.plan!.plan.rationale}</p>
+          {canConfirm && project.project.status === 'draft' ? (
+            <div className="space-y-2 rounded border border-ds-border p-2">
+              <label className="block text-xs">
+                <span className="text-ds-muted">{t('projectCoordinatorContentMode')}</span>
+                <select
+                  value={initialContentMode}
+                  onChange={(event) => onInitialContentMode(
+                    event.currentTarget.value as 'none' | 'required'
+                  )}
+                  className="mt-1 w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+                >
+                  <option value="none">{t('projectCoordinatorContentModeNone')}</option>
+                  <option value="required">{t('projectCoordinatorContentModeTeam')}</option>
+                </select>
+              </label>
+              {initialContentMode === 'required' ? (
+                <label className="block text-xs">
+                  <span className="text-ds-muted">{t('projectCoordinatorProviderInstance')}</span>
+                  <select
+                    required
+                    value={selectedOwnerFact?.providerPrincipalFactId ?? ''}
+                    onChange={(event) => onInitialProviderFactId(event.currentTarget.value)}
+                    className="mt-1 w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+                  >
+                    {ownerProviderFacts.length === 0 ? (
+                      <option value="">{t('projectCoordinatorCreateProviderFactsMissing')}</option>
+                    ) : ownerProviderFacts.map((fact) => (
+                      <option key={fact.providerPrincipalFactId} value={fact.providerPrincipalFactId}>
+                        {fact.providerPrincipal.providerInstance.providerInstanceRef} · rev {fact.revision}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <p className="text-[11px] text-ds-muted">
+                {t('projectCoordinatorWorkerMembers')}: {initialMemberUserIds.join(', ')}
+              </p>
+            </div>
+          ) : null}
           {canConfirm ? (
-            <button type="button" disabled={busy} onClick={onConfirm} className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50">
+            <button type="button" disabled={busy || missingInitialProviderFacts} onClick={onConfirm} className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50">
               {t('projectCoordinatorConfirmPlan')}
             </button>
           ) : null}
