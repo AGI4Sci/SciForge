@@ -375,6 +375,7 @@ export function CollaborationPanel({
       setActionSuccess(t('collaborationActionSucceeded'))
       return true
     } catch (error) {
+      if (options.refresh !== false) await refresh().catch(() => undefined)
       setActionError(errorMessage(error, t('collaborationActionFailed')))
       return false
     } finally {

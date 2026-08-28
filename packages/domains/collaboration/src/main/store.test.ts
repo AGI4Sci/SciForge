@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  agentNodeFixture,
+  humanEndpointBindingFixture,
+  participantProfileFixture,
   TEST_HASH,
   TEST_IDS,
   TEST_TIMESTAMP,
@@ -9,9 +12,46 @@ import {
 } from '@sciforge/collaboration-contracts/testing'
 import {
   CollaborationLocalStore,
+  EMPTY_COLLABORATION_LOCAL_STATE,
   type CollaborationLocalState,
   type CollaborationStateBackend
 } from './store.js'
+
+test('a new signed-in User may replace only an unbound identity cache', async () => {
+  const store = new CollaborationLocalStore(new MemoryBackend(replaceableOtherUserCache()))
+  await store.open()
+
+  await store.prepareForAuthenticatedUser(TEST_IDS.userId)
+
+  const state = store.snapshot()
+  assert.equal(state.revision, 5)
+  assert.equal(state.user, undefined)
+  assert.equal(state.participant, undefined)
+  assert.deepEqual(state.agents, [])
+  assert.deepEqual(state.outbox, [])
+  assert.deepEqual(state.diagnostics, [])
+})
+
+test('a new signed-in User cannot replace a cache with a bound phone endpoint', async () => {
+  const cached = replaceableOtherUserCache()
+  cached.endpoints = [{ ...humanEndpointBindingFixture, userId: TEST_IDS.secondUserId }]
+  cached.participant = {
+    ...participantProfileFixture,
+    userId: TEST_IDS.secondUserId
+  }
+  const store = new CollaborationLocalStore(new MemoryBackend(cached))
+  await store.open()
+
+  await assert.rejects(
+    store.prepareForAuthenticatedUser(TEST_IDS.userId),
+    /already has Phone Link or Session data/u
+  )
+
+  const state = store.snapshot()
+  assert.equal(state.user?.userId, TEST_IDS.secondUserId)
+  assert.equal(state.endpoints.length, 1)
+  assert.equal(state.revision, 4)
+})
 
 test('restart recovery only rewinds safely replayable local and outbox work', async () => {
   const state: CollaborationLocalState = {
@@ -93,5 +133,37 @@ class MemoryBackend implements CollaborationStateBackend {
   async write(value: CollaborationLocalState): Promise<void> {
     this.value = structuredClone(value)
     this.writes += 1
+  }
+}
+
+function replaceableOtherUserCache(): CollaborationLocalState {
+  return {
+    ...structuredClone(EMPTY_COLLABORATION_LOCAL_STATE),
+    revision: 4,
+    user: { ...userPrincipalFixture, userId: TEST_IDS.secondUserId },
+    participant: {
+      ...participantProfileFixture,
+      userId: TEST_IDS.secondUserId,
+      primaryHumanEndpointId: null,
+      status: 'incomplete'
+    },
+    agents: [{ ...agentNodeFixture, ownerUserId: TEST_IDS.secondUserId }],
+    outbox: [{
+      outboxId: 'obx_OtherUser0001',
+      idempotencyKey: 'idem_worker.availability.other-user-1',
+      kind: 'worker.availability',
+      body: {},
+      state: 'pending',
+      attempts: 0,
+      createdAt: TEST_TIMESTAMP,
+      updatedAt: TEST_TIMESTAMP
+    }],
+    diagnostics: [{
+      code: 'collaboration.connection_error',
+      severity: 'error',
+      message: 'Safe cached diagnostic.',
+      recoverable: true,
+      occurredAt: TEST_TIMESTAMP
+    }]
   }
 }

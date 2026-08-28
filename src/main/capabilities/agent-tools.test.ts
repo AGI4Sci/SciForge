@@ -1718,7 +1718,11 @@ describe('CapabilityAgentToolSurface', () => {
       mode: 'confirmation',
       input: { value: 'result' }
     })
-    expect(approvalRequest.remoteApproval).toBeUndefined()
+    expect(approvalRequest.remoteApproval).toEqual({
+      eligible: true,
+      safeSummary: 'Publish result',
+      ttlMs: 4 * 60_000 + 30_000
+    })
     expect(invoke.mock.calls[0]![0].approvals).toEqual([{
       actionId: 'test.publish',
       invocationId: approvalRequest.invocationId,
@@ -1741,7 +1745,7 @@ describe('CapabilityAgentToolSurface', () => {
     )
   })
 
-  it('allows remote confirmation only for Host-classified workspace writes', async () => {
+  it('marks a confirmed workspace write as remotely approvable with a safe summary', async () => {
     const write = defineCapability({
       id: 'test.workspace.write',
       version: '1',

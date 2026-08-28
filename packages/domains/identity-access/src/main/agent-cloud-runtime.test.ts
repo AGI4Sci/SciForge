@@ -732,7 +732,7 @@ describe('Identity Agent Cloud runtime', () => {
     await expect(revoking).resolves.toMatchObject({ lifecycleStatus: 'revoked' })
   })
 
-  it('injects authority inside one bounded WSS handshake and returns only strict events', async () => {
+  it('injects authority inside one bounded WSS handshake, preserves the Cloud base path, and returns only strict events', async () => {
     const vault = memoryVault()
     await vault.write(
       { kind: 'agent-credential', agentId: agentNodeFixture.agentId },
@@ -748,7 +748,7 @@ describe('Identity Agent Cloud runtime', () => {
     const socket = new FakeWebSocket()
     let handshake: Readonly<{ url: string; headers: Readonly<Record<string, string>> }> | undefined
     const service = createTestIdentityAgentCloudRuntime({
-      getRuntime: () => runtimeDouble() as never,
+      getRuntime: () => runtimeDouble(vi.fn(), 'https://cloud.example.test/collaboration') as never,
       vault,
       webSocketFactory: (url, headers) => {
         handshake = { url, headers }
@@ -771,7 +771,7 @@ describe('Identity Agent Cloud runtime', () => {
       value: webSocketMessageFixture
     })
     expect(handshake).toEqual({
-      url: 'wss://cloud.example.test/v1/events',
+      url: 'wss://cloud.example.test/collaboration/v1/events',
       headers: { authorization: `Bearer ${AUTHORITY}` }
     })
     expect(JSON.stringify(webSocketMessageFixture)).not.toContain(AUTHORITY)
@@ -823,11 +823,14 @@ class FakeWebSocket extends EventEmitter {
   })
 }
 
-function runtimeDouble(executeAuthenticatedCloud = vi.fn()) {
+function runtimeDouble(
+  executeAuthenticatedCloud = vi.fn(),
+  baseUrl = 'https://cloud.example.test'
+) {
   return {
     authenticatedCloudTransportStatus: () => ({
       state: 'ready' as const,
-      baseUrl: 'https://cloud.example.test',
+      baseUrl,
       userId: agentNodeFixture.ownerUserId,
       deviceId: agentNodeFixture.deviceId,
       deviceRevision: 1
@@ -835,7 +838,7 @@ function runtimeDouble(executeAuthenticatedCloud = vi.fn()) {
     executeAuthenticatedCloud,
     revalidateCurrentDevice: async () => ({
       state: 'ready' as const,
-      baseUrl: 'https://cloud.example.test',
+      baseUrl,
       userId: agentNodeFixture.ownerUserId,
       deviceId: agentNodeFixture.deviceId,
       deviceRevision: 1

@@ -192,9 +192,14 @@ export class CollaborationConnection {
     }
     await this.options.settings.configure(status.baseUrl)
     this.connectionState = { state: 'disconnected' }
-    await this.refreshProviderCatalog()
-    const agent = await this.ensureLocalAgent()
-    await this.refreshParticipant(agent.ownerUserId)
+    try {
+      await this.refreshProviderCatalog()
+      const agent = await this.ensureLocalAgent()
+      await this.refreshParticipant(agent.ownerUserId)
+    } catch (error) {
+      this.recordError(error, true)
+      throw error
+    }
   }
 
   async applyConnectionAction(input: CollaborationConnectionConnectInput): Promise<void> {
@@ -308,6 +313,7 @@ export class CollaborationConnection {
 
   async ensureLocalAgent(): Promise<AgentNode> {
     const identity = this.requireIdentityReady()
+    await this.options.store.prepareForAuthenticatedUser(identity.userId)
     const state = this.options.store.snapshot()
     if (state.user && state.user.userId !== identity.userId) {
       throw new Error('Cached collaboration state belongs to another OIDC User.')
@@ -419,7 +425,9 @@ export class CollaborationConnection {
           key: 'providerUserId',
           label: provider.onboarding.accountLabel,
           required: true,
-          placeholder: 'Exact provider account identity'
+          placeholder: provider.provider === 'zulip'
+            ? 'Numeric user ID of the Zulip account to pair'
+            : 'Exact provider account identity'
         }
       ]
     }))

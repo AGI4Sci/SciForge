@@ -162,7 +162,7 @@ export const ZULIP_HUMAN_ENDPOINT_PROVIDER_CONTRACT: HumanEndpointProviderContra
   },
   onboarding: {
     realmLabel: 'Zulip server URL',
-    accountLabel: 'Bot email',
+    accountLabel: 'Zulip user ID',
     containerLabel: 'Stream',
     topicLabel: 'Topic'
   },

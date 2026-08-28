@@ -164,6 +164,27 @@ describe('remote capability approval security boundary', () => {
     ].join('\n'))
     expect(cards[0]?.payload.text).not.toContain('AP1-')
     expect(cards[0]?.payload.text).not.toContain('回复：')
+    await service.createRemoteCapabilityApproval(device, {
+      projectionId: projection.projectionId,
+      runtimeId: 'codex',
+      threadId: 'thread-fixed',
+      turnId: 'turn-risk',
+      capabilityRequestId: 'capability-request-risk',
+      desktopApprovalId: 'desktop-approval-risk',
+      safeSummary: '命令执行',
+      effect: 'destructive',
+      remoteEligible: true,
+      expiresAt: new Date(at.getTime() + 300_000).toISOString(),
+      idempotencyKey: 'idem_remote_approval_risk'
+    })
+    const riskCards = await repository.pullInbox(
+      { kind: 'human_endpoint', id: owner.endpointId }, 0, 10, at.toISOString()
+    )
+    expect(riskCards.map((message) => message.payload.text)).toContain([
+      '需审批（5 分钟）：命令执行',
+      '高风险，建议到电脑核实。',
+      '👍 允许一次 · 👎 拒绝'
+    ].join('\n'))
     expect(JSON.stringify(repository.state.auditEvents)).not.toContain(reference)
     const createdId = String((created.approval as Record<string, unknown>).remoteApprovalId)
     await service.confirmRemoteApprovalCard(createdId, 'provider-card-owner')
@@ -220,6 +241,30 @@ describe('remote capability approval security boundary', () => {
       turnId: 'turn-fixed',
       capabilityRequestId: 'capability-request-fixture'
     })
+    const accepted = repository.state.remoteApprovals.get(createdId)!
+    const immediateCardUpdates = (await repository.pullInbox(
+      { kind: 'human_endpoint', id: owner.endpointId }, 0, 20, at.toISOString()
+    )).filter((candidate) => (
+      candidate.messageType === 'provider.message.update.outbound'
+      && candidate.payload.providerMessageId === 'provider-card-owner'
+    ))
+    expect(immediateCardUpdates).toHaveLength(1)
+    expect(immediateCardUpdates[0]?.payload.text).toBe(
+      accepted.status === 'approved' ? '本次权限已允许。' : '本次权限已拒绝。'
+    )
+    await service.reportRemoteCapabilityApprovalResult(device, {
+      remoteApprovalId: createdId,
+      decisionId: accepted.decisionId!,
+      outcome: 'applied',
+      idempotencyKey: 'idem_remote_approval_result_applied'
+    })
+    const afterApplied = (await repository.pullInbox(
+      { kind: 'human_endpoint', id: owner.endpointId }, 0, 20, at.toISOString()
+    )).filter((candidate) => (
+      candidate.messageType === 'provider.message.update.outbound'
+      && candidate.payload.providerMessageId === 'provider-card-owner'
+    ))
+    expect(afterApplied).toHaveLength(1)
 
     const secondSameTopicService = new CollaborationService({
       repository,
@@ -261,6 +306,15 @@ describe('remote capability approval security boundary', () => {
       capabilityRequestId: 'capability-request-same-topic-second',
       decision: 'deny_once'
     })
+    expect((await repository.pullInbox(
+      { kind: 'human_endpoint', id: owner.endpointId }, 0, 30, at.toISOString()
+    ))).toContainEqual(expect.objectContaining({
+      messageType: 'provider.message.update.outbound',
+      payload: expect.objectContaining({
+        providerMessageId: 'provider-card-same-topic-second',
+        text: '本次权限已拒绝。'
+      })
+    }))
 
     const secondTopicLocator = {
       ...locator,
@@ -314,6 +368,15 @@ describe('remote capability approval security boundary', () => {
       capabilityRequestId: 'capability-request-second-topic',
       decision: 'allow_once'
     })
+    expect((await repository.pullInbox(
+      { kind: 'human_endpoint', id: owner.endpointId }, 0, 40, at.toISOString()
+    ))).toContainEqual(expect.objectContaining({
+      messageType: 'provider.message.update.outbound',
+      payload: expect.objectContaining({
+        providerMessageId: 'provider-card-second-topic',
+        text: '本次权限已允许。'
+      })
+    }))
 
     const closedReference = `AP1-${'B'.repeat(20)}`
     const closedService = new CollaborationService({

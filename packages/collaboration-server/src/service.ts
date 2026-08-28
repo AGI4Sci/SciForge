@@ -433,10 +433,21 @@ export class CollaborationService {
           threadId: approval.threadId, turnId: approval.turnId,
           capabilityRequestId: approval.capabilityRequestId, decisionId, decision: input.action
         }, at)
+      const cardUpdate = approval.providerCardMessageId
+        ? await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+            'provider.message.update.outbound', {
+              protocolVersion: '1.0', type: 'provider.message.update.outbound',
+              remoteApprovalId: approval.remoteApprovalId, locator: approval.locator,
+              providerMessageId: approval.providerCardMessageId,
+              text: remoteApprovalTerminalText(updated.status),
+              fallbackText: remoteApprovalTerminalText(updated.status)
+            }, at)
+        : null
       return {
         response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(updated) },
         resourceKind: 'remote_capability_approval', resourceId: approval.remoteApprovalId,
-        notifications: [{ recipient: message.recipient, sequence: message.sequence }]
+        notifications: [message, ...(cardUpdate ? [cardUpdate] : [])]
+          .map((notification) => ({ recipient: notification.recipient, sequence: notification.sequence }))
       }
     })
   }
@@ -472,6 +483,7 @@ export class CollaborationService {
       }
       await tx.updateRemoteApproval(updated, approval.revision)
       const notifications = approval.providerCardMessageId
+        && !(approval.interactionMode === 'reaction_v1' && input.outcome === 'applied')
         ? [await this.appendInbox(tx, { kind: 'human_endpoint', id: (
           required(await tx.getProjection(approval.projectionId), 'Projection')
         ).humanEndpointId }, 'provider.message.update.outbound', {
@@ -7731,7 +7743,10 @@ function sameLocator(left: ProviderLocatorValue, right: ProviderLocatorValue): b
 }
 
 function remoteApprovalCard(approval: StoredRemoteCapabilityApproval): string {
-  return `需审批（5 分钟）：${approval.safeSummary}\n👍 允许一次 · 👎 拒绝`
+  const riskNotice = approval.effect !== 'workspace-write'
+    ? '\n高风险，建议到电脑核实。'
+    : ''
+  return `需审批（5 分钟）：${approval.safeSummary}${riskNotice}\n👍 允许一次 · 👎 拒绝`
 }
 
 function remoteApprovalDesktopRequiredNotice(approval: StoredRemoteCapabilityApproval): string {

@@ -618,6 +618,24 @@ export class CollaborationLocalStore {
     return result
   }
 
+  async prepareForAuthenticatedUser(userId: string): Promise<void> {
+    const snapshot = this.snapshot()
+    if (!snapshot.user || snapshot.user.userId === userId) return
+    await this.transact((draft) => {
+      if (!draft.user || draft.user.userId === userId) return
+      if (!isReplaceableIdentityCache(draft)) {
+        throw new Error(
+          'This Desktop already has Phone Link or Session data for another signed-in SciForge User.'
+        )
+      }
+      const revision = draft.revision
+      Object.assign(draft, structuredClone(EMPTY_COLLABORATION_LOCAL_STATE))
+      delete draft.user
+      delete draft.participant
+      draft.revision = revision
+    })
+  }
+
   private async recoverInterruptedWork(): Promise<void> {
     if (!this.state) return
     let changed = false
@@ -646,6 +664,26 @@ export class CollaborationLocalStore {
     await this.backend.write(parsed)
     this.state = parsed
   }
+}
+
+function isReplaceableIdentityCache(state: CollaborationLocalState): boolean {
+  return state.lastInboxSequence === 0 &&
+    state.endpoints.length === 0 &&
+    state.endpointLocators.length === 0 &&
+    state.managedContainers.length === 0 &&
+    !state.participant?.primaryHumanEndpointId &&
+    state.projections.length === 0 &&
+    (state.sessionBindings?.length ?? 0) === 0 &&
+    state.projects.length === 0 &&
+    state.tasks.length === 0 &&
+    state.taskRuns.length === 0 &&
+    state.workerAcceptancePolicies.length === 0 &&
+    state.queue.length === 0 &&
+    state.receipts.length === 0 &&
+    state.remoteApprovals.length === 0 &&
+    state.outbox.every((entry) => (
+      entry.kind === 'worker.availability' || entry.kind === 'agent.heartbeat'
+    ))
 }
 
 export function claimLocalSessionProjectionBinding(
