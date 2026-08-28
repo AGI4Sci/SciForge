@@ -20,12 +20,13 @@ import {
   defineProjectCoordinatorWorkspacePort
 } from './ports.js'
 import { createProjectCoordinatorContinuationPort } from './continuation.js'
+import { ProjectCoordinatorPlanningError } from './plan-readiness.js'
 import { ProjectCoordinatorStateStore } from './state.js'
 
 test('local Coordinator Runtime creates an editable durable Plan draft with Worker User assignment', async () => {
   const settings = inMemorySettings()
   const prompts: string[] = []
-  const workspace = workspaceFixture()
+  const workspace = planningWorkspaceFixture('draft')
   const firstAgent = workspace.projects[0]!.workerGroups[0]!.agents[0]!
   workspace.projects[0]!.workerGroups[0]!.agents.push({
     displayName: 'Worker Desktop B',
@@ -114,7 +115,7 @@ test('local Coordinator Runtime creates an editable durable Plan draft with Work
     })),
     rationale: edited.rationale,
     assignments: edited.assignments
-  }), /one online eligible Runtime/u)
+  }), /one planning-ready Runtime/u)
 
   const reloaded = createProjectCoordinatorPlanPort(options)
   assert.deepEqual(await reloaded.readDraft({ projectId: generated.projectId }), edited)
@@ -129,7 +130,128 @@ test('local Coordinator Runtime creates an editable durable Plan draft with Work
       workerUserId: 'usr_NotAProjectUser',
       recommendationReason: 'An invented candidate must be rejected.'
     }]
-  }), /active Project member/u)
+  }), /visible Worker User/u)
+})
+
+test('paused planning accepts only active membership with project_paused prospective authority', async () => {
+  const workspace = planningWorkspaceFixture('paused')
+  let runtimeRuns = 0
+  const port = createProjectCoordinatorPlanPort({
+    settings: inMemorySettings(),
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => workspace
+    }),
+    getAgentExecution: () => ({
+      run: async () => {
+        runtimeRuns += 1
+        return planAgentExecution().run({
+          clientDirectiveId: 'project-plan:paused',
+          prompt: 'paused',
+          interaction: 'reviewable',
+          mode: 'plan'
+        })
+      }
+    }),
+    continuation: {
+      reconcileProject: async () => workspace,
+      reconcileVisibleProjects: async () => undefined
+    },
+    now: () => new Date('2026-08-25T01:06:00.000Z')
+  })
+
+  const draft = await port.generateDraft({
+    projectId: 'prj_ProjectCreated01',
+    instruction: 'Replan while provisioning keeps execution paused.',
+    sourceInputLocators: [],
+    modelId: null
+  })
+  const edited = await port.editDraft({
+    projectId: draft.projectId,
+    draftId: draft.draftId,
+    expectedDraftRevision: draft.draftRevision,
+    tasks: draft.tasks,
+    rationale: draft.rationale,
+    assignments: [{
+      planItemId: 'item_meeting_summary',
+      workerUserId: 'usr_Worker000001',
+      recommendationReason: 'The paused Project exposes prospective text scope.'
+    }]
+  })
+
+  assert.equal(runtimeRuns, 1)
+  assert.equal(edited.assignments[0]?.workerUserId, 'usr_Worker000001')
+
+  const activeWithoutEligibleAuthority = planningWorkspaceFixture('active')
+  activeWithoutEligibleAuthority.projects[0]!.workerGroups[0]!.agents[0]!
+    .projectAvailability.taskAuthorities[0]!.state = 'suspended'
+  activeWithoutEligibleAuthority.projects[0]!.workerGroups[0]!.agents[0]!
+    .projectAvailability.taskAuthorities[0]!.reason = 'project_paused'
+  let activeRuntimeRuns = 0
+  const activePort = createProjectCoordinatorPlanPort({
+    settings: inMemorySettings(),
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => activeWithoutEligibleAuthority
+    }),
+    getAgentExecution: () => ({
+      run: async (request) => {
+        activeRuntimeRuns += 1
+        return planAgentExecution().run(request)
+      }
+    }),
+    continuation: {
+      reconcileProject: async () => activeWithoutEligibleAuthority,
+      reconcileVisibleProjects: async () => undefined
+    }
+  })
+  await assert.rejects(
+    activePort.generateDraft({
+      projectId: 'prj_ProjectCreated01',
+      instruction: 'Do not plan with suspended authority after activation.',
+      sourceInputLocators: [],
+      modelId: null
+    }),
+    (error: unknown) => error instanceof ProjectCoordinatorPlanningError &&
+      error.code === 'planning_candidates_unavailable'
+  )
+  assert.equal(activeRuntimeRuns, 0)
+})
+
+test('planning with no prospective Worker candidate fails before Runtime dispatch', async () => {
+  const workspace = planningWorkspaceFixture('draft')
+  Object.assign(
+    workspace.projects[0]!.workerGroups[0]!.agents[0]!
+      .projectAvailability.availability,
+    { connectionStatus: 'offline', acceptsNewOffers: false }
+  )
+  let runtimeRuns = 0
+  const port = createProjectCoordinatorPlanPort({
+    settings: inMemorySettings(),
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => workspace
+    }),
+    getAgentExecution: () => ({
+      run: async (request) => {
+        runtimeRuns += 1
+        return planAgentExecution().run(request)
+      }
+    }),
+    continuation: {
+      reconcileProject: async () => workspace,
+      reconcileVisibleProjects: async () => undefined
+    }
+  })
+
+  await assert.rejects(
+    port.generateDraft({
+      projectId: 'prj_ProjectCreated01',
+      instruction: 'This must fail before provider dispatch.',
+      sourceInputLocators: [],
+      modelId: null
+    }),
+    (error: unknown) => error instanceof ProjectCoordinatorPlanningError &&
+      error.code === 'planning_candidates_unavailable'
+  )
+  assert.equal(runtimeRuns, 0)
 })
 
 test('Plan confirmation keeps the Project paused until the canonical workflow activates and reconciles', async () => {
@@ -450,6 +572,39 @@ function workspaceFixture() {
   }
 }
 
+function planningWorkspaceFixture(status: 'draft' | 'paused' | 'active') {
+  const base = workspaceFixture()
+  return {
+    ...base,
+    projects: base.projects.map((project) => ({
+      ...project,
+      project: {
+        ...project.project,
+        status
+      },
+      workerGroups: project.workerGroups.map((group) => ({
+        ...group,
+        agents: group.agents.map((agent) => ({
+          ...agent,
+          projectAvailability: {
+            ...agent.projectAvailability,
+            membership: status === 'draft'
+              ? null
+              : agent.projectAvailability.membership,
+            taskAuthorities: status === 'draft'
+              ? []
+              : agent.projectAvailability.taskAuthorities.map((authority) => ({
+                  ...authority,
+                  state: status === 'paused' ? 'suspended' as const : 'eligible' as const,
+                  reason: status === 'paused' ? 'project_paused' as const : null
+                }))
+          }
+        }))
+      }))
+    }))
+  }
+}
+
 function workflowWorkspace(
   phase: 'draft' | 'submitted' | 'confirmed' | 'active',
   plan: ProjectPlan | undefined,
@@ -474,7 +629,11 @@ function workflowWorkspace(
       project: {
         ...base.projects[0]!.project,
         revision: projectRevision,
-        status: phase === 'active' ? 'active' as const : 'paused' as const
+        status: phase === 'draft'
+          ? 'draft' as const
+          : phase === 'active'
+            ? 'active' as const
+            : 'paused' as const
       },
       plan: plan ? {
         plan,

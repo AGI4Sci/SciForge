@@ -1137,6 +1137,7 @@ test('an awaiting-confirmation Plan renders its Owner action as a default-visibl
   const markup = renderToStaticMarkup(createElement(ProjectCoordinatorPlanSection, {
     project: awaitingConfirmationProjectFixture(),
     draft: null,
+    observedAt: '2026-08-25T01:08:00.000Z',
     busy: false,
     onGenerate: () => undefined,
     onEditDraft: () => undefined,
@@ -1156,7 +1157,7 @@ test('an awaiting-confirmation Plan renders its Owner action as a default-visibl
 })
 
 test('a local Plan draft exposes full content editing before immutable submit', () => {
-  const project = awaitingConfirmationProjectFixture()
+  const project = planningProjectFixture('draft')
   const task = project.plan.plan.tasks[0]!
   const markup = renderToStaticMarkup(createElement(ProjectCoordinatorPlanSection, {
     project: { ...project, plan: null },
@@ -1179,6 +1180,7 @@ test('a local Plan draft exposes full content editing before immutable submit', 
       createdAt: project.project.createdAt,
       updatedAt: project.project.updatedAt
     },
+    observedAt: '2026-08-25T01:08:00.000Z',
     busy: false,
     onGenerate: () => undefined,
     onEditDraft: () => undefined,
@@ -1199,7 +1201,50 @@ test('a local Plan draft exposes full content editing before immutable submit', 
   assert.match(markup, /name="plan-item-criteria-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-capabilities-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-user-item_meeting_summary"/u)
+  assert.match(markup, /data-planning-eligible="true"/u)
   assert.match(markup, /projectCoordinatorSavePlanEdits/u)
+})
+
+test('a paused Project keeps a Worker option enabled for project_paused prospective authority', () => {
+  const project = planningProjectFixture('paused')
+  const task = project.plan.plan.tasks[0]!
+  const markup = renderToStaticMarkup(createElement(ProjectCoordinatorPlanSection, {
+    project: { ...project, plan: null },
+    draft: {
+      draftId: 'draft_MeetingReplan01',
+      draftRevision: 1,
+      projectId: project.project.projectId,
+      expectedProjectRevision: project.project.revision,
+      expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
+      supersedesProjectPlanId: project.plan.plan.projectPlanId,
+      sourceInputLocators: [],
+      tasks: [task],
+      rationale: project.plan.plan.rationale,
+      runtimeProvenance: project.plan.plan.runtimeProvenance,
+      assignments: [{
+        planItemId: task.planItemId,
+        workerUserId: null,
+        recommendationReason: null
+      }],
+      createdAt: project.project.createdAt,
+      updatedAt: project.project.updatedAt
+    },
+    observedAt: '2026-08-25T01:08:00.000Z',
+    busy: false,
+    onGenerate: () => undefined,
+    onEditDraft: () => undefined,
+    onSubmitDraft: () => undefined,
+    canConfirm: false,
+    currentUserId: 'usr_Owner0000001',
+    providerPrincipalFacts: [],
+    initialContentMode: 'none',
+    initialProviderFactId: '',
+    onInitialContentMode: () => undefined,
+    onInitialProviderFactId: () => undefined,
+    onConfirm: () => undefined
+  }))
+
+  assert.match(markup, /value="usr_ProjectMember01" data-planning-eligible="true"/u)
 })
 
 test('pending HumanNeeded, result review, and eligible completion are default-visible decision cards', () => {
@@ -1709,6 +1754,87 @@ function awaitingConfirmationProjectFixture() {
       externalOperationJournal: [],
       recoveryActions: []
     }
+  }
+}
+
+function planningProjectFixture(
+  status: 'draft' | 'paused'
+): ProjectCoordinatorProject & {
+  plan: NonNullable<ProjectCoordinatorProject['plan']>
+} {
+  const base = awaitingConfirmationProjectFixture()
+  const userId = 'usr_ProjectMember01'
+  const agentId = 'agt_MemberAgent001'
+  return {
+    ...base,
+    project: {
+      ...base.project,
+      status
+    },
+    workerGroups: [{
+      userId,
+      displayName: 'Project Member',
+      agents: [{
+        displayName: 'Member Desktop',
+        projectAvailability: {
+          schemaVersion: 1,
+          type: 'project_worker_availability_view',
+          projectId: base.project.projectId,
+          userId,
+          agentId,
+          revision: 1,
+          availability: {
+            schemaVersion: 1,
+            type: 'worker_availability_projection',
+            userId,
+            agentId,
+            deviceId: 'dev_MemberDevice001',
+            agentActive: true,
+            deviceActive: true,
+            connectionStatus: 'online',
+            lastHeartbeatAt: base.project.updatedAt,
+            runtimeReadiness: 'ready',
+            runtimeCapabilityTags: ['meeting.review'],
+            acceptsNewOffers: true,
+            activeTaskCount: 0,
+            observedAt: base.project.updatedAt,
+            expiresAt: '2026-08-25T02:08:00.000Z',
+            revision: 1,
+            createdAt: base.project.createdAt,
+            updatedAt: base.project.updatedAt
+          },
+          membership: status === 'draft'
+            ? null
+            : {
+                ...base.provisioning.memberships[1]!,
+                state: 'active'
+              },
+          taskAuthorities: status === 'draft'
+            ? []
+            : [{
+                schemaVersion: 1,
+                type: 'task_authority',
+                taskAuthorityId: 'tau_MemberText001',
+                projectId: base.project.projectId,
+                userId,
+                scope: 'text_tasks',
+                state: 'suspended',
+                authorityEpoch: 1,
+                reason: 'project_paused',
+                effectiveAt: base.project.createdAt,
+                revision: 1,
+                createdAt: base.project.createdAt,
+                updatedAt: base.project.updatedAt
+              }],
+          providerPrincipalFact: null,
+          providerPrincipalSnapshotStatus: 'not_applicable',
+          contentReadiness: null,
+          observedAt: base.project.updatedAt
+        }
+      }]
+    }]
+  } as ProjectCoordinatorProject & {
+    plan: NonNullable<ProjectCoordinatorProject['plan']>
   }
 }
 

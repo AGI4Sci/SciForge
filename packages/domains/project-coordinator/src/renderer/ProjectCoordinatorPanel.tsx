@@ -60,6 +60,7 @@ import type {
   ProjectCoordinatorResultReviewInput,
   ProjectCoordinatorWorkspace
 } from '../contract.js'
+import { projectCoordinatorPlanningTaskReadiness } from '../plan-readiness.js'
 import type { ProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
 import type { ProjectCoordinatorWorkspaceSection } from './workspace-sections.js'
 
@@ -1105,6 +1106,7 @@ export function ProjectCoordinatorPanel({
                 <ProjectCoordinatorPlanSection
                   project={project}
                   draft={draft}
+                  observedAt={workspace?.observedAt ?? project?.project.updatedAt ?? ''}
                   busy={Boolean(busyAction?.startsWith('plan-'))}
                   onGenerate={generateDraft}
                   onEditDraft={editDraft}
@@ -2034,6 +2036,7 @@ export function ProjectCoordinatorTransferSection({
 export function ProjectCoordinatorPlanSection({
   project,
   draft,
+  observedAt,
   busy,
   onGenerate,
   onEditDraft,
@@ -2049,6 +2052,7 @@ export function ProjectCoordinatorPlanSection({
 }: Readonly<{
   project?: ProjectCoordinatorProject
   draft: ProjectCoordinatorPlanDraft | null
+  observedAt: string
   busy: boolean
   onGenerate(): void
   onEditDraft(content: Pick<
@@ -2206,15 +2210,20 @@ export function ProjectCoordinatorPlanSection({
                 >
                   <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
                   {visibleWorkerGroups.map((group) => {
-                    const online = group.agents.some((agent) => {
-                      const operational = projectCoordinatorAgentOperationalState(agent)
-                      return operational.state !== 'blocked' && operational.state !== 'offline'
-                    })
+                    const planningEligible = project !== undefined && group.agents.some(({
+                      projectAvailability
+                    }) => projectCoordinatorPlanningTaskReadiness(
+                      project,
+                      projectAvailability,
+                      item,
+                      observedAt
+                    ).eligible)
                     return (
                       <option
                         key={group.userId}
                         value={group.userId}
-                        disabled={!online}
+                        disabled={!planningEligible}
+                        data-planning-eligible={planningEligible ? 'true' : 'false'}
                       >
                         {group.displayName}
                       </option>
