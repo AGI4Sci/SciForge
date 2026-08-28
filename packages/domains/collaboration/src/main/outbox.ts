@@ -6,6 +6,10 @@ import {
   type RestResponse
 } from '@sciforge/collaboration-contracts'
 import type { AgentCloudRuntime } from '@sciforge/domain-identity-access/agent-cloud-runtime'
+import {
+  coordinatorCloudCommandSchema,
+  type CoordinatorCloudCommand
+} from '../coordinator-cloud-command.js'
 import type { ProjectionCloudOutbox, ProjectionDeliveryCommand } from './projection-coordinator.js'
 import type { CollaborationOutboxEntry } from './store.js'
 import { CollaborationLocalStore } from './store.js'
@@ -16,6 +20,11 @@ export type DurableCloudOutboxOptions = Readonly<{
   localAgentId: () => string | undefined
   sanitizeText?: (value: string) => string
   now?: () => Date
+}>
+
+type CoordinatorActor = Readonly<{
+  agentId: string
+  userId: string
 }>
 
 export class DurableCloudOutbox implements ProjectionCloudOutbox {
@@ -182,7 +191,10 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
         const response = restResponseSchema.parse(
           await this.options.agentCloudRuntime.execute({ agentId, request })
         )
-        assertExpectedWriteResponse(next.kind, request, response)
+        assertExpectedWriteResponse(next.kind, request, response, {
+          agentId,
+          userId: authority.userId
+        })
         const deliveredAt = this.now().toISOString()
         await this.options.store.transact((draft) => {
           const entry = requireOutbox(draft.outbox, next.outboxId)
@@ -253,19 +265,23 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
 function assertExpectedWriteResponse(
   kind: CollaborationOutboxEntry['kind'],
   request: RestRequest,
-  response: RestResponse
+  response: RestResponse,
+  actor: CoordinatorActor
 ): void {
-  if (response.type === 'rest.error') {
-    if (kind === 'coordinator.command' && response.requestId === request.requestId) return
-    if (kind === 'coordinator.command') {
+  if (kind === 'coordinator.command') {
+    const command = coordinatorCloudCommandSchema.parse(request)
+    if (response.type === 'rest.error') {
+      if (response.requestId === command.requestId) return
       throw new Error('Cloud write returned a response for another request.')
     }
+    if (isExpectedCoordinatorResponse(command, response, actor)) return
+    throw new Error(`Cloud write returned unexpected ${response.type}.`)
+  }
+  if (response.type === 'rest.error') {
     throw new Error(response.error.message)
   }
-  const expected = kind === 'coordinator.command'
-    ? isExpectedCoordinatorResponse(request, response)
-    : kind === 'task.offer-decision' && request.type === 'task.offer.accept'
-      ? isExpectedTaskOfferClaimResponse(request, response)
+  const expected = kind === 'task.offer-decision' && request.type === 'task.offer.accept'
+    ? isExpectedTaskOfferClaimResponse(request, response)
     : request.type === 'capability.approval.create'
       ? response.type === 'capability.approval.created'
       : request.type === 'capability.approval.result' || request.type === 'capability.approval.withdraw'
@@ -275,15 +291,51 @@ function assertExpectedWriteResponse(
 }
 
 function isExpectedCoordinatorResponse(
-  request: RestRequest,
-  response: Exclude<RestResponse, { type: 'rest.error' }>
+  request: CoordinatorCloudCommand,
+  response: Exclude<RestResponse, { type: 'rest.error' }>,
+  actor: CoordinatorActor
 ): boolean {
   if (response.requestId !== request.requestId) return false
   switch (request.type) {
+    case 'project.create':
+      return isProjectCreatedResponse(request, response, actor)
     case 'project.plan.submit':
       return response.type === 'rest.entity' &&
         response.entity.type === 'project_plan' &&
         response.entity.projectId === request.projectId
+    case 'human.needed.create': {
+      if (
+        response.type !== 'rest.entity' ||
+        response.entity.type !== 'human_needed'
+      ) return false
+      const expectedContext = request.context.scope === 'worker_execution'
+        ? {
+            scope: 'worker_execution' as const,
+            taskId: request.context.taskId,
+            executionId: request.context.executionId
+          }
+        : {
+            scope: 'coordinator_project' as const,
+            coordinatorAuthorityEpoch: request.context.expectedCoordinatorAuthorityEpoch
+          }
+      return response.entity.projectId === request.projectId &&
+        response.entity.targetUserId === request.targetUserId &&
+        response.entity.requestedByAgentId === actor.agentId &&
+        response.entity.requiredAssurance === request.requiredAssurance &&
+        response.entity.prompt === request.prompt &&
+        canonicalJson(response.entity.confirmableAction) ===
+          canonicalJson(request.confirmableAction ?? null) &&
+        response.entity.status === 'pending' &&
+        response.entity.expiresAt === request.expiresAt &&
+        response.entity.revision === 1 &&
+        canonicalJson(response.entity.context) === canonicalJson(expectedContext)
+    }
+    case 'task.result.review':
+      return isTaskResultReviewCollection(request, response, actor)
+    case 'project.decision.submit':
+      return isProjectDecisionCollection(request, response, actor)
+    case 'project.final_summary.submit':
+      return isProjectFinalSummaryCollection(request, response, actor)
     case 'task.offer.create':
       return isUserTaskOfferCollection(response, {
         outcome: 'created',
@@ -310,9 +362,218 @@ function isExpectedCoordinatorResponse(
         taskRevision: request.expectedTaskRevision + 1,
         offerRevision: 1
       })
-    default:
-      return false
   }
+  return unexpectedCoordinatorCommand(request)
+}
+
+function unexpectedCoordinatorCommand(command: never): false {
+  throw new Error(`Unsupported Coordinator command: ${String(command)}.`)
+}
+
+function isProjectCreatedResponse(
+  request: Extract<CoordinatorCloudCommand, { type: 'project.create' }>,
+  response: Exclude<RestResponse, { type: 'rest.error' }>,
+  actor: CoordinatorActor
+): boolean {
+  if (response.type !== 'rest.project_created') return false
+  const expectedMemberUserIds = request.content.members.map(({ userId }) => userId).sort()
+  const actualMemberUserIds = response.memberships.map(({ userId }) => userId).sort()
+  const commonFactsMatch = response.project.ownerUserId === actor.userId &&
+    response.project.coordinatorAgentId === actor.agentId &&
+    response.project.displayName === request.displayName &&
+    response.project.goal === request.goal &&
+    response.project.contentMode === request.content.mode &&
+    response.project.status === 'paused' &&
+    response.project.coordinatorAuthorityEpoch === 1 &&
+    response.project.executionAuthorityEpoch === 1 &&
+    response.project.revision === 1 &&
+    canonicalJson(response.project.budget) === canonicalJson(request.budget) &&
+    canonicalJson(actualMemberUserIds) === canonicalJson(expectedMemberUserIds) &&
+    response.memberships.every((membership) => (
+      membership.projectId === response.project.projectId &&
+      membership.state === 'active' &&
+      membership.authorityEpoch === 1 &&
+      membership.revision === 1
+    ))
+  if (!commonFactsMatch) return false
+  if (request.content.mode === 'none') return response.provisioningIntent === null
+  const intent = response.provisioningIntent
+  if (intent === null) return false
+  const expectedDesiredMembers = request.content.members
+    .map((member) => ({
+      userId: member.userId,
+      providerPrincipalFactId: member.providerPrincipalFactId,
+      snapshottedFactRevision: member.expectedFactRevision
+    }))
+    .sort((left, right) => left.userId.localeCompare(right.userId))
+  const actualDesiredMembers = intent.desiredMembers
+    .map((member) => ({
+      userId: member.userId,
+      providerPrincipalFactId: member.providerPrincipalFactId,
+      snapshottedFactRevision: member.snapshottedFactRevision
+    }))
+    .sort((left, right) => left.userId.localeCompare(right.userId))
+  return intent.projectId === response.project.projectId &&
+    intent.provisioningRevision === 1 &&
+    intent.kind === 'initial_provisioning' &&
+    intent.state === 'pending' &&
+    intent.createdByOwnerUserId === actor.userId &&
+    intent.contentOwnerUserId === request.content.contentOwnerUserId &&
+    canonicalJson(intent.providerInstance) === canonicalJson(request.content.providerInstance) &&
+    canonicalJson(actualDesiredMembers) === canonicalJson(expectedDesiredMembers) &&
+    intent.containerDisplayName === request.content.containerDisplayName &&
+    intent.currentRootLocator === null &&
+    intent.currentBindingRevision === null &&
+    intent.revision === 1
+}
+
+function isProjectFinalSummaryCollection(
+  request: Extract<CoordinatorCloudCommand, { type: 'project.final_summary.submit' }>,
+  response: Exclude<RestResponse, { type: 'rest.error' }>,
+  actor: CoordinatorActor
+): boolean {
+  if (
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length !== 3
+  ) return false
+  const [project, record, summary] = response.items
+  return project?.type === 'project' &&
+    record?.type === 'project_record' &&
+    summary?.type === 'project_final_summary' &&
+    project.projectId === request.projectId &&
+    project.ownerUserId === actor.userId &&
+    project.coordinatorAgentId === actor.agentId &&
+    project.coordinatorAuthorityEpoch === request.expectedCoordinatorAuthorityEpoch &&
+    project.executionAuthorityEpoch === request.expectedExecutionAuthorityEpoch + 1 &&
+    project.status === 'completed' &&
+    project.revision === request.expectedProjectRevision + 1 &&
+    record.projectId === request.projectId &&
+    record.kind === 'summary' &&
+    record.status === 'accepted' &&
+    record.body === request.summary &&
+    record.authorUserId === actor.userId &&
+    record.authorAgentId === actor.agentId &&
+    record.sourceTaskId === null &&
+    record.sourceResultSubmissionId === null &&
+    record.sourceHumanAnswerId === null &&
+    record.acceptedByUserId === actor.userId &&
+    record.acceptedByAgentId === actor.agentId &&
+    record.revision === 1 &&
+    summary.projectId === request.projectId &&
+    summary.projectRecordId === record.projectRecordId &&
+    summary.projectPlanId === request.projectPlanId &&
+    summary.confirmedPlanRevision === request.confirmedPlanRevision &&
+    canonicalJson(summary.acceptedResultSubmissionIds) ===
+      canonicalJson(request.acceptedResultSubmissionIds) &&
+    summary.summary === request.summary &&
+    summary.createdByUserId === actor.userId &&
+    summary.createdByCoordinatorAgentId === actor.agentId &&
+    summary.completedAt === record.acceptedAt &&
+    summary.completedAt === project.updatedAt &&
+    summary.revision === 1
+}
+
+function isProjectDecisionCollection(
+  request: Extract<CoordinatorCloudCommand, { type: 'project.decision.submit' }>,
+  response: Exclude<RestResponse, { type: 'rest.error' }>,
+  actor: CoordinatorActor
+): boolean {
+  if (
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length !== 2
+  ) return false
+  const [project, record] = response.items
+  return project?.type === 'project' &&
+    record?.type === 'project_record' &&
+    project.projectId === request.projectId &&
+    project.ownerUserId === actor.userId &&
+    project.coordinatorAgentId === actor.agentId &&
+    project.coordinatorAuthorityEpoch === request.expectedCoordinatorAuthorityEpoch &&
+    project.revision === request.expectedProjectRevision + 1 &&
+    record.projectId === request.projectId &&
+    record.kind === 'decision' &&
+    record.status === 'accepted' &&
+    record.body === request.decision &&
+    record.authorUserId === actor.userId &&
+    record.authorAgentId === actor.agentId &&
+    record.sourceTaskId === null &&
+    record.sourceResultSubmissionId === null &&
+    record.sourceHumanAnswerId === request.humanAnswerId &&
+    record.sourceRevision === request.expectedHumanAnswerRevision &&
+    record.acceptedByUserId === actor.userId &&
+    record.acceptedByAgentId === actor.agentId &&
+    record.revision === 1
+}
+
+function isTaskResultReviewCollection(
+  request: Extract<CoordinatorCloudCommand, { type: 'task.result.review' }>,
+  response: Exclude<RestResponse, { type: 'rest.error' }>,
+  actor: CoordinatorActor
+): boolean {
+  if (
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length !== (request.decision === 'accept' ? 3 : 4)
+  ) return false
+  const [task, execution, review, offer] = response.items
+  if (
+    task?.type !== 'task' ||
+    execution?.type !== 'task_execution' ||
+    review?.type !== 'task_review_decision' ||
+    task.projectId !== request.projectId ||
+    task.taskId !== request.taskId ||
+    task.revision !== request.expectedTaskRevision + 1 ||
+    execution.projectId !== request.projectId ||
+    execution.taskId !== request.taskId ||
+    execution.executionId !== request.executionId ||
+    execution.currentResultSubmissionId !== request.resultSubmissionId ||
+    execution.revision !== request.expectedExecutionRevision + 1 ||
+    review.projectId !== request.projectId ||
+    review.taskId !== request.taskId ||
+    review.executionId !== request.executionId ||
+    review.resultSubmissionId !== request.resultSubmissionId ||
+    review.reviewedResultRevision !== request.expectedResultRevision ||
+    review.decidedByUserId !== actor.userId ||
+    review.decidedByCoordinatorAgentId !== actor.agentId ||
+    review.decision !== request.decision ||
+    review.instruction !== request.instruction ||
+    review.revision !== 1
+  ) return false
+  if (request.decision === 'accept') {
+    return offer === undefined &&
+      task.status === 'completed' &&
+      task.currentExecutionId === execution.executionId &&
+      task.currentExecutionState === 'completed' &&
+      task.completedAt !== null &&
+      execution.state === 'completed' &&
+      execution.fence.status === 'fenced' &&
+      execution.fence.reason === 'completed' &&
+      execution.terminalAt !== null &&
+      review.acceptedProjectRecordId !== null &&
+      review.nextTaskOfferId === null
+  }
+  return offer?.type === 'task_offer' &&
+    task.status === 'offered' &&
+    task.currentExecutionId === null &&
+    task.currentExecutionState === null &&
+    task.completedAt === null &&
+    canonicalJson(task.fileIntent) === canonicalJson(request.nextFileIntent) &&
+    execution.state === 'superseded' &&
+    execution.fence.status === 'fenced' &&
+    execution.fence.reason === 'reassigned' &&
+    execution.terminalAt !== null &&
+    review.acceptedProjectRecordId === null &&
+    review.nextTaskOfferId === offer.taskOfferId &&
+    offer.projectId === request.projectId &&
+    offer.taskId === request.taskId &&
+    offer.executionId === null &&
+    offer.workerUserId === request.nextWorkerUserId &&
+    offer.offeredByCoordinatorAgentId === actor.agentId &&
+    offer.state === 'pending' &&
+    offer.expiresAt === request.nextOfferExpiresAt &&
+    offer.revision === 1
 }
 
 function isUserTaskOfferCollection(
