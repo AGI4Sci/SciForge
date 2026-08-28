@@ -264,7 +264,7 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
   assert.equal(agentExecution.requests.length, 1)
 })
 
-test('Cloud file Plan runs, reviews, records, and uniquely continues its dependent Task', async (t) => {
+test('Cloud file Plan survives same-profile Coordinator restart and uniquely continues its dependent Task', async (t) => {
   const clock = new FakeClock()
   const repository = new FakeCollaborationRepository()
   const service = new CollaborationService({ repository, now: clock.now })
@@ -524,13 +524,14 @@ test('Cloud file Plan runs, reviews, records, and uniquely continues its depende
   const workspacePort = createProjectCoordinatorCloudWorkspacePort({
     transport: ownerTransport
   })
-  const ownerStore = new CollaborationLocalStore(new FakeCollaborationStateBackend())
+  const ownerBackend = new FakeCollaborationStateBackend()
+  const ownerStore = new CollaborationLocalStore(ownerBackend)
   await ownerStore.open()
   await ownerStore.transact((draft) => {
     draft.agents.push(toAgent(ownerRegistration.registered.agent))
   })
-  const ownerOutbox = new DurableCloudOutbox({
-    store: ownerStore,
+  const createOwnerOutbox = (localStore) => new DurableCloudOutbox({
+    store: localStore,
     agentCloudRuntime: {
       authorityStatus: async (agentId) => ({
         state: 'ready',
@@ -550,6 +551,7 @@ test('Cloud file Plan runs, reviews, records, and uniquely continues its depende
     localAgentId: () => coordinator.agentId,
     now: clock.now
   })
+  const ownerOutbox = createOwnerOutbox(ownerStore)
   const coordinatorCloudCommands = {
     execute: (request) => ownerOutbox.enqueueAndWait('coordinator.command', request),
     subscribe: () => () => undefined
@@ -569,12 +571,21 @@ test('Cloud file Plan runs, reviews, records, and uniquely continues its depende
     }, true)
   }
   const backgroundContinuationFailures = []
+  let coordinatorProcessAvailable = true
+  const ownerPackageSettings = memoryPackageSettings()
   const actions = createProjectCoordinatorActionPort({
     workspace: workspacePort,
     coordinatorCloudCommands,
     transport: ownerTransport,
-    state: new ProjectCoordinatorStateStore(memoryPackageSettings()),
-    continuation,
+    state: new ProjectCoordinatorStateStore(ownerPackageSettings),
+    continuation: {
+      reconcileProject: async (projectId) => {
+        if (!coordinatorProcessAvailable) {
+          throw new Error('simulated Coordinator process restart after Cloud review commit')
+        }
+        return continuation.reconcileProject(projectId)
+      }
+    },
     onBackgroundContinuationFailure: (_projectId, error) => {
       backgroundContinuationFailures.push(error)
     }
@@ -775,9 +786,14 @@ test('Cloud file Plan runs, reviews, records, and uniquely continues its depende
   assert.equal(rootSubmission.outputs.length, 1)
   assert.equal(rootSubmission.outputs[0].bindingRevision, attestedContent.binding.revision)
   assert.equal(rootSubmission.outputs[0].locator.authority, 'opencontent.full-path')
+  coordinatorProcessAvailable = false
   await actions.reviewResult(
     acceptedResultReviewInput(workspace.projects[0], rootTask.task.taskId),
     'idem_full_path_root_review'
+  )
+  await waitUntil(
+    () => backgroundContinuationFailures.length === 1,
+    'simulated pre-restart continuation failure'
   )
   const coordinatorInbox = await service.pullInbox(coordinator, {
     afterSequence: 0,
@@ -788,12 +804,42 @@ test('Cloud file Plan runs, reviews, records, and uniquely continues its depende
     message.payload.projectId === active.projectId
   ))
   assert.ok(observationWake)
-  await actions.handleInbox(toInboxMessage(observationWake))
+
+  ownerOutbox.stop()
+  const restartedOwnerStore = new CollaborationLocalStore(ownerBackend)
+  await restartedOwnerStore.open()
+  const restartedOwnerOutbox = createOwnerOutbox(restartedOwnerStore)
+  const restartedCoordinatorCloudCommands = {
+    execute: (request) => restartedOwnerOutbox.enqueueAndWait('coordinator.command', request),
+    subscribe: () => () => undefined
+  }
+  const restartedContinuation = createProjectCoordinatorContinuationPort({
+    workspace: workspacePort,
+    coordinatorCloudCommands: restartedCoordinatorCloudCommands,
+    now: clock.now
+  })
+  const restartedActions = createProjectCoordinatorActionPort({
+    workspace: workspacePort,
+    coordinatorCloudCommands: restartedCoordinatorCloudCommands,
+    transport: ownerTransport,
+    state: new ProjectCoordinatorStateStore(ownerPackageSettings),
+    continuation: restartedContinuation,
+    onBackgroundContinuationFailure: (_projectId, error) => {
+      backgroundContinuationFailures.push(error)
+    }
+  })
+  await Promise.all([
+    restartedContinuation.reconcileVisibleProjects(),
+    restartedActions.handleInbox(toInboxMessage(observationWake))
+  ])
 
   await waitUntil(async () => (
     (await repository.listTaskOffersByProject(active.projectId, null, 10)).length === 2
   ), 'dependent Task offer after accepted root result')
-  assert.deepEqual(backgroundContinuationFailures, [])
+  assert.deepEqual(
+    backgroundContinuationFailures.map((failure) => failure.message),
+    ['simulated Coordinator process restart after Cloud review commit']
+  )
   const continuedOffers = await repository.listTaskOffersByProject(active.projectId, null, 10)
   const dependentOffer = continuedOffers.find(({ taskOfferId }) => (
     taskOfferId !== offered.offer.taskOfferId
@@ -832,11 +878,11 @@ test('Cloud file Plan runs, reviews, records, and uniquely continues its depende
     task.taskId === dependentOffer.taskId
   ))
   assert.ok(dependentTask)
-  await actions.reviewResult(
+  await restartedActions.reviewResult(
     acceptedResultReviewInput(workspace.projects[0], dependentTask.task.taskId),
     'idem_full_path_dependent_review'
   )
-  await continuation.reconcileProject(active.projectId)
+  await restartedContinuation.reconcileProject(active.projectId)
 
   workspace = await workspacePort.readWorkspace({ projectId: active.projectId })
   const project = workspace.projects[0]
@@ -857,7 +903,7 @@ test('Cloud file Plan runs, reviews, records, and uniquely continues its depende
     acceptedResultSubmissionIds,
     summary: 'Owner accepted both results and completed the bounded Project.'
   }
-  const completed = await actions.completeProject(
+  const completed = await restartedActions.completeProject(
     completionInput,
     'idem_full_path_project_complete'
   )
@@ -869,7 +915,7 @@ test('Cloud file Plan runs, reviews, records, and uniquely continues its depende
     ['observation', 'observation', 'summary']
   )
   assert.equal(runtimeSessionOrdinal, 2)
-  const coordinatorCommands = ownerStore.snapshot().outbox
+  const coordinatorCommands = restartedOwnerStore.snapshot().outbox
     .filter(({ kind }) => kind === 'coordinator.command')
   assert.ok(coordinatorCommands.every(({ state }) => state === 'delivered'))
   assert.deepEqual(
@@ -885,7 +931,7 @@ test('Cloud file Plan runs, reviews, records, and uniquely continues its depende
 
   adapter.stop()
   outbox.stop()
-  ownerOutbox.stop()
+  restartedOwnerOutbox.stop()
 })
 
 function fullPathProviderFactCommand({
