@@ -1199,6 +1199,7 @@ test('a local Plan draft exposes full content editing before immutable submit', 
   assert.match(markup, /name="plan-item-title-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-objective-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-criteria-item_meeting_summary"/u)
+  assert.match(markup, /name="plan-item-dependencies-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-capabilities-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-user-item_meeting_summary"/u)
   assert.match(markup, /data-planning-eligible="true"/u)
@@ -1245,6 +1246,92 @@ test('a paused Project keeps a Worker option enabled for project_paused prospect
   }))
 
   assert.match(markup, /value="usr_ProjectMember01" data-planning-eligible="true"/u)
+})
+
+test('file Plan editing can clear the logical declaration and confirmation requires Team content', () => {
+  const draftProject = planningProjectFixture('draft')
+  const logicalFileTask = {
+    ...draftProject.plan.plan.tasks[0]!,
+    fileIntent: {
+      schemaVersion: 1 as const,
+      inputs: [],
+      output: {
+        kind: 'content-space.output-new' as const,
+        target: 'project-binding-root' as const,
+        mode: 'upload-new' as const,
+        fileName: 'meeting-summary.md',
+        mediaType: 'text/markdown',
+        maxBytes: 65_536
+      }
+    }
+  }
+  const draftMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorPlanSection, {
+    project: { ...draftProject, plan: null },
+    draft: {
+      draftId: 'draft_FilePlan001',
+      draftRevision: 1,
+      projectId: draftProject.project.projectId,
+      expectedProjectRevision: draftProject.project.revision,
+      expectedCoordinatorAuthorityEpoch: draftProject.project.coordinatorAuthorityEpoch,
+      supersedesProjectPlanId: null,
+      sourceInputLocators: [],
+      tasks: [logicalFileTask],
+      rationale: draftProject.plan.plan.rationale,
+      runtimeProvenance: draftProject.plan.plan.runtimeProvenance,
+      assignments: [{
+        planItemId: logicalFileTask.planItemId,
+        workerUserId: null,
+        recommendationReason: null
+      }],
+      createdAt: draftProject.project.createdAt,
+      updatedAt: draftProject.project.updatedAt
+    },
+    observedAt: draftProject.project.updatedAt,
+    busy: false,
+    onGenerate: () => undefined,
+    onEditDraft: () => undefined,
+    onSubmitDraft: () => undefined,
+    canConfirm: false,
+    currentUserId: draftProject.project.ownerUserId,
+    providerPrincipalFacts: [],
+    initialContentMode: 'none',
+    initialProviderFactId: '',
+    onInitialContentMode: () => undefined,
+    onInitialProviderFactId: () => undefined,
+    onConfirm: () => undefined
+  }))
+  assert.match(draftMarkup, /name="plan-item-file-enabled-item_meeting_summary"/u)
+  assert.match(draftMarkup, /projectCoordinatorKeepFileDeclaration/u)
+
+  const confirmationProject = {
+    ...draftProject,
+    plan: {
+      ...draftProject.plan,
+      plan: {
+        ...draftProject.plan.plan,
+        tasks: [logicalFileTask]
+      }
+    }
+  }
+  const confirmationMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorPlanSection, {
+    project: confirmationProject,
+    draft: null,
+    observedAt: draftProject.project.updatedAt,
+    busy: false,
+    onGenerate: () => undefined,
+    onEditDraft: () => undefined,
+    onSubmitDraft: () => undefined,
+    canConfirm: true,
+    currentUserId: draftProject.project.ownerUserId,
+    providerPrincipalFacts: [],
+    initialContentMode: 'none',
+    initialProviderFactId: '',
+    onInitialContentMode: () => undefined,
+    onInitialProviderFactId: () => undefined,
+    onConfirm: () => undefined
+  }))
+  assert.match(confirmationMarkup, /data-content-required-by-plan="true"/u)
+  assert.match(confirmationMarkup, /<select[^>]*disabled[^>]*data-content-required-by-plan="true"/u)
 })
 
 test('pending HumanNeeded, result review, and eligible completion are default-visible decision cards', () => {

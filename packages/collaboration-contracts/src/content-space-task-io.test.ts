@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  bindTaskFileDeclaration,
   portableContentSpaceLocatorSchema,
+  taskFileDeclarationFromIntent,
+  taskFileDeclarationSchema,
   taskExecutionFileIntentSchema,
   taskFileIntentSchema
 } from './content-space-task-io.js'
@@ -22,9 +25,8 @@ const fileLocator = {
   identity: { fileId: 'file-one' }
 }
 
-const fileIntent = {
+const fileDeclaration = {
   schemaVersion: 1 as const,
-  bindingRevision: 3,
   inputs: [{
     kind: 'content-space.input-file' as const,
     locator: fileLocator,
@@ -41,6 +43,7 @@ const fileIntent = {
     maxBytes: 1_000_000
   }
 }
+const fileIntent = bindTaskFileDeclaration(fileDeclaration, 3)
 
 describe('Project Content Space and Task file I/O contracts', () => {
   it('treats a portable envelope only as a bounded locator', () => {
@@ -51,8 +54,11 @@ describe('Project Content Space and Task file I/O contracts', () => {
     }).success).toBe(false)
   })
 
-  it('separates the Coordinator declaration from Cloud execution binding', () => {
+  it('separates the Plan declaration from Cloud Task and execution binding', () => {
+    expect(taskFileDeclarationSchema.parse(fileDeclaration)).toEqual(fileDeclaration)
+    expect(taskFileDeclarationSchema.safeParse(fileIntent).success).toBe(false)
     expect(taskFileIntentSchema.parse(fileIntent)).toEqual(fileIntent)
+    expect(taskFileDeclarationFromIntent(fileIntent)).toEqual(fileDeclaration)
     expect(taskFileIntentSchema.safeParse({
       ...fileIntent,
       taskId: TEST_IDS.taskId,

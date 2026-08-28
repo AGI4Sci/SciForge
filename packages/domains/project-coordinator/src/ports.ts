@@ -463,9 +463,7 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
           `Budget: ${JSON.stringify(project.project.budget)}`,
           `Worker User candidates: ${JSON.stringify(candidates)}`,
           'Each Task must match one runtimeProfiles entry: fileIntent null requires text_tasks, a fileIntent requires file_tasks, and requiredCapabilityTags must be a subset of that same entry capabilityTags. Never combine fields across Runtime profiles.',
-          ...(project.project.status === 'draft'
-            ? ['For an initial file Task, declare bindingRevision 1; the first Plan confirmation creates that project-scoped placeholder binding before any Provider write.']
-            : []),
+          'A fileIntent is a logical Plan declaration only. Never include a bindingRevision; Cloud binds the created Task to the current active Project Content root when the offer is committed.',
           'Return only strict JSON with {tasks,rationale}. Each task must use a stable item_* ID and canonical Project Plan Task fields.'
         ].join('\n'),
         ...(input.modelId ? { model: input.modelId } : {}),

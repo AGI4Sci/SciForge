@@ -22,7 +22,7 @@ import {
 import {
   portableContentSpaceLocatorSchema,
   taskFileDestinationNameSchema,
-  taskFileIntentSchema
+  taskFileDeclarationSchema
 } from './content-space-task-io.js'
 
 const unique = <T>(values: readonly T[]): boolean => new Set(values).size === values.length
@@ -46,7 +46,7 @@ export const projectPlanTaskSchema = z.object({
     .refine(unique, 'Plan item dependencies must be unique.'),
   requiredCapabilityTags: z.array(z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u)).max(256)
     .refine(unique, 'Required capability tags must be unique.'),
-  fileIntent: taskFileIntentSchema.nullable()
+  fileIntent: taskFileDeclarationSchema.nullable()
 }).strict().superRefine((item, context) => {
   if (item.dependencyPlanItemIds.includes(item.planItemId)) {
     context.addIssue({

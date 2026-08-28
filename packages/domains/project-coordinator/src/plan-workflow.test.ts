@@ -88,6 +88,8 @@ test('local Coordinator Runtime creates an editable durable Plan draft with Work
   assert.equal(generated.runtimeProvenance.generatedByCoordinatorAgentId, 'agt_Coordinator01')
   assert.equal(generated.assignments[0]?.workerUserId, null)
   assert.match(prompts[0] ?? '', /Created meeting.*runtimeProfiles.*eligibleTaskScopes.*text_tasks.*capabilityTags.*meeting\.review.*document\.write/su)
+  assert.match(prompts[0] ?? '', /logical Plan declaration only.*Never include a bindingRevision/su)
+  assert.doesNotMatch(prompts[0] ?? '', /declare bindingRevision 1/u)
   assert.doesNotMatch(prompts[0] ?? '', /runtimeCapabilityTags/u)
 
   const edited = await port.editDraft({

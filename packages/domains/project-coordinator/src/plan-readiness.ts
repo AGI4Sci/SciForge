@@ -18,7 +18,6 @@ export type ProjectCoordinatorPlanningReadinessReason =
   | 'membership_inactive'
   | 'task_authority_unavailable'
   | 'capability_unavailable'
-  | 'content_binding_unavailable'
 
 export type ProjectCoordinatorPlanningRuntimeReadiness = Readonly<{
   eligible: boolean
@@ -108,13 +107,6 @@ export function projectCoordinatorPlanningTaskReadiness(
     !view.availability.runtimeCapabilityTags.includes(tag)
   ))) {
     return Object.freeze({ eligible: false, reason: 'capability_unavailable', scope })
-  }
-  if (
-    task.fileIntent !== null &&
-    project.project.status !== 'draft' &&
-    project.provisioning.binding?.revision !== task.fileIntent.bindingRevision
-  ) {
-    return Object.freeze({ eligible: false, reason: 'content_binding_unavailable', scope })
   }
   return Object.freeze({ eligible: true, reason: 'ready', scope })
 }

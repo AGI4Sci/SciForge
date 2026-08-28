@@ -68,6 +68,34 @@ describe('Project plan, result review and final summary', () => {
     }).success).toBe(true)
   })
 
+  it('keeps file Plans logical and rejects a pre-bound Content revision', () => {
+    const fileTask = {
+      planItemId: 'item_file_review1',
+      title: 'Review one file',
+      objective: 'Read one portable input and create one new output.',
+      completionCriteria: ['One new output is reviewable.'],
+      dependencyPlanItemIds: [],
+      requiredCapabilityTags: ['content.read', 'content.write'],
+      fileIntent: {
+        schemaVersion: 1,
+        inputs: [],
+        output: {
+          kind: 'content-space.output-new',
+          target: 'project-binding-root',
+          mode: 'upload-new',
+          fileName: 'review.md',
+          mediaType: 'text/markdown',
+          maxBytes: 65_536
+        }
+      }
+    }
+    expect(projectPlanSchema.shape.tasks.element.safeParse(fileTask).success).toBe(true)
+    expect(projectPlanSchema.shape.tasks.element.safeParse({
+      ...fileTask,
+      fileIntent: { ...fileTask.fileIntent, bindingRevision: 1 }
+    }).success).toBe(false)
+  })
+
   it('uses immutable result submission and explicit accept/request-revision decisions', () => {
     const result = taskResultSubmissionSchema.parse({
       ...metadata,

@@ -728,6 +728,9 @@ export function ProjectCoordinatorPanel({
       workspace?.connection.state !== 'ready'
     ) return
     const plan = project.plan.plan
+    const effectiveContentMode = plan.tasks.some(({ fileIntent }) => fileIntent !== null)
+      ? 'required' as const
+      : initialContentMode
     const assignedUserIds = project.plan.assignments.flatMap(({ workerUserId }) => (
       workerUserId === null ? [] : [workerUserId]
     ))
@@ -743,7 +746,7 @@ export function ProjectCoordinatorPanel({
     const ownerProviderFact = ownerProviderFacts.find(({ providerPrincipalFactId }) => (
       providerPrincipalFactId === initialProviderFactId
     )) ?? ownerProviderFacts[0]
-    const requiredMembers = initialContentMode === 'required' && ownerProviderFact
+    const requiredMembers = effectiveContentMode === 'required' && ownerProviderFact
       ? initialMemberUserIds.map((userId) => {
           const fact = workspace.providerPrincipalFacts
             .filter((candidate) => (
@@ -762,7 +765,7 @@ export function ProjectCoordinatorPanel({
       : []
     if (
       project.project.status === 'draft' &&
-      initialContentMode === 'required' &&
+      effectiveContentMode === 'required' &&
       (!ownerProviderFact || requiredMembers.some((member) => member === null))
     ) {
       setError(t('projectCoordinatorCreateProviderFactsMissing'))
@@ -770,7 +773,7 @@ export function ProjectCoordinatorPanel({
     }
     const initialTeam = project.project.status !== 'draft'
       ? null
-      : initialContentMode === 'none'
+      : effectiveContentMode === 'none'
         ? {
             mode: 'none' as const,
             members: initialMemberUserIds.map((userId) => ({ userId }))
@@ -2084,8 +2087,12 @@ export function ProjectCoordinatorPlanSection({
   const selectedOwnerFact = ownerProviderFacts.find(({ providerPrincipalFactId }) => (
     providerPrincipalFactId === initialProviderFactId
   )) ?? ownerProviderFacts[0]
+  const planRequiresContent = project?.plan?.plan.tasks.some(({ fileIntent }) => (
+    fileIntent !== null
+  )) ?? false
+  const effectiveContentMode = planRequiresContent ? 'required' : initialContentMode
   const missingInitialProviderFacts = project?.project.status === 'draft' &&
-    initialContentMode === 'required' && (
+    effectiveContentMode === 'required' && (
       !selectedOwnerFact || initialMemberUserIds.some((userId) => (
         !providerPrincipalFacts.some((fact) => (
           fact.userId === userId &&
@@ -2106,7 +2113,9 @@ export function ProjectCoordinatorPlanSection({
               <label className="block text-xs">
                 <span className="text-ds-muted">{t('projectCoordinatorContentMode')}</span>
                 <select
-                  value={initialContentMode}
+                  value={effectiveContentMode}
+                  disabled={planRequiresContent}
+                  data-content-required-by-plan={planRequiresContent ? 'true' : 'false'}
                   onChange={(event) => onInitialContentMode(
                     event.currentTarget.value as 'none' | 'required'
                   )}
@@ -2116,7 +2125,7 @@ export function ProjectCoordinatorPlanSection({
                   <option value="required">{t('projectCoordinatorContentModeTeam')}</option>
                 </select>
               </label>
-              {initialContentMode === 'required' ? (
+              {effectiveContentMode === 'required' ? (
                 <label className="block text-xs">
                   <span className="text-ds-muted">{t('projectCoordinatorProviderInstance')}</span>
                   <select
@@ -2165,7 +2174,14 @@ export function ProjectCoordinatorPlanSection({
                   ),
                   requiredCapabilityTags: splitCommaSeparated(
                     String(values.get(`plan-item-capabilities-${item.planItemId}`) ?? '')
-                  )
+                  ),
+                  dependencyPlanItemIds: splitCommaSeparated(
+                    String(values.get(`plan-item-dependencies-${item.planItemId}`) ?? '')
+                  ),
+                  fileIntent: item.fileIntent !== null &&
+                    values.get(`plan-item-file-enabled-${item.planItemId}`) === 'on'
+                    ? item.fileIntent
+                    : null
                 })),
                 assignments: draft.assignments.map((assignment) => {
                   const workerUserId = String(
@@ -2201,7 +2217,18 @@ export function ProjectCoordinatorPlanSection({
                 <input required name={`plan-item-title-${item.planItemId}`} defaultValue={item.title} aria-label={t('projectCoordinatorTaskTitle')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
                 <textarea required name={`plan-item-objective-${item.planItemId}`} defaultValue={item.objective} aria-label={t('projectCoordinatorTaskObjective')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
                 <textarea required name={`plan-item-criteria-${item.planItemId}`} defaultValue={item.completionCriteria.join('\n')} aria-label={t('projectCoordinatorCompletionCriteria')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+                <input name={`plan-item-dependencies-${item.planItemId}`} defaultValue={item.dependencyPlanItemIds.join(', ')} aria-label={t('projectCoordinatorTaskDependencies')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
                 <input required name={`plan-item-capabilities-${item.planItemId}`} defaultValue={item.requiredCapabilityTags.join(', ')} aria-label={t('projectCoordinatorCapabilityTags')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+                {item.fileIntent !== null ? (
+                  <label className="flex items-center gap-2 text-xs text-ds-muted">
+                    <input
+                      type="checkbox"
+                      name={`plan-item-file-enabled-${item.planItemId}`}
+                      defaultChecked
+                    />
+                    {t('projectCoordinatorKeepFileDeclaration')}
+                  </label>
+                ) : null}
                 <select
                   name={`plan-item-user-${item.planItemId}`}
                   className="mt-1 w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  bindTaskFileDeclaration,
   createCollaborationError,
   restResponseSchema,
   taskOfferSchema,
@@ -52,6 +53,7 @@ const dependentItem: ProjectPlanTask = {
 }
 
 const plan = confirmedPlan([rootItem, dependentItem])
+const FILE_BINDING_REVISION = 3
 
 test('ready-set derives only absent Plan Tasks whose canonical dependencies completed', () => {
   assert.deepEqual(deriveReadyPlanItems({
@@ -257,6 +259,67 @@ test('a successful write must become visible before reconciliation dispatches ag
   assert.equal(writes, 1)
 })
 
+test('continuation accepts only the current Team-root binding of a logical file Plan item', async () => {
+  const fileItem: ProjectPlanTask = {
+    ...rootItem,
+    planItemId: 'item_file_collect',
+    fileIntent: {
+      schemaVersion: 1,
+      inputs: [],
+      output: {
+        kind: 'content-space.output-new',
+        target: 'project-binding-root',
+        mode: 'upload-new',
+        fileName: 'evidence-summary.md',
+        mediaType: 'text/markdown',
+        maxBytes: 65_536
+      }
+    }
+  }
+  const currentPlan = confirmedPlan([fileItem])
+  let workspace = fileContinuationWorkspace(currentPlan)
+  const continuation = createProjectCoordinatorContinuationPort({
+    workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspace }),
+    coordinatorCloudCommands: {
+      execute: async (command) => {
+        if (command.type !== 'task.offer.create') throw new Error(`Unexpected ${command.type}.`)
+        const response = offerResponse(command, currentPlan)
+        const task = response.items.find((item) => item.type === 'task')
+        const offer = response.items.find((item) => item.type === 'task_offer')
+        if (!task || task.type !== 'task' || !offer || offer.type !== 'task_offer') {
+          throw new Error('Fixture did not produce a Task and TaskOffer.')
+        }
+        workspace = projectCoordinatorWorkspaceSchema.parse({
+          ...workspace,
+          projects: [{
+            ...workspace.projects[0]!,
+            project: {
+              ...workspace.projects[0]!.project,
+              revision: workspace.projects[0]!.project.revision + 1,
+              updatedAt: TEST_LATER_TIMESTAMP
+            },
+            tasks: [{ task, executions: [] }],
+            offers: [offer]
+          }]
+        })
+        return response
+      },
+      subscribe: () => () => undefined
+    },
+    now: () => new Date(TEST_TIMESTAMP)
+  })
+
+  const reconciled = await continuation.reconcileProject(TEST_IDS.projectId)
+  assert.equal(
+    reconciled.projects[0]?.tasks[0]?.task.fileIntent?.bindingRevision,
+    FILE_BINDING_REVISION
+  )
+  assert.deepEqual(
+    reconciled.projects[0]?.plan?.plan.tasks[0]?.fileIntent,
+    fileItem.fileIntent
+  )
+})
+
 function confirmedPlan(tasks: readonly ProjectPlanTask[]): ProjectPlan {
   return {
     schemaVersion: 1,
@@ -399,6 +462,52 @@ function continuationWorkspace(currentPlan: ProjectPlan): ProjectCoordinatorWork
   })
 }
 
+function fileContinuationWorkspace(currentPlan: ProjectPlan): ProjectCoordinatorWorkspace {
+  const workspace = continuationWorkspace(currentPlan)
+  const rootLocator = {
+    contractVersion: 1 as const,
+    kind: 'content-space.container-reference' as const,
+    authority: 'opencontent.run0',
+    identity: { containerId: 'continuation-root' }
+  }
+  return projectCoordinatorWorkspaceSchema.parse({
+    ...workspace,
+    projects: [{
+      ...workspace.projects[0]!,
+      project: { ...workspace.projects[0]!.project, contentMode: 'required' },
+      provisioning: {
+        ...workspace.projects[0]!.provisioning,
+        binding: {
+          schemaVersion: 1,
+          type: 'project_content_space_binding',
+          projectContentBindingId: 'pcb_Continuation001',
+          projectId: TEST_IDS.projectId,
+          contentOwnerUserId: TEST_IDS.userId,
+          providerInstance: {
+            schemaVersion: 1,
+            type: 'provider_instance_reference',
+            providerInstanceRef: rootLocator.authority
+          },
+          rootLocator,
+          rootLocatorDigest: TEST_HASH,
+          provisioningIntentId: 'pci_Continuation001',
+          provisioningRevision: 1,
+          attestationId: 'pca_Continuation001',
+          attestationDigest: TEST_HASH,
+          status: 'active',
+          statusReason: null,
+          activatedAt: TEST_TIMESTAMP,
+          degradedAt: null,
+          closedAt: null,
+          revision: FILE_BINDING_REVISION,
+          createdAt: TEST_TIMESTAMP,
+          updatedAt: TEST_TIMESTAMP
+        }
+      }
+    }]
+  })
+}
+
 function offerResponse(
   command: Extract<RestRequest, { type: 'task.offer.create' }>,
   currentPlan: ProjectPlan
@@ -419,7 +528,9 @@ function offerResponse(
       canonicalTaskIdForPlanItem(currentPlan.projectPlanId, planItemId)
     )),
     requiredCapabilityTags: item.requiredCapabilityTags,
-    fileIntent: item.fileIntent,
+    fileIntent: item.fileIntent === null
+      ? null
+      : bindTaskFileDeclaration(item.fileIntent, FILE_BINDING_REVISION),
     currentExecutionId: null,
     currentExecutionState: null,
     status: 'offered',

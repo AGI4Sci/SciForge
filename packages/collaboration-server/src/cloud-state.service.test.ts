@@ -8,7 +8,8 @@ import {
   canonicalProvisionedMemberSetBytes,
   type CloudStateCommand,
   type ProjectContentProvisioningAttestation,
-  type ProjectCreateCommand
+  type ProjectCreateCommand,
+  type ProjectPlanTask
 } from '@sciforge/collaboration-contracts'
 import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts/node'
 import { FakeCollaborationRepository } from '../../../test-fixtures/collaboration/fake-adapters.mjs'
@@ -239,15 +240,7 @@ async function contentRecoveryProjectFixture(suffix: string) {
   return { repository, service, owner, worker, coordinator, ownerFact, workerFact, initialTeam, created }
 }
 
-type FixturePlanTask = Readonly<{
-  planItemId: string
-  title: string
-  objective: string
-  completionCriteria: readonly string[]
-  dependencyPlanItemIds: readonly string[]
-  requiredCapabilityTags: readonly string[]
-  fileIntent: import('@sciforge/collaboration-contracts').TaskFileIntent | null
-}>
+type FixturePlanTask = ProjectPlanTask
 
 async function confirmFixturePlan(
   fixture: Awaited<ReturnType<typeof contentRecoveryProjectFixture>>,
@@ -334,7 +327,18 @@ async function acceptFixtureWorkerForLaunch(
   }])
 }
 
-async function activeContentProjectFixture(suffix: string) {
+async function activeContentProjectFixture(
+  suffix: string,
+  launchTasks: readonly FixturePlanTask[] = [{
+    planItemId: 'item_content_lifecycle',
+    title: 'Review content lifecycle',
+    objective: 'Keep the Project active while Provider observations change.',
+    completionCriteria: ['Authority follows exact Provider observations.'],
+    dependencyPlanItemIds: [],
+    requiredCapabilityTags: ['research.execute'],
+    fileIntent: null
+  }]
+) {
   const fixture = await contentRecoveryProjectFixture(suffix)
   const { repository, service, owner, worker, coordinator, ownerFact, created } = fixture
   const signing = generateKeyPairSync('ed25519')
@@ -352,15 +356,12 @@ async function activeContentProjectFixture(suffix: string) {
     }, device.revision)
   })
   const workerAgent = await registeredAgent(service, worker.user, worker.deviceId, `${suffix}-worker-agent`)
-  const launch = await confirmPlanAndAcceptFixtureWorker(fixture, `${suffix}_launch`, [{
-    planItemId: 'item_content_lifecycle',
-    title: 'Review content lifecycle',
-    objective: 'Keep the Project active while Provider observations change.',
-    completionCriteria: ['Authority follows exact Provider observations.'],
-    dependencyPlanItemIds: [],
-    requiredCapabilityTags: ['research.execute'],
-    fileIntent: null
-  }])
+  const launch = await confirmPlanAndAcceptFixtureWorker(
+    fixture,
+    `${suffix}_launch`,
+    launchTasks
+  )
+  const placeholderBinding = await repository.getProjectContentSpaceBinding(created.project.projectId)
   const intent = launch.provisioningIntent!
   const requestDigest = stableDigest({ suffix, operation: 'create_shared_container' })
   const prepared = await service.prepareExternalOperation(owner.user, {
@@ -450,6 +451,8 @@ async function activeContentProjectFixture(suffix: string) {
   return {
     ...fixture,
     workerAgent,
+    launch,
+    placeholderBinding,
     rootLocator,
     binding: activatedContent.binding,
     activeProject,
@@ -972,6 +975,90 @@ async function manualRecoveryFileOfferFixture(
 }
 
 describe('vNext Cloud application service', () => {
+  it('binds an initial logical file Plan to the attested Team-root revision only when offering', async () => {
+    const fileDeclaration = {
+      schemaVersion: 1 as const,
+      inputs: [{
+        kind: 'content-space.input-file' as const,
+        locator: {
+          contractVersion: 1 as const,
+          kind: 'content-space.file-reference' as const,
+          authority: 'opencontent.run0',
+          identity: { fileId: 'initial-plan-input' }
+        },
+        destinationName: 'agenda.md',
+        expectedSemanticRevision: null,
+        expectedMediaType: 'text/markdown'
+      }],
+      output: {
+        kind: 'content-space.output-new' as const,
+        target: 'project-binding-root' as const,
+        mode: 'upload-new' as const,
+        fileName: 'agenda-summary.md',
+        mediaType: 'text/markdown',
+        maxBytes: 1_000_000
+      }
+    }
+    const planTask = {
+      planItemId: 'item_initial_file',
+      title: 'Summarize the shared agenda',
+      objective: 'Download the agenda and upload one new summary.',
+      completionCriteria: ['The Owner can review the new summary.'],
+      dependencyPlanItemIds: [],
+      requiredCapabilityTags: ['research.execute'],
+      fileIntent: fileDeclaration
+    }
+    const fixture = await activeContentProjectFixture('initial-file-binding', [planTask])
+    await publishReadyAvailability(
+      fixture.service,
+      fixture.workerAgent,
+      'initial_file_binding_worker'
+    )
+
+    expect(fixture.placeholderBinding).toEqual(expect.objectContaining({
+      status: 'provisioning',
+      revision: 1
+    }))
+    expect(fixture.binding).toEqual(expect.objectContaining({
+      status: 'active',
+      revision: 2
+    }))
+    expect(fixture.launch.confirmed.tasks[0]?.fileIntent).toEqual(fileDeclaration)
+
+    const offered = await fixture.service.createTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.create',
+      requestId: 'req_initial_file_binding_offer',
+      idempotencyKey: 'idem_initial_file_binding_offer',
+      projectId: fixture.activeProject.projectId,
+      expectedProjectRevision: fixture.activeProject.revision,
+      expectedCoordinatorAuthorityEpoch: fixture.activeProject.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: fixture.activeProject.executionAuthorityEpoch,
+      projectPlanId: fixture.launch.confirmed.projectPlanId,
+      expectedPlanRevision: fixture.launch.confirmed.revision,
+      planItemId: planTask.planItemId,
+      workerUserId: fixture.worker.user.userId,
+      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
+    })
+    expect(offered.task.fileIntent).toEqual({
+      ...fileDeclaration,
+      bindingRevision: fixture.binding.revision
+    })
+
+    const accepted = await fixture.service.acceptTaskOffer(fixture.workerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.offer.accept',
+      requestId: 'req_initial_file_binding_accept',
+      idempotencyKey: 'idem_initial_file_binding_accept',
+      taskOfferId: offered.offer.taskOfferId,
+      taskId: offered.task.taskId,
+      expectedTaskRevision: offered.task.revision,
+      expectedOfferRevision: offered.offer.revision
+    })
+    expect(accepted.execution.fence.bindingRevision).toBe(fixture.binding.revision)
+    expect(accepted.execution.fileIntent?.bindingRevision).toBe(fixture.binding.revision)
+  })
+
   it('replays one Project for the same business command when only request correlation changes', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })

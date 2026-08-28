@@ -4,6 +4,7 @@ import {
   canonicalProjectContentProvisioningAttestationFactualPayloadBytes,
   canonicalProjectContentProvisioningAttestationSignatureBytes,
   canonicalProvisionedMemberSetBytes,
+  bindTaskFileDeclaration,
   canInvitedUserReadProjectCoordinationCollection,
   canUserReadProjectCoordination,
   cloudStateEventSchema,
@@ -21,6 +22,7 @@ import {
   type ProjectWorkerAvailabilityView,
   type RestRequest,
   type TaskExecutionPreflight,
+  type TaskFileDeclaration,
   type TaskFileIntent,
   type TaskExecutionFileIntent,
   type TaskResultOutput
@@ -4341,11 +4343,16 @@ export class CollaborationService {
       if (totalTasks >= project.budget.maxTasks || roundTasks >= project.budget.maxTasksPerRound) {
         fail('budget_exhausted', 'The Project Task budget is exhausted.')
       }
+      const fileIntent = await bindPlanFileDeclarationToCurrentProjectRoot(
+        tx,
+        project,
+        item.fileIntent
+      )
       const eligibility = await requireEligibleWorkerUser({
         tx,
         project,
         workerUserId: input.workerUserId,
-        fileIntent: item.fileIntent,
+        fileIntent,
         requiredCapabilityTags: item.requiredCapabilityTags,
         at
       })
@@ -4373,7 +4380,7 @@ export class CollaborationService {
         completionCriteria: item.completionCriteria,
         dependencyTaskIds,
         requiredCapabilityTags: item.requiredCapabilityTags,
-        fileIntent: item.fileIntent,
+        fileIntent,
         currentExecutionId: null,
         currentExecutionState: null,
         status: 'offered',
@@ -6544,12 +6551,11 @@ async function configureInitialProjectTeam(
   ) {
     fail('invalid_state_transition', 'A draft Project must retain only its active Owner Membership before Plan confirmation.')
   }
-  const fileIntents = plan.tasks.flatMap(({ fileIntent }) => fileIntent === null ? [] : [fileIntent])
-  if (team.mode === 'none' && fileIntents.length > 0) {
+  const fileDeclarations = plan.tasks.flatMap(({ fileIntent }) => (
+    fileIntent === null ? [] : [fileIntent]
+  ))
+  if (team.mode === 'none' && fileDeclarations.length > 0) {
     fail('validation_failed', 'A content-free initial Team cannot confirm a Plan with file Tasks.')
-  }
-  if (team.mode === 'required' && fileIntents.some(({ bindingRevision }) => bindingRevision !== 1)) {
-    fail('validation_failed', 'Initial file Tasks must bind to the first project-scoped Content binding revision.')
   }
 
   const memberUserIds = team.members.map(({ userId }) => userId)
@@ -6841,6 +6847,22 @@ async function requireEligibleWorkerUser(input: Readonly<{
     fail('permission_denied', 'The selected Worker User has no online eligible Runtime for this Task.')
   }
   return { authority, binding, recipientAgentIds }
+}
+
+async function bindPlanFileDeclarationToCurrentProjectRoot(
+  tx: CollaborationTransaction,
+  project: StoredProject,
+  declaration: TaskFileDeclaration | null
+): Promise<TaskFileIntent | null> {
+  if (declaration === null) return null
+  if (project.contentMode !== 'required') {
+    fail('permission_denied', 'A content-free Project cannot create a file Task.')
+  }
+  const binding = required(
+    await tx.getProjectContentSpaceBindingForUpdate(project.projectId),
+    'Project Content binding'
+  )
+  return bindTaskFileDeclaration(declaration, binding.revision)
 }
 
 async function requireEligibleAssignee(input: Readonly<{

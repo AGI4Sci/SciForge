@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 
 import {
+  bindTaskFileDeclaration,
   CURRENT_PROTOCOL_VERSION,
   type Project,
   type ProjectPlan,
@@ -184,6 +185,11 @@ function assertCreatedTaskOffer(
   const expectedDependencyTaskIds = item.dependencyPlanItemIds.map((planItemId) => (
     canonicalTaskIdForPlanItem(plan.projectPlanId, planItemId)
   ))
+  const expectedFileIntent = item.fileIntent === null
+    ? null
+    : project.provisioning.binding?.status === 'active'
+      ? bindTaskFileDeclaration(item.fileIntent, project.provisioning.binding.revision)
+      : undefined
   if (
     response.items.length !== 2 ||
     tasks.length !== 1 ||
@@ -198,7 +204,8 @@ function assertCreatedTaskOffer(
     stableDigest(task.completionCriteria) !== stableDigest(item.completionCriteria) ||
     stableDigest(task.dependencyTaskIds) !== stableDigest(expectedDependencyTaskIds) ||
     stableDigest(task.requiredCapabilityTags) !== stableDigest(item.requiredCapabilityTags) ||
-    stableDigest(task.fileIntent) !== stableDigest(item.fileIntent) ||
+    expectedFileIntent === undefined ||
+    stableDigest(task.fileIntent) !== stableDigest(expectedFileIntent) ||
     task.currentExecutionId !== null ||
     task.currentExecutionState !== null ||
     task.status !== 'offered' ||

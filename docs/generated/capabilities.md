@@ -77062,11 +77062,6 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                                   {
                                     "additionalProperties": false,
                                     "properties": {
-                                      "bindingRevision": {
-                                        "maximum": 9007199254740991,
-                                        "minimum": 1,
-                                        "type": "integer"
-                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -77204,7 +77199,6 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                                     },
                                     "required": [
                                       "schemaVersion",
-                                      "bindingRevision",
                                       "inputs",
                                       "output"
                                     ],
@@ -80677,9 +80671,9 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                             },
                             "required": [
                               "schemaVersion",
-                              "bindingRevision",
                               "inputs",
-                              "output"
+                              "output",
+                              "bindingRevision"
                             ],
                             "type": "object"
                           },
@@ -82783,11 +82777,6 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                                   {
                                     "additionalProperties": false,
                                     "properties": {
-                                      "bindingRevision": {
-                                        "maximum": 9007199254740991,
-                                        "minimum": 1,
-                                        "type": "integer"
-                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -82925,7 +82914,6 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                                     },
                                     "required": [
                                       "schemaVersion",
-                                      "bindingRevision",
                                       "inputs",
                                       "output"
                                     ],
@@ -86398,9 +86386,9 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                             },
                             "required": [
                               "schemaVersion",
-                              "bindingRevision",
                               "inputs",
-                              "output"
+                              "output",
+                              "bindingRevision"
                             ],
                             "type": "object"
                           },
@@ -88521,11 +88509,6 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                                   {
                                     "additionalProperties": false,
                                     "properties": {
-                                      "bindingRevision": {
-                                        "maximum": 9007199254740991,
-                                        "minimum": 1,
-                                        "type": "integer"
-                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -88663,7 +88646,6 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                                     },
                                     "required": [
                                       "schemaVersion",
-                                      "bindingRevision",
                                       "inputs",
                                       "output"
                                     ],
@@ -92136,9 +92118,9 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                             },
                             "required": [
                               "schemaVersion",
-                              "bindingRevision",
                               "inputs",
-                              "output"
+                              "output",
+                              "bindingRevision"
                             ],
                             "type": "object"
                           },
@@ -94242,11 +94224,6 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                                   {
                                     "additionalProperties": false,
                                     "properties": {
-                                      "bindingRevision": {
-                                        "maximum": 9007199254740991,
-                                        "minimum": 1,
-                                        "type": "integer"
-                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -94384,7 +94361,6 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                                     },
                                     "required": [
                                       "schemaVersion",
-                                      "bindingRevision",
                                       "inputs",
                                       "output"
                                     ],
@@ -97857,9 +97833,9 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                             },
                             "required": [
                               "schemaVersion",
-                              "bindingRevision",
                               "inputs",
-                              "output"
+                              "output",
+                              "bindingRevision"
                             ],
                             "type": "object"
                           },
@@ -99982,11 +99958,6 @@ Submits the exact target Project member User answer through the OIDC User path.
                                   {
                                     "additionalProperties": false,
                                     "properties": {
-                                      "bindingRevision": {
-                                        "maximum": 9007199254740991,
-                                        "minimum": 1,
-                                        "type": "integer"
-                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -100124,7 +100095,6 @@ Submits the exact target Project member User answer through the OIDC User path.
                                     },
                                     "required": [
                                       "schemaVersion",
-                                      "bindingRevision",
                                       "inputs",
                                       "output"
                                     ],
@@ -103597,9 +103567,9 @@ Submits the exact target Project member User answer through the OIDC User path.
                             },
                             "required": [
                               "schemaVersion",
-                              "bindingRevision",
                               "inputs",
-                              "output"
+                              "output",
+                              "bindingRevision"
                             ],
                             "type": "object"
                           },
@@ -105733,11 +105703,6 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                                   {
                                     "additionalProperties": false,
                                     "properties": {
-                                      "bindingRevision": {
-                                        "maximum": 9007199254740991,
-                                        "minimum": 1,
-                                        "type": "integer"
-                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -105875,7 +105840,6 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                                     },
                                     "required": [
                                       "schemaVersion",
-                                      "bindingRevision",
                                       "inputs",
                                       "output"
                                     ],
@@ -109348,9 +109312,9 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                             },
                             "required": [
                               "schemaVersion",
-                              "bindingRevision",
                               "inputs",
-                              "output"
+                              "output",
+                              "bindingRevision"
                             ],
                             "type": "object"
                           },
@@ -111480,11 +111444,6 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                                   {
                                     "additionalProperties": false,
                                     "properties": {
-                                      "bindingRevision": {
-                                        "maximum": 9007199254740991,
-                                        "minimum": 1,
-                                        "type": "integer"
-                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -111622,7 +111581,6 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                                     },
                                     "required": [
                                       "schemaVersion",
-                                      "bindingRevision",
                                       "inputs",
                                       "output"
                                     ],
@@ -115095,9 +115053,9 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                             },
                             "required": [
                               "schemaVersion",
-                              "bindingRevision",
                               "inputs",
-                              "output"
+                              "output",
+                              "bindingRevision"
                             ],
                             "type": "object"
                           },
@@ -117231,11 +117189,6 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                                   {
                                     "additionalProperties": false,
                                     "properties": {
-                                      "bindingRevision": {
-                                        "maximum": 9007199254740991,
-                                        "minimum": 1,
-                                        "type": "integer"
-                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -117373,7 +117326,6 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                                     },
                                     "required": [
                                       "schemaVersion",
-                                      "bindingRevision",
                                       "inputs",
                                       "output"
                                     ],
@@ -120846,9 +120798,9 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                             },
                             "required": [
                               "schemaVersion",
-                              "bindingRevision",
                               "inputs",
-                              "output"
+                              "output",
+                              "bindingRevision"
                             ],
                             "type": "object"
                           },
@@ -122962,11 +122914,6 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                                   {
                                     "additionalProperties": false,
                                     "properties": {
-                                      "bindingRevision": {
-                                        "maximum": 9007199254740991,
-                                        "minimum": 1,
-                                        "type": "integer"
-                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -123104,7 +123051,6 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                                     },
                                     "required": [
                                       "schemaVersion",
-                                      "bindingRevision",
                                       "inputs",
                                       "output"
                                     ],
@@ -126577,9 +126523,9 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                             },
                             "required": [
                               "schemaVersion",
-                              "bindingRevision",
                               "inputs",
-                              "output"
+                              "output",
+                              "bindingRevision"
                             ],
                             "type": "object"
                           },
@@ -127867,11 +127813,6 @@ CAS-updates Plan items and exact visible Worker Agent choices.
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "bindingRevision": {
-                      "maximum": 9007199254740991,
-                      "minimum": 1,
-                      "type": "integer"
-                    },
                     "inputs": {
                       "items": {
                         "additionalProperties": false,
@@ -128009,7 +127950,6 @@ CAS-updates Plan items and exact visible Worker Agent choices.
                   },
                   "required": [
                     "schemaVersion",
-                    "bindingRevision",
                     "inputs",
                     "output"
                   ],
@@ -128303,11 +128243,6 @@ CAS-updates Plan items and exact visible Worker Agent choices.
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "bindingRevision": {
-                      "maximum": 9007199254740991,
-                      "minimum": 1,
-                      "type": "integer"
-                    },
                     "inputs": {
                       "items": {
                         "additionalProperties": false,
@@ -128445,7 +128380,6 @@ CAS-updates Plan items and exact visible Worker Agent choices.
                   },
                   "required": [
                     "schemaVersion",
-                    "bindingRevision",
                     "inputs",
                     "output"
                   ],
@@ -128891,11 +128825,6 @@ Runs the configured local Agent Runtime and persists one reviewable non-secret d
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "bindingRevision": {
-                      "maximum": 9007199254740991,
-                      "minimum": 1,
-                      "type": "integer"
-                    },
                     "inputs": {
                       "items": {
                         "additionalProperties": false,
@@ -129033,7 +128962,6 @@ Runs the configured local Agent Runtime and persists one reviewable non-secret d
                   },
                   "required": [
                     "schemaVersion",
-                    "bindingRevision",
                     "inputs",
                     "output"
                   ],
@@ -129352,11 +129280,6 @@ Reads the package-owned non-secret draft for one exact Project.
                     {
                       "additionalProperties": false,
                       "properties": {
-                        "bindingRevision": {
-                          "maximum": 9007199254740991,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
                         "inputs": {
                           "items": {
                             "additionalProperties": false,
@@ -129494,7 +129417,6 @@ Reads the package-owned non-secret draft for one exact Project.
                       },
                       "required": [
                         "schemaVersion",
-                        "bindingRevision",
                         "inputs",
                         "output"
                       ],
@@ -130722,11 +130644,6 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                                   {
                                     "additionalProperties": false,
                                     "properties": {
-                                      "bindingRevision": {
-                                        "maximum": 9007199254740991,
-                                        "minimum": 1,
-                                        "type": "integer"
-                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -130864,7 +130781,6 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                                     },
                                     "required": [
                                       "schemaVersion",
-                                      "bindingRevision",
                                       "inputs",
                                       "output"
                                     ],
@@ -134337,9 +134253,9 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                             },
                             "required": [
                               "schemaVersion",
-                              "bindingRevision",
                               "inputs",
-                              "output"
+                              "output",
+                              "bindingRevision"
                             ],
                             "type": "object"
                           },
@@ -135766,11 +135682,6 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                     {
                       "additionalProperties": false,
                       "properties": {
-                        "bindingRevision": {
-                          "maximum": 9007199254740991,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
                         "inputs": {
                           "items": {
                             "additionalProperties": false,
@@ -135908,7 +135819,6 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                       },
                       "required": [
                         "schemaVersion",
-                        "bindingRevision",
                         "inputs",
                         "output"
                       ],
@@ -136876,11 +136786,6 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                       {
                                         "additionalProperties": false,
                                         "properties": {
-                                          "bindingRevision": {
-                                            "maximum": 9007199254740991,
-                                            "minimum": 1,
-                                            "type": "integer"
-                                          },
                                           "inputs": {
                                             "items": {
                                               "additionalProperties": false,
@@ -137018,7 +136923,6 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                         },
                                         "required": [
                                           "schemaVersion",
-                                          "bindingRevision",
                                           "inputs",
                                           "output"
                                         ],
@@ -140491,9 +140395,9 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                 },
                                 "required": [
                                   "schemaVersion",
-                                  "bindingRevision",
                                   "inputs",
-                                  "output"
+                                  "output",
+                                  "bindingRevision"
                                 ],
                                 "type": "object"
                               },
@@ -142643,11 +142547,6 @@ Submits the Coordinator final summary and atomically completes the Project.
                                   {
                                     "additionalProperties": false,
                                     "properties": {
-                                      "bindingRevision": {
-                                        "maximum": 9007199254740991,
-                                        "minimum": 1,
-                                        "type": "integer"
-                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -142785,7 +142684,6 @@ Submits the Coordinator final summary and atomically completes the Project.
                                     },
                                     "required": [
                                       "schemaVersion",
-                                      "bindingRevision",
                                       "inputs",
                                       "output"
                                     ],
@@ -146258,9 +146156,9 @@ Submits the Coordinator final summary and atomically completes the Project.
                             },
                             "required": [
                               "schemaVersion",
-                              "bindingRevision",
                               "inputs",
-                              "output"
+                              "output",
+                              "bindingRevision"
                             ],
                             "type": "object"
                           },
@@ -147458,6 +147356,10 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
         ],
         "type": "object"
       },
+      "createIntentId": {
+        "pattern": "^pct_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      },
       "displayName": {
         "maxLength": 200,
         "minLength": 1,
@@ -147471,6 +147373,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
     },
     "readOnly": true,
     "required": [
+      "createIntentId",
       "displayName",
       "goal",
       "budget"
@@ -147514,6 +147417,10 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
       }
     },
     "properties": {
+      "createIntentId": {
+        "pattern": "^pct_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      },
       "createdProjectId": {
         "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
         "type": "string"
@@ -148405,11 +148312,6 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                       {
                                         "additionalProperties": false,
                                         "properties": {
-                                          "bindingRevision": {
-                                            "maximum": 9007199254740991,
-                                            "minimum": 1,
-                                            "type": "integer"
-                                          },
                                           "inputs": {
                                             "items": {
                                               "additionalProperties": false,
@@ -148547,7 +148449,6 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                         },
                                         "required": [
                                           "schemaVersion",
-                                          "bindingRevision",
                                           "inputs",
                                           "output"
                                         ],
@@ -152020,9 +151921,9 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                 },
                                 "required": [
                                   "schemaVersion",
-                                  "bindingRevision",
                                   "inputs",
-                                  "output"
+                                  "output",
+                                  "bindingRevision"
                                 ],
                                 "type": "object"
                               },
@@ -153157,6 +153058,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
     },
     "readOnly": true,
     "required": [
+      "createIntentId",
       "createdProjectId",
       "workspace"
     ],
@@ -153423,9 +153325,9 @@ Accepts one immutable result or requests a fresh fenced revision execution.
             },
             "required": [
               "schemaVersion",
-              "bindingRevision",
               "inputs",
-              "output"
+              "output",
+              "bindingRevision"
             ],
             "type": "object"
           },
@@ -154410,11 +154312,6 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                                   {
                                     "additionalProperties": false,
                                     "properties": {
-                                      "bindingRevision": {
-                                        "maximum": 9007199254740991,
-                                        "minimum": 1,
-                                        "type": "integer"
-                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -154552,7 +154449,6 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                                     },
                                     "required": [
                                       "schemaVersion",
-                                      "bindingRevision",
                                       "inputs",
                                       "output"
                                     ],
@@ -158025,9 +157921,9 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                             },
                             "required": [
                               "schemaVersion",
-                              "bindingRevision",
                               "inputs",
-                              "output"
+                              "output",
+                              "bindingRevision"
                             ],
                             "type": "object"
                           },
@@ -160678,11 +160574,6 @@ Executes the exact confirmed workflow, including finite Team operations when req
                                   {
                                     "additionalProperties": false,
                                     "properties": {
-                                      "bindingRevision": {
-                                        "maximum": 9007199254740991,
-                                        "minimum": 1,
-                                        "type": "integer"
-                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -160820,7 +160711,6 @@ Executes the exact confirmed workflow, including finite Team operations when req
                                     },
                                     "required": [
                                       "schemaVersion",
-                                      "bindingRevision",
                                       "inputs",
                                       "output"
                                     ],
@@ -164293,9 +164183,9 @@ Executes the exact confirmed workflow, including finite Team operations when req
                             },
                             "required": [
                               "schemaVersion",
-                              "bindingRevision",
                               "inputs",
-                              "output"
+                              "output",
+                              "bindingRevision"
                             ],
                             "type": "object"
                           },
@@ -166734,11 +166624,6 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                                   {
                                     "additionalProperties": false,
                                     "properties": {
-                                      "bindingRevision": {
-                                        "maximum": 9007199254740991,
-                                        "minimum": 1,
-                                        "type": "integer"
-                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -166876,7 +166761,6 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                                     },
                                     "required": [
                                       "schemaVersion",
-                                      "bindingRevision",
                                       "inputs",
                                       "output"
                                     ],
@@ -170349,9 +170233,9 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                             },
                             "required": [
                               "schemaVersion",
-                              "bindingRevision",
                               "inputs",
-                              "output"
+                              "output",
+                              "bindingRevision"
                             ],
                             "type": "object"
                           },
