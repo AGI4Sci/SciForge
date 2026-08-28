@@ -3202,7 +3202,12 @@ process.stdout.write(JSON.stringify({
     )
     const current = settings()
     current.workspaceRoot = workspace
+    current.modelAccess = { mode: 'coding-plan', planAdapterId: 'codex' }
     const client = controllableClient()
+    client.readAccount = vi.fn(async () => ({
+      account: null,
+      requiresOpenaiAuth: true
+    }))
     vi.mocked(client.connect).mockResolvedValue({
       userAgent: 'sciforge/development (Mac OS 15.7.4; arm64) xterm-256color (sciforge; 0.1.0)',
       codexHome: managedCodexHome,
@@ -3263,6 +3268,7 @@ process.stdout.write(JSON.stringify({
       settings: async () => current,
       managedCodexHome,
       storageRoot: root,
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' },
       preToolUseHookLaunch: {
         appPath,
         execPath: process.execPath,
@@ -3271,9 +3277,13 @@ process.stdout.write(JSON.stringify({
       createClient: () => client
     })
 
+    await expect(service.getCodingPlanAccount()).resolves.toMatchObject({ ok: true })
+    expect(client.listHooks).not.toHaveBeenCalled()
+    expect(service.isClientWarm()).toBe(false)
     await expect(service.connect()).resolves.toMatchObject({ ok: true })
     expect(client.listHooks).toHaveBeenCalledTimes(2)
     expect(client.writeConfigBatch).toHaveBeenCalledOnce()
+    expect(service.isClientWarm()).toBe(true)
     const trustWrite = vi.mocked(client.writeConfigBatch).mock.calls[0]?.[0]
     expect(trustWrite).toMatchObject({
       edits: [
@@ -3674,7 +3684,13 @@ process.stdout.write(JSON.stringify({
       service.startTurn({
         threadId: 'thread-1',
         text: 'think carefully',
-        reasoningEffort: 'high'
+        reasoningEffort: 'high',
+        outputSchema: {
+          type: 'object',
+          properties: { answer: { type: 'string' } },
+          required: ['answer'],
+          additionalProperties: false
+        }
       })
     ).resolves.toMatchObject({
       ok: true,
@@ -3693,7 +3709,13 @@ process.stdout.write(JSON.stringify({
     expect(client.startTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         effort: 'high',
-        summary: 'detailed'
+        summary: 'detailed',
+        outputSchema: {
+          type: 'object',
+          properties: { answer: { type: 'string' } },
+          required: ['answer'],
+          additionalProperties: false
+        }
       })
     )
   })
@@ -3722,13 +3744,26 @@ process.stdout.write(JSON.stringify({
       createClient: () => client
     })
 
-    await expect(service.startTurn({ threadId: 'gui-thread-1', text: 'hello' })).resolves.toMatchObject({
+    const outputSchema = {
+      type: 'object',
+      properties: { answer: { type: 'string' } },
+      required: ['answer'],
+      additionalProperties: false
+    }
+    await expect(service.startTurn({
+      threadId: 'gui-thread-1',
+      text: 'hello',
+      outputSchema
+    })).resolves.toMatchObject({
       ok: true,
       threadId: 'gui-thread-1',
       turnId: 'turn-1'
     })
 
-    expect(client.startTurn).toHaveBeenNthCalledWith(1, expect.objectContaining({ threadId: 'codex-thread-old' }))
+    expect(client.startTurn).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      threadId: 'codex-thread-old',
+      outputSchema
+    }))
     expect(client.startThread).toHaveBeenCalledWith(
       expect.objectContaining({
         cwd: '/tmp/workspace',
@@ -3736,7 +3771,10 @@ process.stdout.write(JSON.stringify({
         ephemeral: false
       })
     )
-    expect(client.startTurn).toHaveBeenNthCalledWith(2, expect.objectContaining({ threadId: 'codex-thread-new' }))
+    expect(client.startTurn).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      threadId: 'codex-thread-new',
+      outputSchema
+    }))
     await expect(threadStore.get('gui-thread-1')).resolves.toMatchObject({
       guiThreadId: 'gui-thread-1',
       codexThreadId: 'codex-thread-new'
@@ -6528,6 +6566,163 @@ process.stdout.write(JSON.stringify({
     expect(logoutAccount).toHaveBeenCalledTimes(1)
     expect(queued.client.startThread).not.toHaveBeenCalled()
     expect(queued.client.startTurn).not.toHaveBeenCalled()
+    queued.close()
+  })
+
+  it('does not gate coding-plan account login on runtime-only hook verification', async () => {
+    const root = await tempRoot()
+    const workspace = join(root, 'workspace')
+    await mkdir(workspace, { recursive: true })
+    const client = {
+      ...controllableClient(),
+      listHooks: vi.fn(async () => {
+        throw new Error('runtime governance probe unavailable')
+      }),
+      startAccountLogin: vi.fn(async () => ({
+        type: 'chatgpt' as const,
+        loginId: 'account-only-login-1',
+        authUrl: 'https://auth.example/login'
+      }))
+    } as unknown as CodexAppServerJsonRpcClient
+    const current = settings()
+    current.workspaceRoot = workspace
+    const service = new CodexRuntimeService({
+      settings: async () => current,
+      managedCodexHome: join(root, 'codex-home'),
+      storageRoot: root,
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' },
+      preToolUseHookLaunch: {
+        appPath: join(root, 'missing-app'),
+        execPath: process.execPath,
+        isPackaged: false
+      },
+      createClient: () => client
+    })
+
+    await expect(service.startCodingPlanLogin({ method: 'browser' })).resolves.toMatchObject({
+      ok: true,
+      method: 'browser',
+      loginId: 'account-only-login-1'
+    })
+    expect(client.listHooks).not.toHaveBeenCalled()
+    expect(client.startAccountLogin).toHaveBeenCalledOnce()
+  })
+
+  it('keeps an account refresh alive while persisted runtime access differs', async () => {
+    const accountRead = deferred<{
+      account: null
+      requiresOpenaiAuth: boolean
+    }>()
+    const client = {
+      ...controllableClient(),
+      readAccount: vi.fn(() => accountRead.promise)
+    } as unknown as CodexAppServerJsonRpcClient
+    const current = settings()
+    delete (current as Partial<AppSettingsV1>).modelAccess
+    const service = new CodexRuntimeService({
+      settings: async () => current,
+      managedCodexHome: await tempRoot(),
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' },
+      createClient: () => client
+    })
+
+    const account = service.getCodingPlanAccount({ refreshToken: true })
+    await vi.waitFor(() => expect(client.readAccount).toHaveBeenCalledOnce())
+    await expect(service.listThreads()).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('sign-in is still in progress')
+    })
+    expect(client.stop).not.toHaveBeenCalled()
+    await service.synchronizeModelAccess()
+    expect(client.stop).not.toHaveBeenCalled()
+
+    accountRead.resolve({ account: null, requiresOpenaiAuth: true })
+    await expect(account).resolves.toMatchObject({ ok: true })
+  })
+
+  it('keeps account login alive when concurrent runtime hook verification fails', async () => {
+    const runtimeHook = deferred<void>()
+    const loginStart = deferred<{
+      type: 'chatgpt'
+      loginId: string
+      authUrl: string
+    }>()
+    const client = {
+      ...controllableClient(),
+      startAccountLogin: vi.fn(() => loginStart.promise)
+    } as unknown as CodexAppServerJsonRpcClient
+    const service = new CodexRuntimeService({
+      settings: async () => ({
+        ...settings(),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      }),
+      managedCodexHome: await tempRoot(),
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' },
+      createClient: () => client
+    })
+    const runtimeReadiness = service as unknown as {
+      ensureCodexPreToolUseHookTrusted(): Promise<void>
+    }
+    const hookTrust = vi.spyOn(runtimeReadiness, 'ensureCodexPreToolUseHookTrusted')
+      .mockImplementation(() => runtimeHook.promise)
+
+    const connect = service.connect()
+    await vi.waitFor(() => expect(hookTrust).toHaveBeenCalledOnce())
+    const login = service.startCodingPlanLogin({ method: 'browser' })
+    await vi.waitFor(() => expect(client.startAccountLogin).toHaveBeenCalledOnce())
+
+    runtimeHook.reject(new Error('runtime hook probe timed out'))
+    await expect(connect).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('runtime hook probe timed out')
+    })
+    expect(client.stop).not.toHaveBeenCalled()
+
+    loginStart.resolve({
+      type: 'chatgpt',
+      loginId: 'concurrent-login-1',
+      authUrl: 'https://auth.example/login'
+    })
+    await expect(login).resolves.toMatchObject({
+      ok: true,
+      loginId: 'concurrent-login-1'
+    })
+  })
+
+  it('fails account login closed when the app-server transport disconnects', async () => {
+    const queued = clientWithQueuedEvents()
+    Object.assign(queued.client, {
+      startAccountLogin: vi.fn(async () => ({
+        type: 'chatgpt' as const,
+        loginId: 'disconnected-login-1',
+        authUrl: 'https://auth.example/login'
+      }))
+    })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      managedCodexHome: await tempRoot(),
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' },
+      createClient: () => queued.client
+    })
+
+    await expect(service.startCodingPlanLogin({ method: 'browser' })).resolves.toMatchObject({
+      ok: true,
+      loginId: 'disconnected-login-1'
+    })
+    const completion = service.waitForCodingPlanLogin('disconnected-login-1')
+    queued.push({
+      type: 'closed',
+      channel: CODEX_MAIN_IPC_CHANNELS.closed,
+      reason: 'error'
+    })
+
+    await expect(completion).resolves.toMatchObject({
+      ok: true,
+      success: false,
+      error: expect.stringContaining('disconnected before login completed')
+    })
+    await vi.waitFor(() => expect(queued.client.stop).toHaveBeenCalledOnce())
+    expect(service.isClientWarm()).toBe(false)
     queued.close()
   })
 

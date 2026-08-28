@@ -61,7 +61,10 @@ import type {
   ProjectCoordinatorWorkspace
 } from '../contract.js'
 import { projectCoordinatorPlanningTaskReadiness } from '../plan-readiness.js'
-import type { ProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
+import {
+  ProjectCoordinatorPlanDraftGenerationClientError,
+  type ProjectCoordinatorRendererClient
+} from './project-coordinator-capability-client.js'
 import type { ProjectCoordinatorWorkspaceSection } from './workspace-sections.js'
 
 export const PROJECT_COORDINATOR_PANEL_SECTION_IDS = Object.freeze([
@@ -74,6 +77,21 @@ export const PROJECT_COORDINATOR_PANEL_SECTION_IDS = Object.freeze([
 ] as const)
 
 export const PROJECT_COORDINATOR_LIVE_REFRESH_INTERVAL_MS = 15_000
+
+function projectCoordinatorPlanGenerationFailureMessageKey(
+  reason: ProjectCoordinatorPlanDraftGenerationClientError['reason']
+): string {
+  switch (reason) {
+    case 'planning_candidates_unavailable':
+      return 'projectCoordinatorPlanCandidatesUnavailable'
+    case 'runtime_unavailable':
+      return 'projectCoordinatorPlanRuntimeUnavailable'
+    case 'runtime_execution_failed':
+      return 'projectCoordinatorPlanRuntimeExecutionFailed'
+    case 'invalid_structured_output':
+      return 'projectCoordinatorPlanInvalidStructuredOutput'
+  }
+}
 
 export const PROJECT_COORDINATOR_BUILT_IN_WORKSPACE_VIEWS = Object.freeze([
   'overview',
@@ -634,7 +652,11 @@ export function ProjectCoordinatorPanel({
     try {
       await apply(await operation())
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t('projectCoordinatorActionFailed'))
+      setError(cause instanceof ProjectCoordinatorPlanDraftGenerationClientError
+        ? t(projectCoordinatorPlanGenerationFailureMessageKey(cause.reason))
+        : cause instanceof Error
+          ? cause.message
+          : t('projectCoordinatorActionFailed'))
     } finally {
       setBusyAction(undefined)
     }
@@ -3179,7 +3201,9 @@ export function ProjectCoordinatorProvisioningSection({
                     <Status value={membership.state} />
                   </div>
                   <div className="flex items-center justify-between gap-2 text-ds-muted">
-                    <span>{readiness?.state ?? 'not_applicable'}</span>
+                    <span>{readiness?.state ?? t(project.project.contentMode === 'none'
+                      ? 'projectCoordinatorContentNotRequired'
+                      : 'projectCoordinatorContentReadinessPending')}</span>
                     {authoritySuspended ? (
                       <span>{t('projectCoordinatorTaskAuthoritySuspended')}</span>
                     ) : null}

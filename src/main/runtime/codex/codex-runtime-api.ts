@@ -255,6 +255,7 @@ export type CodexTurnStartPayload = {
   workspace?: string
   model?: string
   reasoningEffort?: string
+  outputSchema?: Readonly<Record<string, unknown>>
   fileReferences?: AgentRuntimeFileReference[]
   ownedVisualToolsAvailable?: boolean
   nativeVisualProofChainPending?: boolean

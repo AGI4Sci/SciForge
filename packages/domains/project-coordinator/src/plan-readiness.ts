@@ -31,24 +31,6 @@ export type ProjectCoordinatorPlanningTaskReadiness = Readonly<{
   scope: TaskAuthorityScope
 }>
 
-export const PROJECT_COORDINATOR_PLANNING_FAILURE_CODES = Object.freeze([
-  'planning_candidates_unavailable'
-] as const)
-
-export type ProjectCoordinatorPlanningFailureCode =
-  typeof PROJECT_COORDINATOR_PLANNING_FAILURE_CODES[number]
-
-export class ProjectCoordinatorPlanningError extends Error {
-  override readonly name = 'ProjectCoordinatorPlanningError'
-
-  constructor(
-    readonly code: ProjectCoordinatorPlanningFailureCode,
-    message: string
-  ) {
-    super(message)
-  }
-}
-
 /**
  * Prospective planning is intentionally distinct from execution eligibility.
  * A draft has no invited Membership or TaskAuthority rows yet; a paused

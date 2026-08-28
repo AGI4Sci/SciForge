@@ -34,7 +34,8 @@ import {
 } from './main.js'
 import type { ProjectCoordinatorSessionProjectionPort } from './session-projection.js'
 import {
-  createProjectContentProvisioningAttestationSigningPort
+  createProjectContentProvisioningAttestationSigningPort,
+  ProjectCoordinatorPlanGenerationError
 } from './ports.js'
 
 test('workspace read remains a strict non-writing coordination capability', async () => {
@@ -563,6 +564,64 @@ test('membership-inactive Agent scope rejects external writes before the canonic
     expectedProviderPrincipalFactRevision: null
   }, agentInvocationContext('invocation-membership-inactive')), /membership_inactive/u)
   assert.equal(addMemberCalls, 0)
+})
+
+test('Plan generation capability returns only a bounded package-owned failure reason', async () => {
+  const factory = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
+    defineCapability: (input) => input,
+    ports: {
+      workspace: {
+        readWorkspace: async () => ({
+          connection: { state: 'identity_required' },
+          observedAt: '2026-08-25T01:05:00.000Z',
+          availableWorkerUsers: [],
+          providerPrincipalFacts: [],
+          projects: []
+        }),
+        createProject: async () => { throw new Error('unused') },
+        completeProjectCreate: async () => { throw new Error('unused') }
+      },
+      plan: {
+        readDraft: async () => null,
+        generateDraft: async () => {
+          throw new ProjectCoordinatorPlanGenerationError(
+            'invalid_structured_output',
+            'provider-secret: exact upstream schema diagnostics'
+          )
+        },
+        editDraft: async () => { throw new Error('unused') },
+        submitDraft: async () => { throw new Error('unused') },
+        confirm: async () => { throw new Error('unused') },
+        activateAndReconcile: async () => { throw new Error('unused') }
+      },
+      provisioningAttestationSigning: {
+        signFactualPayload: async () => { throw new Error('unused') }
+      },
+      provisioning: coordinatorProvisioningPort(),
+      recovery: coordinatorRecoveryPort(),
+      artifactReview: coordinatorArtifactReviewPort(),
+      coordinatorCloudCommands: coordinatorCloudCommandService(),
+      actions: coordinatorActionPort()
+    },
+    sessions: sessionProjectionPort()
+  })
+  const generate = factory.createDefinitions().find(
+    ({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate
+  )!
+  const response = await generate.handler({
+    projectId: 'prj_ProjectCreated01',
+    instruction: 'Create a bounded plan.',
+    sourceInputLocators: [],
+    modelId: null
+  }, uiInvocationContext('invocation-plan-generation-failure'))
+
+  assert.deepEqual(response, {
+    output: {
+      status: 'failed',
+      reason: 'invalid_structured_output'
+    }
+  })
+  assert.doesNotMatch(JSON.stringify(response), /provider-secret/u)
 })
 
 function coordinatorActionPort() {

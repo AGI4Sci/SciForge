@@ -51,6 +51,7 @@ import {
   projectCoordinatorPlanConfirmInputSchema,
   projectCoordinatorPlanDraftEditInputSchema,
   projectCoordinatorPlanDraftGenerateInputSchema,
+  projectCoordinatorPlanDraftGenerateResultSchema,
   projectCoordinatorPlanDraftReadInputSchema,
   projectCoordinatorPlanDraftSchema,
   projectCoordinatorPlanDraftSubmitInputSchema,
@@ -80,6 +81,7 @@ import {
   createProjectCoordinatorActionPort,
   createProjectCoordinatorPlanPort,
   createProjectContentProvisioningAttestationSigningPort,
+  ProjectCoordinatorPlanGenerationError,
   type ProjectCoordinatorMainPorts
 } from './ports.js'
 import { ProjectCoordinatorStateStore } from './state.js'
@@ -94,7 +96,7 @@ import {
 
 export type ProjectCoordinatorCapabilityOptions = Readonly<{
   id: string
-  version: '1.0.0'
+  version: '1.0.0' | '2.0.0'
   title: string
   description: string
   audiences: readonly ('ui' | 'agent')[]
@@ -251,7 +253,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate,
-        version: '1.0.0',
+        version: '2.0.0',
         title: 'Generate local Project Plan draft',
         description: 'Runs the configured local Agent Runtime and persists one reviewable non-secret draft.',
         audiences: agentAudiences,
@@ -261,11 +263,26 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         concurrency: { revision: 'none', idempotency: 'required' },
         tags: ['project', 'plan', 'runtime'],
         inputSchema: projectCoordinatorPlanDraftGenerateInputSchema,
-        outputSchema: projectCoordinatorPlanDraftSchema,
+        outputSchema: projectCoordinatorPlanDraftGenerateResultSchema,
         handler: async (raw, context) => {
           const input = projectCoordinatorPlanDraftGenerateInputSchema.parse(raw)
           await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
-          return { output: await options.ports.plan.generateDraft(input) }
+          try {
+            return {
+              output: {
+                status: 'generated' as const,
+                draft: await options.ports.plan.generateDraft(input)
+              }
+            }
+          } catch (error) {
+            if (!(error instanceof ProjectCoordinatorPlanGenerationError)) throw error
+            return {
+              output: {
+                status: 'failed' as const,
+                reason: error.reason
+              }
+            }
+          }
         }
       }),
       options.defineCapability({

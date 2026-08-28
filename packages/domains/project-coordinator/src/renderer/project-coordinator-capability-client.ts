@@ -16,6 +16,7 @@ import {
   projectCoordinatorPlanConfirmInputSchema,
   projectCoordinatorPlanDraftEditInputSchema,
   projectCoordinatorPlanDraftGenerateInputSchema,
+  projectCoordinatorPlanDraftGenerateResultSchema,
   projectCoordinatorPlanDraftReadInputSchema,
   projectCoordinatorPlanDraftSchema,
   projectCoordinatorPlanDraftSubmitInputSchema,
@@ -46,6 +47,7 @@ import {
   type ProjectCoordinatorPlanDraft,
   type ProjectCoordinatorPlanDraftEditInput,
   type ProjectCoordinatorPlanDraftGenerateInput,
+  type ProjectCoordinatorPlanDraftGenerateFailureReason,
   type ProjectCoordinatorPlanDraftReadInput,
   type ProjectCoordinatorPlanDraftSubmitInput,
   type ProjectCoordinatorPlanSubmitResult,
@@ -94,8 +96,18 @@ const planDraftGenerateContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate,
   effect: 'workspace-write' as const,
   inputSchema: projectCoordinatorPlanDraftGenerateInputSchema,
-  outputSchema: projectCoordinatorPlanDraftSchema
+  outputSchema: projectCoordinatorPlanDraftGenerateResultSchema
 })
+
+export class ProjectCoordinatorPlanDraftGenerationClientError extends Error {
+  readonly reason: ProjectCoordinatorPlanDraftGenerateFailureReason
+
+  constructor(reason: ProjectCoordinatorPlanDraftGenerateFailureReason) {
+    super('Project Plan generation failed.')
+    this.name = 'ProjectCoordinatorPlanDraftGenerationClientError'
+    this.reason = reason
+  }
+}
 
 const planDraftEditContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftEdit,
@@ -266,7 +278,13 @@ export function createProjectCoordinatorRendererClient(
     },
     readSessionProjection: () => invoker.invoke(sessionProjectionReadContract, {}),
     readPlanDraft: (input) => invoker.invoke(planDraftReadContract, input),
-    generatePlanDraft: (input) => invoker.invoke(planDraftGenerateContract, input),
+    generatePlanDraft: async (input) => {
+      const result = await invoker.invoke(planDraftGenerateContract, input)
+      if (result.status === 'failed') {
+        throw new ProjectCoordinatorPlanDraftGenerationClientError(result.reason)
+      }
+      return result.draft
+    },
     editPlanDraft: (input) => invoker.invoke(planDraftEditContract, input),
     submitPlanDraft: (input) => invoker.invoke(planSubmitContract, input, confirmationApproval),
     confirmPlan: (input) => invoker.invoke(

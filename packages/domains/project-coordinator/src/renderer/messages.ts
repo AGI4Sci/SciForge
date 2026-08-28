@@ -58,6 +58,14 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorCloudUnavailable: 'The Cloud coordination service is unavailable.',
     projectCoordinatorReadFailed: 'Project coordination state could not be read.',
     projectCoordinatorActionFailed: 'The requested Project action failed.',
+    projectCoordinatorPlanCandidatesUnavailable:
+      'No fresh online Worker User Runtime can satisfy this Project Plan yet.',
+    projectCoordinatorPlanRuntimeUnavailable:
+      'Plan generation needs a ready local Agent Runtime. Check Runtime settings and try again.',
+    projectCoordinatorPlanRuntimeExecutionFailed:
+      'The local Agent Runtime could not finish Plan generation. Check the Runtime connection and try again.',
+    projectCoordinatorPlanInvalidStructuredOutput:
+      'The Agent returned an invalid Plan structure. No draft was saved; try generating it again.',
     projectCoordinatorCreateProject: 'Create Project',
     projectCoordinatorCreateProjectHint: 'Start a durable Agent collaboration',
     projectCoordinatorProjectName: 'Project name',
@@ -158,7 +166,7 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorTaskAuthority: 'Project Task Authority',
     projectCoordinatorTextTasks: 'Text tasks',
     projectCoordinatorFileTasks: 'File tasks',
-    projectCoordinatorContentNotRequired: 'No content required',
+    projectCoordinatorContentNotRequired: 'Shared files are not required for this Project',
     projectCoordinatorContentReady: 'Content ready',
     projectCoordinatorContentBlocked: 'Content blocked',
     projectCoordinatorCapabilities: 'Capabilities',
@@ -245,6 +253,7 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorAcceptInvitation: 'Accept confirmed Plan and invitation',
     projectCoordinatorProjectMembers: 'Project members and Task Authority',
     projectCoordinatorTaskAuthoritySuspended: 'Task Authority suspended',
+    projectCoordinatorContentReadinessPending: 'Shared-file readiness has not been reported yet',
     projectCoordinatorAddMember: 'Add exact member',
     projectCoordinatorRemoveMember: 'Remove member',
     projectCoordinatorNoReadyProviderPrincipal: 'No verified ready Provider principal is available.',
@@ -310,6 +319,14 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorCloudUnavailable: 'Cloud 协调服务不可用。',
     projectCoordinatorReadFailed: '无法读取 Project 协调状态。',
     projectCoordinatorActionFailed: '请求的 Project 操作失败。',
+    projectCoordinatorPlanCandidatesUnavailable:
+      '暂无可满足该 Project Plan 的新鲜在线 Worker User Runtime。',
+    projectCoordinatorPlanRuntimeUnavailable:
+      '生成 Plan 需要可用的本地 Agent Runtime，请检查 Runtime 设置后重试。',
+    projectCoordinatorPlanRuntimeExecutionFailed:
+      '本地 Agent Runtime 未能完成 Plan 生成，请检查 Runtime 连接后重试。',
+    projectCoordinatorPlanInvalidStructuredOutput:
+      'Agent 返回的 Plan 结构不符合要求，系统未保存草稿，请重新生成。',
     projectCoordinatorCreateProject: '创建 Project',
     projectCoordinatorCreateProjectHint: '发起可持久恢复的 Agent 协作',
     projectCoordinatorProjectName: 'Project 名称',
@@ -410,7 +427,7 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorTaskAuthority: 'Project Task Authority',
     projectCoordinatorTextTasks: '文本任务',
     projectCoordinatorFileTasks: '文件任务',
-    projectCoordinatorContentNotRequired: '无需内容通道',
+    projectCoordinatorContentNotRequired: '此 Project 无需共享文件（不代表本机能力缺失）',
     projectCoordinatorContentReady: '内容就绪',
     projectCoordinatorContentBlocked: '内容受阻',
     projectCoordinatorCapabilities: '能力',
@@ -497,6 +514,7 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorAcceptInvitation: '接受已确认 Plan 与邀请',
     projectCoordinatorProjectMembers: 'Project 成员与 Task Authority',
     projectCoordinatorTaskAuthoritySuspended: 'Task Authority 已暂停',
+    projectCoordinatorContentReadinessPending: '尚未收到共享文件就绪状态',
     projectCoordinatorAddMember: '添加精确成员',
     projectCoordinatorRemoveMember: '移除成员',
     projectCoordinatorNoReadyProviderPrincipal: '当前没有已核验且 ready 的 Provider principal。',
