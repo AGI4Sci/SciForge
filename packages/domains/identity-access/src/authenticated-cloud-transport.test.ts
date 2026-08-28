@@ -247,6 +247,7 @@ function projectPlanSubmitPayload(identity: Record<string, DomainPackageJsonValu
       identity
     }],
     tasks: [{
+      workerUserId: TEST_IDS.secondUserId,
       planItemId: 'item_analysis01',
       title: 'Analyze the synthetic notes',
       objective: 'Produce one bounded meeting analysis.',
