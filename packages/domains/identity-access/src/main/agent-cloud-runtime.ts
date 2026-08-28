@@ -357,7 +357,7 @@ class IdentityAgentCloudRuntime {
           }
         }
       })
-      const url = new URL('v1/events', identity.baseUrl)
+      const url = new URL('v1/events', ensureTrailingSlash(identity.baseUrl))
       url.protocol = url.protocol === 'http:' ? 'ws:' : 'wss:'
       socket = this.#webSocketFactory(url.toString(), {
         authorization: `Bearer ${authority.authority}`

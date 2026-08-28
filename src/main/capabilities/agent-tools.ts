@@ -972,7 +972,6 @@ export class CapabilityAgentToolSurface {
 function remoteApprovalPolicy(
   descriptor: CapabilityDescriptor
 ): CapabilityAgentApprovalRequest['remoteApproval'] | undefined {
-  if (descriptor.effect !== 'workspace-write') return undefined
   return {
     eligible: true,
     safeSummary: descriptor.title,

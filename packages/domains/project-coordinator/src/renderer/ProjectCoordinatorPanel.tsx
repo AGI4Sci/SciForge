@@ -1234,7 +1234,7 @@ function CollaborationCenterEmpty({
   )
 }
 
-function CollaborationSettingsDrawer({
+export function CollaborationSettingsDrawer({
   open,
   sections,
   session,
@@ -1255,8 +1255,11 @@ function CollaborationSettingsDrawer({
   }, [onClose, returnFocusRef])
 
   useEffect(() => {
+    if (open) closeButtonRef.current?.focus()
+  }, [open])
+
+  useEffect(() => {
     if (!open) return
-    closeButtonRef.current?.focus()
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape') return
       event.preventDefault()
