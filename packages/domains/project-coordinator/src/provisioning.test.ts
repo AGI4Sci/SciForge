@@ -44,7 +44,7 @@ test('launch workflow preparation binds the complete ordered ordinary Content Sp
   let batchCreated = false
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
-    activateAndDispatch: async () => workspace,
+    activateAndReconcile: async () => workspace,
     transport: unusedTransport(),
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => ({
@@ -98,7 +98,7 @@ test('Team reconcile workflow reauthorizes the exact existing root before any me
   })
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
-    activateAndDispatch: async () => workspace,
+    activateAndReconcile: async () => workspace,
     transport: unusedTransport(),
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => unusedCapabilities(),
@@ -132,7 +132,7 @@ test('a dispatched or outcome-unknown create is reconciled and never issued a se
     )
     const port = createProjectCoordinatorProvisioningPort({
       workspace: { readWorkspace: async () => workspace },
-      activateAndDispatch: async () => workspace,
+      activateAndReconcile: async () => workspace,
       transport: unusedTransport(),
       signing: { signFactualPayload: async () => { throw new Error('unused') } },
       getCapabilities: () => unusedCapabilities(),
@@ -153,7 +153,7 @@ test('confirmed initial plan journals each Provider operation and submits one De
   const workspace = workspaceFixture({ root: null, intentKind: 'initial_provisioning' })
   const cloud = cloudHarness()
   const invoked: string[] = []
-  let activatedAndDispatched = false
+  let activatedAndReconciled = false
   let capturedPlan: DomainMainFiniteCapabilityBatchPlan | undefined
   const resource = {
     token: `cap_${'a'.repeat(32)}`,
@@ -216,8 +216,8 @@ test('confirmed initial plan journals each Provider operation and submits one De
   let signedDigest = ''
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
-    activateAndDispatch: async () => {
-      activatedAndDispatched = true
+    activateAndReconcile: async () => {
+      activatedAndReconciled = true
       return workspace
     },
     transport: cloud.transport,
@@ -272,7 +272,7 @@ test('confirmed initial plan journals each Provider operation and submits one De
     ...journalCommandTypes(6),
     'project.content.attest'
   ])
-  assert.equal(activatedAndDispatched, true)
+  assert.equal(activatedAndReconciled, true)
   assert.equal(cloud.attestation?.deviceSignature.canonicalPayloadDigest, signedDigest)
   assert.deepEqual(cloud.attestation?.memberObservations.map(({ userId, presence }) => ({
     userId,
@@ -320,7 +320,7 @@ test('Owner root authorization loss records unauthorized and stops before every 
   } as unknown as DomainMainSystemCapabilityInvoker
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
-    activateAndDispatch: async () => workspace,
+    activateAndReconcile: async () => workspace,
     transport: cloud.transport,
     signing: { signFactualPayload: async () => { throw new Error('must not sign') } },
     getCapabilities: () => capabilities,
@@ -357,7 +357,7 @@ test('dynamic member add creates an OIDC invitation without a Provider fact', as
   const cloud = membershipCloudHarness('invited')
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
-    activateAndDispatch: async () => workspace,
+    activateAndReconcile: async () => workspace,
     transport: cloud.transport,
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => unusedCapabilities()
@@ -381,7 +381,7 @@ test('content-required dynamic member add rejects an immediate-active response',
   const cloud = membershipCloudHarness('active')
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
-    activateAndDispatch: async () => workspace,
+    activateAndReconcile: async () => workspace,
     transport: cloud.transport,
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => unusedCapabilities()
@@ -401,7 +401,7 @@ test('only the invited OIDC User can accept the exact confirmed Plan before Team
   const cloud = membershipAcceptanceCloudHarness('pending_membership')
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
-    activateAndDispatch: async () => workspace,
+    activateAndReconcile: async () => workspace,
     transport: cloud.transport,
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => unusedCapabilities()
@@ -428,7 +428,7 @@ test('only the invited OIDC User can accept the exact confirmed Plan before Team
   })
   const wrongUser = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => ownerWorkspace },
-    activateAndDispatch: async () => ownerWorkspace,
+    activateAndReconcile: async () => ownerWorkspace,
     transport: unusedTransport(),
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => unusedCapabilities()
@@ -449,7 +449,7 @@ test('content-required active or accepted-pending member removal accepts only me
   const pendingCloud = membershipRemovalCloudHarness('membership_removal_pending')
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
-    activateAndDispatch: async () => workspace,
+    activateAndReconcile: async () => workspace,
     transport: pendingCloud.transport,
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => unusedCapabilities()
@@ -468,7 +468,7 @@ test('content-required active or accepted-pending member removal accepts only me
   const acceptedPendingCloud = membershipRemovalCloudHarness('membership_removal_pending')
   const acceptedPendingPort = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => acceptedPendingWorkspace },
-    activateAndDispatch: async () => acceptedPendingWorkspace,
+    activateAndReconcile: async () => acceptedPendingWorkspace,
     transport: acceptedPendingCloud.transport,
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => unusedCapabilities()
@@ -484,7 +484,7 @@ test('content-required active or accepted-pending member removal accepts only me
   const immediateCloud = membershipRemovalCloudHarness('removed')
   const rejecting = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
-    activateAndDispatch: async () => workspace,
+    activateAndReconcile: async () => workspace,
     transport: immediateCloud.transport,
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => unusedCapabilities()

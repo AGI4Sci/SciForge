@@ -23,6 +23,7 @@ import {
   type TaskExecutionFileIntent,
   type TaskResultOutput
 } from '@sciforge/collaboration-contracts'
+import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts/node'
 
 import { actorInboxRecipient, type AgentActor, type AuthContext, type HumanEndpointActor, type UserActor } from './actor.js'
 import { fenceTaskExecution, revokeAgentAuthorityInTransaction } from './authority-revocation.js'
@@ -4353,10 +4354,17 @@ export class CollaborationService {
       }
       await tx.updateProjectPlan(confirmed, plan.revision)
       await tx.updateProject({ ...project, revision: project.revision + 1, updatedAt: at }, project.revision)
-      const message = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId }, 'project.plan.confirmed', {
+      const planConfirmedPayload = agentInboxPayloadSchema.parse({
         protocolVersion: '1.0', type: 'project.plan.confirmed', projectId: project.projectId,
         projectPlanId: confirmed.projectPlanId, planDigest: confirmed.planDigest, revision: confirmed.revision
-      }, at)
+      })
+      const message = await this.appendInbox(
+        tx,
+        { kind: 'agent', id: project.coordinatorAgentId },
+        planConfirmedPayload.type,
+        planConfirmedPayload,
+        at
+      )
       const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = [
         { recipient: message.recipient, sequence: message.sequence }
       ]
@@ -4399,9 +4407,11 @@ export class CollaborationService {
       }
       const item = plan.tasks.find(({ planItemId }) => planItemId === input.planItemId)
       if (!item) fail('not_found', 'The plan item was not found in this confirmed plan revision.')
-      const taskId = taskIdForPlanItem(plan.projectPlanId, item.planItemId)
+      const taskId = canonicalTaskIdForPlanItem(plan.projectPlanId, item.planItemId)
       if (await tx.getTask(taskId)) fail('identity_conflict', 'This confirmed plan item already has its canonical Task.')
-      const dependencyTaskIds = item.dependencyPlanItemIds.map((planItemId) => taskIdForPlanItem(plan.projectPlanId, planItemId))
+      const dependencyTaskIds = item.dependencyPlanItemIds.map((planItemId) => (
+        canonicalTaskIdForPlanItem(plan.projectPlanId, planItemId)
+      ))
       for (const dependencyTaskId of dependencyTaskIds) {
         const dependency = required(await tx.getTask(dependencyTaskId), 'Dependency Task')
         if (dependency.projectId !== project.projectId || dependency.status !== 'completed') {
@@ -5082,11 +5092,18 @@ export class CollaborationService {
       await tx.updateTaskExecution(updatedExecution, execution.revision)
       await tx.updateTask(updatedTask, task.revision)
       if (execution.fileIntent !== null) await tx.invalidateCloudResourceRefs(task.taskId, execution.executionId, at)
-      const message = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId }, 'task.result.submitted', {
+      const resultSubmittedPayload = agentInboxPayloadSchema.parse({
         protocolVersion: '1.0', type: 'task.result.submitted', projectId: project.projectId,
         taskId: task.taskId, executionId: execution.executionId,
         resultSubmissionId: submission.resultSubmissionId, revision: submission.revision
-      }, at)
+      })
+      const message = await this.appendInbox(
+        tx,
+        { kind: 'agent', id: project.coordinatorAgentId },
+        resultSubmittedPayload.type,
+        resultSubmittedPayload,
+        at
+      )
       return { response: { protocolVersion: '1.0', type: 'task.result.submitted',
         task: updatedTask, execution: updatedExecution, submission }, resourceKind: 'task_result_submission',
         resourceId: submission.resultSubmissionId,
@@ -6652,10 +6669,6 @@ async function requireActiveCoordinatorAgent(
     fail('permission_denied', 'The current Coordinator Agent authority is no longer active on this Device.')
   }
   return coordinator
-}
-
-function taskIdForPlanItem(projectPlanId: string, planItemId: string): string {
-  return `tsk_${stableDigest({ projectPlanId, planItemId }).slice(0, 32)}`
 }
 
 async function requireEligibleWorkerUser(input: Readonly<{

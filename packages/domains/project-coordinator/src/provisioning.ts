@@ -97,7 +97,7 @@ type ProvisioningOptions = Readonly<{
   workspace: WorkspaceReader
   transport: AuthenticatedCloudTransport
   signing: ProjectContentProvisioningAttestationSigningPort
-  activateAndDispatch: ProjectCoordinatorPlanPort['activateAndDispatch']
+  activateAndReconcile: ProjectCoordinatorPlanPort['activateAndReconcile']
   getCapabilities(): DomainMainSystemCapabilityInvoker
   now?: () => Date
   attemptId?: () => string
@@ -304,7 +304,7 @@ export function createProjectCoordinatorProvisioningPort(
         }
       }
       if (input.purpose === 'launch') {
-        return options.activateAndDispatch({
+        return options.activateAndReconcile({
           projectId: input.projectId,
           projectPlanId: input.projectPlanId,
           expectedCoordinatorAuthorityEpoch: input.expectedCoordinatorAuthorityEpoch,

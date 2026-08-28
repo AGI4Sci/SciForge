@@ -48,7 +48,7 @@ test('workspace read remains a strict non-writing coordination capability', asyn
         editDraft: async () => { throw new Error('unused') },
         submitDraft: async () => { throw new Error('unused') },
         confirm: async () => { throw new Error('unused') },
-        activateAndDispatch: async () => { throw new Error('unused') }
+        activateAndReconcile: async () => { throw new Error('unused') }
       },
       provisioningAttestationSigning: {
         signFactualPayload: async () => { throw new Error('unused') }
@@ -259,7 +259,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
       editDraft: async () => { throw new Error('unused') },
       submitDraft: async () => { throw new Error('unused') },
       confirm: async () => { throw new Error('unused') },
-      activateAndDispatch: async () => { throw new Error('unused') }
+      activateAndReconcile: async () => { throw new Error('unused') }
     },
     provisioningAttestationSigning: {
       signFactualPayload: async () => { throw new Error('unused') }

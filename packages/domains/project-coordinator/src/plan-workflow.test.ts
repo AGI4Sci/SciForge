@@ -13,11 +13,13 @@ import {
   type ProjectPlan,
   type RestResponse
 } from '@sciforge/collaboration-contracts'
+import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts/node'
 
 import {
   createProjectCoordinatorPlanPort,
   defineProjectCoordinatorWorkspacePort
 } from './ports.js'
+import { createProjectCoordinatorContinuationPort } from './continuation.js'
 import { ProjectCoordinatorStateStore } from './state.js'
 
 test('local Coordinator Runtime creates an editable durable Plan draft with Worker User assignment', async () => {
@@ -67,6 +69,10 @@ test('local Coordinator Runtime creates an editable durable Plan draft with Work
       readWorkspace: async () => workspace
     }),
     getAgentExecution: () => agentExecution,
+    continuation: {
+      reconcileProject: async () => workspace,
+      reconcileVisibleProjects: async () => undefined
+    },
     now: () => new Date('2026-08-25T01:06:00.000Z')
   }
   const port = createProjectCoordinatorPlanPort(options)
@@ -126,7 +132,7 @@ test('local Coordinator Runtime creates an editable durable Plan draft with Work
   }), /active Project member/u)
 })
 
-test('Plan confirmation keeps the Project paused until the canonical workflow activates and dispatches', async () => {
+test('Plan confirmation keeps the Project paused until the canonical workflow activates and reconciles', async () => {
   const settings = inMemorySettings()
   let phase: 'draft' | 'submitted' | 'confirmed' | 'active' = 'draft'
   let submittedPlan: ProjectPlan | undefined
@@ -207,12 +213,20 @@ test('Plan confirmation keeps the Project paused until the canonical workflow ac
     }
   }
   let requestOrdinal = 0
+  const workspacePort = defineProjectCoordinatorWorkspacePort({
+    readWorkspace: async () => workflowWorkspace(phase, submittedPlan, offeredBundle)
+  })
+  const continuation = createProjectCoordinatorContinuationPort({
+    workspace: workspacePort,
+    coordinatorCloudCommands,
+    requestId: () => `req_PlanWorkflow${String(++requestOrdinal).padStart(4, '0')}`,
+    now: () => new Date('2026-08-25T01:06:00.000Z')
+  })
   const port = createProjectCoordinatorPlanPort({
     settings,
-    workspace: defineProjectCoordinatorWorkspacePort({
-      readWorkspace: async () => workflowWorkspace(phase, submittedPlan, offeredBundle)
-    }),
+    workspace: workspacePort,
     getAgentExecution: () => planAgentExecution(),
+    continuation,
     coordinatorCloudCommands,
     transport,
     requestId: () => `req_PlanWorkflow${String(++requestOrdinal).padStart(4, '0')}`,
@@ -284,7 +298,7 @@ test('Plan confirmation keeps the Project paused until the canonical workflow ac
     'project.plan.submit'
   ])
 
-  const activated = await port.activateAndDispatch({
+  const activated = await port.activateAndReconcile({
     projectId: assigned.projectId,
     projectPlanId: submitted.plan.projectPlanId,
     expectedCoordinatorAuthorityEpoch: 1,
@@ -566,7 +580,7 @@ function taskOfferResponse(command: Extract<
   { type: 'task.offer.create' }
 >): Extract<RestResponse, { type: 'rest.collection' }> {
   const at = '2026-08-25T01:06:00.000Z'
-  const taskId = 'tsk_MeetingSummary01'
+  const taskId = canonicalTaskIdForPlanItem(command.projectPlanId, command.planItemId)
   const task = taskSchema.parse({
     schemaVersion: 1,
     type: 'task',

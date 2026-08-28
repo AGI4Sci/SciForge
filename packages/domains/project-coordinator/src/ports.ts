@@ -30,7 +30,6 @@ import {
   type ProjectWorkerAvailabilityView,
   type ProviderDirectoryPrincipalFact,
   type RestResponse,
-  type Task,
   type TaskAuthority,
   type TaskExecution,
   type TaskOffer,
@@ -92,6 +91,7 @@ import { ProjectCoordinatorStateStore } from './state.js'
 import type { ProjectCoordinatorProvisioningPort } from './provisioning.js'
 import type { ProjectCoordinatorRecoveryPort } from './recovery.js'
 import type { ProjectCoordinatorArtifactReviewPort } from './artifact-review.js'
+import type { ProjectCoordinatorContinuationPort } from './continuation.js'
 
 const PROJECT_COORDINATOR_PROJECT_FACT_COLLECTIONS = PROJECT_COORDINATION_COLLECTIONS.filter(
   (collection) => collection !== 'agent_label_facts' &&
@@ -121,7 +121,7 @@ export type ProjectCoordinatorPlanPort = Readonly<{
     input: ProjectCoordinatorPlanConfirmInput,
     idempotencyKey: string
   ): Promise<ProjectCoordinatorWorkspace>
-  activateAndDispatch(
+  activateAndReconcile(
     input: Pick<ProjectCoordinatorWorkflowPlan,
       'projectId' | 'projectPlanId' | 'expectedCoordinatorAuthorityEpoch' |
       'expectedExecutionAuthorityEpoch' | 'expectedPlanRevision' | 'planDigest'>,
@@ -409,6 +409,7 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
   state?: ProjectCoordinatorStateStore
   workspace: ProjectCoordinatorWorkspacePort
   getAgentExecution(): DomainMainAgentExecutionHost | undefined
+  continuation: ProjectCoordinatorContinuationPort
   coordinatorCloudCommands?: CoordinatorCloudCommandService
   transport?: AuthenticatedCloudTransport
   now?: () => Date
@@ -626,7 +627,7 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
         await options.workspace.readWorkspace({ projectId: input.projectId })
       )
     },
-    activateAndDispatch: async (input, idempotencyKey) => {
+    activateAndReconcile: async (input, idempotencyKey) => {
       if (!options.transport) throw new Error('OIDC Cloud transport is unavailable.')
       let workspace = await options.workspace.readWorkspace({ projectId: input.projectId })
       const projectView = requireReadyProject(workspace, input.projectId)
@@ -680,135 +681,9 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       if (!options.coordinatorCloudCommands) {
         throw new Error('Coordinator Agent Cloud command mediation is unavailable.')
       }
-      return dispatchInitialPlanOffers({
-        workspace: options.workspace,
-        coordinatorCloudCommands: options.coordinatorCloudCommands,
-        state,
-        requestId,
-        now
-      }, confirmedPlan, idempotencyKey, parsed)
+      return options.continuation.reconcileProject(confirmedPlan.projectId)
     }
   })
-}
-
-async function dispatchInitialPlanOffers(options: Readonly<{
-  workspace: ProjectCoordinatorWorkspacePort
-  coordinatorCloudCommands: CoordinatorCloudCommandService
-  state: ProjectCoordinatorStateStore
-  requestId(): `req_${string}`
-  now(): Date
-}>, confirmedPlan: ProjectPlan, idempotencyKey: string,
-initialWorkspace: ProjectCoordinatorWorkspace): Promise<ProjectCoordinatorWorkspace> {
-  const initialProject = requireReadyProject(initialWorkspace, confirmedPlan.projectId)
-  if (initialProject.project.status !== 'active') {
-    throw new Error('Initial Task offers require an active Project.')
-  }
-  const rootItems = confirmedPlan.tasks.filter(({ dependencyPlanItemIds }) => (
-    dependencyPlanItemIds.length === 0
-  ))
-  if (rootItems.length === 0) {
-    throw new Error('A confirmed Plan must expose at least one dependency-free initial Task.')
-  }
-  const assignments = await options.state.readPlanAssignments(
-    confirmedPlan.projectPlanId,
-    confirmedPlan.planDigest
-  )
-  const assignmentByItem = new Map(assignments.map((assignment) => (
-    [assignment.planItemId, assignment] as const
-  )))
-  if (
-    assignments.length !== confirmedPlan.tasks.length ||
-    confirmedPlan.tasks.some(({ planItemId }) => !assignmentByItem.has(planItemId))
-  ) {
-    throw new Error('Confirmed Plan Task dispatch requires its durable Worker User assignments.')
-  }
-
-  let workspace = initialWorkspace
-  const offeredTaskIds = new Set<string>()
-
-  for (const item of rootItems) {
-    workspace = await options.workspace.readWorkspace({ projectId: confirmedPlan.projectId })
-    const project = requireReadyProject(workspace, confirmedPlan.projectId)
-    if (
-      project.project.status !== 'active' ||
-      project.plan?.plan.projectPlanId !== confirmedPlan.projectPlanId ||
-      project.plan.plan.planDigest !== confirmedPlan.planDigest ||
-      project.plan.plan.state !== 'confirmed'
-    ) {
-      throw new Error('Initial Task dispatch lost the exact active Project and confirmed Plan.')
-    }
-    const assignment = assignmentByItem.get(item.planItemId)
-    if (!assignment?.workerUserId) {
-      throw new Error('Every initial Plan item requires a Worker User assignment.')
-    }
-    const offerExpiresAt = new Date(options.now().getTime() + 15 * 60_000).toISOString()
-    const response = await options.coordinatorCloudCommands.execute({
-      protocolVersion: CURRENT_PROTOCOL_VERSION,
-      requestId: options.requestId(),
-      type: 'task.offer.create',
-      idempotencyKey: scopedIdempotencyKey(
-        idempotencyKey,
-        `offer-${stableDigest({
-          projectPlanId: confirmedPlan.projectPlanId,
-          planItemId: item.planItemId
-        }).slice(0, 24)}`
-      ),
-      projectId: project.project.projectId,
-      expectedProjectRevision: project.project.revision,
-      expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
-      expectedExecutionAuthorityEpoch: project.project.executionAuthorityEpoch,
-      projectPlanId: confirmedPlan.projectPlanId,
-      expectedPlanRevision: project.plan.plan.revision,
-      planItemId: item.planItemId,
-      workerUserId: assignment.workerUserId,
-      offerExpiresAt
-    })
-    if (response.type === 'rest.error') {
-      throw new Error(`Initial Task offer failed: ${response.error.code}: ${response.error.message}`)
-    }
-    if (response.type !== 'rest.collection') {
-      throw new Error(`Initial Task offer returned ${response.type}.`)
-    }
-    const tasks = response.items.filter((entity): entity is Task => entity.type === 'task')
-    const offers = response.items.filter((entity): entity is TaskOffer => entity.type === 'task_offer')
-    const task = tasks[0]
-    const offer = offers[0]
-    if (
-      response.items.length !== 2 ||
-      tasks.length !== 1 ||
-      offers.length !== 1 ||
-      !task || !offer ||
-      task.projectId !== project.project.projectId ||
-      task.createdByCoordinatorAgentId !== project.project.coordinatorAgentId ||
-      task.title !== item.title ||
-      task.objective !== item.objective ||
-      stableDigest(task.completionCriteria) !== stableDigest(item.completionCriteria) ||
-      task.dependencyTaskIds.length !== 0 ||
-      stableDigest(task.requiredCapabilityTags) !== stableDigest(item.requiredCapabilityTags) ||
-      stableDigest(task.fileIntent) !== stableDigest(item.fileIntent) ||
-      task.currentExecutionId !== null ||
-      task.currentExecutionState !== null ||
-      task.status !== 'offered' ||
-      offer.projectId !== task.projectId ||
-      offer.taskId !== task.taskId ||
-      offer.executionId !== null ||
-      offer.workerUserId !== assignment.workerUserId ||
-      offer.state !== 'pending' ||
-      offer.expiresAt !== offerExpiresAt
-    ) {
-      throw new Error('Initial Task offer did not return the selected Worker User assignment.')
-    }
-    offeredTaskIds.add(task.taskId)
-  }
-
-  workspace = await options.workspace.readWorkspace({ projectId: confirmedPlan.projectId })
-  const observed = requireReadyProject(workspace, confirmedPlan.projectId)
-  if ([...offeredTaskIds].some((taskId) => (
-    !observed.tasks.some(({ task }) => task.taskId === taskId)
-  ))) {
-    throw new Error('Initial Task offers were not observed in fresh Cloud facts.')
-  }
-  return workspace
 }
 
 export function createProjectCoordinatorActionPort(options: Readonly<{
@@ -816,9 +691,16 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
   coordinatorCloudCommands: CoordinatorCloudCommandService
   transport: AuthenticatedCloudTransport
   state: ProjectCoordinatorStateStore
+  continuation: Pick<ProjectCoordinatorContinuationPort, 'reconcileProject'>
+  onBackgroundContinuationFailure?(projectId: string, error: unknown): void
   requestId?: () => `req_${string}`
 }>): ProjectCoordinatorActionPort {
   const requestId = options.requestId ?? (() => `req_${randomUUID().replaceAll('-', '')}`)
+  const reconcileInBackground = (projectId: string): void => {
+    void options.continuation.reconcileProject(projectId).catch((error: unknown) => {
+      options.onBackgroundContinuationFailure?.(projectId, error)
+    })
+  }
   return Object.freeze({
     transferCoordinator: async (rawInput, idempotencyKey) => {
       const input = projectCoordinatorTransferInputSchema.parse(rawInput)
@@ -976,7 +858,9 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
       ) {
         throw new Error('Task result review did not return the exact immutable submission decision.')
       }
-      return options.workspace.readWorkspace({ projectId: input.projectId })
+      const workspace = await options.workspace.readWorkspace({ projectId: input.projectId })
+      if (input.decision === 'accept') reconcileInBackground(input.projectId)
+      return workspace
     },
     completeProject: async (rawInput, idempotencyKey) => {
       const input = projectCoordinatorCompleteInputSchema.parse(rawInput)
@@ -1029,12 +913,50 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
         const started = message.payload
         const workspace = await options.workspace.readWorkspace({ projectId: started.projectId })
         const project = requireReadyProject(workspace, started.projectId)
-        if (
-          message.recipientAgentId !== project.project.coordinatorAgentId ||
-          project.project.revision < started.revision
-        ) {
+        if (message.recipientAgentId !== project.project.coordinatorAgentId) return
+        if (project.project.revision < started.revision) {
           throw new Error('Project start notification does not match current Cloud authority.')
         }
+        await options.continuation.reconcileProject(started.projectId)
+        return
+      }
+      if (message.payload.type === 'project.plan.confirmed') {
+        const confirmed = message.payload
+        const workspace = await options.workspace.readWorkspace({ projectId: confirmed.projectId })
+        const project = requireReadyProject(workspace, confirmed.projectId)
+        const plan = project.plan?.plan
+        if (message.recipientAgentId !== project.project.coordinatorAgentId) return
+        if (
+          plan?.projectPlanId !== confirmed.projectPlanId ||
+          plan.planDigest !== confirmed.planDigest ||
+          plan.revision < confirmed.revision
+        ) return
+        await options.continuation.reconcileProject(confirmed.projectId)
+        return
+      }
+      if (message.payload.type === 'task.result.submitted') {
+        const submitted = message.payload
+        const workspace = await options.workspace.readWorkspace({ projectId: submitted.projectId })
+        const project = requireReadyProject(workspace, submitted.projectId)
+        if (message.recipientAgentId !== project.project.coordinatorAgentId) return
+        const review = project.reviews.find(({ submission }) => (
+          submission.resultSubmissionId === submitted.resultSubmissionId
+        ))
+        const task = project.tasks.find(({ task }) => task.taskId === submitted.taskId)
+        const execution = task?.executions.find(({ executionId }) => (
+          executionId === submitted.executionId
+        ))
+        if (
+          !review ||
+          review.submission.projectId !== submitted.projectId ||
+          review.submission.taskId !== submitted.taskId ||
+          review.submission.executionId !== submitted.executionId ||
+          review.submission.revision < submitted.revision ||
+          !execution
+        ) {
+          throw new Error('Task result notification does not match an immutable Cloud submission.')
+        }
+        await options.continuation.reconcileProject(submitted.projectId)
         return
       }
       if (message.payload.type === 'coordinator.transferred') {
@@ -1072,6 +994,9 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
             observedAt: message.createdAt
           })
         )
+        if (message.recipientAgentId === transfer.coordinatorAgentId) {
+          await options.continuation.reconcileProject(transfer.projectId)
+        }
         return
       }
       if (message.payload.type !== 'human.answer.received') {
@@ -1106,6 +1031,7 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
         ) {
           throw new Error('The existing Project decision does not match this HumanAnswer.')
         }
+        await options.continuation.reconcileProject(answer.projectId)
         return
       }
       if (project.project.status === 'completed' || project.project.status === 'cancelled') {
@@ -1149,6 +1075,7 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
       ) {
         throw new Error('Project decision did not return the exact Coordinator-authored HumanAnswer record.')
       }
+      await options.continuation.reconcileProject(answer.projectId)
     }
   })
 }

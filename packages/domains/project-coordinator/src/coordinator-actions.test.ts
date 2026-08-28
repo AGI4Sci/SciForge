@@ -33,6 +33,11 @@ import { ProjectCoordinatorStateStore } from './state.js'
 test('Coordinator consumes the canonical project.started Inbox notification from fresh Cloud facts', async () => {
   const workspace = workspaceFixture()
   let reads = 0
+  let continuations = 0
+  let releaseContinuation!: () => void
+  const continuationGate = new Promise<void>((resolve) => {
+    releaseContinuation = resolve
+  })
   const port = createProjectCoordinatorActionPort({
     workspace: defineProjectCoordinatorWorkspacePort({
       readWorkspace: async () => {
@@ -45,10 +50,18 @@ test('Coordinator consumes the canonical project.started Inbox notification from
       subscribe: () => () => undefined
     },
     transport: unusedTransport(),
-    state: coordinatorState()
+    state: coordinatorState(),
+    continuation: {
+      reconcileProject: async () => {
+        continuations += 1
+        await continuationGate
+        return workspace
+      }
+    }
   })
 
-  await port.handleInbox(agentInboxMessageSchema.parse({
+  let handled = false
+  const handling = port.handleInbox(agentInboxMessageSchema.parse({
     ...agentInboxMessageFixture,
     recipientAgentId: projectFixture.coordinatorAgentId,
     payload: {
@@ -57,9 +70,15 @@ test('Coordinator consumes the canonical project.started Inbox notification from
       projectId: projectFixture.projectId,
       revision: projectFixture.revision
     }
-  }))
+  })).then(() => { handled = true })
+
+  await Promise.resolve()
+  assert.equal(handled, false)
+  releaseContinuation()
+  await handling
 
   assert.equal(reads, 1)
+  assert.equal(continuations, 1)
 })
 
 test('Coordinator creates Project-scoped HumanNeeded for one explicit Project member User', async () => {
@@ -111,6 +130,7 @@ test('Coordinator creates Project-scoped HumanNeeded for one explicit Project me
     coordinatorCloudCommands,
     transport,
     state: coordinatorState(),
+    continuation: { reconcileProject: async () => workspace },
     requestId: () => `req_CoordinatorAction${String(++requestOrdinal).padStart(3, '0')}`
   })
 
@@ -194,6 +214,8 @@ test('Coordinator accepts or requests revision through the exact immutable resul
     },
     subscribe: () => () => undefined
   }
+  const continuedProjects: string[] = []
+  const continuationFailures: string[] = []
   const port = createProjectCoordinatorActionPort({
     workspace: defineProjectCoordinatorWorkspacePort({
       readWorkspace: async () => workspaceFixture()
@@ -201,6 +223,15 @@ test('Coordinator accepts or requests revision through the exact immutable resul
     coordinatorCloudCommands,
     transport: unusedTransport(),
     state: coordinatorState(),
+    continuation: {
+      reconcileProject: async (projectId) => {
+        continuedProjects.push(projectId)
+        throw new Error('Injected continuation failure after the committed review.')
+      }
+    },
+    onBackgroundContinuationFailure: (projectId, error) => {
+      continuationFailures.push(`${projectId}:${error instanceof Error ? error.message : String(error)}`)
+    },
     requestId: (() => {
       let ordinal = 0
       return () => `req_ResultReview${String(++ordinal).padStart(4, '0')}`
@@ -234,10 +265,15 @@ test('Coordinator accepts or requests revision through the exact immutable resul
     nextOfferExpiresAt: TEST_LATER_TIMESTAMP,
     nextFileIntent: null
   }, 'idem_ResultRevision01')
+  await Promise.resolve()
 
   assert.deepEqual(commands.map((command) => command.type), [
     'task.result.review',
     'task.result.review'
+  ])
+  assert.deepEqual(continuedProjects, [TEST_IDS.projectId])
+  assert.deepEqual(continuationFailures, [
+    `${TEST_IDS.projectId}:Injected continuation failure after the committed review.`
   ])
   assert.deepEqual(commands.map((command) => (
     command.type === 'task.result.review'
@@ -327,6 +363,7 @@ test('Coordinator final summary atomically completes the Project through accepte
     coordinatorCloudCommands,
     transport: unusedTransport(),
     state: coordinatorState(),
+    continuation: { reconcileProject: async () => completedWorkspace },
     requestId: () => 'req_FinalSummary0001'
   })
 
@@ -425,6 +462,7 @@ test('durable Coordinator Inbox turns the exact target member HumanAnswer into o
     coordinatorCloudCommands,
     transport: unusedTransport(),
     state: coordinatorState(),
+    continuation: { reconcileProject: async () => workspaceFixture() },
     requestId: () => 'req_ProjectDecision001'
   })
 

@@ -16,6 +16,7 @@ import {
   projectIdSchema,
   projectEndpointBindingIdSchema,
   projectInputIdSchema,
+  projectPlanIdSchema,
   projectRecordIdSchema,
   projectionIdSchema,
   protocolEnvelopeShape,
@@ -28,6 +29,7 @@ import {
   recoveryActionIdSchema,
   remoteApprovalIdSchema,
   requestIdSchema,
+  resultSubmissionIdSchema,
   resourceRefIdSchema,
   revisionSchema,
   runtimeIdSchema,
@@ -294,6 +296,27 @@ export const taskRecoveryAbandonedPayloadSchema = z.object({
 }).strict()
 export type TaskRecoveryAbandonedPayload = z.infer<typeof taskRecoveryAbandonedPayloadSchema>
 
+export const projectPlanConfirmedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('project.plan.confirmed'),
+  projectId: projectIdSchema,
+  projectPlanId: projectPlanIdSchema,
+  planDigest: sha256Schema,
+  revision: revisionSchema
+}).strict()
+export type ProjectPlanConfirmedPayload = z.infer<typeof projectPlanConfirmedPayloadSchema>
+
+export const taskResultSubmittedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('task.result.submitted'),
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  executionId: executionIdSchema,
+  resultSubmissionId: resultSubmissionIdSchema,
+  revision: revisionSchema
+}).strict()
+export type TaskResultSubmittedPayload = z.infer<typeof taskResultSubmittedPayloadSchema>
+
 export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
   z.object({
     ...agentInboxEnvelopeShape,
@@ -314,6 +337,8 @@ export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
   taskOfferClosedPayloadSchema,
   taskRecoveryOutputLinkedPayloadSchema,
   taskRecoveryAbandonedPayloadSchema,
+  projectPlanConfirmedPayloadSchema,
+  taskResultSubmittedPayloadSchema,
   projectionUpdatedPayloadSchema,
   projectEndpointUpdatedPayloadSchema,
   z.object({

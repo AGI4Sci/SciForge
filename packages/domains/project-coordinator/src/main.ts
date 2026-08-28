@@ -4,6 +4,7 @@ import type { z } from 'zod'
 import type { DomainMainAgentExecutionHost } from '@sciforge/domain-sdk/agent-execution'
 import type {
   DomainMainHost,
+  DomainMainRuntimeLifecycleContext,
   DomainMainRuntimeLifecycleContribution,
   DomainMainSystemCapabilityInvoker
 } from '@sciforge/domain-sdk/host'
@@ -77,6 +78,7 @@ import { ProjectCoordinatorStateStore } from './state.js'
 import { createProjectCoordinatorProvisioningPort } from './provisioning.js'
 import { createProjectCoordinatorRecoveryPort } from './recovery.js'
 import { createProjectCoordinatorArtifactReviewPort } from './artifact-review.js'
+import { createProjectCoordinatorContinuationPort } from './continuation.js'
 
 export type ProjectCoordinatorCapabilityOptions = Readonly<{
   id: string
@@ -605,11 +607,17 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     )
   })
   let agentExecution: DomainMainAgentExecutionHost | undefined
+  let runtimeLog: DomainMainRuntimeLifecycleContext['log'] | undefined
+  const continuation = createProjectCoordinatorContinuationPort({
+    workspace,
+    coordinatorCloudCommands
+  })
   const plan = createProjectCoordinatorPlanPort({
     settings: host.packageSettings,
     state,
     workspace,
     getAgentExecution: () => agentExecution,
+    continuation,
     coordinatorCloudCommands,
     transport
   })
@@ -617,7 +625,16 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     workspace,
     coordinatorCloudCommands,
     transport,
-    state
+    state,
+    continuation,
+    onBackgroundContinuationFailure: (projectId, error) => {
+      runtimeLog?.({
+        level: 'warn',
+        message: `Project continuation failed for ${projectId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      })
+    }
   })
   const artifactReview = createProjectCoordinatorArtifactReviewPort({
     workspace,
@@ -633,7 +650,7 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     workspace,
     transport,
     signing: provisioningAttestationSigning,
-    activateAndDispatch: plan.activateAndDispatch,
+    activateAndReconcile: plan.activateAndReconcile,
     getCapabilities: () => {
       if (!systemCapabilities) {
         throw new Error('The approved Content Space provisioning batch is unavailable.')
@@ -671,9 +688,19 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     activate: (context) => {
       agentExecution = context.agentExecution
       systemCapabilities = context.capabilities
+      runtimeLog = context.log
+      void continuation.reconcileVisibleProjects().catch((error: unknown) => {
+        context.log({
+          level: 'warn',
+          message: `Project continuation activation sweep failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        })
+      })
       return () => {
         agentExecution = undefined
         systemCapabilities = undefined
+        runtimeLog = undefined
       }
     }
   })
@@ -701,3 +728,4 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
 
 export * from './ports.js'
 export * from './artifact-review.js'
+export * from './continuation.js'

@@ -10,6 +10,7 @@ import {
   type ProjectContentProvisioningAttestation,
   type ProjectCreateCommand
 } from '@sciforge/collaboration-contracts'
+import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts/node'
 import { FakeCollaborationRepository } from '../../../test-fixtures/collaboration/fake-adapters.mjs'
 import type { AgentActor, HumanEndpointActor, UserActor } from './actor.js'
 import { toInboxMessage } from './contracts.js'
@@ -4154,6 +4155,10 @@ describe('vNext Cloud application service', () => {
       workerUserId: worker.userId,
       offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
     })
+    expect(offered.task.taskId).toBe(canonicalTaskIdForPlanItem(
+      confirmedPlan.projectPlanId,
+      'item_meeting_summary'
+    ))
     const accepted = await service.acceptTaskOffer(workerAgent, {
       protocolVersion: '1.0', type: 'task.offer.accept', requestId: 'req_offer_accept_001',
       idempotencyKey: 'idem_offer_accept_001', taskOfferId: offered.offer.taskOfferId,
@@ -4299,6 +4304,29 @@ describe('vNext Cloud application service', () => {
     expect(humanAnswer.answeredFrom).toEqual(expect.objectContaining({ type: 'oidc_user' }))
     const coordinatorInbox = await service.pullInbox(coordinator, { afterSequence: 0, limit: 200 })
     expect(coordinatorInbox.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        messageType: 'project.plan.confirmed',
+        payload: {
+          protocolVersion: '1.0',
+          type: 'project.plan.confirmed',
+          projectId: activeProject.projectId,
+          projectPlanId: confirmedPlan.projectPlanId,
+          planDigest: confirmedPlan.planDigest,
+          revision: confirmedPlan.revision
+        }
+      }),
+      expect.objectContaining({
+        messageType: 'task.result.submitted',
+        payload: {
+          protocolVersion: '1.0',
+          type: 'task.result.submitted',
+          projectId: activeProject.projectId,
+          taskId: result.task.taskId,
+          executionId: result.execution.executionId,
+          resultSubmissionId: result.submission.resultSubmissionId,
+          revision: result.submission.revision
+        }
+      }),
       expect.objectContaining({
         messageType: 'human.answer.received',
         payload: expect.objectContaining({
