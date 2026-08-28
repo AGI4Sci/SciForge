@@ -36,6 +36,7 @@ import {
   projectWorkerAvailabilityViewSchema,
   workerAvailabilityProjectionSchema,
   taskExecutionSchema,
+  taskIdSchema,
   taskOfferSchema,
   taskFileDestinationNameSchema,
   taskResultOutputSchema,
@@ -55,6 +56,7 @@ const safeReasonSchema = z.string().trim().min(1).max(2_000)
 export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   workspaceRead: 'project-coordinator.workspace.read',
   projectCreate: 'project-coordinator.project.create',
+  sessionProjectionRead: 'project-coordinator.session-projection.read',
   planDraftRead: 'project-coordinator.plan-draft.read',
   planDraftGenerate: 'project-coordinator.plan-draft.generate',
   planDraftEdit: 'project-coordinator.plan-draft.edit',
@@ -75,6 +77,107 @@ export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   resultReview: 'project-coordinator.result.review',
   projectComplete: 'project-coordinator.project.complete'
 } as const)
+
+export const projectCoordinatorSessionAccessSchema = z.enum([
+  'coordinator',
+  'worker',
+  'read_only'
+])
+
+export const projectCoordinatorSessionFenceReasonSchema = z.enum([
+  'authority_changed',
+  'execution_fenced',
+  'execution_not_current',
+  'membership_inactive',
+  'principal_changed',
+  'project_terminal',
+  'project_unavailable'
+])
+
+const projectCoordinatorCoordinatorSessionBindingRecordObjectSchema = z.object({
+  schemaVersion: z.literal(1),
+  role: z.literal('coordinator'),
+  projectId: projectIdSchema,
+  principalUserId: userIdSchema,
+  coordinatorAgentId: agentIdSchema,
+  coordinatorAuthorityEpoch: projectSchema.shape.coordinatorAuthorityEpoch,
+  runtimeId: z.string().trim().min(1).max(256),
+  threadId: z.string().trim().min(1).max(512),
+  boundAt: timestampSchema
+}).strict()
+
+export const projectCoordinatorCoordinatorSessionBindingRecordSchema =
+  projectCoordinatorCoordinatorSessionBindingRecordObjectSchema.readonly()
+
+export const projectCoordinatorCoordinatorSessionBindingSchema =
+  projectCoordinatorCoordinatorSessionBindingRecordObjectSchema.extend({
+    access: z.enum(['coordinator', 'read_only']),
+    fenceReason: projectCoordinatorSessionFenceReasonSchema.nullable()
+  }).strict().superRefine((binding, context) => {
+    if ((binding.access === 'read_only') !== (binding.fenceReason !== null)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['fenceReason'],
+        message: 'A read-only Coordinator Session requires its exact fence reason.'
+      })
+    }
+  }).readonly()
+
+export const projectCoordinatorWorkerSessionBindingSchema = z.object({
+  schemaVersion: z.literal(1),
+  role: z.literal('worker'),
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  executionId: taskExecutionSchema.shape.executionId,
+  principalUserId: userIdSchema,
+  assigneeAgentId: agentIdSchema,
+  assigneeDeviceId: deviceIdSchema,
+  runtimeId: z.string().trim().min(1).max(256),
+  threadId: z.string().trim().min(1).max(512),
+  taskRevision: taskSchema.shape.revision,
+  executionRevision: taskExecutionSchema.shape.revision,
+  projectExecutionAuthorityEpoch:
+    taskExecutionSchema.shape.fence.shape.projectExecutionAuthorityEpoch,
+  userTaskAuthorityEpoch:
+    taskExecutionSchema.shape.fence.shape.userTaskAuthorityEpoch,
+  access: z.enum(['worker', 'read_only']),
+  fenceReason: projectCoordinatorSessionFenceReasonSchema.nullable(),
+  updatedAt: timestampSchema
+}).strict().superRefine((binding, context) => {
+  if ((binding.access === 'read_only') !== (binding.fenceReason !== null)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['fenceReason'],
+      message: 'A read-only Worker Session requires its exact fence reason.'
+    })
+  }
+}).readonly()
+
+export const projectCoordinatorSessionBindingSchema = z.discriminatedUnion('role', [
+  projectCoordinatorCoordinatorSessionBindingSchema,
+  projectCoordinatorWorkerSessionBindingSchema
+])
+
+export const projectCoordinatorSessionProjectionSchema = z.object({
+  schemaVersion: z.literal(1),
+  observedAt: timestampSchema,
+  bindings: z.array(projectCoordinatorSessionBindingSchema).max(100_000)
+}).strict().superRefine((projection, context) => {
+  const identities = projection.bindings.map(({ runtimeId, threadId }) => (
+    `${runtimeId}\u0000${threadId}`
+  ))
+  if (new Set(identities).size !== identities.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['bindings'],
+      message: 'Each ordinary Session has at most one Project binding.'
+    })
+  }
+}).readonly()
+
+export const projectCoordinatorSessionProjectionReadInputSchema = z.object({})
+  .strict()
+  .readonly()
 
 export const projectCoordinatorProjectCreateInputSchema = projectCreateCommandSchema.omit({
   protocolVersion: true,
@@ -831,6 +934,15 @@ export const projectCoordinatorProjectCreateResultSchema = z.object({
 }).readonly()
 
 export type ProjectCoordinatorConnection = z.infer<typeof projectCoordinatorConnectionSchema>
+export type ProjectCoordinatorCoordinatorSessionBindingRecord = z.infer<
+  typeof projectCoordinatorCoordinatorSessionBindingRecordSchema
+>
+export type ProjectCoordinatorSessionBinding = z.infer<
+  typeof projectCoordinatorSessionBindingSchema
+>
+export type ProjectCoordinatorSessionProjection = z.infer<
+  typeof projectCoordinatorSessionProjectionSchema
+>
 export type ProjectCoordinatorProject = z.infer<typeof projectCoordinatorProjectSchema>
 export type ProjectCoordinatorWorkspace = z.infer<typeof projectCoordinatorWorkspaceSchema>
 export type ProjectCoordinatorWorkspaceReadInput = z.infer<

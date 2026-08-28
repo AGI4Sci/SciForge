@@ -25,6 +25,8 @@ import {
   projectCoordinatorWorkflowPrepareInputSchema,
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateResultSchema,
+  projectCoordinatorSessionProjectionReadInputSchema,
+  projectCoordinatorSessionProjectionSchema,
   projectCoordinatorResultReviewInputSchema,
   projectCoordinatorTransferInputSchema,
   projectCoordinatorWorkspaceReadInputSchema,
@@ -52,6 +54,7 @@ import {
   type ProjectCoordinatorWorkflowPrepareInput,
   type ProjectCoordinatorProjectCreateInput,
   type ProjectCoordinatorProjectCreateResult,
+  type ProjectCoordinatorSessionProjection,
   type ProjectCoordinatorResultReviewInput,
   type ProjectCoordinatorTransferInput,
   type ProjectCoordinatorWorkspace,
@@ -71,6 +74,13 @@ const projectCreateContract = Object.freeze({
   effect: 'external-write' as const,
   inputSchema: projectCoordinatorProjectCreateInputSchema,
   outputSchema: projectCoordinatorProjectCreateResultSchema
+})
+
+const sessionProjectionReadContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead,
+  effect: 'read' as const,
+  inputSchema: projectCoordinatorSessionProjectionReadInputSchema,
+  outputSchema: projectCoordinatorSessionProjectionSchema
 })
 
 const planDraftReadContract = Object.freeze({
@@ -213,6 +223,7 @@ const confirmationApproval = Object.freeze({
 export type ProjectCoordinatorRendererClient = Readonly<{
   readWorkspace(input?: ProjectCoordinatorWorkspaceReadInput): Promise<ProjectCoordinatorWorkspace>
   createProject(input: ProjectCoordinatorProjectCreateInput): Promise<ProjectCoordinatorProjectCreateResult>
+  readSessionProjection(): Promise<ProjectCoordinatorSessionProjection>
   readPlanDraft(input: ProjectCoordinatorPlanDraftReadInput): Promise<ProjectCoordinatorPlanDraft | null>
   generatePlanDraft(input: ProjectCoordinatorPlanDraftGenerateInput): Promise<ProjectCoordinatorPlanDraft>
   editPlanDraft(input: ProjectCoordinatorPlanDraftEditInput): Promise<ProjectCoordinatorPlanDraft>
@@ -253,6 +264,7 @@ export function createProjectCoordinatorRendererClient(
       publishProjectCoordinatorWorkspaceInvalidation()
       return result
     },
+    readSessionProjection: () => invoker.invoke(sessionProjectionReadContract, {}),
     readPlanDraft: (input) => invoker.invoke(planDraftReadContract, input),
     generatePlanDraft: (input) => invoker.invoke(planDraftGenerateContract, input),
     editPlanDraft: (input) => invoker.invoke(planDraftEditContract, input),

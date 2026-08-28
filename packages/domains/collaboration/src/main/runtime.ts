@@ -12,6 +12,10 @@ import {
 import type { AuthenticatedCloudTransport } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import type { AgentCloudRuntime } from '@sciforge/domain-identity-access/agent-cloud-runtime'
 import type { DomainMainPackageSettingsHost } from '@sciforge/domain-sdk/package-storage'
+import {
+  workerSessionExecutionBindingSchema,
+  type WorkerSessionExecutionBinding
+} from '../worker-session-projection.js'
 import type {
   DomainAgentTranscriptMessageEvent,
   DomainMainRuntimeDisposer,
@@ -749,6 +753,32 @@ export class CollaborationRuntime {
         .map((run) => mapTaskView(run, this.requireTasks().acceptanceMode(run.offer.recipientAgentId)))
     ]
       .filter((task) => states.size === 0 || states.has(task.state))
+  }
+
+  listWorkerSessionBindings(): readonly WorkerSessionExecutionBinding[] {
+    const snapshot = this.store.snapshot()
+    return Object.freeze(snapshot.taskRuns.flatMap((run) => {
+      if (!run.runtimeId || !run.threadId || !run.execution || !run.task) return []
+      return [workerSessionExecutionBindingSchema.parse({
+        schemaVersion: 1,
+        projectId: run.offer.projectId,
+        taskId: run.offer.taskId,
+        executionId: run.offer.executionId,
+        runtimeId: run.runtimeId,
+        threadId: run.threadId,
+        workerUserId: run.execution.assigneeUserId,
+        assigneeAgentId: run.execution.assigneeAgentId,
+        assigneeDeviceId: run.execution.assigneeDeviceId,
+        taskRevision: run.task.revision,
+        executionRevision: run.execution.revision,
+        executionState: run.execution.state,
+        fenceStatus: run.execution.fence.status,
+        projectExecutionAuthorityEpoch:
+          run.execution.fence.projectExecutionAuthorityEpoch,
+        userTaskAuthorityEpoch: run.execution.fence.userTaskAuthorityEpoch,
+        updatedAt: run.updatedAt
+      })]
+    }))
   }
 
   async updateWorkerAcceptancePolicy(

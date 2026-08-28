@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { DomainMainOrdinarySessionIdentity } from '@sciforge/domain-sdk/host'
 import {
   CAPABILITY_BROKER_CONTRACT_VERSION,
   capabilityCallerContextSchema,
@@ -70,6 +71,8 @@ export type CapabilityHandlerContext = {
   caller: CapabilityCallerContext
   /** Broker-validated identity for this invocation, never supplied by a handler. */
   invocationId?: string
+  /** Host-authenticated ordinary Agent Session; carries no domain authority. */
+  ordinarySession?: DomainMainOrdinarySessionIdentity
   /** Reauthorizes the captured Host Principal against the live Principal lease. */
   assertPrincipalCurrent: () => void
   resource?: ResolvedCapabilityResource

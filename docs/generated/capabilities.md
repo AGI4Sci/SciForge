@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **291**
+Registered actions: **292**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -198,27 +198,28 @@ Registered actions: **291**
 | `paper-radar.sync-arxiv` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
 | `paper-radar.sync-biorxiv` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
 | `paper-radar.sync-profile` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
-| `project-coordinator.artifact-review.prepare` | 1.0.0 | ui | read | none | global |
-| `project-coordinator.content-recovery.abandon` | 1.0.0 | ui | destructive | confirmation | global |
-| `project-coordinator.content-recovery.observe-link` | 1.0.0 | ui | external-write | confirmation | global |
-| `project-coordinator.content-recovery.retry-successor` | 1.0.0 | ui | external-write | confirmation | global |
-| `project-coordinator.coordinator.transfer` | 1.0.0 | ui | external-write | confirmation | global |
-| `project-coordinator.human-needed.answer` | 1.0.0 | ui | external-write | confirmation | global |
-| `project-coordinator.human-needed.create` | 1.0.0 | ui | external-write | confirmation | global |
-| `project-coordinator.membership.accept` | 1.0.0 | ui | external-write | confirmation | global |
-| `project-coordinator.membership.add` | 1.0.0 | ui | external-write | confirmation | global |
-| `project-coordinator.membership.remove` | 1.0.0 | ui | destructive | confirmation | global |
-| `project-coordinator.plan-draft.edit` | 1.0.0 | ui | workspace-write | none | global |
-| `project-coordinator.plan-draft.generate` | 1.0.0 | ui | workspace-write | none | global |
-| `project-coordinator.plan-draft.read` | 1.0.0 | ui | read | none | global |
-| `project-coordinator.plan.confirm` | 1.0.0 | ui | external-write | confirmation | global |
-| `project-coordinator.plan.submit` | 1.0.0 | ui | external-write | confirmation | global |
-| `project-coordinator.project.complete` | 1.0.0 | ui | external-write | confirmation | global |
-| `project-coordinator.project.create` | 1.0.0 | ui | external-write | confirmation | global |
-| `project-coordinator.result.review` | 1.0.0 | ui | external-write | confirmation | global |
-| `project-coordinator.workflow.continue` | 1.0.0 | ui | external-write | confirmation | global |
-| `project-coordinator.workflow.prepare` | 1.0.0 | ui | read | none | global |
-| `project-coordinator.workspace.read` | 1.0.0 | ui | read | none | global |
+| `project-coordinator.artifact-review.prepare` | 1.0.0 | ui, agent | read | none | global |
+| `project-coordinator.content-recovery.abandon` | 1.0.0 | ui, agent | destructive | confirmation | global |
+| `project-coordinator.content-recovery.observe-link` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.content-recovery.retry-successor` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.coordinator.transfer` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.human-needed.answer` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.human-needed.create` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.membership.accept` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.membership.add` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.membership.remove` | 1.0.0 | ui, agent | destructive | confirmation | global |
+| `project-coordinator.plan-draft.edit` | 1.0.0 | ui, agent | workspace-write | none | global |
+| `project-coordinator.plan-draft.generate` | 1.0.0 | ui, agent | workspace-write | none | global |
+| `project-coordinator.plan-draft.read` | 1.0.0 | ui, agent | read | none | global |
+| `project-coordinator.plan.confirm` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.plan.submit` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.project.complete` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.project.create` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.result.review` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.session-projection.read` | 1.0.0 | ui, agent | read | none | global |
+| `project-coordinator.workflow.continue` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.workflow.prepare` | 1.0.0 | ui, agent | read | none | global |
+| `project-coordinator.workspace.read` | 1.0.0 | ui, agent | read | none | global |
 | `project-dag.evidence-preview.resolve` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `project-dag.goal.save` | 1.0.0 | ui, agent, system | compute | none | workspace |
 | `project-dag.update` | 1.0.0 | ui, agent, system | compute | none | workspace |
@@ -75955,7 +75956,7 @@ Synchronizes papers matching one configured Paper Radar profile.
 Re-reads the exact current Cloud submission and binding before returning one Host-scoped non-authorizing Content Space review reference.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `read`
 - Approval: none
 - Scope: global
@@ -76100,7 +76101,7 @@ Re-reads the exact current Cloud submission and binding before returning one Hos
 Fences the unresolved execution permanently from freshly read Cloud CAS facts without manufacturing a successful Provider observation.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `destructive`
 - Approval: confirmation
 - Scope: global
@@ -81827,7 +81828,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
 Re-reads the current recovery tuple, invokes the canonical Content Space exact observation, and links only the Host-derived portable output facts.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -87548,7 +87549,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
 Re-reads the completed abandon facts and asks only the current Coordinator Agent to issue a new fenced execution with a new no-overwrite filename.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -93286,7 +93287,7 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
 Lets the authenticated Project Owner select another exact ready Agent that they own; main derives all Cloud CAS facts and the old Coordinator is fenced atomically.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -99007,7 +99008,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
 Submits the exact target Project member User answer through the OIDC User path.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -104745,7 +104746,7 @@ Submits the exact target Project member User answer through the OIDC User path.
 Creates one Project-scoped HumanNeeded for an explicit active member User through the current Coordinator Agent.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -110496,7 +110497,7 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
 Lets only the exact invited OIDC User accept the exact current confirmed Plan before Team readiness.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -116244,7 +116245,7 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
 Creates only an OIDC User invitation; it grants no Task or Team authority before that exact User accepts the confirmed Plan.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -121994,7 +121995,7 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
 Fences Cloud Task Authority first; content-required membership remains removal-pending until Provider absence is observed and signed.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `destructive`
 - Approval: confirmation
 - Scope: global
@@ -127726,7 +127727,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
 CAS-updates Plan items and exact visible Worker Agent choices.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `workspace-write`
 - Approval: none
 - Scope: global
@@ -128532,7 +128533,7 @@ CAS-updates Plan items and exact visible Worker Agent choices.
 Runs the configured local Agent Runtime and persists one reviewable non-secret draft.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `workspace-write`
 - Approval: none
 - Scope: global
@@ -129120,7 +129121,7 @@ Runs the configured local Agent Runtime and persists one reviewable non-secret d
 Reads the package-owned non-secret draft for one exact Project.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `read`
 - Approval: none
 - Scope: global
@@ -129619,7 +129620,7 @@ Reads the package-owned non-secret draft for one exact Project.
 Confirms the exact immutable Plan; invitations, Team readiness, activation, and dispatch remain gated by the canonical Project workflow.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -129652,6 +129653,129 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
         "minimum": 1,
         "type": "integer"
       },
+      "initialTeam": {
+        "anyOf": [
+          {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "members": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "userId": {
+                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "userId"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 1000,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "mode": {
+                    "const": "none",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "members"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "containerDisplayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "contentOwnerUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "members": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "expectedFactRevision": {
+                          "maximum": 9007199254740991,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "providerPrincipalFactId": {
+                          "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "userId": {
+                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "userId",
+                        "providerPrincipalFactId",
+                        "expectedFactRevision"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 1000,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "mode": {
+                    "const": "required",
+                    "type": "string"
+                  },
+                  "providerInstance": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "providerInstanceRef": {
+                        "maxLength": 256,
+                        "minLength": 3,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                        "type": "string"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "type": {
+                        "const": "provider_instance_reference",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "type",
+                      "providerInstanceRef"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "contentOwnerUserId",
+                  "providerInstance",
+                  "containerDisplayName",
+                  "members"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "planDigest": {
         "pattern": "^[a-f0-9]{64}$",
         "type": "string"
@@ -129672,7 +129796,8 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
       "expectedProjectRevision",
       "expectedCoordinatorAuthorityEpoch",
       "expectedPlanRevision",
-      "planDigest"
+      "planDigest",
+      "initialTeam"
     ],
     "type": "object"
   },
@@ -135361,7 +135486,7 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
 Submits the immutable digest through the current Coordinator Agent durable Cloud command service.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -141523,7 +141648,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
 Submits the Coordinator final summary and atomically completes the Project.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -147283,7 +147408,7 @@ Submits the Coordinator final summary and atomically completes the Project.
 Creates one Cloud-authoritative Project for the current OIDC Owner and returns exact Desktop focus.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -147333,122 +147458,6 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
         ],
         "type": "object"
       },
-      "content": {
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "members": {
-                "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "userId": {
-                      "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "userId"
-                  ],
-                  "type": "object"
-                },
-                "maxItems": 1000,
-                "minItems": 1,
-                "type": "array"
-              },
-              "mode": {
-                "const": "none",
-                "type": "string"
-              }
-            },
-            "required": [
-              "mode",
-              "members"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "containerDisplayName": {
-                "maxLength": 200,
-                "minLength": 1,
-                "type": "string"
-              },
-              "contentOwnerUserId": {
-                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                "type": "string"
-              },
-              "members": {
-                "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "expectedFactRevision": {
-                      "maximum": 9007199254740991,
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "providerPrincipalFactId": {
-                      "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                      "type": "string"
-                    },
-                    "userId": {
-                      "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "userId",
-                    "providerPrincipalFactId",
-                    "expectedFactRevision"
-                  ],
-                  "type": "object"
-                },
-                "maxItems": 1000,
-                "minItems": 1,
-                "type": "array"
-              },
-              "mode": {
-                "const": "required",
-                "type": "string"
-              },
-              "providerInstance": {
-                "additionalProperties": false,
-                "properties": {
-                  "providerInstanceRef": {
-                    "maxLength": 256,
-                    "minLength": 3,
-                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                    "type": "string"
-                  },
-                  "schemaVersion": {
-                    "const": 1,
-                    "type": "number"
-                  },
-                  "type": {
-                    "const": "provider_instance_reference",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "schemaVersion",
-                  "type",
-                  "providerInstanceRef"
-                ],
-                "type": "object"
-              }
-            },
-            "required": [
-              "mode",
-              "contentOwnerUserId",
-              "providerInstance",
-              "containerDisplayName",
-              "members"
-            ],
-            "type": "object"
-          }
-        ]
-      },
       "displayName": {
         "maxLength": 200,
         "minLength": 1,
@@ -147464,8 +147473,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
     "required": [
       "displayName",
       "goal",
-      "budget",
-      "content"
+      "budget"
     ],
     "type": "object"
   },
@@ -153169,7 +153177,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
 Accepts one immutable result or requests a fresh fenced revision execution.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -159161,12 +159169,285 @@ Accepts one immutable result or requests a fresh fenced revision execution.
 }
 ```
 
+## `project-coordinator.session-projection.read`
+
+Reads current-Principal-filtered ordinary Session bindings derived from durable Coordinator receipts and exact Worker execution journals.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "readOnly": true,
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "bindings": {
+        "items": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "access": {
+                  "enum": [
+                    "coordinator",
+                    "read_only"
+                  ],
+                  "type": "string"
+                },
+                "boundAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "coordinatorAgentId": {
+                  "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "coordinatorAuthorityEpoch": {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "fenceReason": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "authority_changed",
+                        "execution_fenced",
+                        "execution_not_current",
+                        "membership_inactive",
+                        "principal_changed",
+                        "project_terminal",
+                        "project_unavailable"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "principalUserId": {
+                  "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "role": {
+                  "const": "coordinator",
+                  "type": "string"
+                },
+                "runtimeId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "threadId": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "readOnly": true,
+              "required": [
+                "schemaVersion",
+                "role",
+                "projectId",
+                "principalUserId",
+                "coordinatorAgentId",
+                "coordinatorAuthorityEpoch",
+                "runtimeId",
+                "threadId",
+                "boundAt",
+                "access",
+                "fenceReason"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "access": {
+                  "enum": [
+                    "worker",
+                    "read_only"
+                  ],
+                  "type": "string"
+                },
+                "assigneeAgentId": {
+                  "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "assigneeDeviceId": {
+                  "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "executionId": {
+                  "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "executionRevision": {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "fenceReason": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "authority_changed",
+                        "execution_fenced",
+                        "execution_not_current",
+                        "membership_inactive",
+                        "principal_changed",
+                        "project_terminal",
+                        "project_unavailable"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "principalUserId": {
+                  "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "projectExecutionAuthorityEpoch": {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "role": {
+                  "const": "worker",
+                  "type": "string"
+                },
+                "runtimeId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "taskId": {
+                  "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "taskRevision": {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "threadId": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "userTaskAuthorityEpoch": {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "readOnly": true,
+              "required": [
+                "schemaVersion",
+                "role",
+                "projectId",
+                "taskId",
+                "executionId",
+                "principalUserId",
+                "assigneeAgentId",
+                "assigneeDeviceId",
+                "runtimeId",
+                "threadId",
+                "taskRevision",
+                "executionRevision",
+                "projectExecutionAuthorityEpoch",
+                "userTaskAuthorityEpoch",
+                "access",
+                "fenceReason",
+                "updatedAt"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "maxItems": 100000,
+        "type": "array"
+      },
+      "observedAt": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+        "type": "string"
+      },
+      "schemaVersion": {
+        "const": 1,
+        "type": "number"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "schemaVersion",
+      "observedAt",
+      "bindings"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "project",
+    "session",
+    "projection",
+    "principal",
+    "authority-fence"
+  ],
+  "title": "Read local Project Session projection"
+}
+```
+
 ## `project-coordinator.workflow.continue`
 
 Executes the exact confirmed workflow, including finite Team operations when required, then verifies readiness before activation and initial Task dispatch.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -165164,7 +165445,7 @@ Executes the exact confirmed workflow, including finite Team operations when req
 Prepares the only production workflow from confirmed Plan and accepted invitations through finite Team operations, readiness, activation, and Task dispatch.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `read`
 - Approval: none
 - Scope: global
@@ -165506,7 +165787,7 @@ Prepares the only production workflow from confirmed Plan and accepted invitatio
 Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, reviews, and content provisioning state.
 
 - Version: `1.0.0`
-- Audiences: ui
+- Audiences: ui, agent
 - Effect: `read`
 - Approval: none
 - Scope: global

@@ -51,6 +51,14 @@ export const PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRACT =
   domainPackageDefinition.contributionContracts[
     PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION.id
   ]!
+export const PROJECT_COORDINATOR_COMPOSER_CONTEXT_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.composer-context-provider'
+)
+export const PROJECT_COORDINATOR_COMPOSER_CONTEXT_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    PROJECT_COORDINATOR_COMPOSER_CONTEXT_CONTRIBUTION.id
+  ]!
 export const PROJECT_COORDINATOR_I18N_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.i18n-resource'

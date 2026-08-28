@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import type { z } from 'zod'
 import type { DomainMainAgentExecutionHost } from '@sciforge/domain-sdk/agent-execution'
 import type {
+  DomainMainCapabilityInvocationContext,
   DomainMainHost,
   DomainMainRuntimeLifecycleContext,
   DomainMainRuntimeLifecycleContribution,
@@ -18,6 +19,11 @@ import {
   COORDINATOR_CLOUD_COMMAND_SERVICE_ID,
   type CoordinatorCloudCommandService
 } from '@sciforge/domain-collaboration/coordinator-cloud-command'
+import {
+  WORKER_SESSION_PROJECTION_CONTRACT_VERSION,
+  WORKER_SESSION_PROJECTION_SERVICE_ID,
+  type WorkerSessionProjectionService
+} from '@sciforge/domain-collaboration/worker-session-projection'
 import {
   AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
   AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
@@ -54,6 +60,8 @@ import {
   projectCoordinatorWorkflowPrepareInputSchema,
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateResultSchema,
+  projectCoordinatorSessionProjectionReadInputSchema,
+  projectCoordinatorSessionProjectionSchema,
   projectCoordinatorResultReviewInputSchema,
   projectCoordinatorTransferInputSchema,
   projectCoordinatorWorkspaceReadInputSchema,
@@ -79,13 +87,17 @@ import { createProjectCoordinatorProvisioningPort } from './provisioning.js'
 import { createProjectCoordinatorRecoveryPort } from './recovery.js'
 import { createProjectCoordinatorArtifactReviewPort } from './artifact-review.js'
 import { createProjectCoordinatorContinuationPort } from './continuation.js'
+import {
+  createProjectCoordinatorSessionProjectionPort,
+  type ProjectCoordinatorSessionProjectionPort
+} from './session-projection.js'
 
 export type ProjectCoordinatorCapabilityOptions = Readonly<{
   id: string
   version: '1.0.0'
   title: string
   description: string
-  audiences: readonly ['ui']
+  audiences: readonly ('ui' | 'agent')[]
   scope: 'global'
   effect: 'read' | 'compute' | 'workspace-write' | 'external-write' | 'destructive'
   approval: 'none' | 'confirmation'
@@ -103,7 +115,7 @@ export type ProjectCoordinatorCapabilityOptions = Readonly<{
    */
   handler(
     input: unknown,
-    context: Readonly<{ invocationId?: string }>
+    context: DomainMainCapabilityInvocationContext
   ): Promise<Readonly<{ output: unknown; changed?: never }>>
 }>
 
@@ -121,7 +133,9 @@ export type ProjectCoordinatorCapabilityFactory<CapabilityDefinition = unknown> 
 export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(options: Readonly<{
   defineCapability(input: ProjectCoordinatorCapabilityOptions): CapabilityDefinition
   ports: ProjectCoordinatorMainPorts
+  sessions: ProjectCoordinatorSessionProjectionPort
 }>): ProjectCoordinatorCapabilityFactory<CapabilityDefinition> {
+  const agentAudiences = Object.freeze(['ui', 'agent'] as const)
   return Object.freeze({
     moduleId: PROJECT_COORDINATOR_DOMAIN_MODULE_ID,
     policy: Object.freeze({
@@ -136,7 +150,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         version: '1.0.0',
         title: 'Read Project coordination workspace',
         description: 'Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, reviews, and content provisioning state.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'read',
         approval: 'none',
@@ -144,18 +158,24 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'coordinator', 'plan', 'worker-selection', 'review', 'provisioning'],
         inputSchema: projectCoordinatorWorkspaceReadInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
-        handler: async (raw) => ({
-          output: await options.ports.workspace.readWorkspace(
-            projectCoordinatorWorkspaceReadInputSchema.parse(raw) as ProjectCoordinatorWorkspaceReadInput
-          )
-        })
+        handler: async (raw, context) => {
+          let input = projectCoordinatorWorkspaceReadInputSchema.parse(raw) as
+            ProjectCoordinatorWorkspaceReadInput
+          if (context.caller.audience === 'agent') {
+            input = await options.sessions.scopeWorkspaceRead(
+              input,
+              requireOrdinaryAgentSession(context)
+            )
+          }
+          return { output: await options.ports.workspace.readWorkspace(input) }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
         version: '1.0.0',
         title: 'Create Project',
         description: 'Creates one Cloud-authoritative Project for the current OIDC Owner and returns exact Desktop focus.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -163,19 +183,61 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'create', 'owner'],
         inputSchema: projectCoordinatorProjectCreateInputSchema,
         outputSchema: projectCoordinatorProjectCreateResultSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.workspace.createProject(
-            projectCoordinatorProjectCreateInputSchema.parse(raw),
-            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate, context)
+        handler: async (raw, context) => {
+          const input = projectCoordinatorProjectCreateInputSchema.parse(raw)
+          const create = async () => projectCoordinatorProjectCreateResultSchema.parse(
+            await options.ports.workspace.createProject(
+              input,
+              capabilityIdempotencyKey(
+                PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
+                context
+              )
+            )
           )
-        })
+          if (context.caller.audience !== 'agent') return { output: await create() }
+          const session = requireOrdinaryAgentSession(context)
+          context.assertPrincipalCurrent()
+          return options.sessions.withUnboundSession(session, async () => {
+            const result = await create()
+            context.assertPrincipalCurrent()
+            await options.sessions.bindCreatedProject(result, session)
+            return { output: result }
+          })
+        }
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead,
+        version: '1.0.0',
+        title: 'Read local Project Session projection',
+        description: 'Reads current-Principal-filtered ordinary Session bindings derived from durable Coordinator receipts and exact Worker execution journals.',
+        audiences: agentAudiences,
+        scope: 'global',
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        tags: ['project', 'session', 'projection', 'principal', 'authority-fence'],
+        inputSchema: projectCoordinatorSessionProjectionReadInputSchema,
+        outputSchema: projectCoordinatorSessionProjectionSchema,
+        handler: async (raw, context) => {
+          projectCoordinatorSessionProjectionReadInputSchema.parse(raw)
+          context.assertPrincipalCurrent()
+          const output = await options.sessions.readProjection(
+            context.caller.audience === 'agent'
+              ? requireOrdinaryAgentSession(context)
+              : undefined
+          )
+          context.assertPrincipalCurrent()
+          return {
+            output
+          }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftRead,
         version: '1.0.0',
         title: 'Read local Project Plan draft',
         description: 'Reads the package-owned non-secret draft for one exact Project.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'read',
         approval: 'none',
@@ -183,18 +245,18 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'plan', 'draft'],
         inputSchema: projectCoordinatorPlanDraftReadInputSchema,
         outputSchema: projectCoordinatorPlanDraftSchema.nullable(),
-        handler: async (raw) => ({
-          output: await options.ports.plan.readDraft(
-            projectCoordinatorPlanDraftReadInputSchema.parse(raw)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorPlanDraftReadInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return { output: await options.ports.plan.readDraft(input) }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate,
         version: '1.0.0',
         title: 'Generate local Project Plan draft',
         description: 'Runs the configured local Agent Runtime and persists one reviewable non-secret draft.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'workspace-write',
         approval: 'none',
@@ -202,18 +264,18 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'plan', 'runtime'],
         inputSchema: projectCoordinatorPlanDraftGenerateInputSchema,
         outputSchema: projectCoordinatorPlanDraftSchema,
-        handler: async (raw) => ({
-          output: await options.ports.plan.generateDraft(
-            projectCoordinatorPlanDraftGenerateInputSchema.parse(raw)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorPlanDraftGenerateInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return { output: await options.ports.plan.generateDraft(input) }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftEdit,
         version: '1.0.0',
         title: 'Edit local Project Plan draft',
         description: 'CAS-updates Plan items and exact visible Worker Agent choices.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'workspace-write',
         approval: 'none',
@@ -221,18 +283,18 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'plan', 'worker-selection'],
         inputSchema: projectCoordinatorPlanDraftEditInputSchema,
         outputSchema: projectCoordinatorPlanDraftSchema,
-        handler: async (raw) => ({
-          output: await options.ports.plan.editDraft(
-            projectCoordinatorPlanDraftEditInputSchema.parse(raw)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorPlanDraftEditInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return { output: await options.ports.plan.editDraft(input) }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.planSubmit,
         version: '1.0.0',
         title: 'Submit Project Plan',
         description: 'Submits the immutable digest through the current Coordinator Agent durable Cloud command service.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -240,19 +302,23 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'plan', 'submit'],
         inputSchema: projectCoordinatorPlanDraftSubmitInputSchema,
         outputSchema: projectCoordinatorPlanSubmitResultSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.plan.submitDraft(
-            projectCoordinatorPlanDraftSubmitInputSchema.parse(raw),
-            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.planSubmit, context)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorPlanDraftSubmitInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return {
+            output: await options.ports.plan.submitDraft(
+              input,
+              capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.planSubmit, context)
+            )
+          }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirm,
         version: '1.0.0',
         title: 'Confirm Project Plan',
         description: 'Confirms the exact immutable Plan; invitations, Team readiness, activation, and dispatch remain gated by the canonical Project workflow.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -260,19 +326,23 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'plan', 'confirmation'],
         inputSchema: projectCoordinatorPlanConfirmInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.plan.confirm(
-            projectCoordinatorPlanConfirmInputSchema.parse(raw),
-            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirm, context)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorPlanConfirmInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return {
+            output: await options.ports.plan.confirm(
+              input,
+              capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirm, context)
+            )
+          }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.workflowPrepare,
         version: '1.0.0',
         title: 'Prepare Project workflow',
         description: 'Prepares the only production workflow from confirmed Plan and accepted invitations through finite Team operations, readiness, activation, and Task dispatch.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'read',
         approval: 'none',
@@ -280,18 +350,18 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'workflow', 'team', 'readiness', 'plan'],
         inputSchema: projectCoordinatorWorkflowPrepareInputSchema,
         outputSchema: projectCoordinatorWorkflowPlanSchema,
-        handler: async (raw) => ({
-          output: await options.ports.provisioning.prepareWorkflow(
-            projectCoordinatorWorkflowPrepareInputSchema.parse(raw)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorWorkflowPrepareInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return { output: await options.ports.provisioning.prepareWorkflow(input) }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
         version: '1.0.0',
         title: 'Continue Project workflow',
         description: 'Executes the exact confirmed workflow, including finite Team operations when required, then verifies readiness before activation and initial Task dispatch.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -299,22 +369,26 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'workflow', 'team', 'attestation', 'activation', 'dispatch'],
         inputSchema: projectCoordinatorWorkflowContinueInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.provisioning.continueWorkflow(
-            projectCoordinatorWorkflowContinueInputSchema.parse(raw),
-            capabilityIdempotencyKey(
-              PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
-              context
+        handler: async (raw, context) => {
+          const input = projectCoordinatorWorkflowContinueInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return {
+            output: await options.ports.provisioning.continueWorkflow(
+              input,
+              capabilityIdempotencyKey(
+                PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
+                context
+              )
             )
-          )
-        })
+          }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
         version: '1.0.0',
         title: 'Observe and link exact unknown Task output',
         description: 'Re-reads the current recovery tuple, invokes the canonical Content Space exact observation, and links only the Host-derived portable output facts.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -322,22 +396,26 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'content', 'recovery', 'outcome-unknown', 'observe-link'],
         inputSchema: projectCoordinatorContentRecoveryObserveLinkInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.recovery.observeAndLink(
-            projectCoordinatorContentRecoveryObserveLinkInputSchema.parse(raw),
-            capabilityIdempotencyKey(
-              PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
-              context
+        handler: async (raw, context) => {
+          const input = projectCoordinatorContentRecoveryObserveLinkInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return {
+            output: await options.ports.recovery.observeAndLink(
+              input,
+              capabilityIdempotencyKey(
+                PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
+                context
+              )
             )
-          )
-        })
+          }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
         version: '1.0.0',
         title: 'Abandon uncertain Task execution',
         description: 'Fences the unresolved execution permanently from freshly read Cloud CAS facts without manufacturing a successful Provider observation.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'destructive',
         approval: 'confirmation',
@@ -345,22 +423,26 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'content', 'recovery', 'abandon', 'execution-fence'],
         inputSchema: projectCoordinatorContentRecoveryAbandonInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.recovery.abandon(
-            projectCoordinatorContentRecoveryAbandonInputSchema.parse(raw),
-            capabilityIdempotencyKey(
-              PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
-              context
+        handler: async (raw, context) => {
+          const input = projectCoordinatorContentRecoveryAbandonInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return {
+            output: await options.ports.recovery.abandon(
+              input,
+              capabilityIdempotencyKey(
+                PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
+                context
+              )
             )
-          )
-        })
+          }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
         version: '1.0.0',
         title: 'Approve a freshly named recovery successor',
         description: 'Re-reads the completed abandon facts and asks only the current Coordinator Agent to issue a new fenced execution with a new no-overwrite filename.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -368,22 +450,26 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'content', 'recovery', 'successor', 'execution-fence'],
         inputSchema: projectCoordinatorContentRecoveryRetrySuccessorInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.recovery.retrySuccessor(
-            projectCoordinatorContentRecoveryRetrySuccessorInputSchema.parse(raw),
-            capabilityIdempotencyKey(
-              PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
-              context
+        handler: async (raw, context) => {
+          const input = projectCoordinatorContentRecoveryRetrySuccessorInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return {
+            output: await options.ports.recovery.retrySuccessor(
+              input,
+              capabilityIdempotencyKey(
+                PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
+                context
+              )
             )
-          )
-        })
+          }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
         version: '1.0.0',
         title: 'Invite Project member',
         description: 'Creates only an OIDC User invitation; it grants no Task or Team authority before that exact User accepts the confirmed Plan.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -391,19 +477,23 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'membership', 'invitation'],
         inputSchema: projectCoordinatorMembershipAddInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.provisioning.addMember(
-            projectCoordinatorMembershipAddInputSchema.parse(raw),
-            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd, context)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorMembershipAddInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return {
+            output: await options.ports.provisioning.addMember(
+              input,
+              capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd, context)
+            )
+          }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept,
         version: '1.0.0',
         title: 'Accept Project invitation',
         description: 'Lets only the exact invited OIDC User accept the exact current confirmed Plan before Team readiness.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -411,19 +501,30 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'membership', 'invitation', 'acceptance'],
         inputSchema: projectCoordinatorMembershipAcceptInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.provisioning.acceptInvitation(
-            projectCoordinatorMembershipAcceptInputSchema.parse(raw),
-            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept, context)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorMembershipAcceptInputSchema.parse(raw)
+          if (context.caller.audience === 'agent') {
+            context.assertPrincipalCurrent()
+            await options.sessions.authorizeInvitationAcceptance(
+              input.projectId,
+              requireOrdinaryAgentSession(context)
+            )
+            context.assertPrincipalCurrent()
+          }
+          return {
+            output: await options.ports.provisioning.acceptInvitation(
+              input,
+              capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept, context)
+            )
+          }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
         version: '1.0.0',
         title: 'Fence and remove Project member',
         description: 'Fences Cloud Task Authority first; content-required membership remains removal-pending until Provider absence is observed and signed.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'destructive',
         approval: 'confirmation',
@@ -431,19 +532,23 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'membership', 'content', 'removal'],
         inputSchema: projectCoordinatorMembershipRemoveInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.provisioning.removeMember(
-            projectCoordinatorMembershipRemoveInputSchema.parse(raw),
-            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove, context)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorMembershipRemoveInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return {
+            output: await options.ports.provisioning.removeMember(
+              input,
+              capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove, context)
+            )
+          }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
         version: '1.0.0',
         title: 'Ask a Project member User',
         description: 'Creates one Project-scoped HumanNeeded for an explicit active member User through the current Coordinator Agent.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -451,19 +556,23 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'coordinator', 'human-needed'],
         inputSchema: projectCoordinatorHumanNeededCreateInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.actions.createHumanNeeded(
-            projectCoordinatorHumanNeededCreateInputSchema.parse(raw),
-            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate, context)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorHumanNeededCreateInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return {
+            output: await options.ports.actions.createHumanNeeded(
+              input,
+              capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate, context)
+            )
+          }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
         version: '1.0.0',
         title: 'Answer Project HumanNeeded',
         description: 'Submits the exact target Project member User answer through the OIDC User path.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -471,19 +580,23 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'human', 'human-answer'],
         inputSchema: projectCoordinatorHumanAnswerInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.actions.answerHumanNeeded(
-            projectCoordinatorHumanAnswerInputSchema.parse(raw),
-            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer, context)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorHumanAnswerInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'member')
+          return {
+            output: await options.ports.actions.answerHumanNeeded(
+              input,
+              capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer, context)
+            )
+          }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer,
         version: '1.0.0',
         title: 'Transfer Project Coordinator',
         description: 'Lets the authenticated Project Owner select another exact ready Agent that they own; main derives all Cloud CAS facts and the old Coordinator is fenced atomically.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -491,19 +604,23 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'owner', 'coordinator', 'transfer', 'authority-fence'],
         inputSchema: projectCoordinatorTransferInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.actions.transferCoordinator(
-            projectCoordinatorTransferInputSchema.parse(raw),
-            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer, context)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorTransferInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return {
+            output: await options.ports.actions.transferCoordinator(
+              input,
+              capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer, context)
+            )
+          }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.artifactReviewPrepare,
         version: '1.0.0',
         title: 'Prepare Task result artifact review',
         description: 'Re-reads the exact current Cloud submission and binding before returning one Host-scoped non-authorizing Content Space review reference.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'read',
         approval: 'none',
@@ -512,18 +629,18 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         producedResourceKinds: [CONTENT_FILE_RESOURCE_KIND, ARTIFACT_RESOURCE_KIND],
         inputSchema: projectCoordinatorArtifactReviewPrepareInputSchema,
         outputSchema: projectCoordinatorArtifactReviewPreparedSchema,
-        handler: async (raw) => ({
-          output: await options.ports.artifactReview.prepare(
-            projectCoordinatorArtifactReviewPrepareInputSchema.parse(raw)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorArtifactReviewPrepareInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return { output: await options.ports.artifactReview.prepare(input) }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
         version: '1.0.0',
         title: 'Review Task result',
         description: 'Accepts one immutable result or requests a fresh fenced revision execution.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -531,19 +648,23 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'coordinator', 'review'],
         inputSchema: projectCoordinatorResultReviewInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.actions.reviewResult(
-            projectCoordinatorResultReviewInputSchema.parse(raw),
-            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview, context)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorResultReviewInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return {
+            output: await options.ports.actions.reviewResult(
+              input,
+              capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview, context)
+            )
+          }
+        }
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete,
         version: '1.0.0',
         title: 'Complete Project with final summary',
         description: 'Submits the Coordinator final summary and atomically completes the Project.',
-        audiences: ['ui'],
+        audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -551,15 +672,44 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         tags: ['project', 'coordinator', 'summary', 'completion'],
         inputSchema: projectCoordinatorCompleteInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
-        handler: async (raw, context) => ({
-          output: await options.ports.actions.completeProject(
-            projectCoordinatorCompleteInputSchema.parse(raw),
-            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete, context)
-          )
-        })
+        handler: async (raw, context) => {
+          const input = projectCoordinatorCompleteInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return {
+            output: await options.ports.actions.completeProject(
+              input,
+              capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete, context)
+            )
+          }
+        }
       })
     ]
   })
+}
+
+function requireOrdinaryAgentSession(
+  context: DomainMainCapabilityInvocationContext
+) {
+  if (context.caller.audience !== 'agent' || !context.ordinarySession) {
+    throw new Error('This Agent operation requires a Host-authenticated ordinary Session.')
+  }
+  return context.ordinarySession
+}
+
+async function authorizeAgentProject(
+  sessions: ProjectCoordinatorSessionProjectionPort,
+  context: DomainMainCapabilityInvocationContext,
+  projectId: string,
+  requiredAccess: 'coordinator' | 'member'
+): Promise<void> {
+  if (context.caller.audience !== 'agent') return
+  context.assertPrincipalCurrent()
+  await sessions.authorize(
+    projectId,
+    requireOrdinaryAgentSession(context),
+    requiredAccess
+  )
+  context.assertPrincipalCurrent()
 }
 
 function capabilityIdempotencyKey(
@@ -594,6 +744,10 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     COORDINATOR_CLOUD_COMMAND_SERVICE_ID,
     COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION
   )
+  const workerSessionProjection = host.internalServices.acquire<WorkerSessionProjectionService>(
+    WORKER_SESSION_PROJECTION_SERVICE_ID,
+    WORKER_SESSION_PROJECTION_CONTRACT_VERSION
+  )
   const state = new ProjectCoordinatorStateStore(host.packageSettings)
   const workspace = createProjectCoordinatorCloudWorkspacePort({
     transport,
@@ -605,6 +759,11 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     readCoordinatorTransferFeedback: (projectId) => (
       state.readCoordinatorTransferFeedback(projectId)
     )
+  })
+  const sessions = createProjectCoordinatorSessionProjectionPort({
+    state,
+    workspace,
+    workers: workerSessionProjection
   })
   let agentExecution: DomainMainAgentExecutionHost | undefined
   let runtimeLog: DomainMainRuntimeLifecycleContext['log'] | undefined
@@ -713,7 +872,8 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
           defineCapability: host.defineCapability as (
             input: ProjectCoordinatorCapabilityOptions
           ) => CapabilityDefinition,
-          ports
+          ports,
+          sessions
         })
       },
       {

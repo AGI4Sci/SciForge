@@ -12,6 +12,10 @@ import {
 } from '@sciforge/collaboration-contracts/testing'
 
 import type { CapabilityCallerContextInput } from '../../shared/capability-broker'
+import {
+  CAPABILITY_AGENT_TOOL_NAMES,
+  createCapabilityAgentToolSurface
+} from './agent-tools'
 import { CapabilityBroker } from './broker'
 import {
   CapabilityRegistry,
@@ -73,7 +77,8 @@ describe('Project Coordinator Host capability integration', () => {
           readWorkspace: async () => created.workspace,
           createProject
         }
-      } as never
+      } as never,
+      sessions: {} as never
     }).createDefinitions()
     const createDefinition = definitions.find(
       ({ descriptor }) => descriptor.id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate
@@ -104,8 +109,7 @@ describe('Project Coordinator Host capability integration', () => {
           maxTasksPerRound: 4,
           maxTaskRetries: 1,
           maxCoordinationRounds: 2
-        },
-        content: { mode: 'none', members: [{ userId: 'usr_Owner0000001' }] }
+        }
       }
     })).resolves.toMatchObject({
       output: created,
@@ -113,5 +117,45 @@ describe('Project Coordinator Host capability integration', () => {
       replayed: false
     })
     expect(createProject).toHaveBeenCalledTimes(1)
+  })
+
+  it('exposes the explicit Project capability allowlist through sciforge_discover', async () => {
+    const definitions = createProjectCoordinatorCapabilityFactory<CapabilityDefinition>({
+      defineCapability: ({ audiences, tags, producedResourceKinds, ...input }) => defineCapability({
+        ...input,
+        audiences: [...audiences],
+        tags: [...tags],
+        ...(producedResourceKinds ? { producedResourceKinds: [...producedResourceKinds] } : {})
+      }),
+      ports: {} as never,
+      sessions: {} as never
+    }).createDefinitions()
+    const surface = createCapabilityAgentToolSurface({
+      broker: new CapabilityBroker(new CapabilityRegistry(definitions)),
+      resolveCaller: () => ({
+        audience: 'agent',
+        callerId: 'thread-project-discovery',
+        approvals: []
+      })
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { text: 'Project', limit: 50 },
+      context: {
+        requestId: 'request-project-discovery',
+        runtimeId: 'runtime-project-discovery',
+        threadId: 'thread-project-discovery'
+      }
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) {
+      throw new Error('Expected Project capabilities from sciforge_discover.')
+    }
+    const visibleTitles = discovered.value.map(({ title }) => title)
+    expect(visibleTitles).toContain('Read Project coordination workspace')
+    expect(visibleTitles).toContain('Create Project')
+    expect(visibleTitles).toContain('Continue Project workflow')
+    expect(visibleTitles).toContain('Review Task result')
+    expect(visibleTitles).toContain('Complete Project with final summary')
+    expect(visibleTitles).not.toContain('Bind Project Session')
   })
 })

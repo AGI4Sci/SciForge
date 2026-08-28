@@ -1,6 +1,6 @@
 ## Context
 
-See `proposal.md` for motivation and `specs/agentic-project-workspace-navigation/spec.md` for observable behavior. The current Host sidebar owns local Workspace/Thread navigation under the user-visible title “Projects”. `domain-project-coordinator` already owns the canonical workspace read/create capabilities and a package-owned Collaboration Center right panel, but no generic Host slot can place a domain-owned section in the left navigation. The Team integration task is concurrently changing membership, invitation, provisioning, dispatch and continuation; this donor must not touch those state machines.
+See `proposal.md` for motivation and `specs/agentic-project-workspace-navigation/spec.md` for observable behavior. The Host sidebar owns local Workspace/Thread navigation under the user-visible title “Local Workspaces”. `domain-project-coordinator` owns the canonical workspace read/create capabilities, Collaboration Center surface, Cloud Project navigation, membership, invitation, provisioning, dispatch, continuation and ordinary Session projection through explicit package contracts.
 
 ## Goals / Non-Goals
 
@@ -11,13 +11,13 @@ See `proposal.md` for motivation and `specs/agentic-project-workspace-navigation
 - Make a draft Workbench session sufficient to open the canonical create HCI when no persistent Thread exists.
 - Let an unbound ordinary Agent Runtime Session start a Project chat-first through the canonical Agent capability surface, then bind only the successful create receipt.
 - Group existing local Agent Runtime Sessions under a Cloud Project and bind their composer context to an exact canonical collaboration scope without teaching Host about Project IDs.
-- Keep the donor small enough to cherry-pick after the Team snapshot with narrow conflict resolution.
+- Keep all Project interpretation, binding and authority fences inside the Project Coordinator and Collaboration package contracts while the Host carries only generic ordinary Session identity.
 - Preserve the existing sidebar design system while making Cloud lifecycle visibly distinct from local folders.
 
 **Non-Goals:**
 
 - Creating Project, Membership, invitation, Team-root, Task or review facts from the sidebar itself.
-- Changing Cloud schemas, Project provisioning order, continuation, Agent capability audiences/approvals, evidence review or final artifact semantics.
+- Adding a second Project create, provisioning, dispatch, continuation, evidence review or final artifact path alongside the canonical domain capabilities.
 - Making a local Thread the identity or persistence boundary of a Cloud Project.
 - Building a second full-page Project router or replacing the existing Collaboration Center.
 
@@ -86,16 +86,16 @@ This gives Chat-first Collaboration the same transition as the HCI without creat
 
 One local Session may be explicitly projected into one Cloud Project collaboration scope. Worker execution Sessions reuse the already durable `{projectId, taskId, executionId, runtimeId, threadId}` binding in Collaboration's task-run journal. Coordinator Sessions require an explicit package-owned binding to the exact Project and current coordinator authority; they are not inferred from title, Workspace path or the fact that a Plan run happened once. A transfer, membership removal, execution fence or identity change narrows/removes the current operational scope from canonical facts without deleting the private local transcript.
 
-A standard `renderer.composer-context-provider` resolves the current Session binding, rereads the exact Project/task through canonical projections, and contributes a bounded summary containing Project identity, lifecycle/revision and either coordinator-project or exact worker-execution scope. It never contributes secrets, credentials or treats role text as authority. Each Device sees only its own ordinary Sessions under the Project; no Coordinator/Worker transcript is synchronized to another User.
+A standard `renderer.composer-context-provider` resolves the current Session binding and rereads the exact Project/task through canonical projections. Coordinator context receives a bounded Project summary. Worker context receives only its exact Task/execution and the review, accepted evidence, recovery and HumanNeeded facts linked to that exact execution; it excludes sibling Tasks, membership/readiness collections and assignee identities. Every free-text field is deterministically clipped and the complete contribution is capped below 48,000 characters. A transient, aborted, unparseable or oversized optional read returns no composer items, so ordinary chat remains usable. The provider never contributes secrets or credentials and never treats role text as authority. Each Device sees only its own ordinary Sessions under the Project; no Coordinator/Worker transcript is synchronized to another User.
 
-The Host already exposes the canonical `sciforge_discover`, `sciforge_observe`, `sciforge_invoke` and `sciforge_events` tools to Agent runtimes. Those tools, not the composer provider, own operation discovery, approval, invocation, receipts and events. Enabling appropriate Project Coordinator capabilities for the `agent` audience is therefore an integration responsibility of the Team state-machine owner; this donor neither changes capability audiences nor implements a parallel command interpreter. Injecting a hidden prompt that directly calls renderer methods was rejected because it would bypass capability governance and make UI and conversation mutate different systems.
+The Host exposes the canonical `sciforge_discover`, `sciforge_observe`, `sciforge_invoke` and `sciforge_events` tools to Agent runtimes. Project Coordinator publishes an explicit Agent-visible capability allowlist through the same capability definitions, schemas, approvals and handlers used by UI. The Host authenticates only the ordinary runtime/thread identity; the package rereads current Principal, membership, Coordinator authority epoch or exact Worker execution fence before every operation. These tools, not the composer provider, own discovery, approval, invocation, receipts and events. A hidden prompt, renderer method call or parallel command interpreter is forbidden because it would bypass capability governance and make UI and conversation mutate different systems.
 
 ## Risks / Trade-offs
 
 - [The generic slot is introduced for one immediate domain] → Keep its contract presentation-only, versioned and fully tested with a second fixture contribution; do not add domain fields.
 - [Polling can add Cloud reads] → Refresh only while visible, use a bounded interval, ignore overlapping/stale requests and provide manual refresh.
 - [Identity changes during an in-flight read] → Sequence reads and clear Project rows on non-ready/different-User projections; never merge results across observations.
-- [Team integration changes the Project Coordinator renderer client] → Keep this donor free of Cloud/state-machine edits and resolve only the narrow activation/invalidation wrapper after the Team snapshot.
+- [Project and Session facts can change between renderer reads] → Treat renderer context as optional orientation only; canonical main handlers reread authority and fail closed before every operation.
 - [Nested routes imply capabilities not installed] → Resolve routes against installed navigation contributions and fail back to the Project overview.
 - [A draft session might be mistaken for a Project conversation] → Copy and contracts describe it only as a presentation owner; no Thread is created or bound to Project identity.
 - [A failed chat-first create could leave a phantom Project Session] → Persist the binding only after validating the canonical create receipt and exact current ordinary Session identity; failure paths are tested to remain unbound.
@@ -105,8 +105,8 @@ The Host already exposes the canonical `sciforge_discover`, `sciforge_observe`, 
 
 1. Add and test the Domain SDK contract/value guard and renderer-owned registry slot.
 2. Render generic navigation sections above Local Workspaces and pass the existing active-or-draft session context.
-3. Add the Project Coordinator manifest contributions, package-owned sidebar component, active-Project composer context, activation mapping and canonical-read invalidation.
-4. Regenerate standard composition/capability artifacts and run focused renderer, package, type, lint and architecture gates.
-5. Commit the clean donor without pushing; after the Team snapshot, rebase/cherry-pick and rerun all affected gates before any PR decision.
+3. Add the Project Coordinator manifest contributions, package-owned sidebar component, durable Session projection, role-scoped composer context, activation mapping and canonical-read invalidation.
+4. Expose the existing Project capabilities to Agent through one explicit allowlist and authenticate every invocation from Host ordinary Session provenance plus fresh package-owned Cloud facts.
+5. Regenerate standard composition/capability artifacts and run focused renderer, package, type, lint, architecture and strict OpenSpec gates.
 
 Rollback removes the Project Coordinator contribution and generic slot together; Local Workspaces remain functional because they do not depend on the extension registry.

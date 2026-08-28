@@ -62,7 +62,7 @@ Cloud Projects section SHALL 在 canonical create 成功后重新读取 Project 
 
 ### Requirement: 当前 Project 上下文可供自然语言介入
 
-Project Coordinator package SHALL 通过标准 composer-context contribution，把当前普通 Agent Runtime Session 的 canonical Project collaboration scope 与有界摘要提供给 SciForgeAgent。Coordinator scope SHALL 只在当前本机 Agent 仍持有该 Project coordinator authority 时成立；Worker scope SHALL 绑定到当前 User/Device/Agent 的 exact Task execution/fence。该上下文 SHALL 至少包含精确 Project ID、可识别名称、目标、lifecycle state、revision 与安全 scope 摘要，且 SHALL NOT 包含 secret、credential、authority token 或把 prompt role 当作写授权。自然语言提出的 Project 读取、执行、复审、恢复或完成操作 SHALL 只通过 Host 的 canonical Agent capability discovery/invocation/event surface 到达与 UI 相同的 Project capability、approval、idempotency、receipt 与状态机；系统 SHALL NOT 增加 renderer method call、私有 IPC、文本命令 parser 或 fallback 写路径。
+Project Coordinator package SHALL 通过标准 composer-context contribution，把当前普通 Agent Runtime Session 的 canonical Project collaboration scope 与有界摘要提供给 SciForgeAgent。Coordinator scope SHALL 只在当前本机 Agent 仍持有该 Project coordinator authority 时成立，并可包含有界 Project 全局摘要；Worker scope SHALL 绑定到当前 User/Device/Agent 的 exact Task execution/fence，并且只包含该 exact Task/execution 及与它精确关联的 review、accepted evidence、recovery 和 HumanNeeded，不得包含 sibling Tasks、成员 readiness、assignee identity 或 Project 全局成员目录。所有自由文本 SHALL 使用确定性字符预算，完整 contribution SHALL 明确低于 48,000 字符；transient read failure、abort、parse failure 或 oversize SHALL 返回空 context，不得阻断普通聊天。该上下文 SHALL NOT 包含 secret、credential、authority token 或把 prompt role 当作写授权。自然语言提出的 Project 读取、执行、复审、恢复或完成操作 SHALL 只通过 Host 的 canonical Agent capability discovery/invocation/event surface 到达与 UI 相同的 Project capability、approval、idempotency、receipt 与状态机；系统 SHALL NOT 增加 renderer method call、私有 IPC、文本命令 parser 或 fallback 写路径。
 
 一个尚未绑定 Cloud Project 的普通持久 Session SHALL 可以基于当前 authenticated Principal 发现 readiness、通过同一 Agent capability surface 调用唯一 canonical `project-coordinator.project.create`。系统 SHALL 只在该调用成功、校验 canonical receipt 且 receipt 返回精确 Project ID 后，把当前 `runtimeId`/`threadId` 持久绑定到该 Project；失败、取消、超时或无效 receipt SHALL 保持 Session unbound。绑定存在本身 SHALL NOT 授予 Membership、Coordinator authority、Task execution fence 或任何写权限。
 
@@ -89,6 +89,18 @@ Project Coordinator package SHALL 通过标准 composer-context contribution，�
 - **WHEN** identity 改变、Project 不再出现在 canonical projection，或当前 session 进入 New Project intent
 - **THEN** Project Coordinator SHALL 清除该 session 的 active-Project composer context
 - **AND** 后续自然语言 turn SHALL NOT 携带旧 Project ID 或缓存摘要。
+
+#### Scenario: Membership 被移除或进入 removal-pending
+
+- **WHEN** 当前 Coordinator 或 Worker User 的 canonical Project Membership 不再是 active
+- **THEN** public Session projection 与 composer context SHALL 清除该旧 Project scope，或仅保留不含 Project 数据的诊断状态
+- **AND** Agent Project write SHALL 在触达任何 Cloud、Provider 或 package write port 前由 canonical main handler fail closed。
+
+#### Scenario: Worker Session 读取 Project 上下文
+
+- **WHEN** 当前 Session 由一个仍开放的 exact Worker execution journal 投影
+- **THEN** composer context SHALL 只包含该 Task/execution 及与其精确关联的 review、accepted evidence、recovery 与 HumanNeeded
+- **AND** sibling Task、其他 execution、成员 readiness 与 assignee 信息 SHALL 不出现在 context 中。
 
 #### Scenario: Coordinator 与 Worker 在各自设备进入同一 Project
 

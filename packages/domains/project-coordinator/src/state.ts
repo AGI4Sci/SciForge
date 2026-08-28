@@ -8,7 +8,9 @@ import type {
 import {
   projectCoordinatorPlanAssignmentSchema,
   projectCoordinatorPlanDraftSchema,
+  projectCoordinatorCoordinatorSessionBindingRecordSchema,
   projectCoordinatorTransferFeedbackSchema,
+  type ProjectCoordinatorCoordinatorSessionBindingRecord,
   type ProjectCoordinatorPlanAssignment,
   type ProjectCoordinatorPlanDraft,
   type ProjectCoordinatorTransferFeedback
@@ -25,6 +27,9 @@ const projectCoordinatorStateSchema = z.object({
   schemaVersion: z.literal(1),
   planDrafts: z.array(projectCoordinatorPlanDraftSchema).max(1_000),
   submittedPlanSelections: z.array(submittedPlanSelectionSchema).max(1_000),
+  coordinatorSessionBindings: z.array(
+    projectCoordinatorCoordinatorSessionBindingRecordSchema
+  ).max(10_000).default([]),
   coordinatorTransferFeedback: z.array(projectCoordinatorTransferFeedbackSchema)
     .max(1_000)
     .default([])
@@ -36,6 +41,7 @@ const EMPTY_STATE: ProjectCoordinatorState = {
   schemaVersion: 1,
   planDrafts: [],
   submittedPlanSelections: [],
+  coordinatorSessionBindings: [],
   coordinatorTransferFeedback: []
 }
 
@@ -45,6 +51,50 @@ export class ProjectCoordinatorStateStore {
   async readDraft(projectId: string): Promise<ProjectCoordinatorPlanDraft | null> {
     const { state } = await this.read()
     return state.planDrafts.find((draft) => draft.projectId === projectId) ?? null
+  }
+
+  async readCoordinatorSessionBindings(): Promise<
+    readonly ProjectCoordinatorCoordinatorSessionBindingRecord[]
+  > {
+    const { state } = await this.read()
+    return state.coordinatorSessionBindings
+  }
+
+  async bindCoordinatorSession(
+    rawBinding: ProjectCoordinatorCoordinatorSessionBindingRecord
+  ): Promise<ProjectCoordinatorCoordinatorSessionBindingRecord> {
+    const binding = projectCoordinatorCoordinatorSessionBindingRecordSchema.parse(rawBinding)
+    let snapshot = await this.settings.read()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const state = parseState(snapshot)
+      const existing = state.coordinatorSessionBindings.find((candidate) => (
+        candidate.runtimeId === binding.runtimeId &&
+        candidate.threadId === binding.threadId
+      ))
+      if (existing) {
+        if (
+          existing.projectId !== binding.projectId ||
+          existing.principalUserId !== binding.principalUserId ||
+          existing.coordinatorAgentId !== binding.coordinatorAgentId ||
+          existing.coordinatorAuthorityEpoch !== binding.coordinatorAuthorityEpoch
+        ) {
+          throw new Error('The ordinary Session is already bound to different Project authority.')
+        }
+        return existing
+      }
+      const value = projectCoordinatorStateSchema.parse({
+        ...state,
+        coordinatorSessionBindings: [...state.coordinatorSessionBindings, binding]
+      })
+      try {
+        await this.settings.write(value, snapshot.revision)
+        return binding
+      } catch (error) {
+        if (attempt >= 2) throw error
+        snapshot = await this.settings.read()
+      }
+    }
+    throw new Error('Unable to persist the ordinary Coordinator Session binding.')
   }
 
   async writeDraft(

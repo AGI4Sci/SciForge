@@ -1,0 +1,453 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import {
+  taskExecutionSchema,
+  taskSchema
+} from '@sciforge/collaboration-contracts'
+import type { DomainMainPackageSettingsHost } from '@sciforge/domain-sdk/package-storage'
+import type { WorkerSessionProjectionService } from '@sciforge/domain-collaboration/worker-session-projection'
+
+import {
+  projectCoordinatorWorkspaceSchema,
+  type ProjectCoordinatorCoordinatorSessionBindingRecord,
+  type ProjectCoordinatorWorkspace
+} from './contract.js'
+import type { ProjectCoordinatorWorkspacePort } from './ports.js'
+import { createProjectCoordinatorSessionProjectionPort } from './session-projection.js'
+import { ProjectCoordinatorStateStore } from './state.js'
+
+const now = '2026-08-28T08:00:00.000Z'
+const projectId = 'prj_ProjectSession001'
+const ownerUserId = 'usr_ProjectOwner001'
+const workerUserId = 'usr_ProjectWorker01'
+const coordinatorAgentId = 'agt_ProjectCoord0001'
+const workerAgentId = 'agt_ProjectWorker01'
+const workerDeviceId = 'dev_ProjectWorker01'
+const taskId = 'tsk_ProjectTask0001'
+const executionId = 'exe_ProjectExec0001'
+
+test('public projection filters stale Principals and Agent reads cannot enumerate other Sessions', async () => {
+  const settings = memorySettings()
+  const state = new ProjectCoordinatorStateStore(settings)
+  await state.bindCoordinatorSession(coordinatorBinding('runtime-a', 'thread-a'))
+  await state.bindCoordinatorSession(coordinatorBinding('runtime-b', 'thread-b'))
+  await state.bindCoordinatorSession({
+    ...coordinatorBinding('runtime-old', 'thread-old'),
+    principalUserId: 'usr_PreviousOwner01'
+  })
+  const port = createProjectCoordinatorSessionProjectionPort({
+    state,
+    workspace: workspacePort(() => workspaceFixture({ principalUserId: ownerUserId })),
+    workers: workerProjection([]),
+    now: () => new Date(now)
+  })
+
+  const uiProjection = await port.readProjection()
+  assert.deepEqual(uiProjection.bindings.map(({ runtimeId, threadId }) => (
+    `${runtimeId}/${threadId}`
+  )), ['runtime-a/thread-a', 'runtime-b/thread-b'])
+  assert.equal(JSON.stringify(uiProjection).includes('usr_PreviousOwner01'), false)
+
+  const agentProjection = await port.readProjection({
+    runtimeId: 'runtime-a',
+    threadId: 'thread-a'
+  })
+  assert.deepEqual(agentProjection.bindings.map(({ runtimeId, threadId }) => (
+    `${runtimeId}/${threadId}`
+  )), ['runtime-a/thread-a'])
+  assert.deepEqual(await port.readProjection({
+    runtimeId: 'runtime-unbound',
+    threadId: 'thread-unbound'
+  }), {
+    schemaVersion: 1,
+    observedAt: now,
+    bindings: []
+  })
+})
+
+test('unbound workspace reads fail closed and Coordinator authority epoch fences every write', async () => {
+  const settings = memorySettings()
+  const state = new ProjectCoordinatorStateStore(settings)
+  let workspace = workspaceFixture({ principalUserId: ownerUserId })
+  const port = createProjectCoordinatorSessionProjectionPort({
+    state,
+    workspace: workspacePort(() => workspace),
+    workers: workerProjection([]),
+    now: () => new Date(now)
+  })
+  const session = { runtimeId: 'runtime-owner', threadId: 'thread-owner' }
+
+  await assert.rejects(
+    port.scopeWorkspaceRead({}, session),
+    /not bound to a Cloud Project/u
+  )
+  await port.withUnboundSession(session, () => port.bindCreatedProject({
+    createdProjectId: projectId,
+    workspace
+  }, session))
+  assert.deepEqual(await port.scopeWorkspaceRead({}, session), { projectId })
+  assert.equal((await port.authorize(projectId, session, 'coordinator')).access, 'coordinator')
+  const restarted = createProjectCoordinatorSessionProjectionPort({
+    state: new ProjectCoordinatorStateStore(settings),
+    workspace: workspacePort(() => workspace),
+    workers: workerProjection([]),
+    now: () => new Date(now)
+  })
+  assert.equal((await restarted.readProjection(session)).bindings[0]?.access, 'coordinator')
+
+  workspace = workspaceFixture({
+    principalUserId: ownerUserId,
+    coordinatorAuthorityEpoch: 2
+  })
+  const projection = await port.readProjection(session)
+  assert.equal(projection.bindings[0]?.access, 'read_only')
+  assert.equal(projection.bindings[0]?.fenceReason, 'authority_changed')
+  await assert.rejects(
+    port.authorize(projectId, session, 'coordinator'),
+    /does not hold current Coordinator authority/u
+  )
+})
+
+test('Worker projection requires the exact current execution fence', async () => {
+  let workspace = workspaceFixture({
+    principalUserId: workerUserId,
+    includeWorkerExecution: true
+  })
+  const binding = workerBinding()
+  const port = createProjectCoordinatorSessionProjectionPort({
+    state: new ProjectCoordinatorStateStore(memorySettings()),
+    workspace: workspacePort(() => workspace),
+    workers: workerProjection([binding]),
+    now: () => new Date(now)
+  })
+  const session = { runtimeId: binding.runtimeId, threadId: binding.threadId }
+
+  const current = await port.readProjection(session)
+  assert.equal(current.bindings[0]?.role, 'worker')
+  assert.equal(current.bindings[0]?.access, 'worker')
+  assert.equal((await port.authorize(projectId, session, 'member')).access, 'worker')
+
+  workspace = workspaceFixture({
+    principalUserId: workerUserId,
+    includeWorkerExecution: true,
+    executionFenceStatus: 'fenced'
+  })
+  const fenced = await port.readProjection(session)
+  assert.equal(fenced.bindings[0]?.access, 'read_only')
+  assert.equal(fenced.bindings[0]?.fenceReason, 'execution_fenced')
+  await assert.rejects(
+    port.authorize(projectId, session, 'member'),
+    /ordinary Session is fenced: execution_fenced/u
+  )
+})
+
+test('membership removal clears Coordinator and Worker public scope and rejects authorization', async () => {
+  const coordinatorState = new ProjectCoordinatorStateStore(memorySettings())
+  const coordinatorSession = {
+    runtimeId: 'runtime-removed-owner',
+    threadId: 'thread-removed-owner'
+  }
+  await coordinatorState.bindCoordinatorSession(coordinatorBinding(
+    coordinatorSession.runtimeId,
+    coordinatorSession.threadId
+  ))
+  const coordinator = createProjectCoordinatorSessionProjectionPort({
+    state: coordinatorState,
+    workspace: workspacePort(() => workspaceFixture({
+      principalUserId: ownerUserId,
+      ownerMembershipState: 'membership_removal_pending'
+    })),
+    workers: workerProjection([]),
+    now: () => new Date(now)
+  })
+
+  assert.deepEqual((await coordinator.readProjection(coordinatorSession)).bindings, [])
+  await assert.rejects(
+    coordinator.authorize(projectId, coordinatorSession, 'coordinator'),
+    /does not hold current Coordinator authority/u
+  )
+
+  const workerSessionBinding = workerBinding()
+  const workerSession = {
+    runtimeId: workerSessionBinding.runtimeId,
+    threadId: workerSessionBinding.threadId
+  }
+  const worker = createProjectCoordinatorSessionProjectionPort({
+    state: new ProjectCoordinatorStateStore(memorySettings()),
+    workspace: workspacePort(() => workspaceFixture({
+      principalUserId: workerUserId,
+      includeWorkerExecution: true,
+      workerMembershipState: 'removed'
+    })),
+    workers: workerProjection([workerSessionBinding]),
+    now: () => new Date(now)
+  })
+
+  assert.deepEqual((await worker.readProjection(workerSession)).bindings, [])
+  await assert.rejects(
+    worker.authorize(projectId, workerSession, 'member'),
+    /ordinary Session is fenced: membership_inactive/u
+  )
+})
+
+test('duplicate historical Worker journals deterministically suppress the conflicted Session', async () => {
+  const first = workerBinding()
+  const second = {
+    ...first,
+    taskId: 'tsk_ConflictingTask01',
+    executionId: 'exe_ConflictingExec1'
+  }
+  const port = createProjectCoordinatorSessionProjectionPort({
+    state: new ProjectCoordinatorStateStore(memorySettings()),
+    workspace: workspacePort(() => workspaceFixture({
+      principalUserId: workerUserId,
+      includeWorkerExecution: true
+    })),
+    workers: workerProjection([first, second]),
+    now: () => new Date(now)
+  })
+  const session = { runtimeId: first.runtimeId, threadId: first.threadId }
+
+  assert.deepEqual((await port.readProjection()).bindings, [])
+  assert.deepEqual((await port.readProjection(session)).bindings, [])
+  await assert.rejects(
+    port.authorize(projectId, session, 'member'),
+    /conflicting Project bindings/u
+  )
+})
+
+function coordinatorBinding(
+  runtimeId: string,
+  threadId: string
+): ProjectCoordinatorCoordinatorSessionBindingRecord {
+  return {
+    schemaVersion: 1,
+    role: 'coordinator',
+    projectId,
+    principalUserId: ownerUserId,
+    coordinatorAgentId,
+    coordinatorAuthorityEpoch: 1,
+    runtimeId,
+    threadId,
+    boundAt: now
+  }
+}
+
+function workerBinding() {
+  return {
+    schemaVersion: 1 as const,
+    projectId,
+    taskId,
+    executionId,
+    runtimeId: 'runtime-worker',
+    threadId: 'thread-worker',
+    workerUserId,
+    assigneeAgentId: workerAgentId,
+    assigneeDeviceId: workerDeviceId,
+    taskRevision: 3,
+    executionRevision: 4,
+    executionState: 'running' as const,
+    fenceStatus: 'open' as const,
+    projectExecutionAuthorityEpoch: 2,
+    userTaskAuthorityEpoch: 3,
+    updatedAt: now
+  }
+}
+
+function workerProjection(
+  bindings: ReturnType<typeof workerBinding>[]
+): WorkerSessionProjectionService {
+  return { listBindings: () => bindings }
+}
+
+function workspacePort(
+  read: () => ProjectCoordinatorWorkspace
+): ProjectCoordinatorWorkspacePort {
+  return {
+    readWorkspace: async () => read()
+  }
+}
+
+function workspaceFixture(input: Readonly<{
+  principalUserId: string
+  coordinatorAuthorityEpoch?: number
+  includeWorkerExecution?: boolean
+  executionFenceStatus?: 'open' | 'fenced'
+  ownerMembershipState?: 'active' | 'membership_removal_pending' | 'removed'
+  workerMembershipState?: 'active' | 'membership_removal_pending' | 'removed'
+}>): ProjectCoordinatorWorkspace {
+  const includeWorkerExecution = input.includeWorkerExecution ?? false
+  const fenceStatus = input.executionFenceStatus ?? 'open'
+  const task = taskSchema.parse({
+    schemaVersion: 1,
+    type: 'task',
+    taskId,
+    projectId,
+    createdByCoordinatorAgentId: coordinatorAgentId,
+    title: 'Process one Project input',
+    objective: 'Produce one reviewable result.',
+    completionCriteria: ['The result is traceable to this execution.'],
+    dependencyTaskIds: [],
+    requiredCapabilityTags: ['runtime.text'],
+    fileIntent: null,
+    currentExecutionId: executionId,
+    currentExecutionState: fenceStatus === 'open' ? 'running' : 'cancelled',
+    status: fenceStatus === 'open' ? 'in_progress' : 'revision_requested',
+    executionCount: 1,
+    maxRetries: 2,
+    completedAt: null,
+    revision: 3,
+    createdAt: now,
+    updatedAt: now
+  })
+  const execution = taskExecutionSchema.parse({
+    schemaVersion: 1,
+    type: 'task_execution',
+    projectId,
+    taskId,
+    executionId,
+    attempt: 1,
+    offeredByCoordinatorAgentId: coordinatorAgentId,
+    assigneeUserId: workerUserId,
+    assigneeAgentId: workerAgentId,
+    assigneeDeviceId: workerDeviceId,
+    state: fenceStatus === 'open' ? 'running' : 'cancelled',
+    stateRevision: 3,
+    fence: {
+      schemaVersion: 1,
+      executionId,
+      assigneeUserId: workerUserId,
+      assigneeAgentId: workerAgentId,
+      assigneeDeviceId: workerDeviceId,
+      assignmentTaskRevision: 3,
+      projectExecutionAuthorityEpoch: 2,
+      userTaskAuthorityEpoch: 3,
+      bindingRevision: null,
+      status: fenceStatus,
+      reason: fenceStatus === 'open' ? null : 'membership_removed',
+      fencedAt: fenceStatus === 'open' ? null : now
+    },
+    fileIntent: null,
+    currentResultSubmissionId: null,
+    offeredAt: now,
+    acceptedAt: now,
+    startedAt: now,
+    terminalAt: fenceStatus === 'open' ? null : now,
+    revision: 4,
+    createdAt: now,
+    updatedAt: now
+  })
+  return projectCoordinatorWorkspaceSchema.parse({
+    connection: {
+      state: 'ready',
+      userId: input.principalUserId,
+      deviceId: input.principalUserId === ownerUserId
+        ? 'dev_ProjectOwner001'
+        : workerDeviceId
+    },
+    observedAt: now,
+    focusedProjectId: projectId,
+    availableWorkerUsers: [],
+    providerPrincipalFacts: [],
+    projects: [{
+      project: {
+        schemaVersion: 1,
+        type: 'project',
+        projectId,
+        ownerUserId,
+        displayName: 'Project Session test',
+        goal: 'Verify ordinary Session authority projection.',
+        coordinatorAgentId,
+        coordinatorAuthorityEpoch: input.coordinatorAuthorityEpoch ?? 1,
+        executionAuthorityEpoch: 2,
+        contentMode: 'none',
+        status: 'active',
+        budget: {
+          maxTasks: 8,
+          maxTasksPerRound: 2,
+          maxTaskRetries: 2,
+          maxCoordinationRounds: 4
+        },
+        revision: 5,
+        createdAt: now,
+        updatedAt: now
+      },
+      coordinatorTransferFeedback: null,
+      plan: null,
+      memberUsers: [],
+      workerGroups: [],
+      tasks: includeWorkerExecution ? [{ task, executions: [execution] }] : [],
+      offers: [],
+      reviews: [],
+      pendingHumanNeeded: [],
+      records: [],
+      finalSummary: null,
+      provisioning: {
+        intent: null,
+        attestation: null,
+        binding: null,
+        memberships: [
+          membership(
+            ownerUserId,
+            'pmb_ProjectOwner001',
+            input.ownerMembershipState ?? 'active'
+          ),
+          membership(
+            workerUserId,
+            'pmb_ProjectWorker01',
+            input.workerMembershipState ?? 'active'
+          )
+        ],
+        providerPrincipalFacts: [],
+        contentReadiness: [],
+        providerMembershipObservations: [],
+        externalOperationJournal: [],
+        recoveryActions: []
+      }
+    }]
+  })
+}
+
+function membership(
+  userId: string,
+  projectMembershipId: string,
+  state: 'active' | 'membership_removal_pending' | 'removed'
+) {
+  const removing = state !== 'active'
+  return {
+    schemaVersion: 1 as const,
+    type: 'project_membership' as const,
+    projectMembershipId,
+    projectId,
+    userId,
+    state,
+    authorityEpoch: (userId === ownerUserId ? 1 : 3) + (removing ? 1 : 0),
+    activatedAt: now,
+    removalRequestedAt: removing ? now : null,
+    removalRequestedByUserId: removing ? ownerUserId : null,
+    removedAt: state === 'removed' ? now : null,
+    revision: 1,
+    createdAt: now,
+    updatedAt: now
+  }
+}
+
+function memorySettings(): DomainMainPackageSettingsHost {
+  let revision = 0
+  let value: Awaited<ReturnType<DomainMainPackageSettingsHost['read']>>['value'] = null
+  return {
+    read: async () => ({ revision, value }),
+    write: async (next, expectedRevision) => {
+      assert.equal(expectedRevision, revision)
+      value = next
+      revision += 1
+      return { revision, value }
+    },
+    clear: async (expectedRevision) => {
+      assert.equal(expectedRevision, revision)
+      value = null
+      revision += 1
+      return { revision, value }
+    }
+  }
+}

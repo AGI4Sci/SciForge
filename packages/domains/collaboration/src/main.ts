@@ -67,6 +67,8 @@ import {
   COLLABORATION_DOMAIN_MODULE_ID,
   COLLABORATION_RUNTIME_LIFECYCLE_CONTRIBUTION,
   COLLABORATION_RUNTIME_LIFECYCLE_CONTRACT,
+  COLLABORATION_WORKER_SESSION_PROJECTION_CONTRACT,
+  COLLABORATION_WORKER_SESSION_PROJECTION_CONTRIBUTION,
   domainPackageDefinition
 } from './definition.js'
 import {
@@ -75,6 +77,11 @@ import {
   defineCoordinatorCloudCommandService,
   type CoordinatorAgentInboxHandler
 } from './coordinator-cloud-command.js'
+import {
+  WORKER_SESSION_PROJECTION_CONTRACT_VERSION,
+  WORKER_SESSION_PROJECTION_SERVICE_ID,
+  defineWorkerSessionProjectionService
+} from './worker-session-projection.js'
 import {
   CollaborationRuntime,
   collaborationStatePath,
@@ -144,6 +151,13 @@ const coordinatorCloudCommandDescriptor = defineDomainMainInternalServiceDescrip
   allowedConsumerModuleIds: ['sciforge.project-coordinator']
 })
 
+const workerSessionProjectionDescriptor = defineDomainMainInternalServiceDescriptor({
+  location: 'main.internal-service-descriptor',
+  serviceId: WORKER_SESSION_PROJECTION_SERVICE_ID,
+  contractVersion: WORKER_SESSION_PROJECTION_CONTRACT_VERSION,
+  allowedConsumerModuleIds: ['sciforge.project-coordinator']
+})
+
 export function createDomainMainEntry<CapabilityDefinition = unknown>(
   host: CollaborationMainHost
 ): TrustedDomainProcessEntryInput<CollaborationMainContribution<CapabilityDefinition>> {
@@ -178,6 +192,14 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     contractVersion: COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION,
     allowedConsumerModuleIds: coordinatorCloudCommandDescriptor.allowedConsumerModuleIds,
     service: coordinatorCloudCommandService
+  })
+  internalServices.register({
+    serviceId: WORKER_SESSION_PROJECTION_SERVICE_ID,
+    contractVersion: WORKER_SESSION_PROJECTION_CONTRACT_VERSION,
+    allowedConsumerModuleIds: workerSessionProjectionDescriptor.allowedConsumerModuleIds,
+    service: defineWorkerSessionProjectionService({
+      listBindings: () => requireRuntime().listWorkerSessionBindings()
+    })
   })
   const disposeOwned = async (record: OwnedRuntime | null): Promise<void> => {
     if (!record || record.disposed) return
@@ -254,10 +276,17 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
         ...COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRIBUTION,
         contract: COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRACT,
         value: coordinatorCloudCommandDescriptor
+      },
+      {
+        ...COLLABORATION_WORKER_SESSION_PROJECTION_CONTRIBUTION,
+        contract: COLLABORATION_WORKER_SESSION_PROJECTION_CONTRACT,
+        value: workerSessionProjectionDescriptor
       }
     ]
   }
 }
+
+export * from './worker-session-projection.js'
 
 export function createCollaborationCapabilityFactory<CapabilityDefinition>(
   options: Readonly<{

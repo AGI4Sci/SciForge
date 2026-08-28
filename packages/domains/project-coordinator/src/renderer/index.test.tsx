@@ -14,6 +14,7 @@ import {
 import type { ProjectCoordinatorProject } from '../contract.js'
 
 import {
+  PROJECT_COORDINATOR_COMPOSER_CONTEXT_CONTRIBUTION,
   PROJECT_COORDINATOR_I18N_CONTRIBUTION,
   PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION,
   PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION,
@@ -67,6 +68,7 @@ test('renderer entry owns one generic Workbench surface without Identity UI cont
       PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION.id,
       PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRIBUTION.id,
       PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION.id,
+      PROJECT_COORDINATOR_COMPOSER_CONTEXT_CONTRIBUTION.id,
       PROJECT_COORDINATOR_I18N_CONTRIBUTION.id
     ]
   )
@@ -261,6 +263,11 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
         projects: []
       }),
       createProject: async () => { throw new Error('unused') },
+      readSessionProjection: async () => ({
+        schemaVersion: 1 as const,
+        observedAt: '2026-08-24T09:00:00.000Z',
+        bindings: []
+      }),
       readPlanDraft: async () => null,
       generatePlanDraft: async () => { throw new Error('unused') },
       editPlanDraft: async () => { throw new Error('unused') },

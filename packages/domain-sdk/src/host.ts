@@ -1019,6 +1019,35 @@ export type DomainMainInternalServiceHost = Readonly<{
 }>
 
 /**
+ * Host-authenticated identity of one ordinary Agent Runtime Session.
+ *
+ * This deliberately carries no domain scope or authorization claim. Domain
+ * packages may interpret the Session only by joining it to their own durable
+ * facts and the current Principal.
+ */
+export const domainMainOrdinarySessionIdentitySchema = z.object({
+  runtimeId: z.string().trim().min(1).max(256),
+  threadId: z.string().trim().min(1).max(512)
+}).strict().readonly()
+
+export type DomainMainOrdinarySessionIdentity = z.infer<
+  typeof domainMainOrdinarySessionIdentitySchema
+>
+
+/** Trusted subset of the Host capability invocation context exposed to packages. */
+export type DomainMainCapabilityInvocationContext = Readonly<{
+  caller: Readonly<{
+    audience: 'ui' | 'agent' | 'system'
+    principal?: PrincipalSnapshot
+  }>
+  invocationId?: string
+  /** Present only for a Host-routed invocation from an ordinary Agent Session. */
+  ordinarySession?: DomainMainOrdinarySessionIdentity
+  assertPrincipalCurrent: () => void
+  signal?: AbortSignal
+}>
+
+/**
  * Main-process services available to every trusted domain package.
  *
  * Capability definitions deliberately cross this boundary as unknown values:

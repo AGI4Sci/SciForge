@@ -5,6 +5,8 @@ import {
   DOMAIN_MAIN_FINITE_CAPABILITY_BATCH_CONFIRMED_PLAN_DIGEST_FIELD,
   canonicalizeDomainMainFiniteCapabilityBatchPlan,
   domainMainFiniteCapabilityBatchPlanSchema,
+  domainMainOrdinarySessionIdentitySchema,
+  type DomainMainOrdinarySessionIdentity,
   type DomainMainFiniteCapabilityBatchPlan
 } from '@sciforge/domain-sdk/host'
 import {
@@ -263,6 +265,7 @@ export type HostApprovedCapabilityBatch = Readonly<{
 
 type CapabilityInvokeAsOptions = Readonly<{
   signal?: AbortSignal
+  ordinarySession?: DomainMainOrdinarySessionIdentity
   approvedBatchOperation?: HostApprovedBatchOperationState
   captureIssuedResources?: (resources: readonly HostApprovedBatchIssuedResource[]) => void
 }>
@@ -878,7 +881,32 @@ export class CapabilityBroker {
       )
     }
     const caller = this.#parseCaller(rawCaller)
-    return this.#invokeAs(caller, rawRequest, options)
+    return this.#invokeAs(caller, rawRequest, {
+      ...(options.signal ? { signal: options.signal } : {})
+    })
+  }
+
+  /** Host runtime path for attaching authenticated ordinary Session identity. */
+  async invokeOrdinarySession(
+    rawCaller: CapabilityCallerContextInput,
+    rawRequest: CapabilityInvocationRequest,
+    rawOrdinarySession: DomainMainOrdinarySessionIdentity,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<CapabilityInvocationResult> {
+    const caller = this.#parseCaller(rawCaller)
+    if (caller.audience !== 'agent') {
+      throw new CapabilityBrokerError(
+        'invalid_invocation_provenance',
+        'Only an Agent invocation can carry an ordinary Session identity.'
+      )
+    }
+    const ordinarySession = domainMainOrdinarySessionIdentitySchema.parse(
+      rawOrdinarySession
+    )
+    return this.#invokeAs(caller, rawRequest, {
+      ...(options.signal ? { signal: options.signal } : {}),
+      ordinarySession
+    })
   }
 
   /** Host-private authority path used only by package-scoped system invokers. */
@@ -1333,6 +1361,7 @@ export class CapabilityBroker {
         capabilityGrants: [...(caller.capabilityGrants ?? [])].sort(),
         principalSnapshotDigest: caller.principalSnapshotDigest ?? null,
         executionContextDigest: caller.executionContextDigest ?? null,
+        ordinarySession: options.ordinarySession ?? null,
         ...(principalScopedIdempotency ? { principalLease: callerLease } : {}),
         ...(principalScopedIdempotency ? { workspaceScope: workspaceInvocationScope(caller) } : {}),
         resourceRef: resource?.resourceRef ?? null,
@@ -1435,7 +1464,10 @@ export class CapabilityBroker {
         parsedInput: parsedInput.data,
         resource,
         beforeRevision,
-        signal: options.signal,
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.ordinarySession
+          ? { ordinarySession: options.ordinarySession }
+          : {}),
         releaseResourcePinForRetirement: executionRelease,
         captureAcceptedPrincipalLease: (lease) => { acceptedResultPrincipalLease = lease },
         capturePostDispatchMutation: (value) => { postDispatchMutation = value },
@@ -1674,6 +1706,7 @@ export class CapabilityBroker {
     resource?: ResourceState
     beforeRevision?: string
     signal?: AbortSignal
+    ordinarySession?: DomainMainOrdinarySessionIdentity
     releaseResourcePinForRetirement?: () => Promise<void>
     captureAcceptedPrincipalLease?: (lease: string) => void
     capturePostDispatchMutation?: (value: boolean) => void
@@ -1719,6 +1752,7 @@ export class CapabilityBroker {
     resource?: ResourceState
     beforeRevision?: string
     signal?: AbortSignal
+    ordinarySession?: DomainMainOrdinarySessionIdentity
     releaseResourcePinForRetirement?: () => Promise<void>
     captureAcceptedPrincipalLease?: (lease: string) => void
     capturePostDispatchMutation?: (value: boolean) => void
@@ -1788,6 +1822,9 @@ export class CapabilityBroker {
           return await definition.handler(options.parsedInput, {
             caller,
             ...(request.invocationId ? { invocationId: request.invocationId } : {}),
+            ...(options.ordinarySession
+              ? { ordinarySession: options.ordinarySession }
+              : {}),
             assertPrincipalCurrent,
             resource: resource && this.#resolvedResource(resource),
             issueResource: (registration) => this.#issueResourceAs(caller, registration).resource,

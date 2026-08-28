@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createProjectCoordinatorCapabilityFactory } from '../main.js'
+import {
+  createProjectCoordinatorCapabilityFactory,
+  type ProjectCoordinatorCapabilityOptions
+} from '../main.js'
 import { createProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
 import { subscribeProjectCoordinatorWorkspaceInvalidation } from './workspace-invalidation.js'
 
 test('renderer invocation approvals stay aligned with the main capability definitions', async () => {
-  const definitions = createProjectCoordinatorCapabilityFactory({
+  const definitions = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
     defineCapability: (input) => input,
-    ports: {} as never
+    ports: {} as never,
+    sessions: {} as never
   }).createDefinitions()
   const invoked: Array<Readonly<{ actionId: string; approval: 'none' | 'confirmation' }>> = []
   const client = createProjectCoordinatorRendererClient({
@@ -24,6 +28,7 @@ test('renderer invocation approvals stay aligned with the main capability defini
 
   await client.readWorkspace(undefined)
   await client.createProject(undefined as never)
+  await client.readSessionProjection()
   await client.readPlanDraft(undefined as never)
   await client.generatePlanDraft(undefined as never)
   await client.editPlanDraft(undefined as never)

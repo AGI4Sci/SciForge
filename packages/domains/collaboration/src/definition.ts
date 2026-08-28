@@ -33,6 +33,15 @@ export const COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRACT =
   domainPackageDefinition.contributionContracts[
     COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRIBUTION.id
   ]!
+export const COLLABORATION_WORKER_SESSION_PROJECTION_CONTRIBUTION = contributionFor(
+  'main',
+  'main.extension',
+  'collaboration.worker-session-projection'
+)
+export const COLLABORATION_WORKER_SESSION_PROJECTION_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    COLLABORATION_WORKER_SESSION_PROJECTION_CONTRIBUTION.id
+  ]!
 export const COLLABORATION_RIGHT_PANEL_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.workbench-right-panel'

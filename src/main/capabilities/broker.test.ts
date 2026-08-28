@@ -166,6 +166,103 @@ describe('Capability resource change events', () => {
   })
 })
 
+describe('ordinary Agent Session invocation provenance', () => {
+  function sessionCapability() {
+    return defineCapability({
+      id: 'session-provenance.inspect',
+      version: '1',
+      title: 'Inspect Session provenance',
+      description: 'Returns only Host-authenticated ordinary Session provenance.',
+      audiences: ['ui', 'agent', 'system'],
+      scope: 'global',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ hint: z.string().optional() }).strict(),
+      outputSchema: z.object({
+        runtimeId: z.string().nullable(),
+        threadId: z.string().nullable()
+      }).strict(),
+      handler: async (_input, context) => ({
+        output: {
+          runtimeId: context.ordinarySession?.runtimeId ?? null,
+          threadId: context.ordinarySession?.threadId ?? null
+        }
+      })
+    })
+  }
+
+  it('accepts provenance only through the Host ordinary Session route', async () => {
+    const broker = new CapabilityBroker(new CapabilityRegistry([sessionCapability()]))
+    const request = {
+      actionId: 'session-provenance.inspect',
+      invocationId: 'session-provenance-agent-1',
+      input: { hint: 'runtime-x/thread-from-input' }
+    }
+
+    await expect(broker.invokeOrdinarySession(agent, request, {
+      runtimeId: 'runtime-x',
+      threadId: 'thread-x'
+    })).resolves.toMatchObject({
+      output: { runtimeId: 'runtime-x', threadId: 'thread-x' }
+    })
+    await expect(broker.invoke(agent, {
+      ...request,
+      invocationId: 'session-provenance-agent-raw'
+    }, {
+      ordinarySession: { runtimeId: 'forged-runtime', threadId: 'forged-thread' }
+    } as never)).resolves.toMatchObject({
+      output: { runtimeId: null, threadId: null }
+    })
+    await expect(broker.invokeOrdinarySession(ui, {
+      ...request,
+      invocationId: 'session-provenance-ui'
+    }, {
+      runtimeId: 'runtime-ui',
+      threadId: 'thread-ui'
+    })).rejects.toSatisfy((error: unknown) => (
+      expectBrokerCode(error, 'invalid_invocation_provenance')
+    ))
+    await expect(broker.invokeOrdinarySession({
+      audience: 'system',
+      callerId: 'system-1'
+    }, {
+      ...request,
+      invocationId: 'session-provenance-system'
+    }, {
+      runtimeId: 'runtime-system',
+      threadId: 'thread-system'
+    })).rejects.toSatisfy((error: unknown) => (
+      expectBrokerCode(error, 'invalid_invocation_provenance')
+    ))
+  })
+
+  it('includes exact ordinary Session identity in mutation idempotency', async () => {
+    const broker = new CapabilityBroker(new CapabilityRegistry([sessionCapability()]))
+    const request = {
+      actionId: 'session-provenance.inspect',
+      invocationId: 'session-provenance-stable',
+      input: {}
+    }
+    const first = await broker.invokeOrdinarySession(agent, request, {
+      runtimeId: 'runtime-a',
+      threadId: 'thread-a'
+    })
+    const replay = await broker.invokeOrdinarySession(agent, request, {
+      runtimeId: 'runtime-a',
+      threadId: 'thread-a'
+    })
+    expect(first.replayed).toBe(false)
+    expect(replay.replayed).toBe(true)
+    await expect(broker.invokeOrdinarySession(agent, request, {
+      runtimeId: 'runtime-a',
+      threadId: 'thread-b'
+    })).rejects.toSatisfy((error: unknown) => (
+      expectBrokerCode(error, 'idempotency_conflict')
+    ))
+  })
+})
+
 describe('CapabilityRegistry', () => {
   it('atomically binds wire metadata, Zod schemas, and one executable handler', () => {
     const handler = vi.fn(async () => ({ output: { text: 'ok' } }))

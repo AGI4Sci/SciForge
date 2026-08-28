@@ -4,6 +4,7 @@ import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   defineTrustedRendererDomainPackageEntry,
   type DomainRendererCommandHandler,
+  type DomainRendererComposerContextProvider,
   type DomainRendererWorkbenchNavigationSectionValue,
   type DomainRendererWorkbenchRightPanelValue,
   type DomainRendererWorkbenchToolbarActionValue,
@@ -13,6 +14,8 @@ import {
 import { projectCoordinatorActivationSchema } from '../contract.js'
 import type { ProjectCoordinatorArtifactReviewPrepareInput } from '../contract.js'
 import {
+  PROJECT_COORDINATOR_COMPOSER_CONTEXT_CONTRACT,
+  PROJECT_COORDINATOR_COMPOSER_CONTEXT_CONTRIBUTION,
   PROJECT_COORDINATOR_I18N_CONTRIBUTION,
   PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRACT,
   PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION,
@@ -25,8 +28,11 @@ import {
 } from '../definition.js'
 import { createProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
 import {
-  ProjectCoordinatorSidebarSection
-} from './ProjectCoordinatorSidebarSection.js'
+  createProjectCoordinatorComposerContextProvider
+} from './composer-context-provider.js'
+import {
+  ProjectCoordinatorNavigationSection
+} from './ProjectCoordinatorNavigationSection.js'
 import {
   projectCoordinatorI18nResourceContribution,
   type ProjectCoordinatorI18nResourceContribution
@@ -47,6 +53,7 @@ export type ProjectCoordinatorRendererContribution =
   | ProjectCoordinatorRightPanelContribution
   | ProjectCoordinatorToolbarActionContribution
   | ProjectCoordinatorNavigationSectionContribution
+  | DomainRendererComposerContextProvider
   | DomainRendererCommandHandler
   | ProjectCoordinatorI18nResourceContribution
 
@@ -145,7 +152,7 @@ export function createProjectCoordinatorNavigationSectionContribution(
   const client = createProjectCoordinatorRendererClient(host.capabilityInvoker)
   return Object.freeze({
     render: (context) => (
-      <ProjectCoordinatorSidebarSection
+      <ProjectCoordinatorNavigationSection
         client={client}
         context={context}
         onCreateProject={() => openCommand.execute({
@@ -188,6 +195,13 @@ export function createDomainRendererEntry(
         value: createProjectCoordinatorNavigationSectionContribution(host, openCommand)
       },
       {
+        ...PROJECT_COORDINATOR_COMPOSER_CONTEXT_CONTRIBUTION,
+        contract: PROJECT_COORDINATOR_COMPOSER_CONTEXT_CONTRACT,
+        value: createProjectCoordinatorComposerContextProvider(
+          createProjectCoordinatorRendererClient(host.capabilityInvoker)
+        )
+      },
+      {
         ...PROJECT_COORDINATOR_I18N_CONTRIBUTION,
         value: projectCoordinatorI18nResourceContribution
       }
@@ -196,7 +210,9 @@ export function createDomainRendererEntry(
 }
 
 export * from './ProjectCoordinatorPanel.js'
+export * from './ProjectCoordinatorNavigationSection.js'
 export * from './ProjectCoordinatorSidebarSection.js'
+export * from './composer-context-provider.js'
 export * from './messages.js'
 export * from './project-coordinator-capability-client.js'
 export * from './workspace-sections.js'

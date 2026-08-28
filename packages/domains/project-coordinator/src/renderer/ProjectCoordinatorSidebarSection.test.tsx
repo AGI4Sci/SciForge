@@ -11,6 +11,9 @@ import {
   projectCoordinatorSidebarReadReducer,
   projectCoordinatorSidebarSessionAliases
 } from './ProjectCoordinatorSidebarSection.js'
+import {
+  projectCoordinatorSidebarBindings
+} from './ProjectCoordinatorNavigationSection.js'
 
 test('Cloud Project reads ignore stale completion and replace identity-scoped rows', () => {
   const first = projectCoordinatorSidebarReadReducer(
@@ -47,6 +50,7 @@ test('Cloud Project reads ignore stale completion and replace identity-scoped ro
       connection: { state: 'identity_required' },
       observedAt: '2026-08-28T00:01:00.000Z',
       availableWorkerUsers: [],
+      providerPrincipalFacts: [],
       projects: []
     }
   })
@@ -148,6 +152,30 @@ test('ordinary Session aliases require an exact canonical binding projection', (
   assert.deepEqual(selected, ['thread-project-1'])
 })
 
+test('sidebar projection strips Principal and authority facts before presentation', () => {
+  assert.deepEqual(projectCoordinatorSidebarBindings({
+    schemaVersion: 1,
+    observedAt: '2026-08-28T00:00:00.000Z',
+    bindings: [{
+      schemaVersion: 1,
+      role: 'coordinator',
+      projectId: 'prj_CurrentProject1',
+      principalUserId: 'usr_ProjectOwner1',
+      coordinatorAgentId: 'agt_ProjectOwner1',
+      coordinatorAuthorityEpoch: 3,
+      runtimeId: 'codex',
+      threadId: 'thread-project-1',
+      boundAt: '2026-08-28T00:00:00.000Z',
+      access: 'coordinator',
+      fenceReason: null
+    }]
+  }), [{
+    projectId: 'prj_CurrentProject1',
+    runtimeId: 'codex',
+    threadId: 'thread-project-1'
+  }])
+})
+
 function workspaceFixture(
   projectId: string,
   displayName: string
@@ -161,6 +189,7 @@ function workspaceFixture(
     observedAt: '2026-08-28T00:00:00.000Z',
     focusedProjectId: projectId,
     availableWorkerUsers: [],
+    providerPrincipalFacts: [],
     projects: [{
       project: {
         type: 'project',
