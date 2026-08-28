@@ -210,7 +210,7 @@ Registered actions: **290**
 | `project-coordinator.membership.add` | 1.0.0 | ui | external-write | confirmation | global |
 | `project-coordinator.membership.remove` | 1.0.0 | ui | destructive | confirmation | global |
 | `project-coordinator.plan-draft.edit` | 1.0.0 | ui | workspace-write | none | global |
-| `project-coordinator.plan-draft.generate` | 1.0.0 | ui | workspace-write | none | global |
+| `project-coordinator.plan-draft.generate` | 2.0.0 | ui | workspace-write | none | global |
 | `project-coordinator.plan-draft.read` | 1.0.0 | ui | read | none | global |
 | `project-coordinator.plan.confirm-activate` | 1.0.0 | ui | external-write | confirmation | global |
 | `project-coordinator.plan.submit` | 1.0.0 | ui | external-write | confirmation | global |
@@ -127406,7 +127406,7 @@ CAS-updates Plan items and exact visible Worker Agent choices.
 
 Runs the configured local Agent Runtime and persists one reviewable non-secret draft.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui
 - Effect: `workspace-write`
 - Approval: none
@@ -127534,7 +127534,6 @@ Runs the configured local Agent Runtime and persists one reviewable non-secret d
   },
   "outputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "definitions": {
       "__schema0": {
         "anyOf": [
@@ -127568,417 +127567,460 @@ Runs the configured local Agent Runtime and persists one reviewable non-secret d
         ]
       }
     },
-    "properties": {
-      "assignments": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "planItemId": {
-              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-              "type": "string"
-            },
-            "recommendationReason": {
-              "anyOf": [
-                {
-                  "maxLength": 2000,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "workerUserId": {
-              "anyOf": [
-                {
-                  "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "readOnly": true,
-          "required": [
-            "planItemId",
-            "workerUserId",
-            "recommendationReason"
-          ],
-          "type": "object"
-        },
-        "maxItems": 1000,
-        "minItems": 1,
-        "type": "array"
-      },
-      "createdAt": {
-        "format": "date-time",
-        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-        "type": "string"
-      },
-      "draftId": {
-        "pattern": "^draft_[A-Za-z0-9](?:[A-Za-z0-9_-]{10,95}[A-Za-z0-9])$",
-        "type": "string"
-      },
-      "draftRevision": {
-        "maximum": 9007199254740991,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "expectedCoordinatorAuthorityEpoch": {
-        "maximum": 9007199254740991,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "expectedProjectRevision": {
-        "maximum": 9007199254740991,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "projectId": {
-        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-        "type": "string"
-      },
-      "rationale": {
-        "maxLength": 2000,
-        "minLength": 1,
-        "type": "string"
-      },
-      "runtimeProvenance": {
+    "oneOf": [
+      {
         "additionalProperties": false,
         "properties": {
-          "generatedAt": {
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-            "type": "string"
-          },
-          "generatedByCoordinatorAgentId": {
-            "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-            "type": "string"
-          },
-          "modelId": {
-            "anyOf": [
-              {
-                "maxLength": 256,
-                "minLength": 1,
+          "draft": {
+            "additionalProperties": false,
+            "properties": {
+              "assignments": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "planItemId": {
+                      "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    "recommendationReason": {
+                      "anyOf": [
+                        {
+                          "maxLength": 2000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "workerUserId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "readOnly": true,
+                  "required": [
+                    "planItemId",
+                    "workerUserId",
+                    "recommendationReason"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 1000,
+                "minItems": 1,
+                "type": "array"
+              },
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
                 "type": "string"
               },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "runtimeId": {
-            "maxLength": 128,
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": [
-          "runtimeId",
-          "modelId",
-          "generatedByCoordinatorAgentId",
-          "generatedAt"
-        ],
-        "type": "object"
-      },
-      "sourceInputLocators": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "authority": {
-              "maxLength": 256,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-              "type": "string"
-            },
-            "contractVersion": {
-              "const": 1,
-              "type": "number"
-            },
-            "identity": {
-              "additionalProperties": {
-                "$ref": "#/definitions/__schema0"
-              },
-              "propertyNames": {
+              "draftId": {
+                "pattern": "^draft_[A-Za-z0-9](?:[A-Za-z0-9_-]{10,95}[A-Za-z0-9])$",
                 "type": "string"
               },
-              "type": "object"
-            },
-            "kind": {
-              "enum": [
-                "content-space.file-reference",
-                "content-space.container-reference",
-                "content-space.artifact-reference"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "contractVersion",
-            "kind",
-            "authority",
-            "identity"
-          ],
-          "type": "object"
-        },
-        "maxItems": 100,
-        "type": "array"
-      },
-      "supersedesProjectPlanId": {
-        "anyOf": [
-          {
-            "pattern": "^pln_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "tasks": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "completionCriteria": {
-              "items": {
+              "draftRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "expectedCoordinatorAuthorityEpoch": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "expectedProjectRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "projectId": {
+                "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "rationale": {
                 "maxLength": 2000,
                 "minLength": 1,
                 "type": "string"
               },
-              "maxItems": 100,
-              "minItems": 1,
-              "type": "array"
-            },
-            "dependencyPlanItemIds": {
-              "items": {
-                "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                "type": "string"
+              "runtimeProvenance": {
+                "additionalProperties": false,
+                "properties": {
+                  "generatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "generatedByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "modelId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "runtimeId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "runtimeId",
+                  "modelId",
+                  "generatedByCoordinatorAgentId",
+                  "generatedAt"
+                ],
+                "type": "object"
               },
-              "maxItems": 1000,
-              "type": "array"
-            },
-            "fileIntent": {
-              "anyOf": [
-                {
+              "sourceInputLocators": {
+                "items": {
                   "additionalProperties": false,
                   "properties": {
-                    "bindingRevision": {
-                      "maximum": 9007199254740991,
-                      "minimum": 1,
-                      "type": "integer"
+                    "authority": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                      "type": "string"
                     },
-                    "inputs": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "destinationName": {
-                            "maxLength": 128,
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "expectedMediaType": {
-                            "anyOf": [
-                              {
-                                "maxLength": 256,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "expectedSemanticRevision": {
-                            "anyOf": [
-                              {
-                                "maxLength": 256,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "kind": {
-                            "const": "content-space.input-file",
-                            "type": "string"
-                          },
-                          "locator": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "authority": {
-                                "maxLength": 256,
-                                "minLength": 1,
-                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                "type": "string"
-                              },
-                              "contractVersion": {
-                                "const": 1,
-                                "type": "number"
-                              },
-                              "identity": {
-                                "additionalProperties": {
-                                  "$ref": "#/definitions/__schema0"
-                                },
-                                "propertyNames": {
-                                  "type": "string"
-                                },
-                                "type": "object"
-                              },
-                              "kind": {
-                                "enum": [
-                                  "content-space.file-reference",
-                                  "content-space.container-reference",
-                                  "content-space.artifact-reference"
-                                ],
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "contractVersion",
-                              "kind",
-                              "authority",
-                              "identity"
-                            ],
-                            "type": "object"
-                          }
-                        },
-                        "required": [
-                          "kind",
-                          "locator",
-                          "destinationName",
-                          "expectedSemanticRevision",
-                          "expectedMediaType"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 100,
-                      "type": "array"
-                    },
-                    "output": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "fileName": {
-                          "maxLength": 128,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "kind": {
-                          "const": "content-space.output-new",
-                          "type": "string"
-                        },
-                        "maxBytes": {
-                          "maximum": 1073741824,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "mediaType": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "mode": {
-                          "const": "upload-new",
-                          "type": "string"
-                        },
-                        "target": {
-                          "const": "project-binding-root",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "kind",
-                        "target",
-                        "mode",
-                        "fileName",
-                        "mediaType",
-                        "maxBytes"
-                      ],
-                      "type": "object"
-                    },
-                    "schemaVersion": {
+                    "contractVersion": {
                       "const": 1,
                       "type": "number"
+                    },
+                    "identity": {
+                      "additionalProperties": {
+                        "$ref": "#/definitions/__schema0"
+                      },
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "kind": {
+                      "enum": [
+                        "content-space.file-reference",
+                        "content-space.container-reference",
+                        "content-space.artifact-reference"
+                      ],
+                      "type": "string"
                     }
                   },
                   "required": [
-                    "schemaVersion",
-                    "bindingRevision",
-                    "inputs",
-                    "output"
+                    "contractVersion",
+                    "kind",
+                    "authority",
+                    "identity"
                   ],
                   "type": "object"
                 },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "objective": {
-              "maxLength": 32000,
-              "minLength": 1,
-              "type": "string"
-            },
-            "planItemId": {
-              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-              "type": "string"
-            },
-            "requiredCapabilityTags": {
-              "items": {
-                "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                "type": "string"
+                "maxItems": 100,
+                "type": "array"
               },
-              "maxItems": 256,
-              "type": "array"
+              "supersedesProjectPlanId": {
+                "anyOf": [
+                  {
+                    "pattern": "^pln_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "tasks": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "completionCriteria": {
+                      "items": {
+                        "maxLength": 2000,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 100,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "dependencyPlanItemIds": {
+                      "items": {
+                        "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    },
+                    "fileIntent": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "bindingRevision": {
+                              "maximum": 9007199254740991,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "inputs": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "destinationName": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "expectedMediaType": {
+                                    "anyOf": [
+                                      {
+                                        "maxLength": 256,
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "expectedSemanticRevision": {
+                                    "anyOf": [
+                                      {
+                                        "maxLength": 256,
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "kind": {
+                                    "const": "content-space.input-file",
+                                    "type": "string"
+                                  },
+                                  "locator": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "authority": {
+                                        "maxLength": 256,
+                                        "minLength": 1,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                        "type": "string"
+                                      },
+                                      "contractVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "identity": {
+                                        "additionalProperties": {
+                                          "$ref": "#/definitions/__schema0"
+                                        },
+                                        "propertyNames": {
+                                          "type": "string"
+                                        },
+                                        "type": "object"
+                                      },
+                                      "kind": {
+                                        "enum": [
+                                          "content-space.file-reference",
+                                          "content-space.container-reference",
+                                          "content-space.artifact-reference"
+                                        ],
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "contractVersion",
+                                      "kind",
+                                      "authority",
+                                      "identity"
+                                    ],
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "locator",
+                                  "destinationName",
+                                  "expectedSemanticRevision",
+                                  "expectedMediaType"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 100,
+                              "type": "array"
+                            },
+                            "output": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fileName": {
+                                  "maxLength": 128,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "const": "content-space.output-new",
+                                  "type": "string"
+                                },
+                                "maxBytes": {
+                                  "maximum": 1073741824,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "mediaType": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "mode": {
+                                  "const": "upload-new",
+                                  "type": "string"
+                                },
+                                "target": {
+                                  "const": "project-binding-root",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "target",
+                                "mode",
+                                "fileName",
+                                "mediaType",
+                                "maxBytes"
+                              ],
+                              "type": "object"
+                            },
+                            "schemaVersion": {
+                              "const": 1,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "schemaVersion",
+                            "bindingRevision",
+                            "inputs",
+                            "output"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "objective": {
+                      "maxLength": 32000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "planItemId": {
+                      "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    "requiredCapabilityTags": {
+                      "items": {
+                        "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                        "type": "string"
+                      },
+                      "maxItems": 256,
+                      "type": "array"
+                    },
+                    "title": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "planItemId",
+                    "title",
+                    "objective",
+                    "completionCriteria",
+                    "dependencyPlanItemIds",
+                    "requiredCapabilityTags",
+                    "fileIntent"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 1000,
+                "minItems": 1,
+                "type": "array"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              }
             },
-            "title": {
-              "maxLength": 200,
-              "minLength": 1,
-              "type": "string"
-            }
+            "readOnly": true,
+            "required": [
+              "draftId",
+              "draftRevision",
+              "projectId",
+              "expectedProjectRevision",
+              "expectedCoordinatorAuthorityEpoch",
+              "supersedesProjectPlanId",
+              "sourceInputLocators",
+              "tasks",
+              "rationale",
+              "runtimeProvenance",
+              "assignments",
+              "createdAt",
+              "updatedAt"
+            ],
+            "type": "object"
           },
-          "required": [
-            "planItemId",
-            "title",
-            "objective",
-            "completionCriteria",
-            "dependencyPlanItemIds",
-            "requiredCapabilityTags",
-            "fileIntent"
-          ],
-          "type": "object"
+          "status": {
+            "const": "generated",
+            "type": "string"
+          }
         },
-        "maxItems": 1000,
-        "minItems": 1,
-        "type": "array"
+        "readOnly": true,
+        "required": [
+          "status",
+          "draft"
+        ],
+        "type": "object"
       },
-      "updatedAt": {
-        "format": "date-time",
-        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-        "type": "string"
+      {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "enum": [
+              "runtime_unavailable",
+              "runtime_execution_failed",
+              "invalid_structured_output"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "const": "failed",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "status",
+          "reason"
+        ],
+        "type": "object"
       }
-    },
-    "readOnly": true,
-    "required": [
-      "draftId",
-      "draftRevision",
-      "projectId",
-      "expectedProjectRevision",
-      "expectedCoordinatorAuthorityEpoch",
-      "supersedesProjectPlanId",
-      "sourceInputLocators",
-      "tasks",
-      "rationale",
-      "runtimeProvenance",
-      "assignments",
-      "createdAt",
-      "updatedAt"
-    ],
-    "type": "object"
+    ]
   },
   "resourceKinds": [],
   "tags": [

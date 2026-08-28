@@ -65,6 +65,12 @@ describe('agent execution host contract', () => {
       model: 'frontier',
       reasoningEffort: 'high',
       allowedTools: ['sciforge_discover', 'sciforge_invoke'],
+      outputSchema: {
+        type: 'object',
+        properties: { result: { type: 'string' } },
+        required: ['result'],
+        additionalProperties: false
+      },
       interaction: 'reviewable',
       mode: 'agent',
       signal: controller.signal
@@ -120,6 +126,10 @@ describe('agent execution host contract', () => {
       runtimeId: 'sciforge',
       prompt: 'Continue.',
       privateThreadStore: {}
+    }), z.ZodError)
+    assert.throws(() => domainMainAgentExecutionRequestSchema.parse({
+      prompt: 'Return a scalar.',
+      outputSchema: 'string'
     }), z.ZodError)
   })
 

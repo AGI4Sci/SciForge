@@ -11,6 +11,7 @@ import {
   projectCoordinatorContentRecoveryRetrySuccessorInputSchema,
   projectCoordinatorMembershipAddInputSchema,
   projectCoordinatorMembershipRemoveInputSchema,
+  projectCoordinatorPlanDraftGenerateResultSchema,
   projectCoordinatorProvisioningApplyInputSchema,
   projectCoordinatorTransferInputSchema,
   projectCoordinatorWorkspaceSchema
@@ -18,6 +19,21 @@ import {
 
 const createdAt = '2026-08-24T08:00:00.000Z'
 const updatedAt = '2026-08-24T09:00:00.000Z'
+
+test('Plan draft generation failures expose only bounded package-owned reasons', () => {
+  assert.deepEqual(projectCoordinatorPlanDraftGenerateResultSchema.parse({
+    status: 'failed',
+    reason: 'invalid_structured_output'
+  }), {
+    status: 'failed',
+    reason: 'invalid_structured_output'
+  })
+  assert.throws(() => projectCoordinatorPlanDraftGenerateResultSchema.parse({
+    status: 'failed',
+    reason: 'provider_raw_error',
+    details: 'must not cross the UI boundary'
+  }))
+})
 
 const fixture = {
   connection: {

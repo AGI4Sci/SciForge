@@ -213,6 +213,7 @@ type CodexPendingTurnRecovery = {
   workspace: string
   model?: string
   reasoningEffort?: string
+  outputSchema?: Readonly<Record<string, unknown>>
   fileReferences?: CodexTurnStartPayload['fileReferences']
   ownedVisualToolsAvailable: boolean
   nativeVisualProofChainPending: boolean
@@ -1035,6 +1036,7 @@ export class CodexRuntimeService {
             workspace,
             model: runtimeModel,
             reasoningEffort: payload.reasoningEffort,
+            outputSchema: payload.outputSchema,
             fileReferences: payload.fileReferences,
             runtime
           })
@@ -1068,6 +1070,7 @@ export class CodexRuntimeService {
             workspace,
             model: runtimeModel,
             reasoningEffort: payload.reasoningEffort,
+            outputSchema: payload.outputSchema,
             fileReferences: payload.fileReferences,
             runtime
           })
@@ -1089,6 +1092,7 @@ export class CodexRuntimeService {
         workspace,
         model: runtimeModel,
         reasoningEffort: payload.reasoningEffort,
+        outputSchema: payload.outputSchema,
         fileReferences: payload.fileReferences,
         ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
         nativeVisualProofChainPending: payload.nativeVisualProofChainPending === true,
@@ -2923,6 +2927,7 @@ export class CodexRuntimeService {
           workspace: recovery.workspace,
           model: recovery.model,
           reasoningEffort: recovery.reasoningEffort,
+          outputSchema: recovery.outputSchema,
           fileReferences: recovery.fileReferences,
           runtime: recovery.runtime
         })
@@ -4110,6 +4115,7 @@ async function turnStartParams(input: {
   workspace: string
   model?: string
   reasoningEffort?: string
+  outputSchema?: Readonly<Record<string, unknown>>
   fileReferences?: CodexTurnStartPayload['fileReferences']
   runtime: ReturnType<typeof getCodexRuntimeSettings>
 }): Promise<Parameters<CodexAppServerJsonRpcClient['startTurn']>[0]> {
@@ -4126,6 +4132,7 @@ async function turnStartParams(input: {
     }),
     cwd: input.workspace,
     ...(input.model ? { model: input.model } : {}),
+    ...(input.outputSchema ? { outputSchema: { ...input.outputSchema } } : {}),
     approvalPolicy: mapApprovalPolicy(input.runtime.approvalPolicy, input.runtime.sandboxMode),
     sandboxPolicy: mapTurnSandboxMode(input.runtime.sandboxMode, input.workspace),
     ...codexAppServerTurnReasoningParams({

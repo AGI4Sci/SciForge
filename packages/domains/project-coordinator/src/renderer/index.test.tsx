@@ -832,6 +832,8 @@ test('content-required provisioning, membership fences, and root recovery are de
   assert.match(pendingMarkup, /pending_membership/u)
   assert.match(pendingMarkup, /membership_removal_pending/u)
   assert.match(pendingMarkup, /projectCoordinatorTaskAuthoritySuspended/u)
+  assert.match(pendingMarkup, /projectCoordinatorContentReadinessPending/u)
+  assert.doesNotMatch(pendingMarkup, />not_applicable</u)
   assert.match(pendingMarkup, /projectCoordinatorAddMember/u)
   assert.match(pendingMarkup, /projectCoordinatorRemoveMember/u)
 
@@ -852,6 +854,21 @@ test('content-required provisioning, membership fences, and root recovery are de
   assert.match(reviewedMarkup, /content-space\.agent-admin-add-member/u)
   assert.match(reviewedMarkup, /projectCoordinatorApplyProvisioning/u)
   assert.match(reviewedMarkup, new RegExp(provisioningPlanFixture().confirmedPlanDigest, 'u'))
+
+  const contentFreeMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorProvisioningSection, {
+    project: awaitingConfirmationProjectFixture(),
+    plan: null,
+    busy: false,
+    onPreview: () => undefined,
+    onApply: () => undefined,
+    onAddMember: () => undefined,
+    onRemoveMember: () => undefined,
+    onObserveAndLinkRecovery: () => undefined,
+    onAbandonRecovery: () => undefined,
+    onRetryRecoverySuccessor: () => undefined
+  }))
+  assert.match(contentFreeMarkup, /projectCoordinatorContentNotRequired/u)
+  assert.doesNotMatch(contentFreeMarkup, />not_applicable</u)
 
   const degraded = {
     ...project,

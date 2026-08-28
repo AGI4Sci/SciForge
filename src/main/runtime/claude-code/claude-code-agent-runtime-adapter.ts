@@ -34,6 +34,7 @@ export function createClaudeCodeAgentRuntimeAdapter(
       displayText: input.displayText,
       workspace: input.workspace,
       reasoningEffort: input.reasoningEffort,
+      ...(input.outputSchema ? { outputSchema: input.outputSchema } : {}),
       fileReferences: input.fileReferences,
       ...(input.allowedTools ? { allowedTools: input.allowedTools } : {}),
       ...(requested ? {

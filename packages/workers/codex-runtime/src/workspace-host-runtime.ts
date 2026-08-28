@@ -10,6 +10,7 @@ import {
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
+import { domainMainAgentExecutionOutputSchemaSchema } from '@sciforge/domain-sdk/agent-execution'
 import {
   WORKSPACE_HOST_EVENT_KINDS,
   WORKSPACE_HOST_OPERATIONS,
@@ -575,6 +576,9 @@ export class CodexWorkspaceHostRuntime {
     const workspace = await this.#containedWorkspace(
       stringValue(input.workspace) || binding?.workspace
     )
+    const outputSchema = input.outputSchema === undefined
+      ? undefined
+      : domainMainAgentExecutionOutputSchemaSchema.parse(input.outputSchema)
     let response: unknown
     try {
       response = await client.startTurn({
@@ -586,6 +590,7 @@ export class CodexWorkspaceHostRuntime {
         }),
         cwd: workspace,
         ...(stringValue(input.model) ? { model: stringValue(input.model) } : {}),
+        ...(outputSchema ? { outputSchema } : {}),
         approvalPolicy: 'on-request',
         sandboxPolicy: {
           type: 'workspaceWrite',

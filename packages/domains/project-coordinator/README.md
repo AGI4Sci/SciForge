@@ -80,8 +80,10 @@ Identity's token-free User transport and never becomes a second ProjectRecord
 writer. OIDC material never enters this package. Local Plan drafts are
 non-secret package settings guarded by revision compare-and-set. Plan generation
 uses the Host-provided Agent Runtime only after the runtime lifecycle has
-activated; missing Runtime, identity, Device, Cloud, or exact Project facts fail
-closed.
+activated. It supplies a strict structured-output schema and returns only
+package-owned bounded failure reasons to the renderer; provider diagnostics do
+not cross the capability boundary. Missing Runtime, identity, Device, Cloud, or
+exact Project facts fail closed.
 
 Project Content provisioning is a package-owned saga over existing ordinary
 Content Space capabilities. The runtime lifecycle requests only
@@ -125,11 +127,21 @@ cards are default-visible. There is no renderer transport, HTTP client,
 Provider adapter, or second Cloud DTO.
 
 Plan generation exposes Worker identity only at User level while preserving
-anonymous per-Runtime profiles that keep capability tags paired with that same
-Runtime's eligible Task scopes. It never unions facts across a User's devices.
-Generation, assignment edits, and a fresh pre-submit read each require one
-currently eligible Runtime to satisfy the complete Task profile; Cloud
-revalidates the same facts again during offer creation and claim.
+anonymous per-Runtime profiles that keep capability tags paired with the same
+Runtime's planning scopes. It never unions facts across a User's devices. For a
+`draft` or `paused` Project, an active member's authority row suspended solely
+because of `project_paused` is prospective planning evidence: generation,
+assignment edits, and pre-submit validation may use that scope without treating
+it as execution authority. For an active Project, the same checks require an
+actually `eligible` authority. Every other suspension or fence fails closed.
+This separates Plan construction from the post-activation offer/claim gate and
+prevents the Plan-confirmation lifecycle from depending on its own future
+activation.
+
+The Runtime must return the canonical seven Task fields under the supplied JSON
+Schema. For file Tasks it may select only a bounded `sourceInputIndex`; main
+binds the exact caller-provided portable locator and the current content binding
+revision. The model cannot author a locator identity or Provider authority.
 
 Owner confirmation activates the Project and dispatches each dependency-free
 initial Plan item through the canonical Coordinator Agent command service. Main
@@ -139,3 +151,8 @@ contains only `workerUserId`; Cloud broadcasts the pending Offer to all eligible
 Runtime Agents owned by that User, and the first Device claim creates the exact
 Task Execution. No Agent identity or availability revision is supplied by the
 renderer or persisted as a pre-claim assignment.
+
+Renderer content-readiness labels remain separate from local Runtime
+capability. A content-free Project is shown as not requiring shared files, while
+a content-required member without a readiness fact is shown as pending; neither
+state implies that the Device failed to publish Agent capabilities.
