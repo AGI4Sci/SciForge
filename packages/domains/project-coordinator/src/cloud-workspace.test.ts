@@ -57,22 +57,7 @@ test('current Device Agent Project create returns a workspace focused on the exa
       pages: [{
         collection: 'user_label_facts',
         limit: 250,
-        items: [userLabelFixture('usr_Owner0000001', 'Owner')],
-        nextCursor: 'cursor-user-page-2'
-      }],
-      finalSummary: null
-    }),
-    response(200, {
-      protocolVersion: '1.0',
-      type: 'rest.project_coordination',
-      requestId: 'req_ReadProject00002',
-      project,
-      observedAt: updatedAt,
-      pages: [{
-        collection: 'user_label_facts',
-        cursor: 'cursor-user-page-2',
-        limit: 250,
-        items: [userLabelFixture('usr_Worker000001', 'Worker')]
+        items: [userLabelFixture('usr_Owner0000001', 'Owner')]
       }],
       finalSummary: null
     })
@@ -125,8 +110,7 @@ test('current Device Agent Project create returns a workspace focused on the exa
   assert.equal(result.createdProjectId, project.projectId)
   assert.equal(result.workspace.focusedProjectId, project.projectId)
   assert.deepEqual(result.workspace.projects[1]?.memberUsers.map(({ userId }) => userId), [
-    'usr_Owner0000001',
-    'usr_Worker000001'
+    'usr_Owner0000001'
   ])
   assert.deepEqual(
     result.workspace.projects.map(({ project }) => project.projectId),
@@ -139,7 +123,6 @@ test('current Device Agent Project create returns a workspace focused on the exa
       'project.list',
       'worker.availability.list',
       'provider_directory_principal.list',
-      'project.coordination.read',
       'project.coordination.read'
     ]
   )
@@ -161,10 +144,7 @@ test('current Device Agent Project create returns a workspace focused on the exa
     requests.slice(4).map(({ payload }) => (
       payload.type === 'project.coordination.read' ? payload.collections : []
     )),
-    [
-      expectProjectCollections(),
-      [{ collection: 'user_label_facts', cursor: 'cursor-user-page-2', limit: 250 }]
-    ]
+    [expectProjectCollections()]
   )
 })
 

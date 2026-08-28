@@ -184,8 +184,7 @@ async function createActiveTextProject(rig, { owner, members, coordinator, tasks
     idempotencyKey: `idem_project_${key}`,
     displayName: `Project ${key}`,
     goal: `Canonical collaboration goal ${key}`,
-    budget: { maxTasks: 20, maxTasksPerRound: 20, maxTaskRetries: 1, maxCoordinationRounds: 5 },
-    content: { mode: 'none', members: [owner, ...members].map(({ userId }) => ({ userId })) }
+    budget: { maxTasks: 20, maxTasksPerRound: 20, maxTaskRetries: 1, maxCoordinationRounds: 5 }
   })
   const project = created.project
   const planFacts = {
@@ -221,17 +220,42 @@ async function createActiveTextProject(rig, { owner, members, coordinator, tasks
     expectedProjectRevision: project.revision + 1,
     expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
     expectedPlanRevision: submitted.revision,
-    planDigest: submitted.planDigest
+    planDigest: submitted.planDigest,
+    initialTeam: {
+      mode: 'none',
+      members: [owner, ...members].map(({ userId }) => ({ userId }))
+    }
   })
+  for (const member of members) {
+    const membership = await rig.repository.getProjectMember(project.projectId, member.userId)
+    assert.ok(membership)
+    const currentProject = await rig.repository.getProject(project.projectId)
+    assert.ok(currentProject)
+    await rig.service.acceptProjectMembership(member.actor, {
+      protocolVersion: '1.0',
+      type: 'project.membership.accept',
+      requestId: `req_membership_accept_${key}_${member.userId}`,
+      idempotencyKey: `idem_membership_accept_${key}_${member.userId}`,
+      projectId: project.projectId,
+      projectMembershipId: membership.projectMembershipId,
+      expectedProjectRevision: currentProject.revision,
+      expectedMembershipRevision: membership.revision,
+      projectPlanId: confirmed.projectPlanId,
+      expectedPlanRevision: confirmed.revision,
+      planDigest: confirmed.planDigest
+    })
+  }
+  const readyProject = await rig.repository.getProject(project.projectId)
+  assert.ok(readyProject)
   const active = await rig.service.transitionProject(owner.actor, {
     protocolVersion: '1.0',
     type: 'project.transition',
     requestId: `req_project_activate_${key}`,
     idempotencyKey: `idem_project_activate_${key}`,
     projectId: project.projectId,
-    expectedRevision: project.revision + 2,
-    expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
-    expectedExecutionAuthorityEpoch: project.executionAuthorityEpoch,
+    expectedRevision: readyProject.revision,
+    expectedCoordinatorAuthorityEpoch: readyProject.coordinatorAuthorityEpoch,
+    expectedExecutionAuthorityEpoch: readyProject.executionAuthorityEpoch,
     status: 'active'
   })
   return { created, project: active, plan: confirmed }
@@ -559,7 +583,8 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
     idempotencyKey: 'idem_handoff_plan_confirm', projectId: pausedAfterHandoff.projectId,
     projectPlanId: submittedHandoffPlan.projectPlanId, expectedProjectRevision: pausedAfterHandoff.revision + 1,
     expectedCoordinatorAuthorityEpoch: pausedAfterHandoff.coordinatorAuthorityEpoch,
-    expectedPlanRevision: submittedHandoffPlan.revision, planDigest: submittedHandoffPlan.planDigest
+    expectedPlanRevision: submittedHandoffPlan.revision, planDigest: submittedHandoffPlan.planDigest,
+    initialTeam: null
   })
   const confirmedHandoffProject = await rig.repository.getProject(handedOff.projectId)
   const resumedAfterHandoff = await restarted.transitionProject(a.actor, {
@@ -585,7 +610,6 @@ test('8.4 canonical service bounds payloads and blocks sensitive Project Record 
     displayName: '超限 Project',
     goal: 'x'.repeat(32_001),
     budget: { maxTasks: 2, maxTasksPerRound: 2, maxTaskRetries: 1, maxCoordinationRounds: 1 },
-    content: { mode: 'none', members: [{ userId: a.userId }] },
     idempotencyKey: 'idem_oversized_project'
   }))
 
@@ -594,7 +618,6 @@ test('8.4 canonical service bounds payloads and blocks sensitive Project Record 
     displayName: '安全记录 Project',
     goal: '安全记录测试',
     budget: { maxTasks: 2, maxTasksPerRound: 2, maxTaskRetries: 1, maxCoordinationRounds: 1 },
-    content: { mode: 'none', members: [{ userId: a.userId }] },
     idempotencyKey: 'idem_security_project'
   })
   const sensitiveSummary = `${['api', 'key'].join('_')}=${['runtime', 'only', 'material'].join('-')}`

@@ -38,10 +38,6 @@ const commands = [
       maxTasksPerRound: 5,
       maxTaskRetries: 1,
       maxCoordinationRounds: 2
-    },
-    content: {
-      mode: 'none' as const,
-      members: [{ userId: TEST_IDS.userId }]
     }
   },
   {
