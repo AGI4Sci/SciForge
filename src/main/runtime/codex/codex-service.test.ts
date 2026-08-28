@@ -3279,9 +3279,11 @@ process.stdout.write(JSON.stringify({
 
     await expect(service.getCodingPlanAccount()).resolves.toMatchObject({ ok: true })
     expect(client.listHooks).not.toHaveBeenCalled()
+    expect(service.isClientWarm()).toBe(false)
     await expect(service.connect()).resolves.toMatchObject({ ok: true })
     expect(client.listHooks).toHaveBeenCalledTimes(2)
     expect(client.writeConfigBatch).toHaveBeenCalledOnce()
+    expect(service.isClientWarm()).toBe(true)
     const trustWrite = vi.mocked(client.writeConfigBatch).mock.calls[0]?.[0]
     expect(trustWrite).toMatchObject({
       edits: [
@@ -6657,6 +6659,43 @@ process.stdout.write(JSON.stringify({
       ok: true,
       loginId: 'concurrent-login-1'
     })
+  })
+
+  it('fails account login closed when the app-server transport disconnects', async () => {
+    const queued = clientWithQueuedEvents()
+    Object.assign(queued.client, {
+      startAccountLogin: vi.fn(async () => ({
+        type: 'chatgpt' as const,
+        loginId: 'disconnected-login-1',
+        authUrl: 'https://auth.example/login'
+      }))
+    })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      managedCodexHome: await tempRoot(),
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' },
+      createClient: () => queued.client
+    })
+
+    await expect(service.startCodingPlanLogin({ method: 'browser' })).resolves.toMatchObject({
+      ok: true,
+      loginId: 'disconnected-login-1'
+    })
+    const completion = service.waitForCodingPlanLogin('disconnected-login-1')
+    queued.push({
+      type: 'closed',
+      channel: CODEX_MAIN_IPC_CHANNELS.closed,
+      reason: 'error'
+    })
+
+    await expect(completion).resolves.toMatchObject({
+      ok: true,
+      success: false,
+      error: expect.stringContaining('disconnected before login completed')
+    })
+    await vi.waitFor(() => expect(queued.client.stop).toHaveBeenCalledOnce())
+    expect(service.isClientWarm()).toBe(false)
+    queued.close()
   })
 
   it('keeps the OAuth callback app-server alive while persisted model access still differs', async () => {

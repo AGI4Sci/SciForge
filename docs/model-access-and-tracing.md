@@ -31,6 +31,8 @@ Coding-plan access is handled by Plan Gateway adapters. Plan Gateway binds only 
 
 The initial Codex adapter uses a SciForge-managed Codex home and Codex app-server's official ChatGPT login flow. Codex owns token persistence and refresh. SciForge does not copy the user's default Codex home, parse its authentication files, or silently switch to an API key when subscription access fails.
 
+Account operations and Agent turns share one canonical Codex app-server session. Browser login, device-code login, account refresh, logout, and rate-limit reads require only an initialized app-server transport and retain that transport until the account operation or OAuth callback completes. Before the same session can execute an Agent turn, SciForge separately verifies the owned PreToolUse governance hook. An account-ready session is therefore not runtime-ready, and a runtime-only hook failure cannot cancel an otherwise healthy account flow. A real app-server disconnect still terminates both readiness layers and fails any pending login closed.
+
 ## Full trace boundary
 
 The unified local trace contains all information visible at SciForge's boundaries:
@@ -53,8 +55,9 @@ Automated tests use fake upstreams and must cover:
 3. no fallback after authentication, quota, rate-limit, timeout, or ambiguous failures;
 4. loopback-only Plan Gateway binding and route/header enforcement;
 5. Codex plan provider generation with OpenAI authentication required and no API-key environment variable;
-6. full request/stream/Agent correlation and mandatory secret exclusion;
-7. retention, export, clear, and setup diagnostics.
+6. one canonical Codex client across account and runtime readiness, with account-operation leases and mandatory runtime hook verification;
+7. full request/stream/Agent correlation and mandatory secret exclusion;
+8. retention, export, clear, and setup diagnostics.
 
 A live Codex Plan smoke test is opt-in because it consumes the tester's subscription quota:
 
