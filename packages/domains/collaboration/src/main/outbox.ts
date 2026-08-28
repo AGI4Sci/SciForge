@@ -335,6 +335,8 @@ function assertExpectedWriteResponse(
   let expected: boolean
   if (kind === 'task.offer-decision' && request.type === 'task.offer.accept') {
     expected = isExpectedTaskOfferClaimResponse(request, response)
+  } else if (kind === 'task.external-operation') {
+    expected = isExpectedExternalOperationResponse(request, response)
   } else if (kind === 'task.progress' && request.type === 'task.execution.start') {
     expected = isExpectedTaskExecutionStartResponse(request, response, actor)
   } else if (kind === 'task.failed' && request.type === 'task.execution.fail') {
@@ -352,6 +354,105 @@ function assertExpectedWriteResponse(
     expected = response.type === 'rest.receipt' || response.type === 'rest.entity'
   }
   if (!expected) throw new Error(`Cloud write returned unexpected ${response.type}.`)
+}
+
+function isExpectedExternalOperationResponse(
+  request: RestRequest,
+  response: Exclude<RestResponse, { type: 'rest.error' }>
+): boolean {
+  if (response.requestId !== request.requestId) return false
+  if (request.type === 'external_operation.prepare') {
+    if (
+      response.type !== 'rest.entity' ||
+      response.entity.type !== 'external_operation_recovery_journal_entry'
+    ) return false
+    const journal = response.entity
+    return journal.scope === request.scope &&
+      journal.projectId === request.projectId &&
+      journal.taskId === request.taskId &&
+      journal.executionId === request.executionId &&
+      journal.preparedTaskRevision === request.preparedTaskRevision &&
+      journal.preparedExecutionRevision === request.preparedExecutionRevision &&
+      journal.provisioningIntentId === request.provisioningIntentId &&
+      journal.provisioningRevision === request.provisioningRevision &&
+      journal.logicalInvocationId === request.logicalInvocationId &&
+      journal.operation === request.operation &&
+      journal.state === 'prepared' &&
+      journal.requestDigest === request.requestDigest &&
+      journal.receiptDigest === null &&
+      journal.observationDigest === null &&
+      journal.safeFailureCode === null &&
+      journal.dispatchedAt === null &&
+      journal.resolvedAt === null &&
+      journal.revision === 1
+  }
+  if (request.type === 'external_operation.dispatch') {
+    if (
+      response.type !== 'rest.entity' ||
+      response.entity.type !== 'external_operation_recovery_journal_entry'
+    ) return false
+    const journal = response.entity
+    return journal.contentRecoveryJournalEntryId === request.journalEntryId &&
+      journal.state === 'dispatched' &&
+      journal.receiptDigest === null &&
+      journal.observationDigest === null &&
+      journal.safeFailureCode === null &&
+      journal.dispatchedAt !== null &&
+      journal.resolvedAt === null &&
+      journal.revision === request.expectedJournalRevision + 1
+  }
+  if (request.type !== 'external_operation.observe') return false
+  if (
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length < 1
+  ) return false
+  const [journal, ...companions] = response.items
+  if (
+    journal?.type !== 'external_operation_recovery_journal_entry' ||
+    journal.contentRecoveryJournalEntryId !== request.journalEntryId ||
+    journal.state !== request.outcome ||
+    journal.receiptDigest !== request.receiptDigest ||
+    journal.observationDigest !== request.observationDigest ||
+    journal.safeFailureCode !== request.safeFailureCode ||
+    journal.revision !== request.expectedJournalRevision + 1 ||
+    (request.outcome === 'outcome_unknown') !== (journal.resolvedAt === null)
+  ) return false
+  let previousRank = 0
+  for (const companion of companions) {
+    let rank: number
+    if (companion.type === 'visible_recovery_action') {
+      rank = 1
+      if (
+        companion.projectId !== journal.projectId ||
+        companion.journalEntryId !== journal.contentRecoveryJournalEntryId ||
+        companion.taskId !== journal.taskId ||
+        companion.executionId !== journal.executionId
+      ) return false
+    } else if (companion.type === 'task') {
+      rank = 2
+      if (
+        companion.projectId !== journal.projectId ||
+        companion.taskId !== journal.taskId
+      ) return false
+    } else if (companion.type === 'task_execution') {
+      rank = 3
+      if (
+        companion.projectId !== journal.projectId ||
+        companion.taskId !== journal.taskId ||
+        companion.executionId !== journal.executionId
+      ) return false
+    } else if (companion.type === 'project_content_provisioning_intent') {
+      rank = 4
+      if (
+        companion.projectId !== journal.projectId ||
+        companion.provisioningIntentId !== journal.provisioningIntentId
+      ) return false
+    } else return false
+    if (rank <= previousRank) return false
+    previousRank = rank
+  }
+  return true
 }
 
 function isExpectedCoordinatorResponse(

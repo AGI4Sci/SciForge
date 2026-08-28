@@ -1551,7 +1551,7 @@ export class CollaborationTaskAdapter {
         idempotencyKey: idempotencyKey('external_operation.observe', requestFacts),
         ...requestFacts
       }))
-    return requireResponseEntity(response, 'external_operation_recovery_journal_entry')
+    return requireResponseCollectionEntity(response, 'external_operation_recovery_journal_entry')
   }
 
   private async createHumanNeeded(
@@ -2372,6 +2372,20 @@ function requireResponseEntity<Type extends RestEntity['type']>(
     throw new Error(`Cloud command returned unexpected ${response.type}; expected ${type}.`)
   }
   return response.entity as Extract<RestEntity, { type: Type }>
+}
+
+function requireResponseCollectionEntity<Type extends RestEntity['type']>(
+  response: RestResponse,
+  type: Type
+): Extract<RestEntity, { type: Type }> {
+  if (response.type !== 'rest.collection' || response.nextCursor !== undefined) {
+    throw new Error(`Cloud command returned unexpected ${response.type}; expected ${type} collection.`)
+  }
+  const matches = response.items.filter((entity) => entity.type === type)
+  if (matches.length !== 1) {
+    throw new Error(`Cloud command returned ${matches.length} ${type} entities; expected exactly one.`)
+  }
+  return matches[0] as Extract<RestEntity, { type: Type }>
 }
 
 function requireTaskExecutionBundle(response: RestResponse): Readonly<{

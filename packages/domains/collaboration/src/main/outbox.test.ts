@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   createCollaborationError,
+  restRequestSchema,
   restResponseSchema,
   taskOfferSchema,
   type RestRequest,
@@ -438,6 +439,34 @@ test('delivers task.offer.reassign only through its exact replacement collection
 
   assert.deepEqual(await outbox.enqueueAndWait('coordinator.command', command), response)
   assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+})
+
+test('delivers external_operation.observe through its exact canonical recovery collection', async () => {
+  const store = await localStore()
+  const command = externalOperationObserveCommand()
+  const response = externalOperationObservedCollection(command)
+  const outbox = coordinatorOutbox(store, async () => response)
+
+  assert.deepEqual(await outbox.enqueueAndWait('task.external-operation', command), response)
+  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+})
+
+test('rejects an external_operation.observe collection whose journal facts drift', async () => {
+  const store = await localStore()
+  const command = externalOperationObserveCommand()
+  const response = externalOperationObservedCollection(command)
+  assert.equal(response.type, 'rest.collection')
+  const [journal] = response.items
+  assert.equal(journal?.type, 'external_operation_recovery_journal_entry')
+  const drifted = restResponseSchema.parse({
+    ...response,
+    items: [{ ...journal, observationDigest: 'd'.repeat(64) }]
+  })
+  const outbox = coordinatorOutbox(store, async () => drifted)
+
+  await assert.rejects(outbox.enqueueAndWait('task.external-operation', command))
+  assert.equal(store.snapshot().outbox[0]?.state, 'failed')
+  assert.equal(store.snapshot().outbox[0]?.response, undefined)
 })
 
 test('rejects collection response drift instead of treating an arbitrary page as write success', async () => {
@@ -1231,6 +1260,57 @@ function coordinatorReassignCollection(request: RestRequest): RestResponse {
   return restResponseSchema.parse({
     ...created,
     items: [task, { ...offer, taskOfferId: 'ofr_Offer00000002' }]
+  })
+}
+
+function externalOperationObserveCommand(): Extract<RestRequest, { type: 'external_operation.observe' }> {
+  return restRequestSchema.parse({
+    protocolVersion: '1.0',
+    type: 'external_operation.observe',
+    requestId: 'req_ExternalObserve01',
+    idempotencyKey: 'idem_external-operation-observe-01',
+    journalEntryId: TEST_IDS.contentRecoveryJournalEntryId,
+    expectedJournalRevision: 2,
+    outcome: 'observed_success',
+    receiptDigest: 'b'.repeat(64),
+    observationDigest: 'c'.repeat(64),
+    safeFailureCode: null
+  }) as Extract<RestRequest, { type: 'external_operation.observe' }>
+}
+
+function externalOperationObservedCollection(
+  request: Extract<RestRequest, { type: 'external_operation.observe' }>
+): RestResponse {
+  return restResponseSchema.parse({
+    protocolVersion: '1.0',
+    type: 'rest.collection',
+    requestId: request.requestId,
+    items: [{
+      schemaVersion: 1,
+      type: 'external_operation_recovery_journal_entry',
+      contentRecoveryJournalEntryId: request.journalEntryId,
+      scope: 'task_content_transfer',
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      preparedTaskRevision: 2,
+      preparedExecutionRevision: 2,
+      provisioningIntentId: null,
+      provisioningRevision: null,
+      logicalInvocationId: 'download-input-01',
+      operation: 'download',
+      state: request.outcome,
+      requestDigest: TEST_HASH,
+      receiptDigest: request.receiptDigest,
+      observationDigest: request.observationDigest,
+      safeFailureCode: request.safeFailureCode,
+      preparedAt: TEST_TIMESTAMP,
+      dispatchedAt: TEST_LATER_TIMESTAMP,
+      resolvedAt: TEST_LATER_TIMESTAMP,
+      revision: request.expectedJournalRevision + 1,
+      createdAt: TEST_TIMESTAMP,
+      updatedAt: TEST_LATER_TIMESTAMP
+    }]
   })
 }
 

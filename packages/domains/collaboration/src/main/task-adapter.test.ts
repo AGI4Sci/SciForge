@@ -1860,7 +1860,7 @@ class FakeWorkerCloud {
             updatedAt: TEST_LATER_TIMESTAMP
           })
           this.recoveryJournals.set(entry.contentRecoveryJournalEntryId, entry)
-          return entityResponse(request, entry)
+          return collectionResponse(request, [entry])
         }
         if (request.type === 'human.needed.create') {
           assert.deepEqual(request.context, {
