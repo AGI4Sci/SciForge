@@ -276,16 +276,6 @@ test('delivers project.create through its exact canonical creation response', as
   assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
 })
 
-test('delivers content-required project.create with its exact provisioning intent', async () => {
-  const store = await localStore()
-  const command = coordinatorContentProjectCreateCommand()
-  const response = coordinatorContentProjectCreatedResponse(command)
-  const outbox = coordinatorOutbox(store, async () => response)
-
-  assert.deepEqual(await outbox.enqueueAndWait('coordinator.command', command), response)
-  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
-})
-
 test('rejects a project.create response whose durable facts drift from the request', async () => {
   const store = await localStore()
   const command = coordinatorProjectCreateCommand()
@@ -697,13 +687,6 @@ function coordinatorProjectCreateCommand(): RestRequest {
       maxTasksPerRound: 4,
       maxCoordinationRounds: 10,
       maxTaskRetries: 2
-    },
-    content: {
-      mode: 'none',
-      members: [
-        { userId: TEST_IDS.userId },
-        { userId: TEST_IDS.secondUserId }
-      ]
     }
   }
 }
@@ -719,16 +702,15 @@ function coordinatorProjectCreatedResponse(request: RestRequest): RestResponse {
       displayName: request.displayName,
       goal: request.goal,
       budget: request.budget,
-      status: 'paused'
+      contentMode: 'none',
+      status: 'draft'
     },
-    memberships: request.content.members.map(({ userId }, index) => ({
+    memberships: [{
       schemaVersion: 1,
       type: 'project_membership',
-      projectMembershipId: index === 0
-        ? TEST_IDS.projectMembershipId
-        : 'pmb_Member000002',
+      projectMembershipId: TEST_IDS.projectMembershipId,
       projectId: TEST_IDS.projectId,
-      userId,
+      userId: TEST_IDS.userId,
       state: 'active',
       authorityEpoch: 1,
       activatedAt: TEST_TIMESTAMP,
@@ -738,111 +720,9 @@ function coordinatorProjectCreatedResponse(request: RestRequest): RestResponse {
       revision: 1,
       createdAt: TEST_TIMESTAMP,
       updatedAt: TEST_TIMESTAMP
-    })),
+    }],
     provisioningIntent: null
   })
-}
-
-function coordinatorContentProjectCreateCommand(): RestRequest {
-  const command = coordinatorProjectCreateCommand()
-  assert.equal(command.type, 'project.create')
-  return {
-    ...command,
-    idempotencyKey: 'idem_project.create-content-outbox-01',
-    content: {
-      mode: 'required',
-      contentOwnerUserId: TEST_IDS.userId,
-      providerInstance: {
-        schemaVersion: 1,
-        type: 'provider_instance_reference',
-        providerInstanceRef: 'provider-instance-alpha'
-      },
-      containerDisplayName: 'Durable Project Team Library',
-      members: [{
-        userId: TEST_IDS.userId,
-        providerPrincipalFactId: TEST_IDS.providerPrincipalFactId,
-        expectedFactRevision: 1
-      }, {
-        userId: TEST_IDS.secondUserId,
-        providerPrincipalFactId: 'ppf_Principal00002',
-        expectedFactRevision: 2
-      }]
-    }
-  }
-}
-
-function coordinatorContentProjectCreatedResponse(request: RestRequest): RestResponse {
-  assert.equal(request.type, 'project.create')
-  assert.equal(request.content.mode, 'required')
-  const content = request.content
-  return restResponseSchema.parse({
-    protocolVersion: '1.0',
-    type: 'rest.project_created',
-    requestId: request.requestId,
-    project: {
-      ...projectFixture,
-      displayName: request.displayName,
-      goal: request.goal,
-      budget: request.budget,
-      contentMode: 'required',
-      status: 'paused'
-    },
-    memberships: projectCreationMemberships(request),
-    provisioningIntent: {
-      schemaVersion: 1,
-      type: 'project_content_provisioning_intent',
-      provisioningIntentId: TEST_IDS.provisioningIntentId,
-      projectId: TEST_IDS.projectId,
-      provisioningRevision: 1,
-      kind: 'initial_provisioning',
-      state: 'pending',
-      createdByOwnerUserId: TEST_IDS.userId,
-      contentOwnerUserId: content.contentOwnerUserId,
-      providerInstance: content.providerInstance,
-      desiredMembers: content.members.map((member, index) => ({
-        userId: member.userId,
-        providerPrincipalFactId: member.providerPrincipalFactId,
-        snapshottedFactRevision: member.expectedFactRevision,
-        principal: {
-          schemaVersion: 1,
-          type: 'provider_directory_principal_reference',
-          providerInstance: content.providerInstance,
-          principalKind: 'user',
-          principalId: `principal-${index + 1}`
-        }
-      })),
-      containerDisplayName: content.containerDisplayName,
-      currentRootLocator: null,
-      currentBindingRevision: null,
-      intentDigest: TEST_HASH,
-      revision: 1,
-      createdAt: TEST_TIMESTAMP,
-      updatedAt: TEST_TIMESTAMP
-    }
-  })
-}
-
-function projectCreationMemberships(
-  request: Extract<RestRequest, { type: 'project.create' }>
-): unknown[] {
-  return request.content.members.map(({ userId }, index) => ({
-    schemaVersion: 1,
-    type: 'project_membership',
-    projectMembershipId: index === 0
-      ? TEST_IDS.projectMembershipId
-      : 'pmb_Member000002',
-    projectId: TEST_IDS.projectId,
-    userId,
-    state: 'active',
-    authorityEpoch: 1,
-    activatedAt: TEST_TIMESTAMP,
-    removalRequestedAt: null,
-    removalRequestedByUserId: null,
-    removedAt: null,
-    revision: 1,
-    createdAt: TEST_TIMESTAMP,
-    updatedAt: TEST_TIMESTAMP
-  }))
 }
 
 function coordinatorHumanNeededCommand(): RestRequest {

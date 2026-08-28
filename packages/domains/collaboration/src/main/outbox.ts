@@ -376,55 +376,25 @@ function isProjectCreatedResponse(
   actor: CoordinatorActor
 ): boolean {
   if (response.type !== 'rest.project_created') return false
-  const expectedMemberUserIds = request.content.members.map(({ userId }) => userId).sort()
-  const actualMemberUserIds = response.memberships.map(({ userId }) => userId).sort()
-  const commonFactsMatch = response.project.ownerUserId === actor.userId &&
+  const [ownerMembership] = response.memberships
+  return response.memberships.length === 1 &&
+    ownerMembership !== undefined &&
+    response.project.ownerUserId === actor.userId &&
     response.project.coordinatorAgentId === actor.agentId &&
     response.project.displayName === request.displayName &&
     response.project.goal === request.goal &&
-    response.project.contentMode === request.content.mode &&
-    response.project.status === 'paused' &&
+    response.project.contentMode === 'none' &&
+    response.project.status === 'draft' &&
     response.project.coordinatorAuthorityEpoch === 1 &&
     response.project.executionAuthorityEpoch === 1 &&
     response.project.revision === 1 &&
     canonicalJson(response.project.budget) === canonicalJson(request.budget) &&
-    canonicalJson(actualMemberUserIds) === canonicalJson(expectedMemberUserIds) &&
-    response.memberships.every((membership) => (
-      membership.projectId === response.project.projectId &&
-      membership.state === 'active' &&
-      membership.authorityEpoch === 1 &&
-      membership.revision === 1
-    ))
-  if (!commonFactsMatch) return false
-  if (request.content.mode === 'none') return response.provisioningIntent === null
-  const intent = response.provisioningIntent
-  if (intent === null) return false
-  const expectedDesiredMembers = request.content.members
-    .map((member) => ({
-      userId: member.userId,
-      providerPrincipalFactId: member.providerPrincipalFactId,
-      snapshottedFactRevision: member.expectedFactRevision
-    }))
-    .sort((left, right) => left.userId.localeCompare(right.userId))
-  const actualDesiredMembers = intent.desiredMembers
-    .map((member) => ({
-      userId: member.userId,
-      providerPrincipalFactId: member.providerPrincipalFactId,
-      snapshottedFactRevision: member.snapshottedFactRevision
-    }))
-    .sort((left, right) => left.userId.localeCompare(right.userId))
-  return intent.projectId === response.project.projectId &&
-    intent.provisioningRevision === 1 &&
-    intent.kind === 'initial_provisioning' &&
-    intent.state === 'pending' &&
-    intent.createdByOwnerUserId === actor.userId &&
-    intent.contentOwnerUserId === request.content.contentOwnerUserId &&
-    canonicalJson(intent.providerInstance) === canonicalJson(request.content.providerInstance) &&
-    canonicalJson(actualDesiredMembers) === canonicalJson(expectedDesiredMembers) &&
-    intent.containerDisplayName === request.content.containerDisplayName &&
-    intent.currentRootLocator === null &&
-    intent.currentBindingRevision === null &&
-    intent.revision === 1
+    ownerMembership.projectId === response.project.projectId &&
+    ownerMembership.userId === actor.userId &&
+    ownerMembership.state === 'active' &&
+    ownerMembership.authorityEpoch === 1 &&
+    ownerMembership.revision === 1 &&
+    response.provisioningIntent === null
 }
 
 function isProjectFinalSummaryCollection(
