@@ -1447,7 +1447,8 @@ export class AgentRuntimeHost {
       inputDigest: stableJsonDigest({
         text: userDirectiveText(input),
         workspaceRoot: workspaceRoot ?? null,
-        workspaceLocator: context.workspaceHost?.locator ?? null
+        workspaceLocator: context.workspaceHost?.locator ?? null,
+        ...(input.outputSchema ? { outputSchema: input.outputSchema } : {})
       }),
       ...(workspaceRoot ? { workspaceRoot } : {}),
       ...(context.workspaceHost?.locator ? { workspaceLocator: context.workspaceHost.locator } : {})

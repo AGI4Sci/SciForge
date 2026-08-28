@@ -54,6 +54,7 @@ import {
   domainPackagePublisherIdSchema,
   domainPackageVersionSchema
 } from '@sciforge/domain-sdk'
+import { domainMainAgentExecutionOutputSchemaSchema } from '@sciforge/domain-sdk/agent-execution'
 import { TRACE_EVENT_KINDS } from '@sciforge/full-trace'
 import {
   WORKSPACE_HOST_LIMITS,
@@ -296,6 +297,7 @@ export const agentRuntimeStartTurnPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: trimmedString(MAX_ID_LENGTH),
   text: z.string().trim().min(1).max(MAX_CHANNEL_TEXT_LENGTH),
+  outputSchema: domainMainAgentExecutionOutputSchemaSchema.optional(),
   clientDirectiveId: optionalTrimmedString(MAX_ID_LENGTH),
   executionIntent: agentRuntimeExecutionIntentSchema.optional(),
   workspace: defaultPathSchema,

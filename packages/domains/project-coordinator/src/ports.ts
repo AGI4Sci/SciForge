@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import type { DomainMainAgentExecutionHost } from '@sciforge/domain-sdk/agent-execution'
+import {
+  domainMainAgentExecutionOutputSchemaSchema,
+  type DomainMainAgentExecutionHost
+} from '@sciforge/domain-sdk/agent-execution'
 import type { DomainMainPackageSettingsHost } from '@sciforge/domain-sdk/package-storage'
 import {
   AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
@@ -14,6 +17,7 @@ import {
   projectSchema,
   projectPlanSchema,
   projectPlanTaskSchema,
+  taskFileDestinationNameSchema,
   humanAnswerSchema,
   humanNeededSchema,
   type Project,
@@ -78,6 +82,7 @@ import {
   type ProjectCoordinatorPlanDraft,
   type ProjectCoordinatorPlanDraftEditInput,
   type ProjectCoordinatorPlanDraftGenerateInput,
+  type ProjectCoordinatorPlanDraftGenerateFailureReason,
   type ProjectCoordinatorPlanDraftReadInput,
   type ProjectCoordinatorPlanDraftSubmitInput,
   type ProjectCoordinatorPlanSubmitResult,
@@ -291,9 +296,133 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
 const generatedPlanContentSchema = z.object({
   tasks: z.array(projectPlanTaskSchema).min(1).max(1_000),
   rationale: projectCoordinatorPlanDraftSchema.unwrap().shape.rationale
+}).strict().superRefine((content, context) => {
+  const planItemIds = content.tasks.map(({ planItemId }) => planItemId)
+  if (new Set(planItemIds).size !== planItemIds.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['tasks'],
+      message: 'Generated Plan item IDs must be unique.'
+    })
+  }
+  const knownPlanItemIds = new Set(planItemIds)
+  for (const [index, task] of content.tasks.entries()) {
+    if (task.dependencyPlanItemIds.some((dependency) => !knownPlanItemIds.has(dependency))) {
+      context.addIssue({
+        code: 'custom',
+        path: ['tasks', index, 'dependencyPlanItemIds'],
+        message: 'Generated dependencies must name another item in the same Plan.'
+      })
+    }
+  }
+}).readonly()
+
+const generatedPlanFileIntentSelectionSchema = z.object({
+  inputs: z.array(z.object({
+    sourceInputIndex: z.number().int().min(0).max(99),
+    destinationName: taskFileDestinationNameSchema,
+    expectedSemanticRevision: z.string().trim().min(1).max(256).nullable(),
+    expectedMediaType: z.string().trim().min(1).max(256).nullable()
+  }).strict()).max(100),
+  output: z.object({
+    fileName: taskFileDestinationNameSchema,
+    mediaType: z.string().trim().min(1).max(256),
+    maxBytes: z.number().int().min(1).max(1_073_741_824)
+  }).strict()
+}).strict()
+
+const generatedPlanModelTaskShape = {
+  planItemId: projectPlanTaskSchema.shape.planItemId,
+  title: projectPlanTaskSchema.shape.title,
+  objective: projectPlanTaskSchema.shape.objective,
+  completionCriteria: projectPlanTaskSchema.shape.completionCriteria,
+  dependencyPlanItemIds: projectPlanTaskSchema.shape.dependencyPlanItemIds,
+  requiredCapabilityTags: projectPlanTaskSchema.shape.requiredCapabilityTags
+}
+
+const generatedPlanModelContentSchema = z.object({
+  tasks: z.array(z.object({
+    ...generatedPlanModelTaskShape,
+    fileIntent: generatedPlanFileIntentSelectionSchema.nullable()
+  }).strict()).min(1).max(1_000),
+  rationale: projectCoordinatorPlanDraftSchema.unwrap().shape.rationale
 }).strict().readonly()
 
-function isOnlineEligibleRuntime(
+const generatedPlanModelContentWithoutFileIntentSchema = z.object({
+  tasks: z.array(z.object({
+    ...generatedPlanModelTaskShape,
+    fileIntent: z.null()
+  }).strict()).min(1).max(1_000),
+  rationale: projectCoordinatorPlanDraftSchema.unwrap().shape.rationale
+}).strict().readonly()
+
+function generatedPlanOutputJsonSchema(fileIntentAllowed: boolean) {
+  return domainMainAgentExecutionOutputSchemaSchema.parse(z.toJSONSchema(
+    fileIntentAllowed
+      ? generatedPlanModelContentSchema
+      : generatedPlanModelContentWithoutFileIntentSchema,
+    {
+      target: 'draft-07',
+      unrepresentable: 'throw'
+    }
+  ))
+}
+
+function generatedTaskFileIntent(options: Readonly<{
+  selection: z.infer<typeof generatedPlanFileIntentSelectionSchema>
+  contentBinding: ProjectCoordinatorProject['provisioning']['binding']
+  fileSourceInputs: readonly Readonly<{
+    sourceInputIndex: number
+    locator: ProjectCoordinatorPlanDraftGenerateInput['sourceInputLocators'][number]
+  }>[]
+}>) {
+  if (!options.contentBinding || options.contentBinding.status !== 'active') {
+    throw new Error('Generated file intent requires an active Project content binding.')
+  }
+  return {
+    schemaVersion: 1 as const,
+    bindingRevision: options.contentBinding.revision,
+    inputs: options.selection.inputs.map((input) => {
+      const source = options.fileSourceInputs.find(
+        ({ sourceInputIndex }) => sourceInputIndex === input.sourceInputIndex
+      )
+      if (!source) {
+        throw new Error('Generated file intent selected an unavailable exact input locator.')
+      }
+      return {
+        kind: 'content-space.input-file' as const,
+        locator: source.locator,
+        destinationName: input.destinationName,
+        expectedSemanticRevision: input.expectedSemanticRevision,
+        expectedMediaType: input.expectedMediaType
+      }
+    }),
+    output: {
+      kind: 'content-space.output-new' as const,
+      target: 'project-binding-root' as const,
+      mode: 'upload-new' as const,
+      fileName: options.selection.output.fileName,
+      mediaType: options.selection.output.mediaType,
+      maxBytes: options.selection.output.maxBytes
+    }
+  }
+}
+
+export class ProjectCoordinatorPlanGenerationError extends Error {
+  readonly reason: ProjectCoordinatorPlanDraftGenerateFailureReason
+
+  constructor(
+    reason: ProjectCoordinatorPlanDraftGenerateFailureReason,
+    message: string,
+    options?: ErrorOptions
+  ) {
+    super(message, options)
+    this.name = 'ProjectCoordinatorPlanGenerationError'
+    this.reason = reason
+  }
+}
+
+function isOnlinePlanningRuntime(
   projectAvailability: ProjectWorkerAvailabilityView,
   observedAt: string
 ): boolean {
@@ -307,21 +436,26 @@ function isOnlineEligibleRuntime(
     availability.expiresAt > observedAt
 }
 
-function workerRuntimeCanAcceptTask(
+function planningAuthoritySupportsScope(
   project: ProjectCoordinatorProject,
   projectAvailability: ProjectWorkerAvailabilityView,
-  task: ProjectPlanTask,
-  observedAt: string
+  scope: 'text_tasks' | 'file_tasks'
 ): boolean {
-  if (!isOnlineEligibleRuntime(projectAvailability, observedAt)) return false
-  const scope = task.fileIntent === null ? 'text_tasks' : 'file_tasks'
-  if (!projectAvailability.taskAuthorities.some((authority) => (
-    authority.scope === scope && authority.state === 'eligible'
-  ))) return false
-  if (task.requiredCapabilityTags.some((tag) => (
-    !projectAvailability.availability.runtimeCapabilityTags.includes(tag)
-  ))) return false
-  if (task.fileIntent === null) return true
+  const authority = projectAvailability.taskAuthorities.find((candidate) => (
+    candidate.scope === scope
+  ))
+  if (!authority) return false
+  if (project.project.status === 'active') {
+    return authority.state === 'eligible'
+  }
+  if (project.project.status !== 'draft' && project.project.status !== 'paused') return false
+  return authority.state === 'suspended' && authority.reason === 'project_paused'
+}
+
+function filePlanningFactsAreReady(
+  project: ProjectCoordinatorProject,
+  projectAvailability: ProjectWorkerAvailabilityView
+): boolean {
   const binding = project.provisioning.binding
   const readiness = projectAvailability.contentReadiness
   const principal = projectAvailability.providerPrincipalFact
@@ -329,7 +463,6 @@ function workerRuntimeCanAcceptTask(
     binding?.status === 'active' &&
     binding.rootLocator !== null &&
     binding.rootLocatorDigest !== null &&
-    binding.revision === task.fileIntent.bindingRevision &&
     readiness?.state === 'ready' &&
     readiness.bindingRevision === binding.revision &&
     readiness.providerPrincipalFactId !== null &&
@@ -338,31 +471,65 @@ function workerRuntimeCanAcceptTask(
     principal?.readiness === 'ready'
 }
 
-function workerGroupCanAcceptTask(
+function planningTaskScopes(
+  project: ProjectCoordinatorProject,
+  projectAvailability: ProjectWorkerAvailabilityView,
+  observedAt: string
+): readonly ('text_tasks' | 'file_tasks')[] {
+  if (!isOnlinePlanningRuntime(projectAvailability, observedAt)) return []
+  const scopes: ('text_tasks' | 'file_tasks')[] = []
+  if (planningAuthoritySupportsScope(project, projectAvailability, 'text_tasks')) {
+    scopes.push('text_tasks')
+  }
+  if (
+    planningAuthoritySupportsScope(project, projectAvailability, 'file_tasks') &&
+    filePlanningFactsAreReady(project, projectAvailability)
+  ) {
+    scopes.push('file_tasks')
+  }
+  return scopes
+}
+
+function workerRuntimeCanSupportPlannedTask(
+  project: ProjectCoordinatorProject,
+  projectAvailability: ProjectWorkerAvailabilityView,
+  task: ProjectPlanTask,
+  observedAt: string
+): boolean {
+  const scope = task.fileIntent === null ? 'text_tasks' : 'file_tasks'
+  if (!planningTaskScopes(project, projectAvailability, observedAt).includes(scope)) return false
+  if (task.requiredCapabilityTags.some((tag) => (
+    !projectAvailability.availability.runtimeCapabilityTags.includes(tag)
+  ))) return false
+  if (task.fileIntent === null) return true
+  return project.provisioning.binding?.revision === task.fileIntent.bindingRevision
+}
+
+function workerGroupCanSupportPlannedTask(
   project: ProjectCoordinatorProject,
   group: ProjectCoordinatorProject['workerGroups'][number],
   task: ProjectPlanTask,
   observedAt: string
 ): boolean {
   return group.agents.some(({ projectAvailability }) => (
-    workerRuntimeCanAcceptTask(project, projectAvailability, task, observedAt)
+    workerRuntimeCanSupportPlannedTask(project, projectAvailability, task, observedAt)
   ))
 }
 
-function assertTasksHaveEligibleWorker(
+function assertTasksHavePlanningCandidate(
   project: ProjectCoordinatorProject,
   tasks: readonly ProjectPlanTask[],
   observedAt: string
 ): void {
   for (const task of tasks) {
     if (project.workerGroups.some((group) => (
-      workerGroupCanAcceptTask(project, group, task, observedAt)
+      workerGroupCanSupportPlannedTask(project, group, task, observedAt)
     ))) continue
-    throw new Error(`Plan item ${task.planItemId} has no online eligible Runtime with one complete capability profile.`)
+    throw new Error(`Plan item ${task.planItemId} has no online planning-ready Runtime with one complete capability profile.`)
   }
 }
 
-function assertAssignmentsHaveEligibleRuntime(
+function assertAssignmentsHavePlanningRuntime(
   project: ProjectCoordinatorProject,
   tasks: readonly ProjectPlanTask[],
   assignments: readonly ProjectCoordinatorPlanAssignment[],
@@ -377,8 +544,8 @@ function assertAssignmentsHaveEligibleRuntime(
     if (!task || !group) {
       throw new Error('A Plan assignment must select an active Project member User.')
     }
-    if (!workerGroupCanAcceptTask(project, group, task, observedAt)) {
-      throw new Error(`Plan item ${task.planItemId} requires one online eligible Runtime owned by the selected Worker User.`)
+    if (!workerGroupCanSupportPlannedTask(project, group, task, observedAt)) {
+      throw new Error(`Plan item ${task.planItemId} requires one online planning-ready Runtime owned by the selected Worker User.`)
     }
   }
 }
@@ -413,21 +580,29 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       const input = projectCoordinatorPlanDraftGenerateInputSchema.parse(rawInput)
       const { project, observedAt } = await readProject(input.projectId)
       const agentExecution = options.getAgentExecution()
-      if (!agentExecution) throw new Error('The local Agent Runtime is unavailable.')
+      if (!agentExecution) {
+        throw new ProjectCoordinatorPlanGenerationError(
+          'runtime_unavailable',
+          'The local Agent Runtime is unavailable.'
+        )
+      }
       const candidates = project.workerGroups
         .map((group) => {
-          const eligibleAgents = group.agents.filter(({ projectAvailability }) => (
-            isOnlineEligibleRuntime(projectAvailability, observedAt)
+          const planningAgents = group.agents.filter(({ projectAvailability }) => (
+            isOnlinePlanningRuntime(projectAvailability, observedAt)
           ))
-          const profiles = new Map(eligibleAgents.map(({ projectAvailability }) => {
+          const profiles = new Map(planningAgents.flatMap(({ projectAvailability }) => {
+            const scopes = [...planningTaskScopes(
+              project,
+              projectAvailability,
+              observedAt
+            )].sort()
+            if (scopes.length === 0) return []
             const profile = {
-              eligibleTaskScopes: projectAvailability.taskAuthorities
-                .filter(({ state }) => state === 'eligible')
-                .map(({ scope }) => scope)
-                .sort(),
+              planningTaskScopes: scopes,
               capabilityTags: [...projectAvailability.availability.runtimeCapabilityTags].sort()
             }
-            return [JSON.stringify(profile), profile] as const
+            return [[JSON.stringify(profile), profile] as const]
           }))
           return {
             userId: group.userId,
@@ -436,32 +611,116 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
           }
         })
         .filter(({ runtimeProfiles }) => runtimeProfiles.length > 0)
-      const generated = await agentExecution.run({
-        clientDirectiveId: `project-plan:${project.project.projectId}:${project.project.revision}`,
-        prompt: [
-          `Project: ${project.project.displayName}`,
-          `Goal: ${project.project.goal}`,
-          `Owner instruction: ${input.instruction}`,
-          `Budget: ${JSON.stringify(project.project.budget)}`,
-          `Worker User candidates: ${JSON.stringify(candidates)}`,
-          'Each Task must match one runtimeProfiles entry: fileIntent null requires text_tasks, a fileIntent requires file_tasks, and requiredCapabilityTags must be a subset of that same entry capabilityTags. Never combine fields across Runtime profiles.',
-          'Return only strict JSON with {tasks,rationale}. Each task must use a stable item_* ID and canonical Project Plan Task fields.'
-        ].join('\n'),
-        ...(input.modelId ? { model: input.modelId } : {}),
-        interaction: 'reviewable',
-        mode: 'plan'
-      })
+      const contentBinding = project.provisioning.binding
+      const fileIntentAllowed = project.project.contentMode === 'required' &&
+        contentBinding?.status === 'active' &&
+        contentBinding.rootLocator !== null &&
+        contentBinding.rootLocatorDigest !== null
+      const fileSourceInputs = input.sourceInputLocators
+        .filter((locator) => locator.kind === 'content-space.file-reference')
+        .map((locator, sourceInputIndex) => ({ sourceInputIndex, locator }))
+      let generated: Awaited<ReturnType<DomainMainAgentExecutionHost['run']>>
+      try {
+        generated = await agentExecution.run({
+          clientDirectiveId: `project-plan:v2:${project.project.projectId}:${project.project.revision}`,
+          prompt: [
+            `Project: ${project.project.displayName}`,
+            `Goal: ${project.project.goal}`,
+            `Owner instruction: ${input.instruction}`,
+            `Budget: ${JSON.stringify(project.project.budget)}`,
+            `Content binding: ${JSON.stringify(contentBinding
+              ? {
+                  status: contentBinding.status,
+                  bindingRevision: contentBinding.revision
+                }
+              : null)}`,
+            `Exact file input choices: ${JSON.stringify(fileSourceInputs)}`,
+            `Worker User candidates: ${JSON.stringify(candidates)}`,
+            'Each Task must match one runtimeProfiles entry: fileIntent null requires text_tasks in planningTaskScopes, a fileIntent requires file_tasks in planningTaskScopes, and requiredCapabilityTags must be a subset of that same entry capabilityTags. Never combine fields across Runtime profiles.',
+            'The final response is constrained by the supplied JSON Schema. Return exactly one object with tasks and rationale.',
+            'Every task must contain only planItemId, title, objective, completionCriteria, dependencyPlanItemIds, requiredCapabilityTags, and fileIntent.',
+            'Use a unique stable item_* planItemId. Dependencies must reference another item in this same response. Capability tags must describe actual requirements and use the lowercase tag format.',
+            'Do not emit id, description, assignee, dependencies, status, or any other convenience fields. Worker User assignment is a later Human decision.',
+            fileIntentAllowed
+              ? 'A non-null fileIntent selects existing inputs only by sourceInputIndex from Exact file input choices. Never copy or invent a locator identity; main binds the exact locator and binding revision. Use an empty inputs array for an output-only task.'
+              : 'Every fileIntent must be null because this Project has no active content binding.'
+          ].join('\n'),
+          outputSchema: generatedPlanOutputJsonSchema(fileIntentAllowed),
+          ...(input.modelId ? { model: input.modelId } : {}),
+          interaction: 'reviewable',
+          mode: 'plan'
+        })
+      } catch (cause) {
+        throw new ProjectCoordinatorPlanGenerationError(
+          'runtime_execution_failed',
+          'The local Plan Runtime could not complete the structured-output turn.',
+          { cause }
+        )
+      }
       if (generated.state !== 'completed') {
-        throw new Error(`Local Plan Runtime ended in ${generated.state}.`)
+        throw new ProjectCoordinatorPlanGenerationError(
+          'runtime_execution_failed',
+          `Local Plan Runtime ended in ${generated.state}.`
+        )
       }
       let decoded: unknown
       try {
         decoded = JSON.parse(generated.text)
       } catch (cause) {
-        throw new Error('Local Plan Runtime returned non-JSON output.', { cause })
+        throw new ProjectCoordinatorPlanGenerationError(
+          'invalid_structured_output',
+          'Local Plan Runtime returned non-JSON structured output.',
+          { cause }
+        )
       }
-      const content = generatedPlanContentSchema.parse(decoded)
-      assertTasksHaveEligibleWorker(project, content.tasks, observedAt)
+      const parsedModelContent = generatedPlanModelContentSchema.safeParse(decoded)
+      if (!parsedModelContent.success) {
+        throw new ProjectCoordinatorPlanGenerationError(
+          'invalid_structured_output',
+          'Local Plan Runtime returned output that violates the structured generation contract.',
+          { cause: parsedModelContent.error }
+        )
+      }
+      let canonicalContent: unknown
+      try {
+        canonicalContent = {
+          tasks: parsedModelContent.data.tasks.map((task) => ({
+            ...task,
+            fileIntent: task.fileIntent === null
+              ? null
+              : generatedTaskFileIntent({
+                  selection: task.fileIntent,
+                  contentBinding,
+                  fileSourceInputs
+                })
+          })),
+          rationale: parsedModelContent.data.rationale
+        }
+      } catch (cause) {
+        throw new ProjectCoordinatorPlanGenerationError(
+          'invalid_structured_output',
+          'Local Plan Runtime returned an invalid Project file selection.',
+          { cause }
+        )
+      }
+      const parsedContent = generatedPlanContentSchema.safeParse(canonicalContent)
+      if (!parsedContent.success) {
+        throw new ProjectCoordinatorPlanGenerationError(
+          'invalid_structured_output',
+          'Local Plan Runtime returned output that violates the Project Plan contract.',
+          { cause: parsedContent.error }
+        )
+      }
+      const content = parsedContent.data
+      try {
+        assertTasksHavePlanningCandidate(project, content.tasks, observedAt)
+      } catch (cause) {
+        throw new ProjectCoordinatorPlanGenerationError(
+          'invalid_structured_output',
+          'Local Plan Runtime returned tasks that no current Worker User can accept.',
+          { cause }
+        )
+      }
       const timestamp = now().toISOString()
       const next = projectCoordinatorPlanDraftSchema.parse({
         draftId: draftId(),
@@ -501,7 +760,7 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
         throw new Error('Plan draft revision conflict.')
       }
       const { project, observedAt } = await readProject(input.projectId)
-      assertAssignmentsHaveEligibleRuntime(
+      assertAssignmentsHavePlanningRuntime(
         project,
         input.tasks,
         input.assignments,
@@ -528,7 +787,7 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
         throw new Error('Every Plan item requires a Worker User before submit.')
       }
       const { project, observedAt } = await readProject(input.projectId)
-      assertAssignmentsHaveEligibleRuntime(
+      assertAssignmentsHavePlanningRuntime(
         project,
         draft.tasks,
         draft.assignments,

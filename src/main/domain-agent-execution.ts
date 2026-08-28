@@ -178,6 +178,7 @@ export function createDomainAgentExecutionHost(input: Readonly<{
           runtimeId,
           threadId: thread.id,
           text: request.prompt,
+          ...(request.outputSchema ? { outputSchema: request.outputSchema } : {}),
           ...(request.workspaceRoot ? { workspace: request.workspaceRoot } : {}),
           mode: request.mode,
           ...(request.clientDirectiveId ? { clientDirectiveId: request.clientDirectiveId } : {}),

@@ -47,8 +47,15 @@ Cloud SHALL 为 Coordinator 提供包含 Agent/Device active 状态、online/off
 #### Scenario: 同一 Worker User 的多个 Runtime 具有不同 capability
 
 - **WHEN** 同一 User 的两个在线 Runtime 分别发布不相交的 capability tags
-- **THEN** Coordinator planner SHALL 以匿名的逐 Runtime profiles 传递候选事实，并在同一个 profile entry 内保留该 Runtime 的 capability tags 与 eligible Task scopes，不得把两个 Runtime 的事实合并成一个虚构能力集合
-- **AND** draft generation、assignment edit 与 fresh pre-submit validation SHALL 各自要求至少一个同属所选 User 的当前合格 Runtime 单独满足该 Task 的完整 capability、authority 与 content-readiness 条件。
+- **THEN** Coordinator planner SHALL 以匿名的逐 Runtime profiles 传递候选事实，并在同一个 profile entry 内保留该 Runtime 的 capability tags 与 planning Task scopes，不得把两个 Runtime 的事实合并成一个虚构能力集合
+- **AND** draft generation、assignment edit 与 fresh pre-submit validation SHALL 各自要求至少一个同属所选 User 的当前合格 Runtime 单独满足该 Task 的完整 capability、planning-scope 与 content-readiness 条件。
+
+#### Scenario: paused Project 在激活前生成并提交 Plan
+
+- **WHEN** Project 仍为 `draft` 或 `paused`，成员处于 active、Runtime 当前在线/ready，且该 scope 的 Task Authority 仅因 `project_paused` 而 suspended
+- **THEN** Coordinator planner SHALL 将该 scope 作为 prospective planning evidence 生成、编辑并预提交校验 Plan，而不得要求仅在 Project 激活后才成立的 `eligible` 状态
+- **AND** 该 planning evidence SHALL NOT 授予 offer、claim 或 execution authority；Project 激活后的任何 planning read、offer create 与 claim 仍 SHALL 要求当前 `eligible` Task Authority
+- **AND** 任何其他 suspended/fenced reason SHALL fail closed。
 
 ### Requirement: 接单策略是每 Agent Device 的本地持久策略
 
@@ -98,7 +105,8 @@ Coordinator 的 Project plan 与 Worker 的 Task transformation SHALL 通过 run
 #### Scenario: Coordinator 生成会议任务计划
 
 - **WHEN** Human 提供真实合成议程与需求文件
-- **THEN** Coordinator Agent SHALL 调用本机选定 Runtime 生成可编辑计划
+- **THEN** Coordinator Agent SHALL 调用本机选定 Runtime，并通过 Runtime 原生 structured-output 路径约束 canonical Project Plan Task schema 后生成可编辑计划；prompt-only JSON 要求 SHALL NOT 作为结构保证
+- **AND** file Task SHALL 只允许模型选择有界 source input index，main SHALL 绑定 exact caller-provided portable locator 与当前 content binding revision，模型不得生成 locator identity 或 Provider authority
 - **AND** Human SHALL 能在 HCI 中确认或修改后再创建 Task。
 
 #### Scenario: Owner 确认 Plan 后派发初始 Task

@@ -30,12 +30,24 @@ describe('createClaudeCodeAgentRuntimeAdapter', () => {
       threadId: 'thread-seeded-governance',
       text: 'Host prepared text',
       workspace: '/tmp/workspace',
+      outputSchema: {
+        type: 'object',
+        properties: { result: { type: 'string' } },
+        required: ['result'],
+        additionalProperties: false
+      },
       allowedTools: ['sciforge_discover']
     })
 
     expect(received).toEqual([expect.objectContaining({
       threadId: 'thread-seeded-governance',
       allowedTools: ['sciforge_discover'],
+      outputSchema: {
+        type: 'object',
+        properties: { result: { type: 'string' } },
+        required: ['result'],
+        additionalProperties: false
+      },
       ownedVisualToolsAvailable: true,
       nativeVisualProofChainPending: true
     })])

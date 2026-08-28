@@ -25,7 +25,8 @@ import {
   type ProjectCoordinatorCapabilityOptions
 } from './main.js'
 import {
-  createProjectContentProvisioningAttestationSigningPort
+  createProjectContentProvisioningAttestationSigningPort,
+  ProjectCoordinatorPlanGenerationError
 } from './ports.js'
 
 test('workspace read remains a strict non-writing coordination capability', async () => {
@@ -318,6 +319,60 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
   }, { invocationId: 'invocation-project-create-1' } as never), {
     output: created
   })
+})
+
+test('Plan generation capability returns only a bounded package-owned failure reason', async () => {
+  const factory = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
+    defineCapability: (input) => input,
+    ports: {
+      workspace: {
+        readWorkspace: async () => ({
+          connection: { state: 'identity_required' },
+          observedAt: '2026-08-25T01:05:00.000Z',
+          availableWorkerUsers: [],
+          projects: []
+        }),
+        createProject: async () => { throw new Error('unused') }
+      },
+      plan: {
+        readDraft: async () => null,
+        generateDraft: async () => {
+          throw new ProjectCoordinatorPlanGenerationError(
+            'invalid_structured_output',
+            'provider-secret: exact upstream schema diagnostics'
+          )
+        },
+        editDraft: async () => { throw new Error('unused') },
+        submitDraft: async () => { throw new Error('unused') },
+        confirmAndActivate: async () => { throw new Error('unused') }
+      },
+      provisioningAttestationSigning: {
+        signFactualPayload: async () => { throw new Error('unused') }
+      },
+      provisioning: coordinatorProvisioningPort(),
+      recovery: coordinatorRecoveryPort(),
+      artifactReview: coordinatorArtifactReviewPort(),
+      coordinatorCloudCommands: coordinatorCloudCommandService(),
+      actions: coordinatorActionPort()
+    }
+  })
+  const generate = factory.createDefinitions().find(
+    ({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate
+  )!
+  const response = await generate.handler({
+    projectId: 'prj_ProjectCreated01',
+    instruction: 'Create a bounded plan.',
+    sourceInputLocators: [],
+    modelId: null
+  }, {} as never)
+
+  assert.deepEqual(response, {
+    output: {
+      status: 'failed',
+      reason: 'invalid_structured_output'
+    }
+  })
+  assert.doesNotMatch(JSON.stringify(response), /provider-secret/u)
 })
 
 function coordinatorActionPort() {

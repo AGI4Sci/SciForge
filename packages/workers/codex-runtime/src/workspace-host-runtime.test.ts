@@ -90,6 +90,12 @@ describe('CodexWorkspaceHostRuntime', () => {
       threadId: 'gui-thread-1',
       workspace: root,
       text: 'inspect the cluster file',
+      outputSchema: {
+        type: 'object',
+        properties: { summary: { type: 'string' } },
+        required: ['summary'],
+        additionalProperties: false
+      },
       fileReferences: [
         {
           path: 'papers',
@@ -121,6 +127,12 @@ describe('CodexWorkspaceHostRuntime', () => {
       ]
     }))
     assert.equal(turn.turnId, 'turn-1')
+    assert.deepEqual(fake.startTurns[0]?.outputSchema, {
+      type: 'object',
+      properties: { summary: { type: 'string' } },
+      required: ['summary'],
+      additionalProperties: false
+    })
     const turnInputs = fake.startTurns[0]?.input ?? []
     assert.deepEqual(turnInputs[0], {
       type: 'text',
@@ -887,6 +899,7 @@ function fakeCodexClient(): {
   startTurns: Array<{
     sandboxPolicy: { networkAccess: boolean }
     input?: CodexAppServerInputItem[]
+    outputSchema?: Record<string, unknown>
   }>
   stopCount: number
   options?: CodexAppServerJsonRpcClientOptions
@@ -901,6 +914,7 @@ function fakeCodexClient(): {
   const startTurns: Array<{
     sandboxPolicy: { networkAccess: boolean }
     input?: CodexAppServerInputItem[]
+    outputSchema?: Record<string, unknown>
   }> = []
   const state: ReturnType<typeof fakeCodexClient> = {
     events,
@@ -944,6 +958,7 @@ function fakeCodexClient(): {
       startTurn: async (input: {
         sandboxPolicy: { networkAccess: boolean }
         input?: CodexAppServerInputItem[]
+        outputSchema?: Record<string, unknown>
       }) => {
         startTurns.push(input)
         return {

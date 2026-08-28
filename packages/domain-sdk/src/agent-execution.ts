@@ -2,6 +2,21 @@ import { z } from 'zod'
 
 import { domainPackageJsonValueSchema } from './contract.js'
 
+const MAX_AGENT_EXECUTION_OUTPUT_SCHEMA_BYTES = 256 * 1_024
+
+/** Bounded provider-neutral JSON Schema for one final assistant message. */
+export const domainMainAgentExecutionOutputSchemaSchema = z.record(
+  z.string().trim().min(1).max(192),
+  domainPackageJsonValueSchema
+).superRefine((schema, context) => {
+  if (new TextEncoder().encode(JSON.stringify(schema)).byteLength > MAX_AGENT_EXECUTION_OUTPUT_SCHEMA_BYTES) {
+    context.addIssue({
+      code: 'custom',
+      message: `Agent execution output schema exceeds ${MAX_AGENT_EXECUTION_OUTPUT_SCHEMA_BYTES} bytes.`
+    })
+  }
+}).readonly()
+
 export const domainMainAgentExecutionSessionRequestSchema = z.object({
   runtimeId: z.string().trim().min(1).max(128).optional(),
   workspaceRoot: z.string().trim().min(1).max(4_096).optional(),
@@ -34,6 +49,8 @@ export const domainMainAgentExecutionRequestSchema = z.object({
     )
     .optional(),
   prompt: z.string().min(1).max(1_000_000),
+  /** Provider-neutral JSON Schema constraining the exact final assistant message. */
+  outputSchema: domainMainAgentExecutionOutputSchemaSchema.optional(),
   /** Bounded caller provenance persisted with the canonical user directive. */
   metadata: domainPackageJsonValueSchema.optional(),
   signal: z.instanceof(AbortSignal).optional()
@@ -97,6 +114,9 @@ export type DomainMainAgentExecutionSession = z.infer<
 export type DomainMainAgentExecutionResult = z.infer<
   typeof domainMainAgentExecutionResultSchema
 >
+export type DomainMainAgentExecutionOutputSchema = z.infer<
+  typeof domainMainAgentExecutionOutputSchemaSchema
+>
 export type DomainMainAgentRuntimeReadiness = z.infer<
   typeof domainMainAgentRuntimeReadinessSchema
 >
@@ -112,6 +132,9 @@ export type DomainMainAgentRuntimeReadiness = z.infer<
  * rather than retargeting the thread. A caller that can retry a logical
  * directive supplies one stable clientDirectiveId on every attempt so the
  * Host's canonical directive ledger can reconcile it without a second turn.
+ * Supplying outputSchema requires the selected Runtime adapter to constrain
+ * its final assistant message to that exact provider-neutral JSON Schema; a
+ * Host must fail closed when the adapter cannot honor structured output.
  */
 export type DomainMainAgentExecutionHost = Readonly<{
   /** Optional at the generic SDK boundary; consumers that require execution must fail closed. */

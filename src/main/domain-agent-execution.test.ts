@@ -40,6 +40,12 @@ describe('domain Agent execution Host', () => {
       ...session,
       workspaceRoot: '/workspace/project',
       clientDirectiveId: 'collab-worker-stable-directive',
+      outputSchema: {
+        type: 'object',
+        properties: { result: { type: 'string' } },
+        required: ['result'],
+        additionalProperties: false
+      },
       prompt: 'Execute the durable Worker task.'
     })).resolves.toMatchObject({
       runtimeId: 'codex', threadId: 'thread-fixed', turnId: 'turn-prepared'
@@ -47,7 +53,13 @@ describe('domain Agent execution Host', () => {
     expect(runtime.startThread).toHaveBeenCalledTimes(1)
     expect(runtime.startTurn).toHaveBeenCalledWith(expect.objectContaining({
       runtimeId: 'codex', threadId: 'thread-fixed',
-      clientDirectiveId: 'collab-worker-stable-directive'
+      clientDirectiveId: 'collab-worker-stable-directive',
+      outputSchema: {
+        type: 'object',
+        properties: { result: { type: 'string' } },
+        required: ['result'],
+        additionalProperties: false
+      }
     }))
   })
 
