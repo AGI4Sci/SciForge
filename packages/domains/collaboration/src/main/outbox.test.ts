@@ -72,6 +72,63 @@ test('a pending command wakes after exact Agent authority becomes ready', async 
   assert.equal(authority.businessCommits, 1)
 })
 
+test('enqueueAndWait joins the exact pending command until authority wakes it to one terminal receipt', async () => {
+  const store = await localStore()
+  let ready = false
+  let attempts = 0
+  let projectsCreated = 0
+  const command = coordinatorProjectCreateCommand()
+  const outbox = new DurableCloudOutbox({
+    store,
+    agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: async (agentId) => ready
+        ? {
+            state: 'ready',
+            agentId,
+            userId: agentNodeFixture.ownerUserId,
+            deviceId: agentNodeFixture.deviceId!,
+            generation: agentNodeFixture.credentialVersion,
+            runtimeId: 'codex',
+            capabilityTags: ['agent-runtime.codex', 'model-access.api']
+          }
+        : { state: 'agent_required', agentId },
+      execute: async (_agentId, request) => {
+        attempts += 1
+        projectsCreated += 1
+        return coordinatorProjectCreatedResponse(request)
+      }
+    }),
+    localAgentId: () => TEST_IDS.agentId
+  })
+
+  await outbox.enqueue('coordinator.command', command)
+  await outbox.waitForIdle()
+  let settled = 0
+  const first = outbox.enqueueAndWait('coordinator.command', command).then((response) => {
+    settled += 1
+    return response
+  })
+  const second = outbox.enqueueAndWait('coordinator.command', {
+    ...command,
+    requestId: 'req_ProjectCreateRetry1'
+  }).then((response) => {
+    settled += 1
+    return response
+  })
+  await outbox.waitForIdle()
+
+  assert.equal(settled, 0)
+  assert.equal(store.snapshot().outbox.length, 1)
+  assert.equal(store.snapshot().outbox[0]?.state, 'pending')
+  ready = true
+  outbox.wake()
+  const expected = coordinatorProjectCreatedResponse(command)
+  assert.deepEqual(await Promise.all([first, second]), [expected, expected])
+  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+  assert.equal(attempts, 1)
+  assert.equal(projectsCreated, 1)
+})
+
 test('a current Worker availability supersedes stale undelivered heartbeat facts', async () => {
   const store = await localStore()
   const attemptedAgentRevisions: number[] = []
@@ -398,7 +455,7 @@ test('rejects collection response drift instead of treating an arbitrary page as
   assert.equal(store.snapshot().outbox[0]?.response, undefined)
 })
 
-test('recovers an idempotent Coordinator collection after the first response is lost', async () => {
+test('a repeated idempotent Coordinator command retries its original durable body after response loss', async () => {
   const store = await localStore()
   const command = coordinatorCreateCommand()
   const committedResponse = coordinatorOfferCollection(command)
@@ -421,18 +478,14 @@ test('recovers an idempotent Coordinator collection after the first response is 
 
   await assert.rejects(outbox.enqueueAndWait('coordinator.command', command))
   assert.equal(store.snapshot().outbox[0]?.state, 'failed')
-  await outbox.retry('idem_task.offer.create-outbox-01')
-  await outbox.waitForIdle()
-
-  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
-  assert.deepEqual(store.snapshot().outbox[0]?.response, committedResponse)
-  assert.equal(attempts, 2)
-  assert.equal(businessCommits, 1)
   assert.deepEqual(
     await outbox.enqueueAndWait('coordinator.command', command),
     committedResponse
   )
+  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+  assert.deepEqual(store.snapshot().outbox[0]?.response, committedResponse)
   assert.equal(attempts, 2)
+  assert.equal(businessCommits, 1)
 })
 
 test('does not change existing fire-and-retry outbox error semantics', async () => {
@@ -680,6 +733,7 @@ function coordinatorProjectCreateCommand(): RestRequest {
     requestId: TEST_IDS.requestId,
     idempotencyKey: 'idem_project.create-outbox-01',
     type: 'project.create',
+    createIntentId: 'pct_OutboxCreateIntent01',
     displayName: 'Durable Project',
     goal: 'Create a durable collaboration Project exactly once.',
     budget: {

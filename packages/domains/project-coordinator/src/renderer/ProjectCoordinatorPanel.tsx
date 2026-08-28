@@ -465,6 +465,11 @@ export function ProjectCoordinatorPanel({
   const [busyAction, setBusyAction] = useState<string>()
   const [createDisplayName, setCreateDisplayName] = useState('')
   const [createGoal, setCreateGoal] = useState('')
+  const createIntentRef = useRef<Readonly<{
+    fingerprint: string
+    createIntentId: `pct_${string}`
+  }> | undefined>(undefined)
+  const createInFlightRef = useRef<Promise<void> | null>(null)
   const [initialContentMode, setInitialContentMode] = useState<'none' | 'required'>('none')
   const [initialProviderFactId, setInitialProviderFactId] = useState('')
   const [activeView, setActiveView] = useState<string>('overview')
@@ -636,23 +641,40 @@ export function ProjectCoordinatorPanel({
 
   const createProject = useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (workspace?.connection.state !== 'ready') return
-    void runAction('project-create', () => client.createProject({
+    if (workspace?.connection.state !== 'ready' || createInFlightRef.current) return
+    const budget = {
+      maxTasks: 32,
+      maxTasksPerRound: 8,
+      maxTaskRetries: 2,
+      maxCoordinationRounds: 4
+    }
+    const fingerprint = JSON.stringify({
+      displayName: createDisplayName.trim(),
+      goal: createGoal.trim(),
+      budget
+    })
+    const existingIntent = createIntentRef.current
+    const createIntentId = existingIntent?.fingerprint === fingerprint
+      ? existingIntent.createIntentId
+      : newProjectCreateIntentId()
+    createIntentRef.current = Object.freeze({ fingerprint, createIntentId })
+    const operation = runAction('project-create', () => client.createProject({
+      createIntentId,
       displayName: createDisplayName,
       goal: createGoal,
-      budget: {
-        maxTasks: 32,
-        maxTasksPerRound: 8,
-        maxTaskRetries: 2,
-        maxCoordinationRounds: 4
-      }
+      budget
     }), async (result) => {
       const selected = projectCoordinatorCreatedSelection(result)
       setWorkspace(selected.workspace)
       setSelectedProjectId(selected.selectedProjectId)
       setDraft(await client.readPlanDraft({ projectId: selected.selectedProjectId }))
+      createIntentRef.current = undefined
       setCreateDisplayName('')
       setCreateGoal('')
+    })
+    createInFlightRef.current = operation
+    void operation.finally(() => {
+      if (createInFlightRef.current === operation) createInFlightRef.current = null
     })
   }, [
     client,
@@ -1069,8 +1091,14 @@ export function ProjectCoordinatorPanel({
                     busy={busyAction === 'project-create'}
                     displayName={createDisplayName}
                     goal={createGoal}
-                    onDisplayName={setCreateDisplayName}
-                    onGoal={setCreateGoal}
+                    onDisplayName={(value) => {
+                      createIntentRef.current = undefined
+                      setCreateDisplayName(value)
+                    }}
+                    onGoal={(value) => {
+                      createIntentRef.current = undefined
+                      setCreateGoal(value)
+                    }}
                     onSubmit={createProject}
                   />
                 ) : null}
@@ -3414,6 +3442,13 @@ function splitLines(value: string): string[] {
 
 function splitCommaSeparated(value: string): string[] {
   return [...new Set(value.split(',').map((entry) => entry.trim()).filter(Boolean))]
+}
+
+function newProjectCreateIntentId(): `pct_${string}` {
+  if (typeof globalThis.crypto?.randomUUID !== 'function') {
+    throw new Error('Secure Project create intent generation is unavailable.')
+  }
+  return `pct_${globalThis.crypto.randomUUID().replaceAll('-', '')}`
 }
 
 function connectionMessageKey(

@@ -76,15 +76,28 @@ test('unbound workspace reads fail closed and Coordinator authority epoch fences
     now: () => new Date(now)
   })
   const session = { runtimeId: 'runtime-owner', threadId: 'thread-owner' }
+  const createInput = {
+    createIntentId: 'pct_SessionCreateIntent1',
+    displayName: 'Bound Project',
+    goal: 'Bind the ordinary Coordinator Session.',
+    budget: {
+      maxTasks: 4,
+      maxTasksPerRound: 4,
+      maxTaskRetries: 1,
+      maxCoordinationRounds: 2
+    }
+  }
+  await state.resolveProjectCreateIntent(ownerUserId, createInput)
 
   await assert.rejects(
     port.scopeWorkspaceRead({}, session),
     /not bound to a Cloud Project/u
   )
   await port.withUnboundSession(session, () => port.bindCreatedProject({
+    createIntentId: createInput.createIntentId,
     createdProjectId: projectId,
     workspace
-  }, session))
+  }, session, createInput))
   assert.deepEqual(await port.scopeWorkspaceRead({}, session), { projectId })
   assert.equal((await port.authorize(projectId, session, 'coordinator')).access, 'coordinator')
   const restarted = createProjectCoordinatorSessionProjectionPort({

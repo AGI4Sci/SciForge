@@ -168,6 +168,7 @@ describe('Project content provisioning facts', () => {
     const request = {
       protocolVersion: '1.0',
       type: 'project.create',
+      createIntentId: 'pct_ContractCreateIntent1',
       requestId: TEST_IDS.requestId,
       idempotencyKey: 'idem_project_create_0001',
       displayName: 'Meeting PoC',

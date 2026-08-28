@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import {
+  idempotencyComparableCommandProjection,
   restRequestSchema,
   restResponseSchema,
   type RestRequest,
@@ -27,9 +28,15 @@ type CoordinatorActor = Readonly<{
   userId: string
 }>
 
+type TerminalWaiter = Readonly<{
+  resolve: (response: RestResponse) => void
+  reject: (error: Error) => void
+}>
+
 export class DurableCloudOutbox implements ProjectionCloudOutbox {
   private readonly now: () => Date
   private drainTail: Promise<void> = Promise.resolve()
+  private readonly terminalWaiters = new Map<string, Set<TerminalWaiter>>()
   private stopped = false
 
   constructor(private readonly options: DurableCloudOutboxOptions) {
@@ -127,21 +134,18 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
     kind: CollaborationOutboxEntry['kind'],
     request: RestRequest
   ): Promise<RestResponse> {
-    await this.enqueue(kind, request)
-    await this.waitForIdle()
-    if (!('idempotencyKey' in request)) {
+    const parsed = restRequestSchema.parse(request)
+    if (!('idempotencyKey' in parsed)) {
       throw new Error('Durable cloud outbox accepts idempotent write commands only.')
     }
-    const entry = this.options.store.snapshot().outbox.find((candidate) => (
-      candidate.idempotencyKey === request.idempotencyKey
+    const existingBeforeEnqueue = this.options.store.snapshot().outbox.find((candidate) => (
+      candidate.idempotencyKey === parsed.idempotencyKey
     ))
-    if (!entry || entry.state !== 'delivered') {
-      throw new Error(entry?.error ?? 'Cloud command is pending delivery.')
+    await this.enqueue(kind, parsed)
+    if (existingBeforeEnqueue?.state === 'failed') {
+      await this.retry(existingBeforeEnqueue.outboxId)
     }
-    if (!entry.response) {
-      throw new Error('Delivered Cloud command is missing its durable response.')
-    }
-    return restResponseSchema.parse(entry.response)
+    return this.waitForTerminal(parsed.idempotencyKey)
   }
 
   async retry(id?: string): Promise<void> {
@@ -248,6 +252,7 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
           queueItem.completedAt = deliveredAt
           queueItem.remoteMessageId = receipt.remoteMessageId
         })
+        this.settleTerminalWaiters(next.idempotencyKey)
       } catch (error) {
         const failedAt = this.now().toISOString()
         await this.options.store.transact((draft) => {
@@ -256,9 +261,55 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
           entry.error = safeError(error, this.options.sanitizeText)
           entry.updatedAt = failedAt
         })
+        this.settleTerminalWaiters(next.idempotencyKey)
         return
       }
     }
+  }
+
+  private waitForTerminal(idempotencyKey: string): Promise<RestResponse> {
+    const terminal = this.readTerminal(idempotencyKey)
+    if (terminal) return terminal
+    return new Promise<RestResponse>((resolve, reject) => {
+      const waiter = Object.freeze({ resolve, reject })
+      const waiters = this.terminalWaiters.get(idempotencyKey) ?? new Set<TerminalWaiter>()
+      waiters.add(waiter)
+      this.terminalWaiters.set(idempotencyKey, waiters)
+      this.settleTerminalWaiters(idempotencyKey)
+    })
+  }
+
+  private readTerminal(idempotencyKey: string): Promise<RestResponse> | undefined {
+    const entry = this.options.store.snapshot().outbox.find((candidate) => (
+      candidate.idempotencyKey === idempotencyKey
+    ))
+    if (!entry || !['delivered', 'failed'].includes(entry.state)) return undefined
+    if (entry.state === 'failed') {
+      return Promise.reject(new Error(entry.error ?? 'Cloud command delivery failed.'))
+    }
+    if (!entry.response) {
+      return Promise.reject(new Error('Delivered Cloud command is missing its durable response.'))
+    }
+    return Promise.resolve(restResponseSchema.parse(entry.response))
+  }
+
+  private settleTerminalWaiters(idempotencyKey: string): void {
+    const waiters = this.terminalWaiters.get(idempotencyKey)
+    if (!waiters) return
+    const terminal = this.readTerminal(idempotencyKey)
+    if (!terminal) return
+    this.terminalWaiters.delete(idempotencyKey)
+    void terminal.then(
+      (response) => {
+        for (const waiter of waiters) waiter.resolve(response)
+      },
+      (error: unknown) => {
+        const terminalError = error instanceof Error
+          ? error
+          : new Error('Cloud command delivery failed.')
+        for (const waiter of waiters) waiter.reject(terminalError)
+      }
+    )
   }
 }
 
@@ -668,8 +719,9 @@ function sha256(value: string): string {
 
 function idempotentCommandHash(value: unknown): string {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return sha256(canonicalJson(value))
-  const { requestId: _requestId, ...command } = value as Record<string, unknown>
-  return sha256(canonicalJson(command))
+  return sha256(canonicalJson(idempotencyComparableCommandProjection(
+    value as Record<string, unknown>
+  )))
 }
 
 type CommandSupersession = Readonly<{

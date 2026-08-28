@@ -229,6 +229,7 @@ async function contentRecoveryProjectFixture(suffix: string) {
   const created = await service.createProject(coordinator, {
     protocolVersion: '1.0',
     type: 'project.create',
+    createIntentId: `pct_${stableDigest(`${suffix}_create_intent`).slice(0, 24)}`,
     requestId: `req_${stableDigest(`${suffix}_project`).slice(0, 24)}`,
     idempotencyKey: `idem_${suffix}_project`,
     displayName: `${suffix} Project`,
@@ -529,6 +530,7 @@ async function activeTextOfferFixture(suffix: string) {
   const created = await service.createProject(coordinator, {
     protocolVersion: '1.0',
     type: 'project.create',
+    createIntentId: `pct_${stableDigest(`${suffix}_workflow_intent`).slice(0, 24)}`,
     requestId: `req_${stableDigest(`${suffix}_project`).slice(0, 24)}`,
     idempotencyKey: `idem_${suffix}_project`,
     displayName: `${suffix} workflow`,
@@ -970,6 +972,52 @@ async function manualRecoveryFileOfferFixture(
 }
 
 describe('vNext Cloud application service', () => {
+  it('replays one Project for the same business command when only request correlation changes', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const owner = await seedOidcUserDevice(repository, 'project-idempotency-owner', at)
+    const coordinator = await registeredAgent(
+      service,
+      owner.user,
+      owner.deviceId,
+      'project-idempotency-owner'
+    )
+    const command: ProjectCreateCommand = {
+      protocolVersion: '1.0',
+      type: 'project.create',
+      requestId: 'req_ProjectIdempotency01',
+      idempotencyKey: 'idem_project_create_business_intent_01',
+      createIntentId: 'pct_ProjectIdempotency1',
+      displayName: 'One durable Project',
+      goal: 'Ignore transport correlation while comparing the exact business command.',
+      budget: {
+        maxTasks: 5,
+        maxTasksPerRound: 5,
+        maxTaskRetries: 1,
+        maxCoordinationRounds: 2
+      }
+    }
+
+    const created = await service.createProject(coordinator, command)
+    const replayed = await service.createProject(coordinator, {
+      ...command,
+      requestId: 'req_ProjectIdempotency02'
+    })
+    expect(replayed.project.projectId).toBe(created.project.projectId)
+    await expect(service.listProjects(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.list',
+      requestId: 'req_ProjectIdempotencyList',
+      limit: 10
+    })).resolves.toMatchObject({ projects: [{ projectId: created.project.projectId }] })
+
+    await expect(service.createProject(coordinator, {
+      ...command,
+      requestId: 'req_ProjectIdempotency03',
+      goal: 'A different business command must conflict.'
+    })).rejects.toMatchObject({ code: 'idempotency_conflict' })
+  })
+
   it('delivers Project creation through the canonical Agent inbox contract', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
@@ -984,6 +1032,7 @@ describe('vNext Cloud application service', () => {
     const created = await service.createProject(coordinator, {
       protocolVersion: '1.0',
       type: 'project.create',
+      createIntentId: 'pct_ProjectInboxIntent01',
       requestId,
       idempotencyKey: 'idem_project_created_inbox_01',
       displayName: 'Inbox contract Project',
@@ -1131,6 +1180,7 @@ describe('vNext Cloud application service', () => {
     )
     const created = await service.createProject(coordinator, {
       protocolVersion: '1.0', type: 'project.create', requestId: 'req_availability_project',
+      createIntentId: 'pct_AvailabilityIntent01',
       idempotencyKey: 'idem_availability_project', displayName: 'Availability Project',
       goal: 'Compose independent Worker and Content readiness facts.',
       budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 }
@@ -1273,6 +1323,7 @@ describe('vNext Cloud application service', () => {
     const command: ProjectCreateCommand = {
       protocolVersion: '1.0',
       type: 'project.create',
+      createIntentId: 'pct_ProjectCreateVnext01',
       requestId: 'req_project_create_001',
       idempotencyKey: 'idem_project_create_vnext',
       displayName: 'Multi-user design review',
@@ -1427,6 +1478,7 @@ describe('vNext Cloud application service', () => {
     const created = await service.createProject(coordinator, {
       protocolVersion: '1.0',
       type: 'project.create',
+      createIntentId: 'pct_ProjectInviteIntent1',
       requestId: 'req_project_invite_create',
       idempotencyKey: 'idem_project_invite_create',
       displayName: 'Invitation-gated review',
@@ -2684,6 +2736,7 @@ describe('vNext Cloud application service', () => {
     }
     const created = await service.createProject(coordinator, {
       protocolVersion: '1.0', type: 'project.create', requestId: 'req_content_project_01',
+      createIntentId: 'pct_ContentProjectIntent1',
       idempotencyKey: 'idem_content_project_01', displayName: 'Signed Content meeting',
       goal: 'Verify the exact Provider root and member roster.',
       budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 }
@@ -3179,6 +3232,7 @@ describe('vNext Cloud application service', () => {
     const coordinator = await registeredAgent(service, owner.user, owner.deviceId, 'membership-owner')
     const created = await service.createProject(coordinator, {
       protocolVersion: '1.0', type: 'project.create', requestId: 'req_membership_project_01',
+      createIntentId: 'pct_MembershipIntent001',
       idempotencyKey: 'idem_membership_project_01', displayName: 'Dynamic meeting team',
       goal: 'Exercise User-level membership authority.',
       budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 }
@@ -3249,6 +3303,7 @@ describe('vNext Cloud application service', () => {
 
     const secondProject = await service.createProject(coordinator, {
       protocolVersion: '1.0', type: 'project.create', requestId: 'req_membership_project_02',
+      createIntentId: 'pct_MembershipIntent002',
       idempotencyKey: 'idem_membership_project_02', displayName: 'Second dynamic meeting',
       goal: 'Exercise an actor-bound Project list continuation.',
       budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 }
@@ -3314,6 +3369,7 @@ describe('vNext Cloud application service', () => {
     const created = await service.createProject(coordinator, {
       protocolVersion: '1.0',
       type: 'project.create',
+      createIntentId: 'pct_TransferProjectIntent1',
       requestId: 'req_transfer_owner_project',
       idempotencyKey: 'idem_transfer_owner_project',
       displayName: 'Owner-only Coordinator transfer',
@@ -4274,6 +4330,7 @@ describe('vNext Cloud application service', () => {
     })
     const created = await service.createProject(coordinator, {
       protocolVersion: '1.0', type: 'project.create', requestId: 'req_text_project_001',
+      createIntentId: 'pct_TextProjectIntent0001',
       idempotencyKey: 'idem_text_project_001', displayName: 'Meeting synthesis',
       goal: 'Synthesize and approve meeting decisions.',
       budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 }

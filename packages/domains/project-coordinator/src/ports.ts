@@ -103,10 +103,11 @@ export type ProjectCoordinatorWorkspacePort = Readonly<{
 }>
 
 export type ProjectCoordinatorCloudWorkspacePort = ProjectCoordinatorWorkspacePort & Readonly<{
-  createProject(
+  createProject(input: ProjectCoordinatorProjectCreateInput): Promise<ProjectCoordinatorProjectCreateResult>
+  completeProjectCreate(
     input: ProjectCoordinatorProjectCreateInput,
-    idempotencyKey: string
-  ): Promise<ProjectCoordinatorProjectCreateResult>
+    result: ProjectCoordinatorProjectCreateResult
+  ): Promise<void>
 }>
 
 export type ProjectCoordinatorPlanPort = Readonly<{
@@ -192,6 +193,8 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
   readCoordinatorTransferFeedback?: (
     projectId: string
   ) => Promise<ProjectCoordinatorTransferFeedback | null>
+  createIntentState?: Pick<ProjectCoordinatorStateStore,
+    'resolveProjectCreateIntent' | 'recordProjectCreateSucceeded'>
   requestId?: () => `req_${string}`
   now?: () => Date
 }>): ProjectCoordinatorCloudWorkspacePort {
@@ -279,7 +282,7 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
 
   return Object.freeze({
     readWorkspace,
-    createProject: async (rawInput, idempotencyKey) => {
+    createProject: async (rawInput) => {
       const input = projectCoordinatorProjectCreateInputSchema.parse(rawInput)
       const identity = options.transport.status()
       if (identity.state !== 'ready') {
@@ -288,12 +291,19 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
       if (!options.coordinatorCloudCommands) {
         throw new Error('Project creation requires the current Device Agent command service.')
       }
+      const createIntentId = options.createIntentState
+        ? await options.createIntentState.resolveProjectCreateIntent(identity.userId, input)
+        : input.createIntentId
+      const canonicalInput = projectCoordinatorProjectCreateInputSchema.parse({
+        ...input,
+        createIntentId
+      })
       const response = await options.coordinatorCloudCommands.execute({
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         requestId: requestId(),
         type: 'project.create',
-        idempotencyKey,
-        ...input
+        idempotencyKey: projectCreateIdempotencyKey(identity.userId, createIntentId),
+        ...canonicalInput
       })
       if (response.type !== 'rest.project_created') {
         throw new Error(`Project create returned ${response.type}.`)
@@ -302,9 +312,24 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
         throw new Error('Project create did not preserve the current Agent owner authority.')
       }
       return projectCoordinatorProjectCreateResultSchema.parse({
+        createIntentId,
         createdProjectId: response.project.projectId,
         workspace: await readWorkspace({ projectId: response.project.projectId })
       })
+    },
+    completeProjectCreate: async (rawInput, rawResult) => {
+      if (!options.createIntentState) return
+      const input = projectCoordinatorProjectCreateInputSchema.parse(rawInput)
+      const result = projectCoordinatorProjectCreateResultSchema.parse(rawResult)
+      const identity = options.transport.status()
+      if (identity.state !== 'ready') {
+        throw new Error('Project create completion requires the authenticated Owner.')
+      }
+      await options.createIntentState.recordProjectCreateSucceeded(
+        identity.userId,
+        { ...input, createIntentId: result.createIntentId },
+        result.createdProjectId
+      )
     }
   })
 }
@@ -1572,6 +1597,10 @@ function scopedIdempotencyKey(base: string, operation: string): string {
     throw new Error('The Host invocation idempotency key cannot be scoped safely.')
   }
   return scoped
+}
+
+function projectCreateIdempotencyKey(ownerUserId: string, createIntentId: string): string {
+  return `idem_project.create.${stableDigest({ ownerUserId, createIntentId }).slice(0, 48)}`
 }
 
 function stableDigest(value: unknown): string {

@@ -7,6 +7,7 @@ import {
   canInvitedUserReadProjectCoordinationCollection,
   canUserReadProjectCoordination,
   cloudStateEventSchema,
+  idempotencyComparableCommandProjection,
   type CloudStateCommand,
   confirmableHumanActionSchema,
   projectInitialTeamIncludesAuthenticatedOwner,
@@ -5722,7 +5723,11 @@ export class CollaborationService {
     work: (tx: CollaborationTransaction, at: string) => Promise<CommandResult<Record<string, unknown>>>
   ): Promise<Record<string, unknown>> {
     assertText(idempotencyKey, 'idempotencyKey', 8, 300)
-    const requestDigest = stableDigest(request)
+    const requestDigest = stableDigest(
+      request && typeof request === 'object' && !Array.isArray(request)
+        ? idempotencyComparableCommandProjection(request as Record<string, unknown>)
+        : request
+    )
     const at = this.timestamp()
     let notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
     let response: Record<string, unknown>

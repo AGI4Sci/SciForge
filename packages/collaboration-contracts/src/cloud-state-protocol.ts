@@ -12,6 +12,7 @@ import {
   idempotencyKeySchema,
   nonEmptyTextSchema,
   projectContentBindingIdSchema,
+  projectCreateIntentIdSchema,
   projectIdSchema,
   projectMembershipIdSchema,
   projectPlanIdSchema,
@@ -199,6 +200,7 @@ export type ProjectInitialTeam = z.infer<typeof projectInitialTeamSchema>
 export const projectCreateCommandSchema = z.object({
   ...writeCommandShape,
   type: z.literal('project.create'),
+  createIntentId: projectCreateIntentIdSchema,
   displayName: displayNameSchema,
   goal: nonEmptyTextSchema,
   budget: projectBudgetSchema

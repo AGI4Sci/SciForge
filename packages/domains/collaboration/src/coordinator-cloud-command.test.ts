@@ -31,6 +31,7 @@ const commands = [
     ...envelope,
     idempotencyKey: 'idem_project.create-01',
     type: 'project.create' as const,
+    createIntentId: 'pct_CommandCreateIntent1',
     displayName: 'Agent-owned Project',
     goal: 'Bind the current Device Agent as Coordinator.',
     budget: {

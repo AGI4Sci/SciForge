@@ -573,12 +573,14 @@ test('renderer Project create applies the exact Cloud-returned workspace focus w
     invoke: async (contract, input) => {
       invoked.push({ actionId: contract.actionId, effect: contract.effect, input })
       return {
+        createIntentId: 'pct_RendererCreateIntent1',
         createdProjectId: 'prj_ProjectCreated01',
         workspace: returnedWorkspace
       } as never
     }
   })
   const result = await client.createProject({
+    createIntentId: 'pct_RendererCreateIntent1',
     displayName: 'Meeting',
     goal: 'Run a realistic meeting.',
     budget: {
@@ -597,6 +599,7 @@ test('renderer Project create applies the exact Cloud-returned workspace focus w
     actionId: 'project-coordinator.project.create',
     effect: 'external-write',
     input: {
+      createIntentId: 'pct_RendererCreateIntent1',
       displayName: 'Meeting',
       goal: 'Run a realistic meeting.',
       budget: {

@@ -12,6 +12,7 @@ import {
   projectCoordinatorWorkerSessionBindingSchema,
   type ProjectCoordinatorCoordinatorSessionBindingRecord,
   type ProjectCoordinatorProjectCreateResult,
+  type ProjectCoordinatorProjectCreateInput,
   type ProjectCoordinatorSessionBinding,
   type ProjectCoordinatorSessionProjection,
   type ProjectCoordinatorWorkspace,
@@ -36,7 +37,8 @@ export type ProjectCoordinatorSessionProjectionPort = Readonly<{
   ): Promise<Result>
   bindCreatedProject(
     result: ProjectCoordinatorProjectCreateResult,
-    session: DomainMainOrdinarySessionIdentity
+    session: DomainMainOrdinarySessionIdentity,
+    input: ProjectCoordinatorProjectCreateInput
   ): Promise<ProjectCoordinatorSessionBinding>
   authorize(
     projectId: string,
@@ -135,10 +137,15 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
   const bindFromWorkspace = async (
     projectId: string,
     workspace: ProjectCoordinatorWorkspace,
-    session: DomainMainOrdinarySessionIdentity
+    session: DomainMainOrdinarySessionIdentity,
+    createInput?: ProjectCoordinatorProjectCreateInput
   ): Promise<ProjectCoordinatorSessionBinding> => {
     const record = coordinatorBindingRecord(projectId, workspace, session, now())
-    await options.state.bindCoordinatorSession(record)
+    if (createInput) {
+      await options.state.bindCoordinatorSessionForCreatedProject(createInput, record)
+    } else {
+      await options.state.bindCoordinatorSession(record)
+    }
     await coordinatorSnapshot.refresh()
     return projectCoordinatorSessionBindingSchema.parse({
       ...record,
@@ -178,10 +185,11 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
         return operation()
       }
     ),
-    bindCreatedProject: (result, session) => bindFromWorkspace(
+    bindCreatedProject: (result, session, input) => bindFromWorkspace(
       result.createdProjectId,
       result.workspace,
-      session
+      session,
+      { ...input, createIntentId: result.createIntentId }
     ),
     authorize: async (projectId, session, requiredAccess) => {
       await coordinatorSnapshot.refresh()

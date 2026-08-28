@@ -186,21 +186,19 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         handler: async (raw, context) => {
           const input = projectCoordinatorProjectCreateInputSchema.parse(raw)
           const create = async () => projectCoordinatorProjectCreateResultSchema.parse(
-            await options.ports.workspace.createProject(
-              input,
-              capabilityIdempotencyKey(
-                PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
-                context
-              )
-            )
+            await options.ports.workspace.createProject(input)
           )
-          if (context.caller.audience !== 'agent') return { output: await create() }
+          if (context.caller.audience !== 'agent') {
+            const result = await create()
+            await options.ports.workspace.completeProjectCreate(input, result)
+            return { output: result }
+          }
           const session = requireOrdinaryAgentSession(context)
           context.assertPrincipalCurrent()
           return options.sessions.withUnboundSession(session, async () => {
             const result = await create()
             context.assertPrincipalCurrent()
-            await options.sessions.bindCreatedProject(result, session)
+            await options.sessions.bindCreatedProject(result, session, input)
             return { output: result }
           })
         }
@@ -752,6 +750,7 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
   const workspace = createProjectCoordinatorCloudWorkspacePort({
     transport,
     coordinatorCloudCommands,
+    createIntentState: state,
     readPlanAssignments: (plan) => state.readPlanAssignments(
       plan.projectPlanId,
       plan.planDigest

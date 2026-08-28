@@ -1,5 +1,11 @@
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { projectPlanSchema, type ProjectPlan } from '@sciforge/collaboration-contracts'
+import {
+  projectIdSchema,
+  projectPlanSchema,
+  userIdSchema,
+  type ProjectPlan
+} from '@sciforge/collaboration-contracts'
 import type {
   DomainMainPackageSettingsHost,
   DomainMainPackageSettingsSnapshot
@@ -8,11 +14,13 @@ import type {
 import {
   projectCoordinatorPlanAssignmentSchema,
   projectCoordinatorPlanDraftSchema,
+  projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorCoordinatorSessionBindingRecordSchema,
   projectCoordinatorTransferFeedbackSchema,
   type ProjectCoordinatorCoordinatorSessionBindingRecord,
   type ProjectCoordinatorPlanAssignment,
   type ProjectCoordinatorPlanDraft,
+  type ProjectCoordinatorProjectCreateInput,
   type ProjectCoordinatorTransferFeedback
 } from './contract.js'
 
@@ -21,6 +29,14 @@ const submittedPlanSelectionSchema = z.object({
   projectPlanId: projectPlanSchema.shape.projectPlanId,
   planDigest: projectPlanSchema.shape.planDigest,
   assignments: z.array(projectCoordinatorPlanAssignmentSchema).min(1).max(1_000)
+}).strict().readonly()
+
+const projectCreateIntentRecordSchema = z.object({
+  createIntentId: projectCoordinatorProjectCreateInputSchema.unwrap().shape.createIntentId,
+  principalUserId: userIdSchema,
+  commandDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+  state: z.enum(['pending', 'succeeded']),
+  createdProjectId: projectIdSchema.nullable()
 }).strict().readonly()
 
 const projectCoordinatorStateSchema = z.object({
@@ -32,6 +48,9 @@ const projectCoordinatorStateSchema = z.object({
   ).max(10_000).default([]),
   coordinatorTransferFeedback: z.array(projectCoordinatorTransferFeedbackSchema)
     .max(1_000)
+    .default([]),
+  projectCreateIntents: z.array(projectCreateIntentRecordSchema)
+    .max(10_000)
     .default([])
 }).strict().readonly()
 
@@ -42,7 +61,8 @@ const EMPTY_STATE: ProjectCoordinatorState = {
   planDrafts: [],
   submittedPlanSelections: [],
   coordinatorSessionBindings: [],
-  coordinatorTransferFeedback: []
+  coordinatorTransferFeedback: [],
+  projectCreateIntents: []
 }
 
 export class ProjectCoordinatorStateStore {
@@ -58,6 +78,99 @@ export class ProjectCoordinatorStateStore {
   > {
     const { state } = await this.read()
     return state.coordinatorSessionBindings
+  }
+
+  /**
+   * Durably joins retries of the same unresolved business form to one create
+   * intent. A reused intent with different business input fails closed.
+   */
+  async resolveProjectCreateIntent(
+    principalUserId: string,
+    rawInput: ProjectCoordinatorProjectCreateInput
+  ): Promise<ProjectCoordinatorProjectCreateInput['createIntentId']> {
+    const input = projectCoordinatorProjectCreateInputSchema.parse(rawInput)
+    const owner = userIdSchema.parse(principalUserId)
+    const commandDigest = projectCreateCommandDigest(input)
+    let snapshot = await this.settings.read()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const state = parseState(snapshot)
+      const exact = state.projectCreateIntents.find(({ createIntentId }) => (
+        createIntentId === input.createIntentId
+      ))
+      if (exact) {
+        if (exact.principalUserId !== owner || exact.commandDigest !== commandDigest) {
+          throw new Error('Project create intent was reused for a different Owner or business command.')
+        }
+        return exact.createIntentId
+      }
+      const pending = state.projectCreateIntents.find((candidate) => (
+        candidate.principalUserId === owner &&
+        candidate.commandDigest === commandDigest &&
+        candidate.state === 'pending'
+      ))
+      if (pending) return pending.createIntentId
+      const value = projectCoordinatorStateSchema.parse({
+        ...state,
+        projectCreateIntents: [...state.projectCreateIntents, {
+          createIntentId: input.createIntentId,
+          principalUserId: owner,
+          commandDigest,
+          state: 'pending',
+          createdProjectId: null
+        }]
+      })
+      try {
+        await this.settings.write(value, snapshot.revision)
+        return input.createIntentId
+      } catch (error) {
+        if (attempt >= 2) throw error
+        snapshot = await this.settings.read()
+      }
+    }
+    throw new Error('Unable to persist the Project create intent.')
+  }
+
+  async recordProjectCreateSucceeded(
+    principalUserId: string,
+    rawInput: ProjectCoordinatorProjectCreateInput,
+    projectId: string
+  ): Promise<void> {
+    const input = projectCoordinatorProjectCreateInputSchema.parse(rawInput)
+    const owner = userIdSchema.parse(principalUserId)
+    const createdProjectId = projectIdSchema.parse(projectId)
+    const commandDigest = projectCreateCommandDigest(input)
+    let snapshot = await this.settings.read()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const state = parseState(snapshot)
+      const current = state.projectCreateIntents.find(({ createIntentId }) => (
+        createIntentId === input.createIntentId
+      ))
+      if (!current || current.principalUserId !== owner || current.commandDigest !== commandDigest) {
+        throw new Error('Project create success does not match its durable business intent.')
+      }
+      if (current.state === 'succeeded') {
+        if (current.createdProjectId !== createdProjectId) {
+          throw new Error('Project create intent resolved to a different Cloud Project.')
+        }
+        return
+      }
+      const value = projectCoordinatorStateSchema.parse({
+        ...state,
+        projectCreateIntents: state.projectCreateIntents.map((candidate) => (
+          candidate.createIntentId === input.createIntentId
+            ? { ...candidate, state: 'succeeded', createdProjectId }
+            : candidate
+        ))
+      })
+      try {
+        await this.settings.write(value, snapshot.revision)
+        return
+      } catch (error) {
+        if (attempt >= 2) throw error
+        snapshot = await this.settings.read()
+      }
+    }
+    throw new Error('Unable to persist the successful Project create intent.')
   }
 
   async bindCoordinatorSession(
@@ -95,6 +208,68 @@ export class ProjectCoordinatorStateStore {
       }
     }
     throw new Error('Unable to persist the ordinary Coordinator Session binding.')
+  }
+
+  /**
+   * Commits the canonical create receipt and its ordinary Coordinator Session
+   * binding in one package-settings CAS. There is no durable state where the
+   * intent is terminal but the exact Session is still unbound.
+   */
+  async bindCoordinatorSessionForCreatedProject(
+    rawInput: ProjectCoordinatorProjectCreateInput,
+    rawBinding: ProjectCoordinatorCoordinatorSessionBindingRecord
+  ): Promise<ProjectCoordinatorCoordinatorSessionBindingRecord> {
+    const input = projectCoordinatorProjectCreateInputSchema.parse(rawInput)
+    const binding = projectCoordinatorCoordinatorSessionBindingRecordSchema.parse(rawBinding)
+    const commandDigest = projectCreateCommandDigest(input)
+    let snapshot = await this.settings.read()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const state = parseState(snapshot)
+      const intent = state.projectCreateIntents.find(({ createIntentId }) => (
+        createIntentId === input.createIntentId
+      ))
+      if (
+        !intent ||
+        intent.principalUserId !== binding.principalUserId ||
+        intent.commandDigest !== commandDigest
+      ) {
+        throw new Error('Coordinator Session binding does not match its durable Project create intent.')
+      }
+      if (intent.createdProjectId !== null && intent.createdProjectId !== binding.projectId) {
+        throw new Error('Project create intent resolved to a different Cloud Project.')
+      }
+      const existing = state.coordinatorSessionBindings.find((candidate) => (
+        candidate.runtimeId === binding.runtimeId && candidate.threadId === binding.threadId
+      ))
+      if (existing && (
+        existing.projectId !== binding.projectId ||
+        existing.principalUserId !== binding.principalUserId ||
+        existing.coordinatorAgentId !== binding.coordinatorAgentId ||
+        existing.coordinatorAuthorityEpoch !== binding.coordinatorAuthorityEpoch
+      )) {
+        throw new Error('The ordinary Session is already bound to different Project authority.')
+      }
+      if (existing && intent.state === 'succeeded') return existing
+      const value = projectCoordinatorStateSchema.parse({
+        ...state,
+        coordinatorSessionBindings: existing
+          ? state.coordinatorSessionBindings
+          : [...state.coordinatorSessionBindings, binding],
+        projectCreateIntents: state.projectCreateIntents.map((candidate) => (
+          candidate.createIntentId === input.createIntentId
+            ? { ...candidate, state: 'succeeded', createdProjectId: binding.projectId }
+            : candidate
+        ))
+      })
+      try {
+        await this.settings.write(value, snapshot.revision)
+        return existing ?? binding
+      } catch (error) {
+        if (attempt >= 2) throw error
+        snapshot = await this.settings.read()
+      }
+    }
+    throw new Error('Unable to atomically bind the created Project Session.')
   }
 
   async writeDraft(
@@ -255,4 +430,18 @@ function parseState(snapshot: DomainMainPackageSettingsSnapshot): ProjectCoordin
   return snapshot.value === null
     ? EMPTY_STATE
     : projectCoordinatorStateSchema.parse(snapshot.value)
+}
+
+function projectCreateCommandDigest(input: ProjectCoordinatorProjectCreateInput): string {
+  const { createIntentId: _createIntentId, ...businessCommand } = input
+  return createHash('sha256').update(stableJson(businessCommand), 'utf8').digest('hex')
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record).sort().map((key) => (
+    `${JSON.stringify(key)}:${stableJson(record[key])}`
+  )).join(',')}}`
 }

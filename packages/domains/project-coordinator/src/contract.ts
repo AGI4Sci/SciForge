@@ -921,6 +921,7 @@ export const projectCoordinatorPlanSubmitResultSchema = z.object({
 }).readonly()
 
 export const projectCoordinatorProjectCreateResultSchema = z.object({
+  createIntentId: projectCoordinatorProjectCreateInputSchema.unwrap().shape.createIntentId,
   createdProjectId: projectIdSchema,
   workspace: projectCoordinatorWorkspaceSchema
 }).strict().superRefine((result, context) => {

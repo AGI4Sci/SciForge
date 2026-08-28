@@ -97,6 +97,7 @@ test('current Device Agent Project create returns a workspace focused on the exa
   })
 
   const result = await port.createProject({
+    createIntentId: 'pct_CloudWorkspaceCreate01',
     displayName: 'Created meeting',
     goal: 'Run one realistic multi-user meeting.',
     budget: {
@@ -105,7 +106,7 @@ test('current Device Agent Project create returns a workspace focused on the exa
       maxTaskRetries: 2,
       maxCoordinationRounds: 3
     }
-  }, 'idem_CreateProjectTracer01')
+  })
 
   assert.equal(result.createdProjectId, project.projectId)
   assert.equal(result.workspace.focusedProjectId, project.projectId)
@@ -130,7 +131,8 @@ test('current Device Agent Project create returns a workspace focused on the exa
     protocolVersion: '1.0',
     requestId: 'req_TracerRequest0001',
     type: 'project.create',
-    idempotencyKey: 'idem_CreateProjectTracer01',
+    idempotencyKey: coordinatorRequests[0]!.idempotencyKey,
+    createIntentId: 'pct_CloudWorkspaceCreate01',
     displayName: 'Created meeting',
     goal: 'Run one realistic multi-user meeting.',
     budget: {
@@ -140,6 +142,10 @@ test('current Device Agent Project create returns a workspace focused on the exa
       maxCoordinationRounds: 3
     }
   }])
+  assert.match(
+    coordinatorRequests[0]!.idempotencyKey,
+    /^idem_project\.create\.[a-f0-9]{48}$/u
+  )
   assert.deepEqual(
     requests.slice(4).map(({ payload }) => (
       payload.type === 'project.coordination.read' ? payload.collections : []
@@ -179,10 +185,11 @@ test('Agent-authored Project create rejects a Cloud response that changes the cr
         subscribe: () => () => undefined
       }
     }).createProject({
+      createIntentId: 'pct_CloudWorkspaceWrong01',
       displayName: project.displayName,
       goal: project.goal,
       budget: project.budget
-    }, `idem_${project.projectId}`),
+    }),
     /current Agent owner authority/
   )
 })

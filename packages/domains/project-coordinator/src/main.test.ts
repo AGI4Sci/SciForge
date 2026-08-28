@@ -49,7 +49,8 @@ test('workspace read remains a strict non-writing coordination capability', asyn
           providerPrincipalFacts: [],
           projects: []
         }),
-        createProject: async () => { throw new Error('unused') }
+        createProject: async () => { throw new Error('unused') },
+        completeProjectCreate: async () => { throw new Error('unused') }
       },
       plan: {
         readDraft: async () => null,
@@ -245,6 +246,7 @@ test('provisioning signing port locks Identity delegation to factual Project con
 
 test('governed UI capabilities expose Project create and the local-to-Cloud Plan workflow', async () => {
   const created = {
+    createIntentId: 'pct_UiCreateIntent0001',
     createdProjectId: 'prj_ProjectCreated01',
     workspace: {
       connection: {
@@ -270,7 +272,8 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
         providerPrincipalFacts: [],
         projects: []
       }),
-      createProject: async () => created
+      createProject: async () => created,
+      completeProjectCreate: async () => undefined
     },
     plan: {
       readDraft: async () => null,
@@ -335,6 +338,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
   assert.equal(transfer.approval, 'confirmation')
   assert.equal(transfer.concurrency.idempotency, 'required')
   assert.deepEqual(await create.handler({
+    createIntentId: 'pct_UiCreateIntent0001',
     displayName: 'Meeting',
     goal: 'Run the meeting.',
     budget: {
@@ -355,6 +359,7 @@ test('Agent project.create binds only after an exact successful canonical receip
   const context = agentInvocationContext('invocation-agent-create-1')
 
   assert.deepEqual(await successful.handler({
+    createIntentId: result.createIntentId,
     displayName: 'Meeting',
     goal: 'Run the meeting.',
     budget: {
@@ -371,6 +376,7 @@ test('Agent project.create binds only after an exact successful canonical receip
     throw new Error('canonical create rejected')
   }, rejectedSessions.port)
   await assert.rejects(() => rejected.handler({
+    createIntentId: 'pct_RejectedCreate0001',
     displayName: 'Rejected',
     goal: 'Remain unbound.',
     budget: {
@@ -391,6 +397,9 @@ test('Agent project.create binds only after an exact successful canonical receip
       throw failure
     }, interruptedSessions.port)
     await assert.rejects(() => interrupted.handler({
+      createIntentId: failure.name === 'AbortError'
+        ? 'pct_CancelledCreate001'
+        : 'pct_TimeoutCreate00001',
       displayName: failure.name,
       goal: 'Remain unbound after an interrupted create.',
       budget: {
@@ -416,6 +425,7 @@ test('Agent project.create binds only after an exact successful canonical receip
     }
   }) as never, invalidSessions.port)
   await assert.rejects(() => invalid.handler({
+    createIntentId: 'pct_InvalidCreate00001',
     displayName: 'Invalid receipt',
     goal: 'Remain unbound after response drift.',
     budget: {
@@ -434,6 +444,7 @@ test('Agent project.create binds only after an exact successful canonical receip
     return result
   }, alreadyBoundSessions.port)
   await assert.rejects(() => alreadyBound.handler({
+    createIntentId: 'pct_AlreadyBoundCreate1',
     displayName: 'Second Project',
     goal: 'Fail before a second Cloud create.',
     budget: {
@@ -612,7 +623,8 @@ function projectCreatePorts(
         onWorkspaceRead()
         return createdProjectResult().workspace
       },
-      createProject
+      createProject,
+      completeProjectCreate: async () => undefined
     },
     plan: {
       readDraft: async () => null,
@@ -635,6 +647,7 @@ function projectCreatePorts(
 
 function createdProjectResult() {
   return {
+    createIntentId: 'pct_MainCreateIntent001',
     createdProjectId: 'prj_ProjectCreated01',
     workspace: {
       connection: {

@@ -570,6 +570,7 @@ describe('production HTTP OIDC-only boundary', () => {
       items: [{ userId: identity.userId }] })
     const projectCommand = {
       protocolVersion: '1.0', requestId: 'req_HttpProjectCreate1', type: 'project.create',
+      createIntentId: 'pct_HttpProjectCreate01',
       idempotencyKey: 'idem_http_project_create_01', displayName: 'HTTP meeting',
       goal: 'Verify the canonical atomic response.',
       budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 }

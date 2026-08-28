@@ -166,7 +166,7 @@ test('composer context treats Cloud failures and mid-read aborts as empty option
       workspaceReads += 1
       return workspaceFixture()
     }
-  } as ProjectCoordinatorRendererClient)
+  } as unknown as ProjectCoordinatorRendererClient)
   assert.deepEqual(await aborting.provide({
     runtimeId,
     sessionId: threadId,
@@ -188,7 +188,7 @@ test('membership-filtered Session projection clears composer context before Proj
       workspaceReads += 1
       return workspaceFixture()
     }
-  } as ProjectCoordinatorRendererClient)
+  } as unknown as ProjectCoordinatorRendererClient)
 
   assert.deepEqual(await provider.provide(requestFixture({
     runtimeId,
