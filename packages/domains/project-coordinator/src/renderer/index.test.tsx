@@ -15,6 +15,7 @@ import type { ProjectCoordinatorProject } from '../contract.js'
 
 import {
   PROJECT_COORDINATOR_I18N_CONTRIBUTION,
+  PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION,
   PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION,
   PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION,
   PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRIBUTION
@@ -30,6 +31,7 @@ import {
   WorkersSection,
   formatRelativeTime,
   projectCoordinatorAgentOperationalState,
+  projectCoordinatorActivationTarget,
   projectCoordinatorAttentionSummary,
   projectCoordinatorCompletionInput,
   projectCoordinatorCreatedSelection,
@@ -43,6 +45,7 @@ import {
 import { createProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
 import {
   createDomainRendererEntry,
+  createProjectCoordinatorNavigationSectionContribution,
   createProjectCoordinatorOpenCommand,
   createProjectCoordinatorRightPanelContribution
 } from './index.js'
@@ -53,7 +56,8 @@ import {
 } from './workspace-sections.js'
 
 test('renderer entry owns one generic Workbench surface without Identity UI contributions', () => {
-  const host = rendererHost([])
+  const opened: unknown[] = []
+  const host = rendererHost(opened)
   const entry = createDomainRendererEntry(host)
   assert.equal(entry.process, 'renderer')
   assert.deepEqual(
@@ -62,6 +66,7 @@ test('renderer entry owns one generic Workbench surface without Identity UI cont
       PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
       PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION.id,
       PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRIBUTION.id,
+      PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION.id,
       PROJECT_COORDINATOR_I18N_CONTRIBUTION.id
     ]
   )
@@ -79,7 +84,7 @@ test('renderer entry owns one generic Workbench surface without Identity UI cont
       activation: {
         contributionId: string
         revision: number
-        payload: { projectId: string }
+        payload: { projectId: string; view: 'tasks' }
       }
     }): ReactElement<Record<string, unknown>>
   }>
@@ -93,11 +98,112 @@ test('renderer entry owns one generic Workbench surface without Identity UI cont
     activation: {
       contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
       revision: 1,
-      payload: { projectId: 'prj_Project000001' }
+      payload: { projectId: 'prj_Project000001', view: 'tasks' }
     }
   })
   assert.equal(rendered.props.initialProjectId, 'prj_Project000001')
+  assert.equal(rendered.props.initialView, 'tasks')
+  assert.equal(rendered.props.activationRevision, 1)
   assert.equal(rendered.props.className, 'fixture-panel')
+
+  const navigationContribution = entry.contributions.find(
+    ({ id }) => id === PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION.id
+  )!
+  const navigation = navigationContribution.value as ReturnType<
+    typeof createProjectCoordinatorNavigationSectionContribution
+  >
+  const selectSession = () => undefined
+  const context = {
+    active: true,
+    className: 'fixture-navigation',
+    session: { id: 'session-1' },
+    sessions: [{
+      id: 'session-1',
+      title: 'Ordinary Agent Session',
+      updatedAt: '2026-08-28T00:00:00.000Z'
+    }],
+    selectSession
+  }
+  const renderedNavigation = navigation.render(context) as ReactElement<{
+    context: typeof context
+    onCreateProject: () => void
+    onOpenProject: (projectId: string, view: 'files') => void
+  }>
+  assert.equal(renderedNavigation.props.context, context)
+  assert.equal(renderedNavigation.props.context.selectSession, selectSession)
+  renderedNavigation.props.onCreateProject()
+  renderedNavigation.props.onOpenProject('prj_Project000001', 'files')
+  assert.deepEqual(opened.slice(-2), [{
+    contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
+    sessionId: 'session-1',
+    activation: {
+      contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
+      revision: 1,
+      payload: { view: 'create' }
+    }
+  }, {
+    contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
+    sessionId: 'session-1',
+    activation: {
+      contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
+      revision: 2,
+      payload: { projectId: 'prj_Project000001', view: 'files' }
+    }
+  }])
+})
+
+test('Project activation intents resolve only to package-owned safe views', () => {
+  const withoutFiles = new Set(['overview', 'projects', 'reviews'])
+  const withFiles = new Set([...withoutFiles, 'files'])
+  assert.deepEqual(projectCoordinatorActivationTarget('overview', withoutFiles), {
+    workspaceView: 'overview'
+  })
+  assert.deepEqual(projectCoordinatorActivationTarget('tasks', withoutFiles), {
+    workspaceView: 'projects',
+    sectionId: 'tasks'
+  })
+  assert.deepEqual(projectCoordinatorActivationTarget('files', withoutFiles), {
+    workspaceView: 'overview'
+  })
+  assert.deepEqual(projectCoordinatorActivationTarget('files', withFiles), {
+    workspaceView: 'files'
+  })
+  assert.deepEqual(projectCoordinatorActivationTarget('decisions', withoutFiles), {
+    workspaceView: 'reviews'
+  })
+  assert.deepEqual(projectCoordinatorActivationTarget('recovery', withoutFiles), {
+    workspaceView: 'projects',
+    sectionId: 'provisioning'
+  })
+  assert.deepEqual(projectCoordinatorActivationTarget('create', withoutFiles), {
+    workspaceView: 'projects',
+    sectionId: 'create',
+    requestCreate: true
+  })
+})
+
+test('Cloud Projects create reuses a draft presentation Session without inventing a Thread', () => {
+  const opened: unknown[] = []
+  const navigation = createProjectCoordinatorNavigationSectionContribution(
+    rendererHost(opened)
+  )
+  const rendered = navigation.render({
+    active: true,
+    className: 'fixture-navigation',
+    session: { id: 'draft:/workspace', workspaceRoot: '/workspace' },
+    sessions: [],
+    selectSession: () => undefined
+  }) as ReactElement<{ onCreateProject: () => void }>
+  rendered.props.onCreateProject()
+  assert.deepEqual(opened, [{
+    contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
+    sessionId: 'draft:/workspace',
+    activation: {
+      contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
+      revision: 1,
+      payload: { view: 'create' }
+    }
+  }])
 })
 
 test('Collaboration Center keeps package-owned HCI behind one ordered workspace navigation', () => {

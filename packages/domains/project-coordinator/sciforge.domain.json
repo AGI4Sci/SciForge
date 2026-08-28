@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.project-coordinator",
     "displayName": "Project Coordinator",
-    "version": "3.0.0",
+    "version": "3.1.0",
     "hostApi": {
       "minimum": "1.5.0",
       "maximumExclusive": "2.0.0"
@@ -33,6 +33,11 @@
       "location": "workbench.topbar",
       "commandId": "project-coordinator.open",
       "label": "projectCoordinatorToolbar"
+    },
+    "project-coordinator.workbench-navigation-section": {
+      "location": "workbench.navigation-section",
+      "contractVersion": "1.0.0",
+      "label": "projectCoordinatorSidebarCloudProjects"
     }
   },
   "entrypoints": [
@@ -69,6 +74,11 @@
         {
           "kind": "renderer.workbench-toolbar-action",
           "id": "project-coordinator.workbench-toolbar-action",
+          "priority": 73
+        },
+        {
+          "kind": "renderer.extension",
+          "id": "project-coordinator.workbench-navigation-section",
           "priority": 73
         },
         {

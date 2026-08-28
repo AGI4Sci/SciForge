@@ -43,6 +43,7 @@ import type { DomainWorkbenchRightPanelSession } from '@sciforge/domain-sdk/host
 import type {
   ProjectCoordinatorCompleteInput,
   ProjectCoordinatorArtifactReviewPrepareInput,
+  ProjectCoordinatorActivationView,
   ProjectCoordinatorContentRecoveryAbandonInput,
   ProjectCoordinatorContentRecoveryObserveLinkInput,
   ProjectCoordinatorContentRecoveryRetrySuccessorInput,
@@ -379,11 +380,45 @@ export type ProjectCoordinatorPanelProps = Readonly<{
   client: ProjectCoordinatorRendererClient
   session: DomainWorkbenchRightPanelSession
   initialProjectId?: string
+  initialView?: ProjectCoordinatorActivationView
+  activationRevision?: number
   className?: string
   onCollapse?: () => void
   onOpenArtifact?: (input: ProjectCoordinatorArtifactReviewPrepareInput) => Promise<void>
   workspaceSections?: readonly ProjectCoordinatorWorkspaceSection[]
 }>
+
+export type ProjectCoordinatorActivationTarget = Readonly<{
+  workspaceView: string
+  sectionId?: (typeof PROJECT_COORDINATOR_PANEL_SECTION_IDS)[number] | 'create'
+  requestCreate?: true
+}>
+
+export function projectCoordinatorActivationTarget(
+  view: ProjectCoordinatorActivationView,
+  availableWorkspaceViews: ReadonlySet<string>
+): ProjectCoordinatorActivationTarget {
+  switch (view) {
+    case 'overview':
+      return Object.freeze({ workspaceView: 'overview' })
+    case 'tasks':
+      return Object.freeze({ workspaceView: 'projects', sectionId: 'tasks' })
+    case 'files':
+      return Object.freeze({
+        workspaceView: availableWorkspaceViews.has('files') ? 'files' : 'overview'
+      })
+    case 'decisions':
+      return Object.freeze({ workspaceView: 'reviews' })
+    case 'recovery':
+      return Object.freeze({ workspaceView: 'projects', sectionId: 'provisioning' })
+    case 'create':
+      return Object.freeze({
+        workspaceView: 'projects',
+        sectionId: 'create',
+        requestCreate: true
+      })
+  }
+}
 
 export function selectFocusedProject(
   workspace: ProjectCoordinatorWorkspace | undefined,
@@ -411,6 +446,8 @@ export function ProjectCoordinatorPanel({
   client,
   session,
   initialProjectId,
+  initialView,
+  activationRevision = 0,
   className,
   onCollapse,
   onOpenArtifact,
@@ -433,6 +470,10 @@ export function ProjectCoordinatorPanel({
   const [activeView, setActiveView] = useState<string>('overview')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [newProjectRequest, setNewProjectRequest] = useState(0)
+  const [activationSectionRequest, setActivationSectionRequest] = useState<Readonly<{
+    revision: number
+    sectionId: (typeof PROJECT_COORDINATOR_PANEL_SECTION_IDS)[number]
+  }>>()
   const refreshRequestRef = useRef(0)
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
 
@@ -449,6 +490,10 @@ export function ProjectCoordinatorPanel({
       placement === 'navigation' && sectionId === activeView
     )),
     [activeView, workspaceSections]
+  )
+  const availableWorkspaceViews = useMemo(
+    () => new Set(navigationItems.map(({ id }) => id)),
+    [navigationItems]
   )
 
   const refresh = useCallback(async (
@@ -501,6 +546,24 @@ export function ProjectCoordinatorPanel({
     void refresh(initialProjectId, controller.signal)
     return () => controller.abort()
   }, [initialProjectId, refresh, session.id])
+
+  useEffect(() => {
+    if (!initialView) return
+    const target = projectCoordinatorActivationTarget(
+      initialView,
+      availableWorkspaceViews
+    )
+    setSettingsOpen(false)
+    setActiveView(target.workspaceView)
+    if (target.requestCreate) {
+      setNewProjectRequest((request) => request + 1)
+      setActivationSectionRequest(undefined)
+      return
+    }
+    setActivationSectionRequest(target.sectionId && target.sectionId !== 'create'
+      ? { revision: activationRevision, sectionId: target.sectionId }
+      : undefined)
+  }, [activationRevision, availableWorkspaceViews, initialView])
 
   useEffect(() => {
     const timer = setInterval(() => setNowMilliseconds(Date.now()), 10_000)
@@ -830,6 +893,16 @@ export function ProjectCoordinatorPanel({
       if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame)
     }
   }, [activeView, newProjectRequest])
+
+  useEffect(() => {
+    if (activeView !== 'projects' || !activationSectionRequest) return
+    const frame = globalThis.requestAnimationFrame?.(() => {
+      focusCoordinatorSection(activationSectionRequest.sectionId)
+    })
+    return () => {
+      if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame)
+    }
+  }, [activationSectionRequest, activeView])
 
   return (
     <aside

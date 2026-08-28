@@ -4,6 +4,7 @@ import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   defineTrustedRendererDomainPackageEntry,
   type DomainRendererCommandHandler,
+  type DomainRendererWorkbenchNavigationSectionValue,
   type DomainRendererWorkbenchRightPanelValue,
   type DomainRendererWorkbenchToolbarActionValue,
   type TrustedRendererDomainPackageEntry
@@ -13,6 +14,8 @@ import { projectCoordinatorActivationSchema } from '../contract.js'
 import type { ProjectCoordinatorArtifactReviewPrepareInput } from '../contract.js'
 import {
   PROJECT_COORDINATOR_I18N_CONTRIBUTION,
+  PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRACT,
+  PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION,
   PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION,
   PROJECT_COORDINATOR_RIGHT_PANEL_CONTRACT,
   PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION,
@@ -21,6 +24,9 @@ import {
   domainPackageDefinition
 } from '../definition.js'
 import { createProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
+import {
+  ProjectCoordinatorSidebarSection
+} from './ProjectCoordinatorSidebarSection.js'
 import {
   projectCoordinatorI18nResourceContribution,
   type ProjectCoordinatorI18nResourceContribution
@@ -35,9 +41,12 @@ export type ProjectCoordinatorRightPanelContribution =
   DomainRendererWorkbenchRightPanelValue<ReactElement>
 export type ProjectCoordinatorToolbarActionContribution =
   DomainRendererWorkbenchToolbarActionValue<typeof Workflow>
+export type ProjectCoordinatorNavigationSectionContribution =
+  DomainRendererWorkbenchNavigationSectionValue<ReactElement>
 export type ProjectCoordinatorRendererContribution =
   | ProjectCoordinatorRightPanelContribution
   | ProjectCoordinatorToolbarActionContribution
+  | ProjectCoordinatorNavigationSectionContribution
   | DomainRendererCommandHandler
   | ProjectCoordinatorI18nResourceContribution
 
@@ -87,6 +96,10 @@ export function createProjectCoordinatorRightPanelContribution(
           {...(parsedActivation?.success && parsedActivation.data.projectId
             ? { initialProjectId: parsedActivation.data.projectId }
             : {})}
+          {...(parsedActivation?.success && parsedActivation.data.view
+            ? { initialView: parsedActivation.data.view }
+            : {})}
+          {...(activation ? { activationRevision: activation.revision } : {})}
         />
       )
     }
@@ -96,19 +109,24 @@ export function createProjectCoordinatorRightPanelContribution(
 export function createProjectCoordinatorOpenCommand(
   host: DomainRendererHost
 ): DomainRendererCommandHandler {
+  let activationRevision = 0
   return Object.freeze({
     execute: ({ sessionId, payload }) => {
       if (!sessionId || !host.workbench) return
+      const parsedPayload = payload === undefined
+        ? undefined
+        : projectCoordinatorActivationSchema.parse(payload)
+      if (parsedPayload) activationRevision += 1
       host.workbench.openRightPanel({
         contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
         sessionId,
-        ...(payload === undefined
+        ...(parsedPayload === undefined
           ? {}
           : {
               activation: {
                 contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
-                revision: 1,
-                payload: projectCoordinatorActivationSchema.parse(payload)
+                revision: activationRevision,
+                payload: parsedPayload
               }
             })
       })
@@ -120,9 +138,33 @@ export function createProjectCoordinatorOpenCommand(
   })
 }
 
+export function createProjectCoordinatorNavigationSectionContribution(
+  host: DomainRendererHost,
+  openCommand: DomainRendererCommandHandler = createProjectCoordinatorOpenCommand(host)
+): ProjectCoordinatorNavigationSectionContribution {
+  const client = createProjectCoordinatorRendererClient(host.capabilityInvoker)
+  return Object.freeze({
+    render: (context) => (
+      <ProjectCoordinatorSidebarSection
+        client={client}
+        context={context}
+        onCreateProject={() => openCommand.execute({
+          sessionId: context.session.id,
+          payload: { view: 'create' }
+        })}
+        onOpenProject={(projectId, view) => openCommand.execute({
+          sessionId: context.session.id,
+          payload: { projectId, view }
+        })}
+      />
+    )
+  })
+}
+
 export function createDomainRendererEntry(
   host: DomainRendererHost
 ): TrustedRendererDomainPackageEntry<ProjectCoordinatorRendererContribution> {
+  const openCommand = createProjectCoordinatorOpenCommand(host)
   return defineTrustedRendererDomainPackageEntry<ProjectCoordinatorRendererContribution>({
     definition: domainPackageDefinition,
     contributions: [
@@ -133,12 +175,17 @@ export function createDomainRendererEntry(
       },
       {
         ...PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION,
-        value: createProjectCoordinatorOpenCommand(host)
+        value: openCommand
       },
       {
         ...PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRIBUTION,
         contract: PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRACT,
         value: Object.freeze({ icon: Workflow })
+      },
+      {
+        ...PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION,
+        contract: PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRACT,
+        value: createProjectCoordinatorNavigationSectionContribution(host, openCommand)
       },
       {
         ...PROJECT_COORDINATOR_I18N_CONTRIBUTION,
@@ -149,6 +196,7 @@ export function createDomainRendererEntry(
 }
 
 export * from './ProjectCoordinatorPanel.js'
+export * from './ProjectCoordinatorSidebarSection.js'
 export * from './messages.js'
 export * from './project-coordinator-capability-client.js'
 export * from './workspace-sections.js'

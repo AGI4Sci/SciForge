@@ -5,6 +5,7 @@ import test from 'node:test'
 import {
   PROJECT_COORDINATOR_CAPABILITY_FACTORY_CONTRIBUTION,
   PROJECT_COORDINATOR_I18N_CONTRIBUTION,
+  PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION,
   PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION,
   PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION,
   PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION,
@@ -33,6 +34,7 @@ test('manifest composes independent main and renderer entrypoints', () => {
       PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
       PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION.id,
       PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRIBUTION.id,
+      PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION.id,
       PROJECT_COORDINATOR_I18N_CONTRIBUTION.id
     ]
   )
@@ -48,6 +50,16 @@ test('manifest composes independent main and renderer entrypoints', () => {
         'content-space.provisioning-batch',
         'content-space.recovery-observation'
       ]
+    }
+  )
+  assert.deepEqual(
+    domainPackageDefinition.contributionContracts[
+      PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION.id
+    ],
+    {
+      location: 'workbench.navigation-section',
+      contractVersion: '1.0.0',
+      label: 'projectCoordinatorSidebarCloudProjects'
     }
   )
 })

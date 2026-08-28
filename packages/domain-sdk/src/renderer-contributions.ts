@@ -29,6 +29,9 @@ export const WORKBENCH_RIGHT_PANEL_LOCATION = 'workbench.right-panel' as const
 export const WORKBENCH_BOTTOM_PANEL_LOCATION = 'workbench.bottom-panel' as const
 export const WORKBENCH_GLOBAL_OVERLAY_LOCATION = 'workbench.global-overlay' as const
 export const COMPOSER_CONTEXT_LOCATION = 'composer.context' as const
+export const WORKBENCH_NAVIGATION_SECTION_LOCATION =
+  'workbench.navigation-section' as const
+export const WORKBENCH_NAVIGATION_SECTION_CONTRACT_VERSION = '1.0.0' as const
 export const WORKBENCH_WORKSPACE_SECTION_LOCATION =
   'workbench.workspace-section' as const
 export const WORKBENCH_WORKSPACE_SECTION_CONTRACT_VERSION = '1.0.0' as const
@@ -297,6 +300,51 @@ export type DomainRendererWorkbenchSurfaceContract = z.infer<
 >
 
 /**
+ * Presentation-only navigation contributed to the global Workbench sidebar.
+ * Domain identity and activation remain private to the renderer value.
+ */
+export const domainRendererWorkbenchNavigationSectionContractSchema = z.object({
+  location: z.literal(WORKBENCH_NAVIGATION_SECTION_LOCATION),
+  contractVersion: z.literal(WORKBENCH_NAVIGATION_SECTION_CONTRACT_VERSION),
+  label: z.string().trim().min(1).max(160)
+}).strict()
+
+export type DomainRendererWorkbenchNavigationSectionContract = z.infer<
+  typeof domainRendererWorkbenchNavigationSectionContractSchema
+>
+
+export const domainRendererWorkbenchNavigationSessionSchema = z.object({
+  id: z.string().trim().min(1).max(512),
+  runtimeId: z.string().trim().min(1).max(128).optional(),
+  title: z.string().trim().min(1).max(1_000),
+  updatedAt: z.string().trim().min(1).max(128),
+  workspaceRoot: z.string().min(1).max(4_096).optional(),
+  status: z.string().trim().min(1).max(128).optional(),
+  archived: z.boolean().optional()
+}).strict().readonly()
+
+export const domainRendererWorkbenchNavigationSessionCatalogSchema = z.array(
+  domainRendererWorkbenchNavigationSessionSchema
+).max(10_000).superRefine((sessions, context) => {
+  const ids = new Set<string>()
+  sessions.forEach(({ id }, index) => {
+    if (!ids.has(id)) {
+      ids.add(id)
+      return
+    }
+    context.addIssue({
+      code: 'custom',
+      path: [index, 'id'],
+      message: `Workbench navigation Session ${id} is duplicated.`
+    })
+  })
+}).readonly()
+
+export type DomainRendererWorkbenchNavigationSession = z.infer<
+  typeof domainRendererWorkbenchNavigationSessionSchema
+>
+
+/**
  * Declarative navigation contributed to a package-owned composed workspace.
  *
  * The Host treats this as an ordinary renderer extension. The workspace owner
@@ -375,6 +423,18 @@ export type DomainRendererWorkbenchBottomPanelValue<View = unknown> =
 export type DomainRendererWorkbenchGlobalOverlayValue<View = unknown> =
   DomainRendererWorkbenchSurfaceValue<DomainRendererWorkbenchGlobalOverlayRenderContext, View>
 
+export type DomainRendererWorkbenchNavigationSectionRenderContext = Readonly<{
+  active: boolean
+  className: string
+  session: DomainRendererWorkbenchSession
+  sessions: readonly DomainRendererWorkbenchNavigationSession[]
+  selectSession: (sessionId: string) => void
+}>
+
+export type DomainRendererWorkbenchNavigationSectionValue<View = unknown> = Readonly<{
+  render: (context: DomainRendererWorkbenchNavigationSectionRenderContext) => View
+}>
+
 export type DomainRendererWorkbenchWorkspaceSectionRenderContext = Readonly<{
   active: boolean
   className: string
@@ -432,6 +492,12 @@ export function isDomainRendererResourceNavigationValue(
 export function isDomainRendererWorkbenchSurfaceValue(
   value: unknown
 ): value is DomainRendererWorkbenchSurfaceValue<unknown> {
+  return hasOnlyKeys(value, ['render']) && typeof value.render === 'function'
+}
+
+export function isDomainRendererWorkbenchNavigationSectionValue(
+  value: unknown
+): value is DomainRendererWorkbenchNavigationSectionValue {
   return hasOnlyKeys(value, ['render']) && typeof value.render === 'function'
 }
 

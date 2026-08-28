@@ -43,6 +43,14 @@ export const PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRACT =
   domainPackageDefinition.contributionContracts[
     PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRIBUTION.id
   ]!
+export const PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.extension'
+)
+export const PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION.id
+  ]!
 export const PROJECT_COORDINATOR_I18N_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.i18n-resource'

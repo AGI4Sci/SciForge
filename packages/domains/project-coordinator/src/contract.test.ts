@@ -225,13 +225,21 @@ test('unavailable state cannot claim Project data or secret material', () => {
   }))
 })
 
-test('activation accepts only an exact Project focus', () => {
+test('activation accepts only an exact Project focus and bounded workspace view', () => {
   assert.deepEqual(projectCoordinatorActivationSchema.parse({
-    projectId: 'prj_Project000001'
-  }), { projectId: 'prj_Project000001' })
+    projectId: 'prj_Project000001',
+    view: 'tasks'
+  }), { projectId: 'prj_Project000001', view: 'tasks' })
+  assert.deepEqual(projectCoordinatorActivationSchema.parse({
+    view: 'create'
+  }), { view: 'create' })
   assert.throws(() => projectCoordinatorActivationSchema.parse({
     projectId: 'prj_Project000001',
     latest: true
+  }))
+  assert.throws(() => projectCoordinatorActivationSchema.parse({
+    projectId: 'prj_Project000001',
+    view: 'admin'
   }))
 })
 

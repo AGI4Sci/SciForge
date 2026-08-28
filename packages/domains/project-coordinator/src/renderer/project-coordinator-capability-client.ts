@@ -57,6 +57,7 @@ import {
   type ProjectCoordinatorWorkspace,
   type ProjectCoordinatorWorkspaceReadInput
 } from '../contract.js'
+import { publishProjectCoordinatorWorkspaceInvalidation } from './workspace-invalidation.js'
 
 const workspaceReadContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
@@ -247,7 +248,11 @@ export function createProjectCoordinatorRendererClient(
 ): ProjectCoordinatorRendererClient {
   return Object.freeze({
     readWorkspace: (input = {}) => invoker.invoke(workspaceReadContract, input),
-    createProject: (input) => invoker.invoke(projectCreateContract, input, confirmationApproval),
+    createProject: async (input) => {
+      const result = await invoker.invoke(projectCreateContract, input, confirmationApproval)
+      publishProjectCoordinatorWorkspaceInvalidation()
+      return result
+    },
     readPlanDraft: (input) => invoker.invoke(planDraftReadContract, input),
     generatePlanDraft: (input) => invoker.invoke(planDraftGenerateContract, input),
     editPlanDraft: (input) => invoker.invoke(planDraftEditContract, input),

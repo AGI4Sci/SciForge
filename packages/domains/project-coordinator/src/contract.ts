@@ -721,8 +721,18 @@ export const projectCoordinatorWorkspaceReadInputSchema = z.object({
   projectId: projectIdSchema.optional()
 }).strict().readonly()
 
+export const projectCoordinatorActivationViewSchema = z.enum([
+  'overview',
+  'tasks',
+  'files',
+  'decisions',
+  'recovery',
+  'create'
+])
+
 export const projectCoordinatorActivationSchema = z.object({
-  projectId: projectIdSchema.optional()
+  projectId: projectIdSchema.optional(),
+  view: projectCoordinatorActivationViewSchema.optional()
 }).strict().readonly()
 
 export const projectCoordinatorWorkspaceSchema = z.object({
@@ -912,3 +922,6 @@ export type ProjectCoordinatorCompleteInput = z.infer<
   typeof projectCoordinatorCompleteInputSchema
 >
 export type ProjectCoordinatorActivation = z.infer<typeof projectCoordinatorActivationSchema>
+export type ProjectCoordinatorActivationView = z.infer<
+  typeof projectCoordinatorActivationViewSchema
+>

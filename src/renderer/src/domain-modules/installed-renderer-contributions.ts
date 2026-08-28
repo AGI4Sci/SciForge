@@ -8,11 +8,13 @@ import {
   RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
+  WORKBENCH_NAVIGATION_SECTION_LOCATION,
   domainRendererComposerContextProviderContractSchema,
   domainRendererExtensionContractSchema,
   domainRendererResourceNavigationContractSchema,
   domainRendererWorkbenchBottomPanelContractSchema,
   domainRendererWorkbenchGlobalOverlayContractSchema,
+  domainRendererWorkbenchNavigationSectionContractSchema,
   domainRendererWorkbenchRightPanelContractSchema,
   domainRendererWorkbenchToolbarActionContractSchema,
   isDomainRendererCommandHandler,
@@ -21,6 +23,7 @@ import {
   isDomainRendererComposerContextProvider,
   isDomainRendererWorkbenchSurfaceValue,
   isDomainRendererWorkbenchToolbarActionValue,
+  isDomainRendererWorkbenchNavigationSectionValue,
   type DomainRendererCommandHandler,
   type DomainRendererComposerContextProvider,
   type DomainRendererComposerContextProviderContract,
@@ -30,6 +33,8 @@ import {
   type DomainRendererWorkbenchBottomPanelValue,
   type DomainRendererWorkbenchGlobalOverlayContract,
   type DomainRendererWorkbenchGlobalOverlayValue,
+  type DomainRendererWorkbenchNavigationSectionContract,
+  type DomainRendererWorkbenchNavigationSectionValue,
   type DomainRendererWorkbenchRightPanelContract,
   type DomainRendererWorkbenchRightPanelValue
 } from '@sciforge/domain-sdk/renderer'
@@ -48,6 +53,9 @@ import {
 import {
   ComposerContextProviderRegistry
 } from './composer-context-provider-registry'
+import {
+  WorkbenchNavigationSectionContributionRegistry
+} from './workbench-navigation-section-slot'
 import {
   WorkbenchCommandRegistry
 } from './workbench-command-registry'
@@ -113,6 +121,7 @@ export type InstalledRendererContributions = Readonly<{
   bottomPanels: WorkbenchBottomPanelContributionRegistry
   globalOverlays: WorkbenchGlobalOverlayContributionRegistry
   composerContexts: ComposerContextProviderRegistry
+  navigationSections: WorkbenchNavigationSectionContributionRegistry
   toolbarActions: WorkbenchToolbarActionContributionRegistry
   workspacePreviews: RendererWorkspacePreviewRegistry
   readonly disposed: boolean
@@ -160,6 +169,14 @@ export function createInstalledRendererContributions(
     order: number
     contract: DomainRendererComposerContextProviderContract
     value: DomainRendererComposerContextProvider
+    onDispose?: () => void
+  }> = []
+  const navigationSections: Array<{
+    id: string
+    ownerId: string
+    order: number
+    contract: DomainRendererWorkbenchNavigationSectionContract
+    value: DomainRendererWorkbenchNavigationSectionValue<ReactElement | null>
     onDispose?: () => void
   }> = []
   const commands: Array<{
@@ -380,6 +397,32 @@ export function createInstalledRendererContributions(
       continue
     }
     if (installed.declaration.kind === RENDERER_EXTENSION_CONTRIBUTION_KIND) {
+      const navigationContract =
+        domainRendererWorkbenchNavigationSectionContractSchema.safeParse(
+          installed.contract
+        )
+      if (navigationContract.success) {
+        if (!isDomainRendererWorkbenchNavigationSectionValue(installed.value)) {
+          throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+        }
+        navigationSections.push({
+          id: installed.declaration.id,
+          ownerId: installed.owner.moduleId,
+          order: installed.declaration.priority,
+          contract: navigationContract.data,
+          value: installed.value as DomainRendererWorkbenchNavigationSectionValue<ReactElement | null>,
+          ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
+        })
+        continue
+      }
+      if (
+        installed.contract &&
+        typeof installed.contract === 'object' &&
+        'location' in installed.contract &&
+        installed.contract.location === WORKBENCH_NAVIGATION_SECTION_LOCATION
+      ) {
+        throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+      }
       if (!domainRendererExtensionContractSchema.safeParse(installed.contract).success) {
         throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
       }
@@ -400,6 +443,8 @@ export function createInstalledRendererContributions(
   const workbenchBottomPanels = new WorkbenchBottomPanelContributionRegistry()
   const workbenchGlobalOverlays = new WorkbenchGlobalOverlayContributionRegistry()
   const workbenchComposerContexts = new ComposerContextProviderRegistry()
+  const workbenchNavigationSections =
+    new WorkbenchNavigationSectionContributionRegistry()
   const workbenchToolbarActions = new WorkbenchToolbarActionContributionRegistry(
     workbenchCommands
   )
@@ -417,6 +462,7 @@ export function createInstalledRendererContributions(
     () => workbenchBottomPanels.dispose(),
     () => workbenchGlobalOverlays.dispose(),
     () => workbenchComposerContexts.dispose(),
+    () => workbenchNavigationSections.dispose(),
     () => workbenchToolbarActions.dispose(),
     () => workspacePreviews.dispose()
   ]
@@ -447,6 +493,13 @@ export function createInstalledRendererContributions(
         registrationDisposers,
         overlay.onDispose,
         workbenchGlobalOverlays.register(overlay).dispose
+      )
+    }
+    for (const section of navigationSections) {
+      pushOwnedRegistration(
+        registrationDisposers,
+        section.onDispose,
+        workbenchNavigationSections.register(section).dispose
       )
     }
     for (const context of composerContexts) {
@@ -520,6 +573,7 @@ export function createInstalledRendererContributions(
     bottomPanels: workbenchBottomPanels,
     globalOverlays: workbenchGlobalOverlays,
     composerContexts: workbenchComposerContexts,
+    navigationSections: workbenchNavigationSections,
     toolbarActions: workbenchToolbarActions,
     workspacePreviews,
     get disposed() {
