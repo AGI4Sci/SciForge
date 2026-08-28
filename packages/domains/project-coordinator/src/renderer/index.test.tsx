@@ -29,6 +29,7 @@ import {
   ProjectCoordinatorPlanSection,
   ProjectCoordinatorProvisioningSection,
   ProjectCoordinatorTransferSection,
+  TasksSection,
   WorkersSection,
   formatRelativeTime,
   projectCoordinatorAgentOperationalState,
@@ -507,6 +508,86 @@ test('workflow signal and attention derive only from canonical Project facts', (
     Date.parse('2026-08-25T01:08:00.000Z'),
     'en'
   ), '—')
+})
+
+test('Task assignment renders unpublished, pending User offer, and claimed Agent as distinct Cloud states', () => {
+  const project = planningProjectFixture('paused')
+  const source = decisionProjectFixture('review').tasks[0]!
+  const timestamp = project.project.updatedAt
+  const unpublishedTask = {
+    ...source.task,
+    taskId: 'tsk_Unpublished001',
+    currentExecutionId: null,
+    currentExecutionState: null,
+    status: 'revision_requested' as const,
+    executionCount: 0
+  }
+  const pendingTask = {
+    ...unpublishedTask,
+    taskId: 'tsk_PendingOffer001',
+    status: 'offered' as const
+  }
+  const claimedTask = {
+    ...source.task,
+    taskId: 'tsk_ClaimedAgent001',
+    currentExecutionId: 'exe_ClaimedAgent001',
+    currentExecutionState: 'running' as const,
+    status: 'in_progress' as const
+  }
+  const claimedExecution = {
+    ...source.executions[0]!,
+    taskId: claimedTask.taskId,
+    executionId: claimedTask.currentExecutionId,
+    assigneeUserId: 'usr_ProjectMember01',
+    assigneeAgentId: 'agt_MemberAgent001',
+    state: 'running' as const,
+    currentResultSubmissionId: null,
+    terminalAt: null
+  }
+  const commonOffer = {
+    schemaVersion: 1 as const,
+    type: 'task_offer' as const,
+    projectId: project.project.projectId,
+    workerUserId: 'usr_ProjectMember01',
+    offeredByCoordinatorAgentId: project.project.coordinatorAgentId,
+    offeredAt: timestamp,
+    expiresAt: '2026-08-25T02:08:00.000Z',
+    revision: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  }
+  const snapshot = {
+    ...project,
+    tasks: [
+      { task: unpublishedTask, executions: [] },
+      { task: pendingTask, executions: [] },
+      { task: claimedTask, executions: [claimedExecution] }
+    ],
+    offers: [{
+      ...commonOffer,
+      taskOfferId: 'ofr_PendingOffer001',
+      taskId: pendingTask.taskId,
+      executionId: null,
+      state: 'pending' as const,
+      respondedAt: null
+    }, {
+      ...commonOffer,
+      taskOfferId: 'ofr_ClaimedAgent001',
+      taskId: claimedTask.taskId,
+      executionId: claimedExecution.executionId,
+      state: 'accepted' as const,
+      respondedAt: timestamp
+    }]
+  } as ProjectCoordinatorProject
+
+  const markup = renderToStaticMarkup(createElement(TasksSection, { project: snapshot }))
+  assert.match(markup, /data-task-assignment-state="not-published"/u)
+  assert.match(markup, /data-task-assignment-state="awaiting-claim"/u)
+  assert.match(markup, /data-task-assignment-state="claimed"/u)
+  assert.match(markup, /projectCoordinatorNotPublished/u)
+  assert.match(markup, /Project Member/u)
+  assert.match(markup, /projectCoordinatorAwaitingDeviceClaim/u)
+  assert.match(markup, /Member Desktop/u)
 })
 
 test('completed Project meeting package includes only accepted records and artifact refs', () => {

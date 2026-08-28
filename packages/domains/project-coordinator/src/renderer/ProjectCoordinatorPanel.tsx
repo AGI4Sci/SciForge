@@ -2406,7 +2406,7 @@ export function WorkersSection({
   )
 }
 
-function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProject }>): ReactElement {
+export function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProject }>): ReactElement {
   const { t } = useTranslation('common')
   const queue = project ? {
     active: project.tasks.filter(({ task }) => (
@@ -2453,16 +2453,49 @@ function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProjec
               const execution = task.currentExecutionId
                 ? taskView.executions.find(({ executionId }) => executionId === task.currentExecutionId)
                 : undefined
-              const worker = execution ? project.workerGroups.flatMap(({ agents }) => agents).find(
+              const pendingOffer = execution ? undefined : project.offers.find((offer) => (
+                offer.taskId === task.taskId &&
+                offer.state === 'pending' &&
+                offer.executionId === null
+              ))
+              const claimedOffer = execution ? project.offers.find((offer) => (
+                offer.taskId === task.taskId &&
+                offer.state === 'accepted' &&
+                offer.executionId === execution.executionId
+              )) : undefined
+              const workerUserId = execution?.assigneeUserId ?? pendingOffer?.workerUserId
+              const workerUser = workerUserId
+                ? project.memberUsers.find(({ userId }) => userId === workerUserId) ??
+                  project.workerGroups.find(({ userId }) => userId === workerUserId)
+                : undefined
+              const workerAgent = execution ? project.workerGroups.flatMap(({ agents }) => agents).find(
                 ({ projectAvailability }) => (
                   projectAvailability.agentId === execution.assigneeAgentId
                 )
               ) : undefined
+              const assignmentState = execution
+                ? 'claimed'
+                : pendingOffer
+                  ? 'awaiting-claim'
+                  : 'not-published'
+              const workerUserLabel = workerUser?.displayName ?? (
+                workerUserId ? shortIdentifier(workerUserId) : null
+              )
+              const assignmentLabel = assignmentState === 'claimed'
+                ? `${workerUserLabel ?? shortIdentifier(execution!.assigneeUserId)} · ${
+                    workerAgent?.displayName ?? shortIdentifier(execution!.assigneeAgentId)
+                  }`
+                : assignmentState === 'awaiting-claim'
+                  ? `${workerUserLabel ?? shortIdentifier(pendingOffer!.workerUserId)} · ${
+                      t('projectCoordinatorAwaitingDeviceClaim')
+                    }`
+                  : t('projectCoordinatorNotPublished')
               return (
                 <article
                   key={task.taskId}
                   className="project-coordinator-task"
                   data-task-status={task.status}
+                  data-task-assignment-state={assignmentState}
                 >
                   <span className="project-coordinator-task-signal" aria-hidden="true" />
                   <div className="project-coordinator-task-heading">
@@ -2477,10 +2510,8 @@ function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProjec
                   </div>
                   <dl className="project-coordinator-task-meta">
                     <div>
-                      <dt>{t('projectCoordinatorAssignedAgent')}</dt>
-                      <dd>{worker?.displayName ?? (execution
-                        ? shortIdentifier(execution.assigneeAgentId)
-                        : t('projectCoordinatorUnassigned'))}</dd>
+                      <dt>{t('projectCoordinatorAssignment')}</dt>
+                      <dd>{assignmentLabel}</dd>
                     </div>
                     <div>
                       <dt>{t('projectCoordinatorExecution')}</dt>
@@ -2513,6 +2544,20 @@ function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProjec
                             <dd>{execution.executionId}</dd>
                             <dt>Agent</dt>
                             <dd>{execution.assigneeAgentId}</dd>
+                          </>
+                        ) : null}
+                        {pendingOffer ? (
+                          <>
+                            <dt>Offer</dt>
+                            <dd>{pendingOffer.taskOfferId}</dd>
+                            <dt>Worker User</dt>
+                            <dd>{pendingOffer.workerUserId}</dd>
+                          </>
+                        ) : null}
+                        {claimedOffer ? (
+                          <>
+                            <dt>Offer</dt>
+                            <dd>{claimedOffer.taskOfferId}</dd>
                           </>
                         ) : null}
                       </dl>
