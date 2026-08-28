@@ -202,6 +202,13 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=6144"
         run: npm run build
 
+      - name: Verify Windows provider and package tooling
+        if: matrix.platform == 'Windows'
+        run: |
+          npm --workspace @sciforge/collaboration-provider-zulip test
+          node --test ./scripts/domain-packages.test.mjs
+          npm run smoke:domain-packages:tarball
+
   keycloak-macos-bash32:
     runs-on: macos-latest
     steps:

@@ -672,11 +672,29 @@ function relative(filePath) {
   return path.relative(ROOT, filePath).split(path.sep).join('/')
 }
 
+export function domainPackageNpmInvocation({
+  platform = process.platform,
+  npmExecPath = process.env.npm_execpath,
+  nodeExecutable = process.execPath
+} = {}) {
+  if (platform !== 'win32') {
+    return Object.freeze({ command: 'npm', leadingArguments: Object.freeze([]) })
+  }
+  if (typeof npmExecPath !== 'string' || !path.win32.isAbsolute(npmExecPath)) {
+    throw new Error('Windows domain package scripts require an absolute npm_execpath.')
+  }
+  return Object.freeze({
+    command: nodeExecutable,
+    leadingArguments: Object.freeze([npmExecPath])
+  })
+}
+
 function runPackageScript(packages, scriptName) {
+  const npm = domainPackageNpmInvocation()
   for (const candidate of packages) {
     const result = spawnSync(
-      process.platform === 'win32' ? 'npm.cmd' : 'npm',
-      ['--workspace', candidate.packageName, 'run', scriptName],
+      npm.command,
+      [...npm.leadingArguments, '--workspace', candidate.packageName, 'run', scriptName],
       { cwd: ROOT, stdio: 'inherit' }
     )
     if (result.error) throw result.error

@@ -77,7 +77,7 @@ class ZulipSecretFileRuntime {
           'The Zulip credential must be a bounded non-empty regular file.'
         )
       }
-      if ((info.mode & 0o077) !== 0) {
+      if (process.platform !== 'win32' && (info.mode & 0o077) !== 0) {
         throw new ZulipProviderError(
           'permission_denied',
           'The Zulip credential file must be private to its owner.'
