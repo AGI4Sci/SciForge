@@ -22,6 +22,12 @@ import {
   defineCapability,
   type CapabilityDefinition
 } from './registry'
+import {
+  createRuntimeCapabilityBroker
+} from '../runtime/agent-runtime/runtime-capability-broker'
+import {
+  createRuntimeMcpToolGateway
+} from '../runtime/agent-runtime/runtime-mcp-tool-gateway'
 
 const created: ProjectCoordinatorProjectCreateResult = {
   createIntentId: 'pct_HostCreateIntent0001',
@@ -165,5 +171,118 @@ describe('Project Coordinator Host capability integration', () => {
     expect(visibleTitles).toContain('Review Task result')
     expect(visibleTitles).toContain('Complete Project with final summary')
     expect(visibleTitles).not.toContain('Bind Project Session')
+  })
+
+  it('creates and binds a Project through the ordinary Agent Runtime capability route', async () => {
+    const createProject = vi.fn(async () => created)
+    const completeProjectCreate = vi.fn(async () => undefined)
+    const withUnboundSession = vi.fn(async (
+      _session: Readonly<{ runtimeId: string; threadId: string }>,
+      operation: () => Promise<unknown>
+    ) => operation())
+    const bindCreatedProject = vi.fn(async () => undefined)
+    const definitions = createProjectCoordinatorCapabilityFactory<CapabilityDefinition>({
+      defineCapability: ({ audiences, tags, producedResourceKinds, ...input }) => defineCapability({
+        ...input,
+        audiences: [...audiences],
+        tags: [...tags],
+        ...(producedResourceKinds ? { producedResourceKinds: [...producedResourceKinds] } : {})
+      }),
+      ports: {
+        workspace: {
+          readWorkspace: async () => created.workspace,
+          createProject,
+          completeProjectCreate
+        }
+      } as never,
+      sessions: {
+        withUnboundSession,
+        bindCreatedProject
+      } as never
+    }).createDefinitions()
+    const createDefinition = definitions.find(
+      ({ descriptor }) => descriptor.id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate
+    )
+    expect(createDefinition).toBeDefined()
+
+    const runtimeBroker = createRuntimeCapabilityBroker({
+      broker: new CapabilityBroker(new CapabilityRegistry([createDefinition!])),
+      managedTools: createRuntimeMcpToolGateway({
+        servers: [],
+        clientFactory: async () => { throw new Error('unused') }
+      })
+    })
+    const surface = createCapabilityAgentToolSurface({
+      broker: runtimeBroker,
+      resolveCaller: ({ runtimeId, threadId }) => ({
+        audience: 'agent',
+        callerId: `${runtimeId}:${threadId ?? 'missing'}`,
+        approvals: []
+      }),
+      requestApproval: async () => 'allowed' as const
+    })
+    const context = {
+      requestId: 'request-project-create-agent-runtime',
+      runtimeId: 'runtime-project-coordinator',
+      threadId: 'thread-project-coordinator',
+      turnId: 'turn-project-create',
+      callId: 'call-project-create'
+    }
+    const discovery = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {
+        capabilityId: PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
+        includeSchema: true,
+        limit: 1
+      },
+      context
+    })
+    if (discovery.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) {
+      throw new Error('Expected Project create from sciforge_discover.')
+    }
+    const operationRef = discovery.value[0]?.operationRef
+    expect(operationRef).toBeDefined()
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: {
+        operationRef,
+        input: {
+          createIntentId: created.createIntentId,
+          displayName: 'Meeting',
+          goal: 'Run the meeting.',
+          budget: {
+            maxTasks: 4,
+            maxTasksPerRound: 4,
+            maxTaskRetries: 1,
+            maxCoordinationRounds: 2
+          }
+        }
+      },
+      context
+    })).resolves.toMatchObject({
+      tool: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      value: {
+        capabilityId: PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
+        output: created
+      }
+    })
+    expect(withUnboundSession).toHaveBeenCalledWith(
+      {
+        runtimeId: context.runtimeId,
+        threadId: context.threadId
+      },
+      expect.any(Function)
+    )
+    expect(bindCreatedProject).toHaveBeenCalledWith(
+      created,
+      {
+        runtimeId: context.runtimeId,
+        threadId: context.threadId
+      },
+      expect.objectContaining({ createIntentId: created.createIntentId })
+    )
+    expect(createProject).toHaveBeenCalledTimes(1)
+    expect(completeProjectCreate).not.toHaveBeenCalled()
   })
 })
