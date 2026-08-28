@@ -615,7 +615,7 @@ describe('PostgreSQL production transaction path', () => {
     expect(projects?.text).toContain('UNION')
     expect(projects?.text).toContain('owner_user_id=$1')
     expect(projects?.text).toContain('member.user_id=$1')
-    expect(projects?.text).toContain("member.state IN ('active','membership_removal_pending')")
+    expect(projects?.text).toContain("member.state IN ('invited','active','membership_removal_pending')")
     expect(projects?.text).not.toMatch(/member\.state IN \([^)]*'removed'/u)
     expect(projects?.text).not.toMatch(/member\.state IN \([^)]*'pending_membership'/u)
     expect(projects?.text).not.toMatch(/(?:project|owned)\.status/u)

@@ -37,6 +37,7 @@ test('workspace read remains a strict non-writing coordination capability', asyn
           connection: { state: 'identity_required' },
           observedAt: '2026-08-24T09:00:00.000Z',
           availableWorkerUsers: [],
+          providerPrincipalFacts: [],
           projects: []
         }),
         createProject: async () => { throw new Error('unused') }
@@ -46,7 +47,8 @@ test('workspace read remains a strict non-writing coordination capability', asyn
         generateDraft: async () => { throw new Error('unused') },
         editDraft: async () => { throw new Error('unused') },
         submitDraft: async () => { throw new Error('unused') },
-        confirmAndActivate: async () => { throw new Error('unused') }
+        confirm: async () => { throw new Error('unused') },
+        activateAndDispatch: async () => { throw new Error('unused') }
       },
       provisioningAttestationSigning: {
         signFactualPayload: async () => { throw new Error('unused') }
@@ -69,6 +71,7 @@ test('workspace read remains a strict non-writing coordination capability', asyn
       connection: { state: 'identity_required' },
       observedAt: '2026-08-24T09:00:00.000Z',
       availableWorkerUsers: [],
+      providerPrincipalFacts: [],
       projects: []
     }
   })
@@ -157,13 +160,14 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftEdit,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planSubmit,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningPlan,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirm,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.workflowPrepare,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
@@ -232,6 +236,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
       observedAt: '2026-08-25T01:05:00.000Z',
       focusedProjectId: 'prj_ProjectCreated01',
       availableWorkerUsers: [],
+      providerPrincipalFacts: [],
       projects: []
     }
   }
@@ -243,6 +248,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
         connection: { state: 'identity_required' as const },
         observedAt: '2026-08-25T01:05:00.000Z',
         availableWorkerUsers: [],
+        providerPrincipalFacts: [],
         projects: []
       }),
       createProject: async () => created
@@ -252,7 +258,8 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
       generateDraft: async () => { throw new Error('unused') },
       editDraft: async () => { throw new Error('unused') },
       submitDraft: async () => { throw new Error('unused') },
-      confirmAndActivate: async () => { throw new Error('unused') }
+      confirm: async () => { throw new Error('unused') },
+      activateAndDispatch: async () => { throw new Error('unused') }
     },
     provisioningAttestationSigning: {
       signFactualPayload: async () => { throw new Error('unused') }
@@ -276,13 +283,14 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftEdit,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planSubmit,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningPlan,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirm,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.workflowPrepare,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
@@ -339,9 +347,10 @@ function coordinatorArtifactReviewPort() {
 
 function coordinatorProvisioningPort() {
   return Object.freeze({
-    preview: async () => { throw new Error('unused') },
-    apply: async () => { throw new Error('unused') },
+    prepareWorkflow: async () => { throw new Error('unused') },
+    continueWorkflow: async () => { throw new Error('unused') },
     addMember: async () => { throw new Error('unused') },
+    acceptInvitation: async () => { throw new Error('unused') },
     removeMember: async () => { throw new Error('unused') }
   })
 }

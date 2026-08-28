@@ -35,7 +35,6 @@ import {
   projectCoordinatorCreatedSelection,
   projectCoordinatorFlowStages,
   projectCoordinatorMeetingPackageSummary,
-  projectCoordinatorProvisioningApplyInput,
   projectCoordinatorResultReviewInput,
   projectCoordinatorTransferCandidates,
   projectCoordinatorWorkspaceNavigationItems,
@@ -152,6 +151,7 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
         connection: { state: 'identity_required' as const },
         observedAt: '2026-08-24T09:00:00.000Z',
         availableWorkerUsers: [],
+        providerPrincipalFacts: [],
         projects: []
       }),
       createProject: async () => { throw new Error('unused') },
@@ -159,10 +159,11 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
       generatePlanDraft: async () => { throw new Error('unused') },
       editPlanDraft: async () => { throw new Error('unused') },
       submitPlanDraft: async () => { throw new Error('unused') },
-      confirmPlanAndActivate: async () => { throw new Error('unused') },
-      previewProvisioning: async () => { throw new Error('unused') },
-      applyProvisioning: async () => { throw new Error('unused') },
+      confirmPlan: async () => { throw new Error('unused') },
+      prepareWorkflow: async () => { throw new Error('unused') },
+      continueWorkflow: async () => { throw new Error('unused') },
       addMember: async () => { throw new Error('unused') },
+      acceptInvitation: async () => { throw new Error('unused') },
       removeMember: async () => { throw new Error('unused') },
       observeAndLinkRecovery: async () => { throw new Error('unused') },
       abandonRecovery: async () => { throw new Error('unused') },
@@ -201,8 +202,13 @@ test('New Project auto-binds only this Project Coordinator and lists only Cloud 
     goal: '',
     selectedWorkerUserIds: [],
     workerUsers,
+    providerPrincipalFacts: [],
+    contentMode: 'none',
+    providerFactId: '',
     onDisplayName: () => undefined,
     onGoal: () => undefined,
+    onContentMode: () => undefined,
+    onProviderFactId: () => undefined,
     onSubmit: () => undefined,
     onWorkerUserToggle: () => undefined
   }))
@@ -688,34 +694,44 @@ test('renderer decision HCI invokes only the four governed canonical actions', a
   ])
 })
 
-test('renderer provisioning client keeps the reviewed full plan behind its confirmed digest', async () => {
+test('renderer client carries the reviewed full workflow through its canonical continuation', async () => {
   const invoked: unknown[] = []
-  const plan = provisioningPlanFixture()
+  const plan = workflowPlanFixture()
   const workspace = {
     connection: { state: 'ready' as const, userId: 'usr_Owner0000001', deviceId: 'dev_Device0000001' },
     observedAt: '2026-08-25T01:08:00.000Z',
     focusedProjectId: 'prj_ProjectCreated01',
     availableWorkerUsers: [],
+    providerPrincipalFacts: [],
     projects: [contentProvisioningProjectFixture()]
   }
   const client = createProjectCoordinatorRendererClient({
     observe: async () => { throw new Error('not observed') },
     invoke: async (contract, input) => {
       invoked.push({ actionId: contract.actionId, effect: contract.effect, input })
-      return (contract.actionId === 'project-coordinator.content-provisioning.plan'
+      return (contract.actionId === 'project-coordinator.workflow.prepare'
         ? plan
         : workspace) as never
     }
   })
 
-  const reviewed = await client.previewProvisioning({ projectId: plan.projectId })
-  await client.applyProvisioning(projectCoordinatorProvisioningApplyInput(reviewed))
+  const reviewed = await client.prepareWorkflow({ projectId: plan.projectId })
+  await client.continueWorkflow(reviewed)
   await client.addMember({
     projectId: plan.projectId,
     expectedProjectRevision: 3,
     userId: 'usr_NewWorker00001',
     providerPrincipalFactId: 'ppf_NewWorker00001',
     expectedProviderPrincipalFactRevision: 2
+  })
+  await client.acceptInvitation({
+    projectId: plan.projectId,
+    projectMembershipId: 'pmb_InvitedMember01',
+    expectedProjectRevision: 3,
+    expectedMembershipRevision: 1,
+    projectPlanId: plan.projectPlanId,
+    expectedPlanRevision: plan.expectedPlanRevision,
+    planDigest: plan.planDigest
   })
   await client.removeMember({
     projectId: plan.projectId,
@@ -742,23 +758,14 @@ test('renderer provisioning client keeps the reviewed full plan behind its confi
 
   assert.deepEqual(invoked, [
     {
-      actionId: 'project-coordinator.content-provisioning.plan',
+      actionId: 'project-coordinator.workflow.prepare',
       effect: 'read',
       input: { projectId: plan.projectId }
     },
     {
-      actionId: 'project-coordinator.content-provisioning.apply',
+      actionId: 'project-coordinator.workflow.continue',
       effect: 'external-write',
-      input: {
-        projectId: plan.projectId,
-        provisioningIntentId: plan.provisioningIntentId,
-        expectedProjectRevision: plan.expectedProjectRevision,
-        expectedProvisioningRevision: plan.expectedProvisioningRevision,
-        expectedProvisioningIntentRevision: plan.expectedProvisioningIntentRevision,
-        intentDigest: plan.intentDigest,
-        attemptId: plan.attemptId,
-        confirmedPlanDigest: plan.confirmedPlanDigest
-      }
+      input: plan
     },
     {
       actionId: 'project-coordinator.membership.add',
@@ -769,6 +776,19 @@ test('renderer provisioning client keeps the reviewed full plan behind its confi
         userId: 'usr_NewWorker00001',
         providerPrincipalFactId: 'ppf_NewWorker00001',
         expectedProviderPrincipalFactRevision: 2
+      }
+    },
+    {
+      actionId: 'project-coordinator.membership.accept',
+      effect: 'external-write',
+      input: {
+        projectId: plan.projectId,
+        projectMembershipId: 'pmb_InvitedMember01',
+        expectedProjectRevision: 3,
+        expectedMembershipRevision: 1,
+        projectPlanId: plan.projectPlanId,
+        expectedPlanRevision: plan.expectedPlanRevision,
+        planDigest: plan.planDigest
       }
     },
     {
@@ -810,7 +830,7 @@ test('renderer provisioning client keeps the reviewed full plan behind its confi
       }
     }
   ])
-  assert.equal('operations' in (invoked[1] as { input: object }).input, false)
+  assert.deepEqual((invoked[1] as { input: object }).input, plan)
 })
 
 test('content-required provisioning, membership fences, and root recovery are default-visible HCI', () => {
@@ -818,17 +838,19 @@ test('content-required provisioning, membership fences, and root recovery are de
   const pendingMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorProvisioningSection, {
     project,
     plan: null,
+    currentUserId: 'usr_Owner0000001',
     busy: false,
-    onPreview: () => undefined,
-    onApply: () => undefined,
+    onPrepareWorkflow: () => undefined,
+    onContinueWorkflow: () => undefined,
     onAddMember: () => undefined,
+    onAcceptInvitation: () => undefined,
     onRemoveMember: () => undefined,
     onObserveAndLinkRecovery: () => undefined,
     onAbandonRecovery: () => undefined,
     onRetryRecoverySuccessor: () => undefined
   }))
-  assert.match(pendingMarkup, /data-default-visible-card="content-provisioning"/u)
-  assert.match(pendingMarkup, /projectCoordinatorPreviewProvisioning/u)
+  assert.match(pendingMarkup, /data-default-visible-card="project-workflow"/u)
+  assert.match(pendingMarkup, /projectCoordinatorPrepareWorkflow/u)
   assert.match(pendingMarkup, /pending_membership/u)
   assert.match(pendingMarkup, /membership_removal_pending/u)
   assert.match(pendingMarkup, /projectCoordinatorTaskAuthoritySuspended/u)
@@ -837,21 +859,23 @@ test('content-required provisioning, membership fences, and root recovery are de
 
   const reviewedMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorProvisioningSection, {
     project,
-    plan: provisioningPlanFixture(),
+    plan: workflowPlanFixture(),
+    currentUserId: 'usr_Owner0000001',
     busy: false,
-    onPreview: () => undefined,
-    onApply: () => undefined,
+    onPrepareWorkflow: () => undefined,
+    onContinueWorkflow: () => undefined,
     onAddMember: () => undefined,
+    onAcceptInvitation: () => undefined,
     onRemoveMember: () => undefined,
     onObserveAndLinkRecovery: () => undefined,
     onAbandonRecovery: () => undefined,
     onRetryRecoverySuccessor: () => undefined
   }))
-  assert.match(reviewedMarkup, /data-default-visible-card="content-provisioning-confirmation"/u)
+  assert.match(reviewedMarkup, /data-default-visible-card="project-workflow-confirmation"/u)
   assert.match(reviewedMarkup, /content-space\.authorize-provider-administration/u)
   assert.match(reviewedMarkup, /content-space\.agent-admin-add-member/u)
-  assert.match(reviewedMarkup, /projectCoordinatorApplyProvisioning/u)
-  assert.match(reviewedMarkup, new RegExp(provisioningPlanFixture().confirmedPlanDigest, 'u'))
+  assert.match(reviewedMarkup, /projectCoordinatorContinueWorkflow/u)
+  assert.match(reviewedMarkup, new RegExp(workflowPlanFixture().workflowDigest, 'u'))
 
   const degraded = {
     ...project,
@@ -879,10 +903,12 @@ test('content-required provisioning, membership fences, and root recovery are de
   const recoveryMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorProvisioningSection, {
     project: degraded,
     plan: null,
+    currentUserId: 'usr_Owner0000001',
     busy: false,
-    onPreview: () => undefined,
-    onApply: () => undefined,
+    onPrepareWorkflow: () => undefined,
+    onContinueWorkflow: () => undefined,
     onAddMember: () => undefined,
+    onAcceptInvitation: () => undefined,
     onRemoveMember: () => undefined,
     onObserveAndLinkRecovery: () => undefined,
     onAbandonRecovery: () => undefined,
@@ -891,7 +917,7 @@ test('content-required provisioning, membership fences, and root recovery are de
   assert.match(recoveryMarkup, /data-default-visible-card="content-recovery"/u)
   assert.match(recoveryMarkup, /owner_access_lost/u)
   assert.match(recoveryMarkup, /Re-authorize the exact shared root/u)
-  assert.match(recoveryMarkup, /projectCoordinatorPreviewReconcile/u)
+  assert.match(recoveryMarkup, /projectCoordinatorPrepareReconcileWorkflow/u)
 
   const taskRecovery = {
     ...project,
@@ -916,10 +942,12 @@ test('content-required provisioning, membership fences, and root recovery are de
     {
       project: taskRecovery,
       plan: null,
+      currentUserId: 'usr_Owner0000001',
       busy: false,
-      onPreview: () => undefined,
-      onApply: () => undefined,
+      onPrepareWorkflow: () => undefined,
+      onContinueWorkflow: () => undefined,
       onAddMember: () => undefined,
+      onAcceptInvitation: () => undefined,
       onRemoveMember: () => undefined,
       onObserveAndLinkRecovery: () => undefined,
       onAbandonRecovery: () => undefined,
@@ -990,10 +1018,12 @@ test('content-required provisioning, membership fences, and root recovery are de
     {
       project: abandonedTaskRecovery,
       plan: null,
+      currentUserId: 'usr_Owner0000001',
       busy: false,
-      onPreview: () => undefined,
-      onApply: () => undefined,
+      onPrepareWorkflow: () => undefined,
+      onContinueWorkflow: () => undefined,
       onAddMember: () => undefined,
+      onAcceptInvitation: () => undefined,
       onRemoveMember: () => undefined,
       onObserveAndLinkRecovery: () => undefined,
       onAbandonRecovery: () => undefined,
@@ -1013,11 +1043,12 @@ test('an awaiting-confirmation Plan renders its Owner action as a default-visibl
     onGenerate: () => undefined,
     onEditDraft: () => undefined,
     onSubmitDraft: () => undefined,
-    onConfirmActivate: () => undefined
+    canConfirm: true,
+    onConfirm: () => undefined
   }))
 
   assert.match(markup, /data-default-visible-card="plan-confirmation"/u)
-  assert.match(markup, /projectCoordinatorConfirmActivate/u)
+  assert.match(markup, /projectCoordinatorConfirmPlan/u)
 })
 
 test('a local Plan draft exposes full content editing before immutable submit', () => {
@@ -1048,7 +1079,8 @@ test('a local Plan draft exposes full content editing before immutable submit', 
     onGenerate: () => undefined,
     onEditDraft: () => undefined,
     onSubmitDraft: () => undefined,
-    onConfirmActivate: () => undefined
+    canConfirm: false,
+    onConfirm: () => undefined
   }))
 
   assert.match(markup, /name="plan-rationale"/u)
@@ -1570,7 +1602,23 @@ function awaitingConfirmationProjectFixture() {
   }
 }
 
-function provisioningPlanFixture() {
+function workflowPlanFixture() {
+  const provisioning = finiteProvisioningPlanFixture()
+  return {
+    projectId: provisioning.projectId,
+    projectPlanId: 'pln_MeetingPlan001',
+    expectedProjectRevision: provisioning.expectedProjectRevision,
+    expectedCoordinatorAuthorityEpoch: 1,
+    expectedExecutionAuthorityEpoch: 1,
+    expectedPlanRevision: 2,
+    planDigest: 'a'.repeat(64),
+    purpose: 'launch' as const,
+    provisioning,
+    workflowDigest: 'f'.repeat(64)
+  }
+}
+
+function finiteProvisioningPlanFixture() {
   return {
     projectId: 'prj_ProjectCreated01',
     provisioningIntentId: 'pvi_ContentIntent001',
@@ -1655,6 +1703,16 @@ function contentProvisioningProjectFixture(): ProjectCoordinatorProject {
       ...base.project,
       contentMode: 'required',
       revision: 3
+    },
+    plan: {
+      ...base.plan,
+      plan: {
+        ...base.plan.plan,
+        state: 'confirmed' as const,
+        revision: 2,
+        confirmedByUserId: base.project.ownerUserId,
+        confirmedAt: timestamp
+      }
     },
     provisioning: {
       intent: {

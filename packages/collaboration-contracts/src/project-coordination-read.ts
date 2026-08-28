@@ -118,6 +118,13 @@ export const PROJECT_COORDINATION_COLLECTIONS = [
 export const projectCoordinationCollectionSchema = z.enum(PROJECT_COORDINATION_COLLECTIONS)
 export type ProjectCoordinationCollection = z.infer<typeof projectCoordinationCollectionSchema>
 
+/** The complete bounded fact surface visible before an invited User accepts. */
+export const PROJECT_INVITATION_READ_COLLECTIONS = [
+  'user_label_facts',
+  'memberships',
+  'plans'
+] as const satisfies readonly ProjectCoordinationCollection[]
+
 /** Immutable keyset order; cursors retain the same snapshot across continuation. */
 export const PROJECT_COORDINATION_COLLECTION_STABLE_ORDER = {
   user_label_facts: ['userId'],
@@ -172,7 +179,9 @@ export type ProjectCoordinationReadQuery = z.infer<typeof projectCoordinationRea
 
 /**
  * Canonical OIDC read visibility. Provider access loss does not alter this
- * Cloud fact; pending activation and final removal never retain Project reads.
+ * Cloud fact; an invited User may inspect the paused confirmed launch facts
+ * needed for an informed acceptance. Pending Provider activation and final
+ * removal never retain Project reads.
  * Terminal Project status intentionally does not change the rule.
  */
 export function canUserReadProjectCoordination(
@@ -183,7 +192,17 @@ export function canUserReadProjectCoordination(
   if (project.ownerUserId === actorUserId) return true
   return membership?.projectId === project.projectId &&
     membership.userId === actorUserId &&
-    (membership.state === 'active' || membership.state === 'membership_removal_pending')
+    (membership.state === 'invited' ||
+      membership.state === 'active' ||
+      membership.state === 'membership_removal_pending')
+}
+
+export function canInvitedUserReadProjectCoordinationCollection(
+  collection: ProjectCoordinationCollection
+): boolean {
+  return PROJECT_INVITATION_READ_COLLECTIONS.includes(
+    collection as (typeof PROJECT_INVITATION_READ_COLLECTIONS)[number]
+  )
 }
 
 /** Human-visible labels only: no OIDC subject, endpoint identity or account material. */

@@ -39,11 +39,12 @@ const root = {
   identity: { containerId: 'team-root-01' }
 }
 
-test('initial provisioning preview binds the complete ordered ordinary Content Space plan', async () => {
+test('launch workflow preparation binds the complete ordered ordinary Content Space plan', async () => {
   let workspace = workspaceFixture({ root: null, intentKind: 'initial_provisioning' })
   let batchCreated = false
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
+    activateAndDispatch: async () => workspace,
     transport: unusedTransport(),
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => ({
@@ -56,7 +57,10 @@ test('initial provisioning preview binds the complete ordered ordinary Content S
     attemptId: () => 'attempt_Provisioning01'
   })
 
-  const preview = await port.preview({ projectId })
+  const workflow = await port.prepareWorkflow({ projectId })
+  const preview = workflow.provisioning
+  assert.ok(preview)
+  assert.equal(workflow.purpose, 'launch')
 
   assert.equal(preview.rootStrategy, 'create')
   assert.deepEqual(preview.operations.map(({ actionId }) => actionId), [
@@ -80,13 +84,13 @@ test('initial provisioning preview binds the complete ordered ordinary Content S
     containerDisplayName: 'Changed after preview'
   })
   await assert.rejects(
-    port.apply(applyInput(preview), 'idem_ProjectProvisioning01'),
-    /changed after the provisioning preview/u
+    port.continueWorkflow(workflow, 'idem_ProjectProvisioning01'),
+    /facts changed after workflow preparation/u
   )
   assert.equal(batchCreated, false)
 })
 
-test('membership reconcile reauthorizes the exact existing root before any member write', async () => {
+test('Team reconcile workflow reauthorizes the exact existing root before any member write', async () => {
   const workspace = workspaceFixture({
     root,
     intentKind: 'membership_change',
@@ -94,13 +98,17 @@ test('membership reconcile reauthorizes the exact existing root before any membe
   })
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
+    activateAndDispatch: async () => workspace,
     transport: unusedTransport(),
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => unusedCapabilities(),
     attemptId: () => 'attempt_Membership0001'
   })
 
-  const preview = await port.preview({ projectId })
+  const workflow = await port.prepareWorkflow({ projectId })
+  const preview = workflow.provisioning
+  assert.ok(preview)
+  assert.equal(workflow.purpose, 'team_reconcile')
 
   assert.equal(preview.rootStrategy, 'reauthorize')
   assert.deepEqual(preview.operations.map(({ kind }) => kind), [
@@ -124,13 +132,16 @@ test('a dispatched or outcome-unknown create is reconciled and never issued a se
     )
     const port = createProjectCoordinatorProvisioningPort({
       workspace: { readWorkspace: async () => workspace },
+      activateAndDispatch: async () => workspace,
       transport: unusedTransport(),
       signing: { signFactualPayload: async () => { throw new Error('unused') } },
       getCapabilities: () => unusedCapabilities(),
       attemptId: () => `attempt_CreateRecovery_${state}`
     })
 
-    const preview = await port.preview({ projectId })
+    const workflow = await port.prepareWorkflow({ projectId })
+    const preview = workflow.provisioning
+    assert.ok(preview)
 
     assert.equal(preview.rootStrategy, 'reauthorize')
     assert.equal(preview.operations[0]?.kind, 'authorize_root')
@@ -142,6 +153,7 @@ test('confirmed initial plan journals each Provider operation and submits one De
   const workspace = workspaceFixture({ root: null, intentKind: 'initial_provisioning' })
   const cloud = cloudHarness()
   const invoked: string[] = []
+  let activatedAndDispatched = false
   let capturedPlan: DomainMainFiniteCapabilityBatchPlan | undefined
   const resource = {
     token: `cap_${'a'.repeat(32)}`,
@@ -204,6 +216,10 @@ test('confirmed initial plan journals each Provider operation and submits one De
   let signedDigest = ''
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
+    activateAndDispatch: async () => {
+      activatedAndDispatched = true
+      return workspace
+    },
     transport: cloud.transport,
     signing: {
       signFactualPayload: async (request) => {
@@ -232,9 +248,11 @@ test('confirmed initial plan journals each Provider operation and submits one De
       return () => `req_Provisioning${String(++ordinal).padStart(4, '0')}`
     })()
   })
-  const preview = await port.preview({ projectId })
+  const workflow = await port.prepareWorkflow({ projectId })
+  const preview = workflow.provisioning
+  assert.ok(preview)
 
-  await port.apply(applyInput(preview), 'idem_ProjectProvisioning02')
+  await port.continueWorkflow(workflow, 'idem_ProjectProvisioning02')
 
   assert.ok(capturedPlan)
   assert.equal(
@@ -254,6 +272,7 @@ test('confirmed initial plan journals each Provider operation and submits one De
     ...journalCommandTypes(6),
     'project.content.attest'
   ])
+  assert.equal(activatedAndDispatched, true)
   assert.equal(cloud.attestation?.deviceSignature.canonicalPayloadDigest, signedDigest)
   assert.deepEqual(cloud.attestation?.memberObservations.map(({ userId, presence }) => ({
     userId,
@@ -301,6 +320,7 @@ test('Owner root authorization loss records unauthorized and stops before every 
   } as unknown as DomainMainSystemCapabilityInvoker
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
+    activateAndDispatch: async () => workspace,
     transport: cloud.transport,
     signing: { signFactualPayload: async () => { throw new Error('must not sign') } },
     getCapabilities: () => capabilities,
@@ -312,10 +332,10 @@ test('Owner root authorization loss records unauthorized and stops before every 
       return () => `req_RootLoss${String(++ordinal).padStart(8, '0')}`
     })()
   })
-  const preview = await port.preview({ projectId })
+  const workflow = await port.prepareWorkflow({ projectId })
 
   await assert.rejects(
-    port.apply(applyInput(preview), 'idem_ProjectRootLoss0001'),
+    port.continueWorkflow(workflow, 'idem_ProjectRootLoss0001'),
     /root authorization failed: unauthorized/u
   )
 
@@ -332,11 +352,12 @@ test('Owner root authorization loss records unauthorized and stops before every 
   assert.equal(cloud.rootLossObservation?.provisioningRevision, 1)
 })
 
-test('content-free dynamic member add remains directly active without a Provider fact', async () => {
+test('dynamic member add creates an OIDC invitation without a Provider fact', async () => {
   const workspace = contentFreeWorkspaceFixture()
-  const cloud = membershipCloudHarness('active')
+  const cloud = membershipCloudHarness('invited')
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
+    activateAndDispatch: async () => workspace,
     transport: cloud.transport,
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => unusedCapabilities()
@@ -355,11 +376,12 @@ test('content-free dynamic member add remains directly active without a Provider
   assert.equal(cloud.command?.providerPrincipalFactId, null)
 })
 
-test('content-required dynamic member add rejects an immediate-active compatibility response', async () => {
+test('content-required dynamic member add rejects an immediate-active response', async () => {
   const workspace = workspaceFixture({ root, intentKind: 'membership_change' })
   const cloud = membershipCloudHarness('active')
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
+    activateAndDispatch: async () => workspace,
     transport: cloud.transport,
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => unusedCapabilities()
@@ -371,14 +393,63 @@ test('content-required dynamic member add rejects an immediate-active compatibil
     userId: removedUserId,
     providerPrincipalFactId: 'ppf_RemovedFact001',
     expectedProviderPrincipalFactRevision: 1
-  }, 'idem_ContentMemberPending1'), /did not enter pending_membership/u)
+  }, 'idem_ContentMemberPending1'), /canonical OIDC User invitation/u)
 })
 
-test('content-required member removal accepts only membership_removal_pending', async () => {
+test('only the invited OIDC User can accept the exact confirmed Plan before Team readiness', async () => {
+  const workspace = invitedWorkspaceFixture('required')
+  const cloud = membershipAcceptanceCloudHarness('pending_membership')
+  const port = createProjectCoordinatorProvisioningPort({
+    workspace: { readWorkspace: async () => workspace },
+    activateAndDispatch: async () => workspace,
+    transport: cloud.transport,
+    signing: { signFactualPayload: async () => { throw new Error('unused') } },
+    getCapabilities: () => unusedCapabilities()
+  })
+  const plan = workspace.projects[0]!.plan!.plan
+  const invitation = workspace.projects[0]!.provisioning.memberships.find(({ userId }) => (
+    userId === workerUserId
+  ))!
+
+  await port.acceptInvitation({
+    projectId,
+    projectMembershipId: invitation.projectMembershipId,
+    expectedProjectRevision: workspace.projects[0]!.project.revision,
+    expectedMembershipRevision: invitation.revision,
+    projectPlanId: plan.projectPlanId,
+    expectedPlanRevision: plan.revision,
+    planDigest: plan.planDigest
+  }, 'idem_ContentInvitationAccept1')
+  assert.equal(cloud.command?.type, 'project.membership.accept')
+
+  const ownerWorkspace = projectCoordinatorWorkspaceSchema.parse({
+    ...workspace,
+    connection: { state: 'ready', userId: ownerUserId, deviceId: 'dev_Device0000001' }
+  })
+  const wrongUser = createProjectCoordinatorProvisioningPort({
+    workspace: { readWorkspace: async () => ownerWorkspace },
+    activateAndDispatch: async () => ownerWorkspace,
+    transport: unusedTransport(),
+    signing: { signFactualPayload: async () => { throw new Error('unused') } },
+    getCapabilities: () => unusedCapabilities()
+  })
+  await assert.rejects(wrongUser.acceptInvitation({
+    projectId,
+    projectMembershipId: invitation.projectMembershipId,
+    expectedProjectRevision: ownerWorkspace.projects[0]!.project.revision,
+    expectedMembershipRevision: invitation.revision,
+    projectPlanId: plan.projectPlanId,
+    expectedPlanRevision: plan.revision,
+    planDigest: plan.planDigest
+  }, 'idem_ContentInvitationWrong1'), /exact invited OIDC User/u)
+})
+
+test('content-required active or accepted-pending member removal accepts only membership_removal_pending', async () => {
   const workspace = workspaceFixture({ root, intentKind: 'initial_provisioning' })
   const pendingCloud = membershipRemovalCloudHarness('membership_removal_pending')
   const port = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
+    activateAndDispatch: async () => workspace,
     transport: pendingCloud.transport,
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => unusedCapabilities()
@@ -393,9 +464,27 @@ test('content-required member removal accepts only membership_removal_pending', 
 
   assert.equal(pendingCloud.command?.type, 'project.membership.remove')
 
+  const acceptedPendingWorkspace = workspaceFixture({ root, intentKind: 'membership_change' })
+  const acceptedPendingCloud = membershipRemovalCloudHarness('membership_removal_pending')
+  const acceptedPendingPort = createProjectCoordinatorProvisioningPort({
+    workspace: { readWorkspace: async () => acceptedPendingWorkspace },
+    activateAndDispatch: async () => acceptedPendingWorkspace,
+    transport: acceptedPendingCloud.transport,
+    signing: { signFactualPayload: async () => { throw new Error('unused') } },
+    getCapabilities: () => unusedCapabilities()
+  })
+  await acceptedPendingPort.removeMember({
+    projectId,
+    projectMembershipId: 'pmb_WorkerMember01',
+    expectedProjectRevision: 3,
+    expectedMembershipRevision: 1
+  }, 'idem_ContentPendingMemberRemove1')
+  assert.equal(acceptedPendingCloud.command?.type, 'project.membership.remove')
+
   const immediateCloud = membershipRemovalCloudHarness('removed')
   const rejecting = createProjectCoordinatorProvisioningPort({
     workspace: { readWorkspace: async () => workspace },
+    activateAndDispatch: async () => workspace,
     transport: immediateCloud.transport,
     signing: { signFactualPayload: async () => { throw new Error('unused') } },
     getCapabilities: () => unusedCapabilities()
@@ -461,6 +550,7 @@ function workspaceFixture(input: Readonly<{
     observedAt: now,
     focusedProjectId: projectId,
     availableWorkerUsers: [],
+    providerPrincipalFacts,
     projects: [{
       project: {
         schemaVersion: 1,
@@ -473,7 +563,7 @@ function workspaceFixture(input: Readonly<{
         coordinatorAuthorityEpoch: 1,
         executionAuthorityEpoch: 1,
         contentMode: 'required',
-        status: 'paused',
+        status: input.intentKind === 'membership_change' ? 'active' : 'paused',
         budget: {
           maxTasks: 8,
           maxTasksPerRound: 4,
@@ -484,9 +574,20 @@ function workspaceFixture(input: Readonly<{
         createdAt: now,
         updatedAt: now
       },
-      plan: null,
+      plan: {
+        plan: confirmedPlanFixture(),
+        assignments: [{
+          planItemId: 'item_team_launch',
+          workerUserId,
+          recommendationReason: 'The Worker User has the required ready Runtime.'
+        }]
+      },
       memberUsers: [],
-      workerGroups: [],
+      workerGroups: [{
+        userId: workerUserId,
+        displayName: 'Worker User',
+        agents: []
+      }],
       tasks: [],
       offers: [],
       reviews: [],
@@ -582,6 +683,68 @@ function contentFreeWorkspaceFixture(): ProjectCoordinatorWorkspace {
   })
 }
 
+function invitedWorkspaceFixture(contentMode: 'required' | 'none'): ProjectCoordinatorWorkspace {
+  const base = contentMode === 'required'
+    ? workspaceFixture({ root: null, intentKind: 'initial_provisioning' })
+    : contentFreeWorkspaceFixture()
+  const project = base.projects[0]!
+  const invitation = membership(workerUserId, 'pmb_WorkerMember01', 'invited')
+  return projectCoordinatorWorkspaceSchema.parse({
+    ...base,
+    connection: {
+      state: 'ready',
+      userId: workerUserId,
+      deviceId: 'dev_WorkerDevice01'
+    },
+    projects: [{
+      ...project,
+      provisioning: {
+        ...project.provisioning,
+        memberships: [
+          ...project.provisioning.memberships.filter(({ userId }) => userId !== workerUserId),
+          invitation
+        ]
+      }
+    }]
+  })
+}
+
+function confirmedPlanFixture() {
+  return {
+    schemaVersion: 1 as const,
+    type: 'project_plan' as const,
+    projectPlanId: 'pln_ProjectPlan01',
+    projectId,
+    state: 'confirmed' as const,
+    planRevision: 1,
+    sourceInputLocators: [],
+    tasks: [{
+      planItemId: 'item_team_launch',
+      title: 'Run the first Team task',
+      objective: 'Produce one bounded result for Owner review.',
+      completionCriteria: ['The Owner can review one immutable result.'],
+      dependencyPlanItemIds: [],
+      requiredCapabilityTags: ['meeting.review'],
+      fileIntent: null
+    }],
+    rationale: 'The Team is ready for one bounded initial task.',
+    runtimeProvenance: {
+      runtimeId: 'codex-runtime',
+      modelId: null,
+      generatedByCoordinatorAgentId: 'agt_Coordinator01',
+      generatedAt: now
+    },
+    planDigest: 'b'.repeat(64),
+    submittedAt: now,
+    confirmedByUserId: ownerUserId,
+    confirmedAt: now,
+    supersededAt: null,
+    revision: 2,
+    createdAt: now,
+    updatedAt: now
+  }
+}
+
 function principal(userId: string) {
   return {
     schemaVersion: 1 as const,
@@ -631,7 +794,7 @@ function principalFact(
 function membership(
   userId: string,
   projectMembershipId: string,
-  state: 'active' | 'pending_membership' | 'membership_removal_pending'
+  state: 'invited' | 'active' | 'pending_membership' | 'membership_removal_pending'
 ) {
   return {
     schemaVersion: 1 as const,
@@ -641,7 +804,7 @@ function membership(
     userId,
     state,
     authorityEpoch: 1,
-    activatedAt: state === 'pending_membership' ? null : now,
+    activatedAt: state === 'active' || state === 'membership_removal_pending' ? now : null,
     removalRequestedAt: state === 'membership_removal_pending' ? now : null,
     removalRequestedByUserId: state === 'membership_removal_pending' ? ownerUserId : null,
     removedAt: null,
@@ -692,21 +855,6 @@ function withUncertainCreateJournal(
       }
     }]
   })
-}
-
-function applyInput(preview: Awaited<ReturnType<
-  ReturnType<typeof createProjectCoordinatorProvisioningPort>['preview']
->>) {
-  return {
-    projectId: preview.projectId,
-    provisioningIntentId: preview.provisioningIntentId,
-    expectedProjectRevision: preview.expectedProjectRevision,
-    expectedProvisioningRevision: preview.expectedProvisioningRevision,
-    expectedProvisioningIntentRevision: preview.expectedProvisioningIntentRevision,
-    intentDigest: preview.intentDigest,
-    attemptId: preview.attemptId,
-    confirmedPlanDigest: preview.confirmedPlanDigest
-  }
 }
 
 function unusedTransport(): AuthenticatedCloudTransport {
@@ -855,7 +1003,7 @@ function journalCommandTypes(operationCount: number): string[] {
   ]).flat()
 }
 
-function membershipCloudHarness(state: 'active' | 'pending_membership'): Readonly<{
+function membershipCloudHarness(state: 'invited' | 'active'): Readonly<{
   transport: AuthenticatedCloudTransport
   readonly command: Extract<
     import('@sciforge/collaboration-contracts').CloudStateCommand,
@@ -926,6 +1074,47 @@ function membershipRemovalCloudHarness(
           ...membership(workerUserId, command.projectMembershipId, 'membership_removal_pending'),
           state,
           removedAt: state === 'removed' ? now : null
+        }]
+      })
+    }
+  }
+  return Object.freeze({ transport, get command() { return command } })
+}
+
+function membershipAcceptanceCloudHarness(
+  state: 'active' | 'pending_membership'
+): Readonly<{
+  transport: AuthenticatedCloudTransport
+  readonly command: Extract<
+    import('@sciforge/collaboration-contracts').CloudStateCommand,
+    { type: 'project.membership.accept' }
+  > | undefined
+}> {
+  let command: Extract<
+    import('@sciforge/collaboration-contracts').CloudStateCommand,
+    { type: 'project.membership.accept' }
+  > | undefined
+  const transport: AuthenticatedCloudTransport = {
+    status: () => ({
+      state: 'ready',
+      baseUrl: 'https://cloud.invalid/',
+      userId: workerUserId,
+      deviceId: 'dev_WorkerDevice01'
+    }),
+    execute: async (request) => {
+      if (request.payload.type !== 'project.membership.accept') {
+        throw new Error(`Unexpected command ${request.payload.type}.`)
+      }
+      command = request.payload
+      return cloudResponse({
+        protocolVersion: '1.0',
+        type: 'rest.collection',
+        requestId: command.requestId,
+        items: [{
+          ...membership(workerUserId, command.projectMembershipId, state),
+          state,
+          activatedAt: state === 'active' ? now : null,
+          revision: command.expectedMembershipRevision + 1
         }]
       })
     }

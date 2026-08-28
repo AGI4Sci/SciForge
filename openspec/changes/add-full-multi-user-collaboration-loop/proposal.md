@@ -7,6 +7,7 @@ SciForge 已分别具备 OIDC/Device 身份、云端 Project/Task、OpenContent 
 - 以 Keycloak OIDC JIT User、当前 ACTIVE Desktop Device 和其本地 Runtime 为唯一 Agent 建立链；pairing 只绑定通信端点，任何协作包都不得接触 OIDC Token。
 - 让每个 Project 保持一个始终由 Project Owner 所有的精确 Coordinator Agent，并允许 Owner 通过 Coordinator HCI 查看云端 Worker User Directory、为 Task 选择 Worker User、动态增员、派发、超时/撤回后改派、复审，以及在自己的多个 Agent 间显式转交 Coordinator。Cloud 向目标 User 的所有合格运行时广播 User-level Task Offer，并在首个原子领取时才绑定精确 Worker Device/Agent Execution。
 - 将手动/自动接单保留为每台 Agent Device 的本地持久策略；单台 Device 忽略 Offer 只是本地决定，Cloud 只保存 User-level Task Offer、原子 claim、execution fence、revision、幂等、Inbox、Project Record 与恢复事实，不保存 User 级 reject。
+- 把非 Owner 的初始 Project 关系置为 `invited`：Owner 确认精确 Plan 后，Cloud 向每个目标 OIDC User 投递邀请；只有该 User 接受后才进入 content provisioning/readiness，任何未接受邀请都阻止 Team provisioning、Project activation 与 Task dispatch。
 - 新增 Project Owner 驱动的内容 provisioning saga：Run-0 初始 content owner 固定为 Project Owner；Cloud 保存 intent，Owner Desktop 通过 Content Space 创建一个共享目录、精确维护 Provider 成员、写后核验，并提交由当前 Device 签名的无秘密 provisioning attestation 后激活 Project。未来更换 content owner 必须由新 content owner Desktop 执行独立 saga，不属于本次验收。
 - 建立唯一的真实文件任务通道：portable reference 在 Worker 本机重新授权；download 在打开本地目标前执行 Provider `DownloadCheck`，upload 使用 Provider 的真实写入授权；元数据仅验证 locator/ancestry，不充当 ACL 事实源。
 - 删除 Content Space 静态 verification profile 与授权包门禁，改由当前 Principal、Broker audience/authority、pinned Provider 的 live Binding Attestation 和真实 Provider ACL 在每次调用时授权；OpenContent Provider 在没有 `opencontent-base` Agent 技能包时仍可正常使用，私有技能 ZIP 只通过通用本地校验/安装器作为可选增强进入标准 Workspace skill root。

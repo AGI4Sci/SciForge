@@ -126,7 +126,7 @@ test('local Coordinator Runtime creates an editable durable Plan draft with Work
   }), /active Project member/u)
 })
 
-test('immutable Plan submit uses Coordinator Agent authority before Owner confirmation and activation', async () => {
+test('Plan confirmation keeps the Project paused until the canonical workflow activates and dispatches', async () => {
   const settings = inMemorySettings()
   let phase: 'draft' | 'submitted' | 'confirmed' | 'active' = 'draft'
   let submittedPlan: ProjectPlan | undefined
@@ -267,7 +267,7 @@ test('immutable Plan submit uses Coordinator Agent authority before Owner confir
     runtimeProvenance: assigned.runtimeProvenance
   }))
 
-  const activated = await port.confirmAndActivate({
+  const confirmed = await port.confirm({
     projectId: assigned.projectId,
     projectPlanId: submitted.plan.projectPlanId,
     expectedProjectRevision: 2,
@@ -275,6 +275,23 @@ test('immutable Plan submit uses Coordinator Agent authority before Owner confir
     expectedPlanRevision: submitted.plan.revision,
     planDigest: submitted.plan.planDigest
   }, 'idem_PlanConfirmTracer01')
+  assert.equal(confirmed.projects[0]?.project.status, 'paused')
+  assert.equal(confirmed.projects[0]?.tasks.length, 0)
+  assert.deepEqual((userCommands as Array<{ type: string }>).map(({ type }) => type), [
+    'project.plan.confirm'
+  ])
+  assert.deepEqual((coordinatorCommands as Array<{ type: string }>).map(({ type }) => type), [
+    'project.plan.submit'
+  ])
+
+  const activated = await port.activateAndDispatch({
+    projectId: assigned.projectId,
+    projectPlanId: submitted.plan.projectPlanId,
+    expectedCoordinatorAuthorityEpoch: 1,
+    expectedExecutionAuthorityEpoch: 1,
+    expectedPlanRevision: submittedPlan!.revision,
+    planDigest: submitted.plan.planDigest
+  }, 'idem_ProjectWorkflowContinue01')
   assert.equal(activated.projects[0]?.project.status, 'active')
   assert.equal(activated.projects[0]?.tasks.length, 2)
   assert.deepEqual((userCommands as Array<{ type: string }>).map(({ type }) => type), [
@@ -319,6 +336,7 @@ function workspaceFixture() {
     observedAt: updatedAt,
     focusedProjectId: 'prj_ProjectCreated01',
     availableWorkerUsers: [],
+    providerPrincipalFacts: [],
     projects: [{
       project: {
         schemaVersion: 1 as const,

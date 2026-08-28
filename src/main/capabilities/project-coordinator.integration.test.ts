@@ -30,6 +30,7 @@ const created: ProjectCoordinatorProjectCreateResult = {
     observedAt: '2026-08-27T01:30:00.000Z',
     focusedProjectId: TEST_IDS.projectId,
     availableWorkerUsers: [],
+    providerPrincipalFacts: [],
     projects: [{
       project: projectFixture,
       coordinatorTransferFeedback: null,

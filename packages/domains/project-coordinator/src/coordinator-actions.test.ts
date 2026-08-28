@@ -479,6 +479,7 @@ function workspaceFixture(
     observedAt: TEST_TIMESTAMP,
     focusedProjectId: TEST_IDS.projectId,
     availableWorkerUsers: [],
+    providerPrincipalFacts: [],
     projects: [{
       project,
       plan: null,

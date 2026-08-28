@@ -53,7 +53,7 @@ describe.skipIf(connectionString === undefined).sequential(
       } finally {
         await pool.end()
       }
-    })
+    }, 120_000)
 
     it('v17 removes every pre-claim pseudo Execution and preserves claimed retry provenance', async () => {
       assertSafeStage3Database(connectionString!)
@@ -135,7 +135,7 @@ describe.skipIf(connectionString === undefined).sequential(
       } finally {
         await pool.end()
       }
-    })
+    }, 30_000)
 
     it('preserves public-v5 Project-scoped HumanNeeded and fences an unsafe Coordinator', async () => {
       assertSafeStage3Database(connectionString!)
@@ -301,7 +301,7 @@ describe.skipIf(connectionString === undefined).sequential(
       } finally {
         await pool.end()
       }
-    })
+    }, 120_000)
 
     it('rejects unknown source drift before applying any forward migration', async () => {
       assertSafeStage3Database(connectionString!)
@@ -505,7 +505,8 @@ const ROUTES: readonly CollaborationSchemaRoute[] = [
   'current-v14',
   'current-v15',
   'current-v16',
-  'current-v17'
+  'current-v17',
+  'current-v18'
 ]
 
 const BASELINE_MIGRATIONS = [
@@ -522,7 +523,8 @@ const FORWARD_MIGRATIONS = [
   '0014_pre_provider_provisioning_binding.sql',
   '0015_canonical_project_created_inbox.sql',
   '0016_user_targeted_task_offers.sql',
-  '0017_claim_created_task_executions.sql'
+  '0017_claim_created_task_executions.sql',
+  '0018_project_membership_invitations.sql'
 ] as const
 
 const HISTORICAL_MIGRATIONS = [
@@ -568,7 +570,8 @@ async function installRoute(pool: SqlPool, route: CollaborationSchemaRoute): Pro
     'current-v14': 4,
     'current-v15': 5,
     'current-v16': 6,
-    'current-v17': 7
+    'current-v17': 7,
+    'current-v18': 8
   }[route]
   for (const name of FORWARD_MIGRATIONS.slice(0, forwardCount)) {
     await pool.query(await migrationSource(name))

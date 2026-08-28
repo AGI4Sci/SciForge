@@ -26,6 +26,14 @@ describe('frozen state machines', () => {
     expect(canTransition('project_content_binding', 'degraded', 'provisioning')).toBe(false)
   })
 
+  it('withdraws untouched invitations directly but reconciles accepted Team membership removal', () => {
+    expect(canTransition('project_membership', 'invited', 'removed')).toBe(true)
+    expect(canTransition('project_membership', 'pending_membership', 'membership_removal_pending')).toBe(true)
+    expect(canTransition('project_membership', 'active', 'membership_removal_pending')).toBe(true)
+    expect(canTransition('project_membership', 'active', 'removed')).toBe(true)
+    expect(canTransition('project_membership', 'removed', 'active')).toBe(false)
+  })
+
   it('makes revoked identities and acknowledged inbox entries terminal', () => {
     expect(STATE_TRANSITIONS.user.revoked).toEqual([])
     expect(STATE_TRANSITIONS.endpoint.revoked).toEqual([])

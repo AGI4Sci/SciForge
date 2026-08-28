@@ -32,8 +32,9 @@ This package owns only the Human-facing coordination surfaces for:
 - observing Project Tasks, ProjectRecord memory, and the independent Project
   Membership, Provider observation, Content Readiness, Task Authority and
   recovery facts;
-- previewing and applying the Owner-confirmed Content Space provisioning plan,
-  reconciling dynamic membership, and presenting Owner root-loss recovery.
+- driving the one confirmed-Plan workflow through invitation acceptance, finite
+  Team provisioning, all-member readiness, Project activation and initial Task
+  dispatch, plus dynamic Team reconciliation and Owner root-loss recovery.
 
 It does **not** own OIDC login, Device enrollment, Agent registration,
 connection settings, Agent presence, Inbox delivery, local Worker execution,
@@ -83,12 +84,17 @@ uses the Host-provided Agent Runtime only after the runtime lifecycle has
 activated; missing Runtime, identity, Device, Cloud, or exact Project facts fail
 closed.
 
-Project Content provisioning is a package-owned saga over existing ordinary
-Content Space capabilities. The runtime lifecycle requests only
+Project launch is one package-owned workflow: the Owner confirms the immutable
+Plan, each invited OIDC User accepts that exact Plan, the Owner prepares and
+continues one digest-bound workflow, every required Team Membership becomes
+ready, then the Project activates and initial Tasks dispatch. Provider work is
+an internal finite batch within that workflow, never an independently exposed
+Provider planning or execution capability. The runtime lifecycle requests only
 `content-space.provisioning-batch`; one Host-confirmed immutable finite plan
-then authorizes its exact ordered authorize/create-or-reauthorize/observe/list/
-add/remove/list operations. Apply accepts only fresh Cloud CAS facts and the
-Host-canonical full-plan digest, never renderer-supplied Provider operations.
+authorizes its exact ordered authorize/create-or-reauthorize/observe/list/
+add/remove/list operations. Continuation accepts only fresh Cloud CAS facts and
+the Host-canonical workflow and finite-plan digests, never renderer-supplied
+Provider operations.
 Each Provider operation is surrounded by Cloud prepare/dispatch/observe journal
 writes. A dispatched or outcome-unknown container create is reconciled by exact
 live root discovery and is never issued a second time. The final complete member
@@ -96,12 +102,15 @@ observation is signed through Identity's purpose-locked current-Device service
 and submitted to Cloud; the package retains no Provider credential, Connection,
 endpoint, resource handle, Token, local path, or reusable authorization.
 
-Dynamic content-required adds must first return `pending_membership`; removals
-must first return `membership_removal_pending`. The Owner Desktop then applies
-the new provisioning intent and only Cloud's successful verification may
-activate or finally remove the member. The renderer rejects an immediate-active
-or immediate-removed compatibility response. Content-free membership continues
-to activate/remove directly. If exact Owner root authorization or observation
+Every dynamic add first creates an `invited` OIDC User Membership with no Task
+authority. Only that User may accept the exact current confirmed Plan;
+content-required acceptance enters `pending_membership`, while content-free
+acceptance becomes active. Removing an untouched invitation or any content-free
+Membership is immediate. Removing an accepted content-required member—whether
+still pending Team attestation or already active—first returns
+`membership_removal_pending`, atomically fences Task authority and current
+executions, and invalidates ResourceRefs before Provider reconciliation. Only a
+fresh absence attestation finally records `removed`. If exact Owner root authorization or observation
 returns unauthorized, the saga records the external failure, submits the
 factual Owner observation, stops before all member writes, and exposes Cloud's
 safe recovery action without deleting Provider content.
@@ -112,14 +121,15 @@ Plan, Project-scoped Worker Availability, Membership,
 Task Authority, User-level offers, execution, result/review, content readiness,
 provisioning and recovery records; it adds only UI-specific grouping, User selection and focus
 wrappers rather than redefining those state machines.
-`./ports` contains the narrow package-owned workspace, Plan, provisioning, and
+`./ports` contains the narrow package-owned workspace, Plan, workflow, and
 action workflow ports used by the capability factory plus the closed
-Collaboration Coordinator-Agent command port. The renderer invokes nineteen
+Collaboration Coordinator-Agent command port. The renderer invokes twenty-one
 governed capabilities: workspace read, Project create, Plan-draft
-read/generate/edit, Plan submit, Owner confirm-and-activate, provisioning
-preview/apply, three exact-output recovery actions, membership add/remove,
+read/generate/edit, Plan submit, Owner Plan confirmation, workflow
+prepare/continue, three exact-output recovery actions, membership
+invite/accept/remove,
 Project HumanNeeded create/answer, Owner Coordinator transfer, result review,
-and atomic final completion. Pending confirmation, provisioning, HumanNeeded,
+artifact-review preparation, and atomic final completion. Pending confirmation, workflow, HumanNeeded,
 review, completion, Coordinator fencing, membership fences, and root recovery
 cards are default-visible. There is no renderer transport, HTTP client,
 Provider adapter, or second Cloud DTO.
@@ -131,8 +141,10 @@ Generation, assignment edits, and a fresh pre-submit read each require one
 currently eligible Runtime to satisfy the complete Task profile; Cloud
 revalidates the same facts again during offer creation and claim.
 
-Owner confirmation activates the Project and dispatches each dependency-free
-initial Plan item through the canonical Coordinator Agent command service. Main
+Owner confirmation changes only the immutable Plan state. Canonical workflow
+continuation activates the Project and dispatches each dependency-free initial
+Plan item through the Coordinator Agent command service only after every
+invitation and Team-readiness gate has passed. Main
 re-reads the selected User's current Project-scoped availability immediately
 before every offer and requires at least one eligible Runtime. The Cloud command
 contains only `workerUserId`; Cloud broadcasts the pending Offer to all eligible

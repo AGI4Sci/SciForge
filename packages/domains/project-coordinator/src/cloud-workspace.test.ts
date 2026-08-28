@@ -44,6 +44,7 @@ test('current Device Agent Project create returns a workspace focused on the exa
       observedAt: updatedAt
     }),
     emptyWorkerDirectoryResponse('req_ListWorkers00001'),
+    emptyProviderDirectoryResponse('req_ListProviderFacts1'),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_coordination',
@@ -141,6 +142,7 @@ test('current Device Agent Project create returns a workspace focused on the exa
       'project.list',
       'project.list',
       'worker.availability.list',
+      'provider_directory_principal.list',
       'project.coordination.read',
       'project.coordination.read'
     ]
@@ -167,7 +169,7 @@ test('current Device Agent Project create returns a workspace focused on the exa
     }
   }])
   assert.deepEqual(
-    requests.slice(3).map(({ payload }) => (
+    requests.slice(4).map(({ payload }) => (
       payload.type === 'project.coordination.read' ? payload.collections : []
     )),
     [
@@ -219,6 +221,90 @@ test('Agent-authored Project create rejects a Cloud response that changes the cr
   )
 })
 
+test('invited User workspace reads only the bounded invitation fact collections', async () => {
+  const project = projectFixture('prj_ProjectCreated01', 'Invitation review')
+  const invitation = {
+    ...membershipFixture(project.projectId),
+    projectMembershipId: 'pmb_InvitedMember01',
+    userId: 'usr_Worker000001',
+    state: 'invited' as const,
+    activatedAt: null
+  }
+  const plan = {
+    ...planFixture({
+      projectPlanId: 'pln_CurrentMeeting01',
+      state: 'awaiting_confirmation',
+      planRevision: 1
+    }),
+    state: 'confirmed' as const,
+    confirmedByUserId: project.ownerUserId,
+    confirmedAt: updatedAt,
+    revision: 2
+  }
+  const requests: AuthenticatedCloudRequest[] = []
+  const responses = [
+    response(200, {
+      protocolVersion: '1.0',
+      type: 'rest.project_page',
+      requestId: 'req_ListInvitations01',
+      limit: 250,
+      projects: [project],
+      observedAt: updatedAt
+    }),
+    emptyWorkerDirectoryResponse('req_ListInvitationWorkers'),
+    emptyProviderDirectoryResponse('req_ListInvitationFacts1'),
+    response(200, {
+      protocolVersion: '1.0',
+      type: 'rest.project_coordination',
+      requestId: 'req_ReadInvitation01',
+      project,
+      observedAt: updatedAt,
+      pages: [
+        {
+          collection: 'user_label_facts',
+          limit: 250,
+          items: [userLabelFixture('usr_Worker000001', 'Invited Worker')]
+        },
+        { collection: 'memberships', limit: 250, items: [invitation] },
+        { collection: 'plans', limit: 250, items: [plan] }
+      ],
+      finalSummary: null
+    })
+  ]
+  const transport: AuthenticatedCloudTransport = {
+    status: () => ({
+      state: 'ready',
+      baseUrl: 'https://cloud.run0.invalid/',
+      userId: invitation.userId,
+      deviceId: 'dev_WorkerDevice01'
+    }),
+    execute: async (request) => {
+      requests.push(request)
+      const next = responses.shift()
+      if (!next) throw new Error('Unexpected Cloud request.')
+      return next
+    }
+  }
+
+  const workspace = await createProjectCoordinatorCloudWorkspacePort({ transport })
+    .readWorkspace({ projectId: project.projectId })
+
+  assert.equal(workspace.projects[0]?.plan?.plan.projectPlanId, plan.projectPlanId)
+  assert.equal(workspace.projects[0]?.provisioning.memberships[0]?.state, 'invited')
+  assert.deepEqual(workspace.projects[0]?.tasks, [])
+  const invitationRead = requests.at(-1)?.payload
+  assert.deepEqual(
+    invitationRead?.type === 'project.coordination.read'
+      ? invitationRead.collections
+      : null,
+    [
+      { collection: 'user_label_facts', limit: 250 },
+      { collection: 'memberships', limit: 250 },
+      { collection: 'plans', limit: 250 }
+    ]
+  )
+})
+
 test('Cloud-global online Worker Users stay visible outside current Project membership with grouped Agent evidence', async () => {
   const project = projectFixture('prj_ProjectCreated01', 'Created meeting')
   const responses = [
@@ -263,6 +349,7 @@ test('Cloud-global online Worker Users stay visible outside current Project memb
         revision: 1
       }]
     }),
+    emptyProviderDirectoryResponse('req_ListCandidateFacts1'),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_coordination',
@@ -350,6 +437,7 @@ test('Project read selects the one non-superseded Plan instead of relying on pag
       observedAt: updatedAt
     }),
     emptyWorkerDirectoryResponse('req_ListHumanWorkers1'),
+    emptyProviderDirectoryResponse('req_ListPlanFacts001'),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_coordination',
@@ -426,6 +514,7 @@ test('Project read projects pending member-targeted HumanNeeded and accepted Coo
       observedAt: updatedAt
     }),
     emptyWorkerDirectoryResponse('req_ListContentWorkers'),
+    emptyProviderDirectoryResponse('req_ListHumanProvider1'),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_coordination',
@@ -600,6 +689,7 @@ test('Project read keeps membership, Provider observation, readiness, and recove
       observedAt: updatedAt
     }),
     emptyWorkerDirectoryResponse('req_ListContentFactsWorkers'),
+    providerDirectoryResponse('req_ListContentProviderFacts', [principalFact]),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_coordination',
@@ -633,6 +723,7 @@ test('Project read keeps membership, Provider observation, readiness, and recove
     .readWorkspace({ projectId: project.projectId })
   const provisioning = workspace.projects[0]?.provisioning
 
+  assert.deepEqual(workspace.providerPrincipalFacts, [principalFact])
   assert.deepEqual(provisioning?.memberships, [membership])
   assert.deepEqual(provisioning?.providerPrincipalFacts, [principalFact])
   assert.deepEqual(provisioning?.providerMembershipObservations, [observation])
@@ -657,6 +748,22 @@ function emptyWorkerDirectoryResponse(requestId: `req_${string}`): Authenticated
     items: [],
     userLabels: [],
     agentLabels: []
+  })
+}
+
+function emptyProviderDirectoryResponse(requestId: `req_${string}`): AuthenticatedCloudResponse {
+  return providerDirectoryResponse(requestId, [])
+}
+
+function providerDirectoryResponse(
+  requestId: `req_${string}`,
+  items: readonly import('@sciforge/collaboration-contracts').ProviderDirectoryPrincipalFact[]
+): AuthenticatedCloudResponse {
+  return response(200, {
+    protocolVersion: '1.0',
+    type: 'rest.provider_directory_principal_page',
+    requestId,
+    items: [...items]
   })
 }
 

@@ -39,17 +39,18 @@ import {
   projectCoordinatorHumanAnswerInputSchema,
   projectCoordinatorHumanNeededCreateInputSchema,
   projectCoordinatorMembershipAddInputSchema,
+  projectCoordinatorMembershipAcceptInputSchema,
   projectCoordinatorMembershipRemoveInputSchema,
-  projectCoordinatorPlanConfirmActivateInputSchema,
+  projectCoordinatorPlanConfirmInputSchema,
   projectCoordinatorPlanDraftEditInputSchema,
   projectCoordinatorPlanDraftGenerateInputSchema,
   projectCoordinatorPlanDraftReadInputSchema,
   projectCoordinatorPlanDraftSchema,
   projectCoordinatorPlanDraftSubmitInputSchema,
   projectCoordinatorPlanSubmitResultSchema,
-  projectCoordinatorProvisioningApplyInputSchema,
-  projectCoordinatorProvisioningPlanInputSchema,
-  projectCoordinatorProvisioningPlanSchema,
+  projectCoordinatorWorkflowContinueInputSchema,
+  projectCoordinatorWorkflowPlanSchema,
+  projectCoordinatorWorkflowPrepareInputSchema,
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateResultSchema,
   projectCoordinatorResultReviewInputSchema,
@@ -245,62 +246,62 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         })
       }),
       options.defineCapability({
-        id: PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate,
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirm,
         version: '1.0.0',
-        title: 'Confirm Plan and activate Project',
-        description: 'Confirms the exact immutable Plan as the Coordinator Human and activates from freshly read CAS facts.',
+        title: 'Confirm Project Plan',
+        description: 'Confirms the exact immutable Plan; invitations, Team readiness, activation, and dispatch remain gated by the canonical Project workflow.',
         audiences: ['ui'],
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
         concurrency: { revision: 'none', idempotency: 'required' },
-        tags: ['project', 'plan', 'confirmation', 'activation'],
-        inputSchema: projectCoordinatorPlanConfirmActivateInputSchema,
+        tags: ['project', 'plan', 'confirmation'],
+        inputSchema: projectCoordinatorPlanConfirmInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
         handler: async (raw, context) => ({
-          output: await options.ports.plan.confirmAndActivate(
-            projectCoordinatorPlanConfirmActivateInputSchema.parse(raw),
-            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate, context)
+          output: await options.ports.plan.confirm(
+            projectCoordinatorPlanConfirmInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirm, context)
           )
         })
       }),
       options.defineCapability({
-        id: PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningPlan,
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.workflowPrepare,
         version: '1.0.0',
-        title: 'Preview Project Content provisioning',
-        description: 'Reads the exact Cloud intent and returns the Host-canonical complete ordinary Content Space operation plan for Human review.',
+        title: 'Prepare Project workflow',
+        description: 'Prepares the only production workflow from confirmed Plan and accepted invitations through finite Team operations, readiness, activation, and Task dispatch.',
         audiences: ['ui'],
         scope: 'global',
         effect: 'read',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
-        tags: ['project', 'content', 'provisioning', 'plan'],
-        inputSchema: projectCoordinatorProvisioningPlanInputSchema,
-        outputSchema: projectCoordinatorProvisioningPlanSchema,
+        tags: ['project', 'workflow', 'team', 'readiness', 'plan'],
+        inputSchema: projectCoordinatorWorkflowPrepareInputSchema,
+        outputSchema: projectCoordinatorWorkflowPlanSchema,
         handler: async (raw) => ({
-          output: await options.ports.provisioning.preview(
-            projectCoordinatorProvisioningPlanInputSchema.parse(raw)
+          output: await options.ports.provisioning.prepareWorkflow(
+            projectCoordinatorWorkflowPrepareInputSchema.parse(raw)
           )
         })
       }),
       options.defineCapability({
-        id: PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
         version: '1.0.0',
-        title: 'Apply Project Content provisioning',
-        description: 'Executes only the exact Human-confirmed full plan, journals ordinary Provider operations, signs factual observations with the current Device, and submits them to Cloud.',
+        title: 'Continue Project workflow',
+        description: 'Executes the exact confirmed workflow, including finite Team operations when required, then verifies readiness before activation and initial Task dispatch.',
         audiences: ['ui'],
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
         concurrency: { revision: 'none', idempotency: 'required' },
-        tags: ['project', 'content', 'provisioning', 'attestation'],
-        inputSchema: projectCoordinatorProvisioningApplyInputSchema,
+        tags: ['project', 'workflow', 'team', 'attestation', 'activation', 'dispatch'],
+        inputSchema: projectCoordinatorWorkflowContinueInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
         handler: async (raw, context) => ({
-          output: await options.ports.provisioning.apply(
-            projectCoordinatorProvisioningApplyInputSchema.parse(raw),
+          output: await options.ports.provisioning.continueWorkflow(
+            projectCoordinatorWorkflowContinueInputSchema.parse(raw),
             capabilityIdempotencyKey(
-              PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
+              PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
               context
             )
           )
@@ -378,20 +379,40 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
         version: '1.0.0',
-        title: 'Add Project member pending Content provisioning',
-        description: 'Adds the exact User and Provider fact to Cloud; content-required membership remains pending until a fresh signed Provider observation succeeds.',
+        title: 'Invite Project member',
+        description: 'Creates only an OIDC User invitation; it grants no Task or Team authority before that exact User accepts the confirmed Plan.',
         audiences: ['ui'],
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
         concurrency: { revision: 'none', idempotency: 'required' },
-        tags: ['project', 'membership', 'content', 'pending'],
+        tags: ['project', 'membership', 'invitation'],
         inputSchema: projectCoordinatorMembershipAddInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
         handler: async (raw, context) => ({
           output: await options.ports.provisioning.addMember(
             projectCoordinatorMembershipAddInputSchema.parse(raw),
             capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd, context)
+          )
+        })
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept,
+        version: '1.0.0',
+        title: 'Accept Project invitation',
+        description: 'Lets only the exact invited OIDC User accept the exact current confirmed Plan before Team readiness.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'membership', 'invitation', 'acceptance'],
+        inputSchema: projectCoordinatorMembershipAcceptInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => ({
+          output: await options.ports.provisioning.acceptInvitation(
+            projectCoordinatorMembershipAcceptInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept, context)
           )
         })
       }),
@@ -612,6 +633,7 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     workspace,
     transport,
     signing: provisioningAttestationSigning,
+    activateAndDispatch: plan.activateAndDispatch,
     getCapabilities: () => {
       if (!systemCapabilities) {
         throw new Error('The approved Content Space provisioning batch is unavailable.')

@@ -898,7 +898,8 @@ export class FakeCollaborationRepository {
       .filter((project) => {
         const membership = this.state.projectMembers.get(`${project.projectId}:${userId}`)
         return (project.ownerUserId === userId ||
-          membership?.state === 'active' || membership?.state === 'membership_removal_pending') &&
+          membership?.state === 'invited' || membership?.state === 'active' ||
+          membership?.state === 'membership_removal_pending') &&
           (afterProjectId === null || project.projectId.localeCompare(afterProjectId) > 0)
       })
       .sort((left, right) => left.projectId.localeCompare(right.projectId))

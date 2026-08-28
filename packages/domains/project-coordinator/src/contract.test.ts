@@ -11,7 +11,7 @@ import {
   projectCoordinatorContentRecoveryRetrySuccessorInputSchema,
   projectCoordinatorMembershipAddInputSchema,
   projectCoordinatorMembershipRemoveInputSchema,
-  projectCoordinatorProvisioningApplyInputSchema,
+  projectCoordinatorWorkflowContinueInputSchema,
   projectCoordinatorTransferInputSchema,
   projectCoordinatorWorkspaceSchema
 } from './contract.js'
@@ -28,6 +28,7 @@ const fixture = {
   observedAt: updatedAt,
   focusedProjectId: 'prj_Project000001',
   availableWorkerUsers: [],
+  providerPrincipalFacts: [],
   projects: [{
     project: {
       schemaVersion: 1 as const,
@@ -294,29 +295,31 @@ test('artifact review selects immutable Cloud facts without accepting a locator 
   )
 })
 
-test('provisioning confirmation binds only exact Cloud CAS facts and the Host full-plan digest', () => {
-  const apply = {
+test('workflow continuation binds the confirmed Plan, exact Project CAS, and one workflow digest', () => {
+  const workflow = {
     projectId: 'prj_Project000001',
-    provisioningIntentId: 'pci_Provisioning01',
+    projectPlanId: 'pln_ProjectPlan01',
     expectedProjectRevision: 3,
-    expectedProvisioningRevision: 2,
-    expectedProvisioningIntentRevision: 1,
-    intentDigest: 'a'.repeat(64),
-    attemptId: 'attempt_Provisioning01',
-    confirmedPlanDigest: 'b'.repeat(64)
+    expectedCoordinatorAuthorityEpoch: 2,
+    expectedExecutionAuthorityEpoch: 2,
+    expectedPlanRevision: 2,
+    planDigest: 'a'.repeat(64),
+    purpose: 'launch' as const,
+    provisioning: null,
+    workflowDigest: 'b'.repeat(64)
   }
-  assert.deepEqual(projectCoordinatorProvisioningApplyInputSchema.parse(apply), apply)
-  assert.throws(() => projectCoordinatorProvisioningApplyInputSchema.parse({
-    ...apply,
+  assert.deepEqual(projectCoordinatorWorkflowContinueInputSchema.parse(workflow), workflow)
+  assert.throws(() => projectCoordinatorWorkflowContinueInputSchema.parse({
+    ...workflow,
     operations: [{ actionId: 'content-space.agent-admin-add-member' }]
   }))
-  assert.throws(() => projectCoordinatorProvisioningApplyInputSchema.parse({
-    ...apply,
-    confirmedPlanDigest: 'caller-selected-authority'
+  assert.throws(() => projectCoordinatorWorkflowContinueInputSchema.parse({
+    ...workflow,
+    workflowDigest: 'caller-selected-authority'
   }))
   assert.equal(
-    PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
-    'project-coordinator.content-provisioning.apply'
+    PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
+    'project-coordinator.workflow.continue'
   )
 })
 

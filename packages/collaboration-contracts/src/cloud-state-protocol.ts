@@ -254,6 +254,19 @@ export const projectMembershipAddCommandSchema = z.object({
   }
 })
 
+/** The invited OIDC User accepts the exact current confirmed Project Plan. */
+export const projectMembershipAcceptCommandSchema = z.object({
+  ...writeCommandShape,
+  type: z.literal('project.membership.accept'),
+  projectId: projectIdSchema,
+  projectMembershipId: projectMembershipIdSchema,
+  expectedProjectRevision: revisionSchema,
+  expectedMembershipRevision: revisionSchema,
+  projectPlanId: projectPlanIdSchema,
+  expectedPlanRevision: revisionSchema,
+  planDigest: sha256Schema
+}).strict()
+
 /** Safety revocation is immediate; no public command can claim Provider removal succeeded. */
 export const projectMembershipRemoveCommandSchema = z.object({
   ...writeCommandShape,
@@ -683,6 +696,7 @@ export const cloudStateCommandSchemas = [
   workerAvailabilityPublishCommandSchema,
   workerAvailabilityListQuerySchema,
   projectMembershipAddCommandSchema,
+  projectMembershipAcceptCommandSchema,
   projectMembershipRemoveCommandSchema,
   projectMembershipListQuerySchema,
   projectTaskAuthorityListQuerySchema,

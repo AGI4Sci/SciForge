@@ -237,6 +237,85 @@ async function contentRecoveryProjectFixture(suffix: string) {
   return { repository, service, owner, worker, coordinator, ownerFact, workerFact, created }
 }
 
+async function confirmPlanAndAcceptFixtureWorker(
+  fixture: Awaited<ReturnType<typeof contentRecoveryProjectFixture>>,
+  suffix: string,
+  tasks: readonly {
+    planItemId: string
+    title: string
+    objective: string
+    completionCriteria: readonly string[]
+    dependencyPlanItemIds: readonly string[]
+    requiredCapabilityTags: readonly string[]
+    fileIntent: import('@sciforge/collaboration-contracts').TaskFileIntent | null
+  }[]
+) {
+  const planFacts = {
+    projectId: fixture.created.project.projectId,
+    expectedProjectRevision: fixture.created.project.revision,
+    expectedCoordinatorAuthorityEpoch: fixture.created.project.coordinatorAuthorityEpoch,
+    supersedesProjectPlanId: null,
+    sourceInputLocators: [],
+    tasks,
+    rationale: `Confirm ${suffix} before Project invitation acceptance.`,
+    runtimeProvenance: {
+      runtimeId: `runtime_${stableDigest(suffix).slice(0, 24)}`,
+      modelId: null,
+      generatedByCoordinatorAgentId: fixture.coordinator.agentId,
+      generatedAt: at.toISOString()
+    }
+  }
+  const submitted = await fixture.service.submitProjectPlan(fixture.coordinator, {
+    protocolVersion: '1.0', type: 'project.plan.submit',
+    requestId: `req_${stableDigest(`${suffix}.submit`).slice(0, 24)}`,
+    idempotencyKey: `idem_${suffix}_submit`,
+    ...planFacts,
+    planDigest: stableDigest(planFacts)
+  })
+  const confirmed = await fixture.service.confirmProjectPlan(fixture.owner.user, {
+    protocolVersion: '1.0', type: 'project.plan.confirm',
+    requestId: `req_${stableDigest(`${suffix}.confirm`).slice(0, 24)}`,
+    idempotencyKey: `idem_${suffix}_confirm`,
+    projectId: fixture.created.project.projectId,
+    projectPlanId: submitted.projectPlanId,
+    expectedProjectRevision: fixture.created.project.revision + 1,
+    expectedCoordinatorAuthorityEpoch: fixture.created.project.coordinatorAuthorityEpoch,
+    expectedPlanRevision: submitted.revision,
+    planDigest: submitted.planDigest
+  })
+  const invitation = fixture.created.memberships.find(({ userId }) => (
+    userId === fixture.worker.user.userId
+  ))!
+  const accepted = await fixture.service.acceptProjectMembership(fixture.worker.user, {
+    protocolVersion: '1.0', type: 'project.membership.accept',
+    requestId: `req_${stableDigest(`${suffix}.accept`).slice(0, 24)}`,
+    idempotencyKey: `idem_${suffix}_accept`,
+    projectId: fixture.created.project.projectId,
+    projectMembershipId: invitation.projectMembershipId,
+    expectedProjectRevision: fixture.created.project.revision + 2,
+    expectedMembershipRevision: invitation.revision,
+    projectPlanId: confirmed.projectPlanId,
+    expectedPlanRevision: confirmed.revision,
+    planDigest: confirmed.planDigest
+  })
+  return { submitted, confirmed, accepted }
+}
+
+async function acceptFixtureWorkerForLaunch(
+  fixture: Awaited<ReturnType<typeof contentRecoveryProjectFixture>>,
+  suffix: string
+) {
+  return confirmPlanAndAcceptFixtureWorker(fixture, suffix, [{
+    planItemId: 'item_launch_gate',
+    title: 'Enter the confirmed Project',
+    objective: 'Accept the exact Plan before Project content operations.',
+    completionCriteria: ['The invitation is no longer pending.'],
+    dependencyPlanItemIds: [],
+    requiredCapabilityTags: [],
+    fileIntent: null
+  }])
+}
+
 async function activeContentProjectFixture(suffix: string) {
   const fixture = await contentRecoveryProjectFixture(suffix)
   const { repository, service, owner, worker, coordinator, ownerFact, created } = fixture
@@ -255,6 +334,15 @@ async function activeContentProjectFixture(suffix: string) {
     }, device.revision)
   })
   const workerAgent = await registeredAgent(service, worker.user, worker.deviceId, `${suffix}-worker-agent`)
+  const launch = await confirmPlanAndAcceptFixtureWorker(fixture, `${suffix}_launch`, [{
+    planItemId: 'item_content_lifecycle',
+    title: 'Review content lifecycle',
+    objective: 'Keep the Project active while Provider observations change.',
+    completionCriteria: ['Authority follows exact Provider observations.'],
+    dependencyPlanItemIds: [],
+    requiredCapabilityTags: ['research.execute'],
+    fileIntent: null
+  }])
   const intent = created.provisioningIntent!
   const requestDigest = stableDigest({ suffix, operation: 'create_shared_container' })
   const prepared = await service.prepareExternalOperation(owner.user, {
@@ -327,54 +415,16 @@ async function activeContentProjectFixture(suffix: string) {
     protocolVersion: '1.0', type: 'project.content.attest',
     requestId: `req_${suffix}_active_attest`, idempotencyKey: `idem_${suffix}_active_attest`,
     projectId: created.project.projectId,
-    expectedProjectRevision: created.project.revision,
+    expectedProjectRevision: launch.accepted.project.revision,
     expectedProvisioningRevision: intent.provisioningRevision,
     attestation
-  })
-  const planTasks = [{
-    planItemId: 'item_content_lifecycle',
-    title: 'Review content lifecycle',
-    objective: 'Keep the Project active while Provider observations change.',
-    completionCriteria: ['Authority follows exact Provider observations.'],
-    dependencyPlanItemIds: [],
-    requiredCapabilityTags: ['research.execute'],
-    fileIntent: null
-  }]
-  const planFacts = {
-    projectId: created.project.projectId,
-    expectedProjectRevision: activatedContent.project.revision,
-    expectedCoordinatorAuthorityEpoch: activatedContent.project.coordinatorAuthorityEpoch,
-    supersedesProjectPlanId: null,
-    sourceInputLocators: [],
-    tasks: planTasks,
-    rationale: 'Exercise Project Content lifecycle authority.',
-    runtimeProvenance: {
-      runtimeId: `${suffix}-coordinator-runtime`, modelId: null,
-      generatedByCoordinatorAgentId: coordinator.agentId, generatedAt: at.toISOString()
-    }
-  }
-  const submittedPlan = await service.submitProjectPlan(coordinator, {
-    protocolVersion: '1.0', type: 'project.plan.submit',
-    requestId: `req_${suffix}_active_plan`, idempotencyKey: `idem_${suffix}_active_plan`,
-    ...planFacts,
-    planDigest: stableDigest(planFacts)
-  })
-  await service.confirmProjectPlan(owner.user, {
-    protocolVersion: '1.0', type: 'project.plan.confirm',
-    requestId: `req_${suffix}_active_confirm`, idempotencyKey: `idem_${suffix}_active_confirm`,
-    projectId: created.project.projectId,
-    projectPlanId: submittedPlan.projectPlanId,
-    expectedProjectRevision: activatedContent.project.revision + 1,
-    expectedCoordinatorAuthorityEpoch: activatedContent.project.coordinatorAuthorityEpoch,
-    expectedPlanRevision: submittedPlan.revision,
-    planDigest: submittedPlan.planDigest
   })
   const activeProject = await service.transitionProject(owner.user, {
     protocolVersion: '1.0', type: 'project.transition',
     requestId: `req_${stableDigest(`${suffix}_active_project`).slice(0, 24)}`,
     idempotencyKey: `idem_${suffix}_active_project`,
     projectId: created.project.projectId,
-    expectedRevision: activatedContent.project.revision + 2,
+    expectedRevision: activatedContent.project.revision,
     expectedCoordinatorAuthorityEpoch: activatedContent.project.coordinatorAuthorityEpoch,
     expectedExecutionAuthorityEpoch: activatedContent.project.executionAuthorityEpoch,
     status: 'active'
@@ -520,13 +570,27 @@ async function activeTextOfferFixture(suffix: string) {
     expectedPlanRevision: submittedPlan.revision,
     planDigest: submittedPlan.planDigest
   })
+  const invitation = created.memberships.find(({ userId }) => userId === firstWorker.user.userId)!
+  const acceptedMembership = await service.acceptProjectMembership(firstWorker.user, {
+    protocolVersion: '1.0',
+    type: 'project.membership.accept',
+    requestId: `req_${suffix}_membership_accept`,
+    idempotencyKey: `idem_${suffix}_membership_accept`,
+    projectId: created.project.projectId,
+    projectMembershipId: invitation.projectMembershipId,
+    expectedProjectRevision: created.project.revision + 2,
+    expectedMembershipRevision: invitation.revision,
+    projectPlanId: confirmedPlan.projectPlanId,
+    expectedPlanRevision: confirmedPlan.revision,
+    planDigest: confirmedPlan.planDigest
+  })
   const activeProject = await service.transitionProject(owner.user, {
     protocolVersion: '1.0',
     type: 'project.transition',
     requestId: `req_${suffix}_activate`,
     idempotencyKey: `idem_${suffix}_activate`,
     projectId: created.project.projectId,
-    expectedRevision: created.project.revision + 2,
+    expectedRevision: acceptedMembership.project.revision,
     expectedCoordinatorAuthorityEpoch: created.project.coordinatorAuthorityEpoch,
     expectedExecutionAuthorityEpoch: created.project.executionAuthorityEpoch,
     status: 'active'
@@ -612,6 +676,15 @@ async function manualRecoveryFileOfferFixture(
     activeTaskCount: 0,
     observedAt: at.toISOString()
   })
+  const launch = await confirmPlanAndAcceptFixtureWorker(fixture, `${suffix}_launch`, [{
+    planItemId: 'item_prepare_content',
+    title: 'Prepare shared Project content',
+    objective: 'Accept the confirmed Project before Team provisioning.',
+    completionCriteria: ['Every invited User has accepted.'],
+    dependencyPlanItemIds: [],
+    requiredCapabilityTags: ['research.execute'],
+    fileIntent: null
+  }])
 
   const intent = fixture.created.provisioningIntent!
   const provisioningRequestDigest = stableDigest({ suffix, operation: 'create-root' })
@@ -705,7 +778,7 @@ async function manualRecoveryFileOfferFixture(
     requestId: `req_${suffix}_attest_root`,
     idempotencyKey: `idem_${suffix}_attest_root`,
     projectId: fixture.created.project.projectId,
-    expectedProjectRevision: fixture.created.project.revision,
+    expectedProjectRevision: launch.accepted.project.revision,
     expectedProvisioningRevision: intent.provisioningRevision,
     attestation
   })
@@ -736,7 +809,7 @@ async function manualRecoveryFileOfferFixture(
     projectId: fixture.created.project.projectId,
     expectedProjectRevision: activatedContent.project.revision,
     expectedCoordinatorAuthorityEpoch: activatedContent.project.coordinatorAuthorityEpoch,
-    supersedesProjectPlanId: null,
+    supersedesProjectPlanId: launch.confirmed.projectPlanId,
     sourceInputLocators: [],
     tasks,
     rationale: 'Exercise one exact outcome-unknown recovery.',
@@ -1082,7 +1155,7 @@ describe('vNext Cloud application service', () => {
     })])
     expect(matching.projectItems).toEqual([expect.objectContaining({
       availability: expect.objectContaining({ agentId: workerAgent.agentId }),
-      membership: expect.objectContaining({ userId: worker.userId, state: 'active' }),
+      membership: expect.objectContaining({ userId: worker.userId, state: 'invited' }),
       providerPrincipalFact: expect.objectContaining({
         providerPrincipalFactId: workerFact.providerPrincipalFactId,
         revision: workerFact.revision
@@ -1188,7 +1261,10 @@ describe('vNext Cloud application service', () => {
       executionAuthorityEpoch: 1
     })
     expect(created.memberships).toHaveLength(2)
-    expect(created.memberships.every((membership) => membership.state === 'active')).toBe(true)
+    expect(created.memberships).toEqual(expect.arrayContaining([
+      expect.objectContaining({ userId: owner.userId, state: 'active' }),
+      expect.objectContaining({ userId: worker.userId, state: 'invited', activatedAt: null })
+    ]))
     expect(created.provisioningIntent?.desiredMembers).toEqual(expect.arrayContaining([
       expect.objectContaining({
         userId: owner.userId,
@@ -1222,9 +1298,187 @@ describe('vNext Cloud application service', () => {
     expect(await repository.listTaskAuthorities(created.project.projectId)).toHaveLength(4)
   })
 
+  it('keeps an invited Project User fenced until that User accepts the confirmed Plan', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const owner = await seedOidcUserDevice(repository, 'invite-owner', at)
+    const worker = await seedOidcUserDevice(repository, 'invite-worker', at)
+    const coordinator = await registeredAgent(service, owner.user, owner.deviceId, 'invite-owner')
+    const created = await service.createProject(coordinator, {
+      protocolVersion: '1.0',
+      type: 'project.create',
+      requestId: 'req_project_invite_create',
+      idempotencyKey: 'idem_project_invite_create',
+      displayName: 'Invitation-gated review',
+      goal: 'Launch only after the invited Worker accepts the confirmed Plan.',
+      budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 },
+      content: { mode: 'none', members: [{ userId: owner.userId }, { userId: worker.userId }] }
+    })
+    const workerMembership = created.memberships.find(({ userId }) => userId === worker.userId)!
+    expect(workerMembership).toMatchObject({ state: 'invited', activatedAt: null })
+
+    const tasks = [{
+      planItemId: 'item_invitation_gate',
+      title: 'Complete the accepted assignment',
+      objective: 'Produce the result only after joining the Project.',
+      completionCriteria: ['Owner can review the result'],
+      dependencyPlanItemIds: [],
+      requiredCapabilityTags: [],
+      fileIntent: null
+    }]
+    const runtimeProvenance = {
+      runtimeId: 'runtime_invitation_gate',
+      modelId: null,
+      generatedByCoordinatorAgentId: coordinator.agentId,
+      generatedAt: at.toISOString()
+    }
+    const planFacts = {
+      projectId: created.project.projectId,
+      expectedProjectRevision: created.project.revision,
+      expectedCoordinatorAuthorityEpoch: created.project.coordinatorAuthorityEpoch,
+      supersedesProjectPlanId: null,
+      sourceInputLocators: [],
+      tasks,
+      rationale: 'The selected Worker must explicitly accept before launch.',
+      runtimeProvenance
+    }
+    const submitted = await service.submitProjectPlan(coordinator, {
+      protocolVersion: '1.0',
+      type: 'project.plan.submit',
+      requestId: 'req_project_invite_plan_submit',
+      idempotencyKey: 'idem_project_invite_plan_submit',
+      ...planFacts,
+      planDigest: stableDigest(planFacts)
+    })
+    const confirmed = await service.confirmProjectPlan(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.plan.confirm',
+      requestId: 'req_project_invite_plan_confirm',
+      idempotencyKey: 'idem_project_invite_plan_confirm',
+      projectId: created.project.projectId,
+      projectPlanId: submitted.projectPlanId,
+      expectedProjectRevision: created.project.revision + 1,
+      expectedCoordinatorAuthorityEpoch: created.project.coordinatorAuthorityEpoch,
+      expectedPlanRevision: submitted.revision,
+      planDigest: submitted.planDigest
+    })
+    expect((await service.pullInbox(worker.user, { afterSequence: 0, limit: 10 })).messages).toEqual([
+      expect.objectContaining({
+        recipient: { kind: 'user', id: worker.userId },
+        payload: expect.objectContaining({
+          type: 'project.membership.changed',
+          projectId: created.project.projectId,
+          projectMembershipId: workerMembership.projectMembershipId,
+          userId: worker.userId,
+          state: 'invited'
+        })
+      })
+    ])
+
+    await expect(service.readProjectCoordination(worker.user, {
+      protocolVersion: '1.0',
+      type: 'project.coordination.read',
+      requestId: 'req_project_invite_bounded_read',
+      projectId: created.project.projectId,
+      collections: [
+        { collection: 'user_label_facts', limit: 10 },
+        { collection: 'memberships', limit: 10 },
+        { collection: 'plans', limit: 10 }
+      ]
+    })).resolves.toMatchObject({
+      project: { projectId: created.project.projectId },
+      pages: [
+        { collection: 'user_label_facts' },
+        { collection: 'memberships' },
+        { collection: 'plans', items: [expect.objectContaining({
+          projectPlanId: confirmed.projectPlanId,
+          state: 'confirmed'
+        })] }
+      ],
+      finalSummary: null
+    })
+    await expect(service.readProjectCoordination(worker.user, {
+      protocolVersion: '1.0',
+      type: 'project.coordination.read',
+      requestId: 'req_project_invite_forbidden_task_read',
+      projectId: created.project.projectId,
+      collections: [{ collection: 'tasks', limit: 10 }]
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+
+    await expect(service.transitionProject(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.transition',
+      requestId: 'req_project_invite_early_activate',
+      idempotencyKey: 'idem_project_invite_early_activate',
+      projectId: created.project.projectId,
+      expectedRevision: created.project.revision + 2,
+      expectedCoordinatorAuthorityEpoch: created.project.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: created.project.executionAuthorityEpoch,
+      status: 'active'
+    })).rejects.toMatchObject({ code: 'invalid_state_transition' })
+
+    const accepted = await service.acceptProjectMembership(worker.user, {
+      protocolVersion: '1.0',
+      type: 'project.membership.accept',
+      requestId: 'req_project_invite_accept',
+      idempotencyKey: 'idem_project_invite_accept',
+      projectId: created.project.projectId,
+      projectMembershipId: workerMembership.projectMembershipId,
+      expectedProjectRevision: created.project.revision + 2,
+      expectedMembershipRevision: workerMembership.revision,
+      projectPlanId: confirmed.projectPlanId,
+      expectedPlanRevision: confirmed.revision,
+      planDigest: confirmed.planDigest
+    })
+    expect(accepted.membership).toMatchObject({
+      state: 'active',
+      activatedAt: at.toISOString()
+    })
+    expect(accepted.taskAuthorities.every(({ state, reason }) => (
+      state === 'suspended' && reason === 'project_paused'
+    ))).toBe(true)
+
+    await expect(service.transitionProject(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.transition',
+      requestId: 'req_project_invite_activate',
+      idempotencyKey: 'idem_project_invite_activate',
+      projectId: created.project.projectId,
+      expectedRevision: accepted.project.revision,
+      expectedCoordinatorAuthorityEpoch: accepted.project.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: accepted.project.executionAuthorityEpoch,
+      status: 'active'
+    })).resolves.toMatchObject({ status: 'active' })
+  })
+
+  it('rejects Team provisioning while any Project invitation is unaccepted', async () => {
+    const { service, owner, created } = await contentRecoveryProjectFixture(
+      'unaccepted-team-provisioning'
+    )
+    const intent = created.provisioningIntent!
+    await expect(service.prepareExternalOperation(owner.user, {
+      protocolVersion: '1.0',
+      type: 'external_operation.prepare',
+      requestId: 'req_unaccepted_team_prepare',
+      idempotencyKey: 'idem_unaccepted_team_prepare',
+      scope: 'project_provisioning',
+      projectId: created.project.projectId,
+      taskId: null,
+      executionId: null,
+      preparedTaskRevision: null,
+      preparedExecutionRevision: null,
+      provisioningIntentId: intent.provisioningIntentId,
+      provisioningRevision: intent.provisioningRevision,
+      logicalInvocationId: 'unaccepted-team-create-root',
+      operation: 'create_shared_container',
+      requestDigest: stableDigest({ projectId: created.project.projectId, operation: 'create-root' })
+    })).rejects.toMatchObject({ code: 'invalid_state_transition' })
+  })
+
   it('lets only the Owner abandon one exact outcome-unknown Project provisioning tuple', async () => {
-    const { repository, service, owner, worker, created } =
-      await contentRecoveryProjectFixture('recovery-provisioning')
+    const fixture = await contentRecoveryProjectFixture('recovery-provisioning')
+    const { repository, service, owner, worker, created } = fixture
+    const launch = await acceptFixtureWorkerForLaunch(fixture, 'recovery_provisioning_launch')
     const intent = created.provisioningIntent!
     const prepared = await service.prepareExternalOperation(owner.user, {
       protocolVersion: '1.0', type: 'external_operation.prepare', requestId: 'req_recovery_prepare_01',
@@ -1263,7 +1517,7 @@ describe('vNext Cloud application service', () => {
       provisioningIntentId: recoveringIntent.provisioningIntentId,
       recoveryActionId: action.recoveryActionId,
       journalEntryId: observed.journal.contentRecoveryJournalEntryId,
-      expectedProjectRevision: created.project.revision,
+      expectedProjectRevision: launch.accepted.project.revision,
       expectedProvisioningRevision: recoveringIntent.provisioningRevision,
       expectedProvisioningIntentRevision: recoveringIntent.revision,
       expectedRecoveryActionRevision: action.revision,
@@ -1277,7 +1531,7 @@ describe('vNext Cloud application service', () => {
     })).rejects.toMatchObject({ code: 'permission_denied' })
 
     const abandoned = await service.abandonProjectContentRecovery(owner.user, command)
-    expect(abandoned.project.revision).toBe(created.project.revision)
+    expect(abandoned.project.revision).toBe(launch.accepted.project.revision)
     expect(abandoned.journal).toMatchObject({ state: 'abandoned', safeFailureCode: null,
       revision: observed.journal.revision + 1, resolvedAt: at.toISOString() })
     expect(abandoned.recoveryAction).toMatchObject({ status: 'completed',
@@ -1300,14 +1554,8 @@ describe('vNext Cloud application service', () => {
   })
 
   it('binds reconcile observations to the Owner and transfer observations to the exact Worker Agent', async () => {
-    const { repository, service, owner, worker, coordinator, created } =
-      await contentRecoveryProjectFixture('observation-authority')
-    const workerAgent = await registeredAgent(
-      service,
-      worker.user,
-      worker.deviceId,
-      'observation-authority-worker'
-    )
+    const { repository, service, owner, worker, workerAgent, coordinator, created, activeProject } =
+      await activeContentProjectFixture('observation-authority')
     const binding = (await repository.getProjectContentSpaceBinding(created.project.projectId))!
     const ownerReadiness = (await repository.listProjectContentReadiness(created.project.projectId))
       .find(({ userId }) => userId === owner.userId)!
@@ -1341,7 +1589,7 @@ describe('vNext Cloud application service', () => {
       requestId: 'req_observation_non_owner_reconcile',
       idempotencyKey: 'idem_observation_non_owner_reconcile',
       projectId: created.project.projectId,
-      expectedProjectRevision: created.project.revision,
+      expectedProjectRevision: activeProject.revision,
       observation
     })).rejects.toMatchObject({ code: 'permission_denied' })
 
@@ -1350,7 +1598,7 @@ describe('vNext Cloud application service', () => {
       requestId: 'req_observation_cross_user_transfer',
       idempotencyKey: 'idem_observation_cross_user_transfer',
       projectId: created.project.projectId,
-      expectedProjectRevision: created.project.revision,
+      expectedProjectRevision: activeProject.revision,
       observation: {
         ...observation,
         providerObservationId: 'pob_ObservationAuth02',
@@ -1370,7 +1618,7 @@ describe('vNext Cloud application service', () => {
       requestId: 'req_observation_transfer_without_agent',
       idempotencyKey: 'idem_observation_transfer_without_agent',
       projectId: created.project.projectId,
-      expectedProjectRevision: created.project.revision,
+      expectedProjectRevision: activeProject.revision,
       observation: {
         ...observation,
         providerObservationId: 'pob_ObservationAuth03',
@@ -1634,15 +1882,235 @@ describe('vNext Cloud application service', () => {
     ]))
   })
 
+  it('fences a removed member before any later download or upload-new can be prepared', async () => {
+    const fixture = await activeContentProjectFixture('membership-transfer-fence')
+    const {
+      repository,
+      service,
+      owner,
+      worker,
+      coordinator,
+      workerAgent,
+      rootLocator,
+      binding,
+      activeProject
+    } = fixture
+    await publishReadyAvailability(service, workerAgent, 'membership_transfer_fence_worker')
+    const currentPlan = (await repository.listProjectPlans(activeProject.projectId)).find(({ state }) => (
+      state === 'confirmed'
+    ))
+    if (!currentPlan) throw new Error('The active fixture requires one current confirmed Plan.')
+    const pausedProject = await service.transitionProject(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.transition',
+      requestId: 'req_membership_transfer_fence_pause',
+      idempotencyKey: 'idem_membership_transfer_fence_pause',
+      projectId: activeProject.projectId,
+      expectedRevision: activeProject.revision,
+      expectedCoordinatorAuthorityEpoch: activeProject.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: activeProject.executionAuthorityEpoch,
+      status: 'paused'
+    })
+    const fileIntent = {
+      schemaVersion: 1 as const,
+      bindingRevision: binding.revision,
+      inputs: [{
+        kind: 'content-space.input-file' as const,
+        locator: {
+          contractVersion: 1 as const,
+          kind: 'content-space.file-reference' as const,
+          authority: rootLocator.authority,
+          identity: { fileId: 'membership-transfer-fence-input' }
+        },
+        destinationName: 'input.md',
+        expectedSemanticRevision: null,
+        expectedMediaType: 'text/markdown'
+      }],
+      output: {
+        kind: 'content-space.output-new' as const,
+        target: 'project-binding-root' as const,
+        mode: 'upload-new' as const,
+        fileName: 'membership-transfer-fence-output.md',
+        mediaType: 'text/markdown',
+        maxBytes: 1_000_000
+      }
+    }
+    const planTasks = [{
+      planItemId: 'item_membership_transfer_fence',
+      title: 'Exercise the membership transfer fence',
+      objective: 'Read one input and upload one new output only while membership remains active.',
+      completionCriteria: ['The exact current Worker remains authorized for both transfers.'],
+      dependencyPlanItemIds: [],
+      requiredCapabilityTags: ['research.execute'],
+      fileIntent
+    }]
+    const planFacts = {
+      projectId: pausedProject.projectId,
+      expectedProjectRevision: pausedProject.revision,
+      expectedCoordinatorAuthorityEpoch: pausedProject.coordinatorAuthorityEpoch,
+      supersedesProjectPlanId: currentPlan.projectPlanId,
+      sourceInputLocators: [],
+      tasks: planTasks,
+      rationale: 'Prove immediate transfer denial after canonical Membership removal.',
+      runtimeProvenance: {
+        runtimeId: 'runtime_membership_transfer_fence',
+        modelId: null,
+        generatedByCoordinatorAgentId: coordinator.agentId,
+        generatedAt: at.toISOString()
+      }
+    }
+    const submitted = await service.submitProjectPlan(coordinator, {
+      protocolVersion: '1.0',
+      type: 'project.plan.submit',
+      requestId: 'req_membership_transfer_fence_submit',
+      idempotencyKey: 'idem_membership_transfer_fence_submit',
+      ...planFacts,
+      planDigest: stableDigest(planFacts)
+    })
+    const afterSubmit = (await repository.getProject(activeProject.projectId))!
+    const confirmed = await service.confirmProjectPlan(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.plan.confirm',
+      requestId: 'req_membership_transfer_fence_confirm',
+      idempotencyKey: 'idem_membership_transfer_fence_confirm',
+      projectId: afterSubmit.projectId,
+      projectPlanId: submitted.projectPlanId,
+      expectedProjectRevision: afterSubmit.revision,
+      expectedCoordinatorAuthorityEpoch: afterSubmit.coordinatorAuthorityEpoch,
+      expectedPlanRevision: submitted.revision,
+      planDigest: submitted.planDigest
+    })
+    const afterConfirmation = (await repository.getProject(activeProject.projectId))!
+    const relaunchedProject = await service.transitionProject(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.transition',
+      requestId: 'req_membership_transfer_fence_relaunch',
+      idempotencyKey: 'idem_membership_transfer_fence_relaunch',
+      projectId: afterConfirmation.projectId,
+      expectedRevision: afterConfirmation.revision,
+      expectedCoordinatorAuthorityEpoch: afterConfirmation.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: afterConfirmation.executionAuthorityEpoch,
+      status: 'active'
+    })
+    const offered = await service.createTaskOffer(coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.create',
+      requestId: 'req_membership_transfer_fence_offer',
+      idempotencyKey: 'idem_membership_transfer_fence_offer',
+      projectId: relaunchedProject.projectId,
+      expectedProjectRevision: relaunchedProject.revision,
+      expectedCoordinatorAuthorityEpoch: relaunchedProject.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: relaunchedProject.executionAuthorityEpoch,
+      projectPlanId: confirmed.projectPlanId,
+      expectedPlanRevision: confirmed.revision,
+      planItemId: planTasks[0]!.planItemId,
+      workerUserId: worker.userId,
+      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
+    })
+    const accepted = await service.acceptTaskOffer(workerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.offer.accept',
+      requestId: 'req_membership_transfer_fence_accept',
+      idempotencyKey: 'idem_membership_transfer_fence_accept',
+      taskOfferId: offered.offer.taskOfferId,
+      taskId: offered.task.taskId,
+      expectedTaskRevision: offered.task.revision,
+      expectedOfferRevision: offered.offer.revision
+    })
+    const running = await service.startTaskExecution(workerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.execution.start',
+      requestId: 'req_membership_transfer_fence_start',
+      idempotencyKey: 'idem_membership_transfer_fence_start',
+      taskId: accepted.task.taskId,
+      executionId: accepted.execution.executionId,
+      expectedTaskRevision: accepted.task.revision,
+      expectedExecutionRevision: accepted.execution.revision,
+      startedAt: at.toISOString()
+    })
+    expect((await service.getTaskExecutionPreflight(workerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.execution.preflight.get',
+      requestId: 'req_membership_transfer_fence_preflight_before',
+      taskId: running.task.taskId,
+      executionId: running.execution.executionId,
+      expectedTaskRevision: running.task.revision,
+      expectedExecutionRevision: running.execution.revision
+    })).decision).toEqual({ outcome: 'allowed', reasons: [] })
+
+    const membership = (await repository.getProjectMember(activeProject.projectId, worker.userId))!
+    const projectBeforeRemoval = (await repository.getProject(activeProject.projectId))!
+    const journalsBeforeRemoval = await repository.listExternalOperationJournal(activeProject.projectId)
+    const removal = await service.removeProjectMembership(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.membership.remove',
+      requestId: 'req_membership_transfer_fence_remove',
+      idempotencyKey: 'idem_membership_transfer_fence_remove',
+      projectId: activeProject.projectId,
+      projectMembershipId: membership.projectMembershipId,
+      expectedProjectRevision: projectBeforeRemoval.revision,
+      expectedMembershipRevision: membership.revision
+    })
+    expect(removal.membership).toMatchObject({
+      state: 'membership_removal_pending',
+      authorityEpoch: membership.authorityEpoch + 1
+    })
+    const fencedTask = (await repository.getTask(running.task.taskId))!
+    const fencedExecution = (await repository.getTaskExecution(running.execution.executionId))!
+    expect(fencedExecution).toMatchObject({
+      state: 'cancelled',
+      fence: { status: 'fenced', reason: 'membership_removal_pending' }
+    })
+    expect((await repository.listCloudResourceRefs(fencedTask.taskId, fencedExecution.executionId))
+      .every(({ status }) => status === 'invalidated')).toBe(true)
+    const denied = await service.getTaskExecutionPreflight(workerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.execution.preflight.get',
+      requestId: 'req_membership_transfer_fence_preflight_after',
+      taskId: fencedTask.taskId,
+      executionId: fencedExecution.executionId,
+      expectedTaskRevision: fencedTask.revision,
+      expectedExecutionRevision: fencedExecution.revision
+    })
+    expect(denied.decision).toMatchObject({ outcome: 'denied' })
+    expect(denied.decision.reasons).toEqual(expect.arrayContaining([
+      'membership_not_active',
+      'user_authority_not_eligible',
+      'execution_fenced'
+    ]))
+
+    for (const operation of ['download', 'upload_new'] as const) {
+      await expect(service.prepareExternalOperation(workerAgent, {
+        protocolVersion: '1.0',
+        type: 'external_operation.prepare',
+        requestId: `req_membership_transfer_fence_${operation}`,
+        idempotencyKey: `idem_membership_transfer_fence_${operation}`,
+        scope: 'task_content_transfer',
+        projectId: activeProject.projectId,
+        taskId: fencedTask.taskId,
+        executionId: fencedExecution.executionId,
+        preparedTaskRevision: fencedTask.revision,
+        preparedExecutionRevision: fencedExecution.revision,
+        provisioningIntentId: null,
+        provisioningRevision: null,
+        logicalInvocationId: `membership-transfer-fence.${operation}`,
+        operation,
+        requestDigest: stableDigest({ operation, after: 'membership-removal' })
+      })).rejects.toMatchObject({ code: 'revision_conflict' })
+    }
+    expect(await repository.listExternalOperationJournal(activeProject.projectId))
+      .toHaveLength(journalsBeforeRemoval.length)
+  })
+
   it('abandons observed-failure membership recovery without rolling back removal fences or factual state', async () => {
-    const { repository, service, owner, worker, created } =
-      await contentRecoveryProjectFixture('recovery-membership')
-    const membership = created.memberships.find(({ userId }) => userId === worker.userId)!
+    const fixture = await activeContentProjectFixture('recovery-membership')
+    const { repository, service, owner, worker, created, activeProject } = fixture
+    const membership = (await repository.getProjectMember(created.project.projectId, worker.userId))!
     const removal = await service.removeProjectMembership(owner.user, {
       protocolVersion: '1.0', type: 'project.membership.remove', requestId: 'req_recovery_member_remove',
       idempotencyKey: 'idem_recovery_member_remove', projectId: created.project.projectId,
       projectMembershipId: membership.projectMembershipId,
-      expectedProjectRevision: created.project.revision, expectedMembershipRevision: membership.revision
+      expectedProjectRevision: activeProject.revision, expectedMembershipRevision: membership.revision
     })
     const intent = removal.provisioningIntent!
     expect(removal.membership.state).toBe('membership_removal_pending')
@@ -1696,10 +2164,8 @@ describe('vNext Cloud application service', () => {
       .toEqual(removal.taskAuthorities)
     expect(await repository.listProjectContentReadiness(created.project.projectId)).toEqual(readinessBefore)
     expect(await repository.getProjectContentSpaceBinding(created.project.projectId)).toMatchObject({
-      status: 'closed',
-      statusReason: 'owner_requested',
-      provisioningIntentId: recoveringIntent.provisioningIntentId,
-      revision: 3
+      status: 'active',
+      statusReason: null
     })
   })
 
@@ -2083,6 +2549,24 @@ describe('vNext Cloud application service', () => {
             expectedFactRevision: workerFact.revision }
         ] }
     })
+    const launch = await confirmPlanAndAcceptFixtureWorker({
+      repository,
+      service,
+      owner,
+      worker,
+      coordinator,
+      ownerFact,
+      workerFact,
+      created
+    }, 'signed_content_launch', [{
+      planItemId: 'item_signed_content',
+      title: 'Provision signed Project content',
+      objective: 'Create the exact accepted Team root.',
+      completionCriteria: ['Every accepted member is observed in the Team.'],
+      dependencyPlanItemIds: [],
+      requiredCapabilityTags: [],
+      fileIntent: null
+    }])
     const intent = created.provisioningIntent!
     const requestDigest = 'b'.repeat(64)
     const prepared = await service.prepareExternalOperation(owner.user, {
@@ -2134,7 +2618,7 @@ describe('vNext Cloud application service', () => {
     const activated = await service.attestProjectContent(owner.user, {
       protocolVersion: '1.0', type: 'project.content.attest', requestId: 'req_content_attest_01',
       idempotencyKey: 'idem_content_attest_01', projectId: created.project.projectId,
-      expectedProjectRevision: created.project.revision,
+      expectedProjectRevision: launch.accepted.project.revision,
       expectedProvisioningRevision: intent.provisioningRevision,
       attestation
     })
@@ -2142,7 +2626,10 @@ describe('vNext Cloud application service', () => {
     expect(activated.readiness).toHaveLength(2)
     expect(activated.readiness.every(({ state }) => state === 'ready')).toBe(true)
 
-    const workerMembership = created.memberships.find(({ userId }) => userId === worker.userId)!
+    const workerMembership = (await repository.getProjectMember(
+      created.project.projectId,
+      worker.userId
+    ))!
     const removal = await service.removeProjectMembership(owner.user, {
       protocolVersion: '1.0', type: 'project.membership.remove', requestId: 'req_content_remove_01',
       idempotencyKey: 'idem_content_remove_01', projectId: created.project.projectId,
@@ -2249,7 +2736,7 @@ describe('vNext Cloud application service', () => {
     })).resolves.toMatchObject({ projects: [] })
   })
 
-  it('keeps a dynamic content-required member pending with suspended Task authority until provisioning', async () => {
+  it('keeps a dynamic content-required member invited and fenced before Plan acceptance', async () => {
     const { repository, service, owner, created } =
       await contentRecoveryProjectFixture('dynamic-content-member')
     const addedWorker = await seedOidcUserDevice(repository, 'dynamic-content-added-worker', at)
@@ -2277,7 +2764,7 @@ describe('vNext Cloud application service', () => {
 
     expect(added.membership).toMatchObject({
       userId: addedWorker.user.userId,
-      state: 'pending_membership',
+      state: 'invited',
       activatedAt: null
     })
     expect(added.contentReadiness).toMatchObject({
@@ -2286,28 +2773,88 @@ describe('vNext Cloud application service', () => {
       reason: 'provisioning_pending'
     })
     expect(added.taskAuthorities).toHaveLength(2)
-    expect(added.taskAuthorities.every(({ state }) => state === 'suspended')).toBe(true)
-    expect(added.provisioningIntent).toMatchObject({
-      kind: 'membership_change',
-      desiredMembers: expect.arrayContaining([
-        expect.objectContaining({
-          userId: addedWorker.user.userId,
-          providerPrincipalFactId: addedWorkerFact.providerPrincipalFactId,
-          snapshottedFactRevision: addedWorkerFact.revision
-        })
-      ])
-    })
+    expect(added.taskAuthorities.every(({ state, reason }) => (
+      state === 'suspended' && reason === 'invitation_pending'
+    ))).toBe(true)
+    expect(added.provisioningIntent).toBeNull()
     expect(await repository.getProjectContentSpaceBinding(created.project.projectId)).toMatchObject({
       status: 'provisioning',
-      provisioningIntentId: added.provisioningIntent?.provisioningIntentId,
-      provisioningRevision: added.provisioningIntent?.provisioningRevision,
-      revision: 2
+      provisioningIntentId: created.provisioningIntent?.provisioningIntentId,
+      provisioningRevision: created.provisioningIntent?.provisioningRevision,
+      revision: 1
+    })
+  })
+
+  it('fences an accepted pending Team member immediately but still requires Provider removal attestation', async () => {
+    const fixture = await contentRecoveryProjectFixture('pending-member-removal')
+    const { repository, service, owner, created } = fixture
+    const launch = await acceptFixtureWorkerForLaunch(fixture, 'pending_member_removal_launch')
+    const addedWorker = await seedOidcUserDevice(repository, 'pending-member-removal-added-worker', at)
+    const addedWorkerFact = await service.publishProviderDirectoryPrincipalFact(
+      addedWorker.user,
+      providerFactCommand(
+        addedWorker.user,
+        addedWorker.deviceId,
+        'pending-member-removal-provider-worker',
+        'idem_pending_member_removal_fact'
+      )
+    )
+    const added = await service.addProjectMembership(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.membership.add',
+      requestId: 'req_pending_member_removal_add',
+      idempotencyKey: 'idem_pending_member_removal_add',
+      projectId: created.project.projectId,
+      expectedProjectRevision: launch.accepted.project.revision,
+      userId: addedWorker.user.userId,
+      providerPrincipalFactId: addedWorkerFact.providerPrincipalFactId,
+      expectedProviderPrincipalFactRevision: addedWorkerFact.revision
+    })
+    const accepted = await service.acceptProjectMembership(addedWorker.user, {
+      protocolVersion: '1.0',
+      type: 'project.membership.accept',
+      requestId: 'req_pending_member_removal_accept',
+      idempotencyKey: 'idem_pending_member_removal_accept',
+      projectId: created.project.projectId,
+      projectMembershipId: added.membership.projectMembershipId,
+      expectedProjectRevision: added.project.revision,
+      expectedMembershipRevision: added.membership.revision,
+      projectPlanId: launch.confirmed.projectPlanId,
+      expectedPlanRevision: launch.confirmed.revision,
+      planDigest: launch.confirmed.planDigest
+    })
+    expect(accepted.membership).toMatchObject({ state: 'pending_membership', activatedAt: null })
+
+    const removed = await service.removeProjectMembership(owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.membership.remove',
+      requestId: 'req_pending_member_removal_remove',
+      idempotencyKey: 'idem_pending_member_removal_remove',
+      projectId: created.project.projectId,
+      projectMembershipId: accepted.membership.projectMembershipId,
+      expectedProjectRevision: accepted.project.revision,
+      expectedMembershipRevision: accepted.membership.revision
+    })
+    expect(removed.membership).toMatchObject({
+      state: 'membership_removal_pending',
+      activatedAt: null,
+      authorityEpoch: accepted.membership.authorityEpoch + 1
+    })
+    expect(removed.taskAuthorities.every(({ state, reason }) => (
+      state === 'fenced' && reason === 'membership_removal_pending'
+    ))).toBe(true)
+    expect(removed.provisioningIntent).toMatchObject({
+      kind: 'membership_change',
+      desiredMembers: expect.not.arrayContaining([
+        expect.objectContaining({ userId: addedWorker.user.userId })
+      ])
     })
   })
 
   it('activates a pending dynamic member only after exact observed Provider facts and Device attestation', async () => {
-    const { repository, service, owner, ownerFact, created } =
-      await contentRecoveryProjectFixture('dynamic-member-attestation')
+    const fixture = await contentRecoveryProjectFixture('dynamic-member-attestation')
+    const { repository, service, owner, ownerFact, created } = fixture
+    const launch = await acceptFixtureWorkerForLaunch(fixture, 'dynamic_member_initial_launch')
     const signing = generateKeyPairSync('ed25519')
     const publicJwk = signing.publicKey.export({ format: 'jwk' })
     const deviceKeyId = 'dynamic-member-owner-device-key'
@@ -2343,12 +2890,36 @@ describe('vNext Cloud application service', () => {
       requestId: 'req_dynamic_attested_member_add',
       idempotencyKey: 'idem_dynamic_attested_member_add',
       projectId: created.project.projectId,
-      expectedProjectRevision: created.project.revision,
+      expectedProjectRevision: launch.accepted.project.revision,
       userId: addedWorker.user.userId,
       providerPrincipalFactId: addedWorkerFact.providerPrincipalFactId,
       expectedProviderPrincipalFactRevision: addedWorkerFact.revision
     })
-    const intent = added.provisioningIntent!
+    expect(added.membership).toMatchObject({ state: 'invited', activatedAt: null })
+    const accepted = await service.acceptProjectMembership(addedWorker.user, {
+      protocolVersion: '1.0',
+      type: 'project.membership.accept',
+      requestId: 'req_dynamic_attested_member_accept',
+      idempotencyKey: 'idem_dynamic_attested_member_accept',
+      projectId: created.project.projectId,
+      projectMembershipId: added.membership.projectMembershipId,
+      expectedProjectRevision: added.project.revision,
+      expectedMembershipRevision: added.membership.revision,
+      projectPlanId: launch.confirmed.projectPlanId,
+      expectedPlanRevision: launch.confirmed.revision,
+      planDigest: launch.confirmed.planDigest
+    })
+    const intent = accepted.provisioningIntent!
+    expect(intent).toMatchObject({
+      kind: 'membership_change',
+      desiredMembers: expect.arrayContaining([
+        expect.objectContaining({
+          userId: addedWorker.user.userId,
+          providerPrincipalFactId: addedWorkerFact.providerPrincipalFactId,
+          snapshottedFactRevision: addedWorkerFact.revision
+        })
+      ])
+    })
     const requestDigest = '2'.repeat(64)
     const prepared = await service.prepareExternalOperation(owner.user, {
       protocolVersion: '1.0',
@@ -2442,23 +3013,23 @@ describe('vNext Cloud application service', () => {
       requestId: 'req_dynamic_attested_content',
       idempotencyKey: 'idem_dynamic_attested_content',
       projectId: created.project.projectId,
-      expectedProjectRevision: added.project.revision,
+      expectedProjectRevision: accepted.project.revision,
       expectedProvisioningRevision: intent.provisioningRevision,
       attestation
     })
 
-    expect(attested.memberships).toEqual([
+    expect(attested.memberships).toEqual(expect.arrayContaining([
       expect.objectContaining({
         userId: addedWorker.user.userId,
         state: 'active',
         activatedAt: at.toISOString()
       })
-    ])
+    ]))
     expect(await repository.getProjectMember(created.project.projectId, addedWorker.user.userId))
       .toMatchObject({ state: 'active', activatedAt: at.toISOString() })
   })
 
-  it('adds and safely removes dynamic content-free Membership without a Provider ACL saga', async () => {
+  it('withdraws a dynamic content-free invitation without a Provider ACL saga', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
     const owner = await seedOidcUserDevice(repository, 'membership-owner', at)
@@ -2478,7 +3049,7 @@ describe('vNext Cloud application service', () => {
       expectedProjectRevision: created.project.revision, userId: addedWorker.userId,
       providerPrincipalFactId: null, expectedProviderPrincipalFactRevision: null
     })
-    expect(added).toMatchObject({ membership: { userId: addedWorker.userId, state: 'active' },
+    expect(added).toMatchObject({ membership: { userId: addedWorker.userId, state: 'invited' },
       contentReadiness: null, provisioningIntent: null })
     expect(added.taskAuthorities).toHaveLength(2)
     const removed = await service.removeProjectMembership(owner.user, {
@@ -3555,10 +4126,23 @@ describe('vNext Cloud application service', () => {
       expectedCoordinatorAuthorityEpoch: 1, expectedPlanRevision: submittedPlan.revision,
       planDigest: submittedPlan.planDigest
     })
+    const invitation = created.memberships.find(({ userId }) => userId === worker.userId)!
+    const acceptedMembership = await service.acceptProjectMembership(worker.user, {
+      protocolVersion: '1.0', type: 'project.membership.accept',
+      requestId: 'req_meeting_membership_accept',
+      idempotencyKey: 'idem_meeting_membership_accept',
+      projectId: created.project.projectId,
+      projectMembershipId: invitation.projectMembershipId,
+      expectedProjectRevision: 3,
+      expectedMembershipRevision: invitation.revision,
+      projectPlanId: confirmedPlan.projectPlanId,
+      expectedPlanRevision: confirmedPlan.revision,
+      planDigest: confirmedPlan.planDigest
+    })
     const activeProject = await service.transitionProject(owner.user, {
       protocolVersion: '1.0', type: 'project.transition', requestId: 'req_project_active_001',
       idempotencyKey: 'idem_project_active_001', projectId: created.project.projectId,
-      expectedRevision: 3, expectedCoordinatorAuthorityEpoch: 1,
+      expectedRevision: acceptedMembership.project.revision, expectedCoordinatorAuthorityEpoch: 1,
       expectedExecutionAuthorityEpoch: 1, status: 'active'
     })
     const offered = await service.createTaskOffer(coordinator, {

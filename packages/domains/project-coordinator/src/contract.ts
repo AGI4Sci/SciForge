@@ -22,6 +22,7 @@ import {
   projectFinalSummarySubmitCommandSchema,
   projectIdSchema,
   projectMembershipAddCommandSchema,
+  projectMembershipAcceptCommandSchema,
   projectMembershipRemoveCommandSchema,
   projectMembershipSchema,
   projectProviderMembershipObservationSchema,
@@ -57,13 +58,14 @@ export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   planDraftGenerate: 'project-coordinator.plan-draft.generate',
   planDraftEdit: 'project-coordinator.plan-draft.edit',
   planSubmit: 'project-coordinator.plan.submit',
-  planConfirmActivate: 'project-coordinator.plan.confirm-activate',
-  contentProvisioningPlan: 'project-coordinator.content-provisioning.plan',
-  contentProvisioningApply: 'project-coordinator.content-provisioning.apply',
+  planConfirm: 'project-coordinator.plan.confirm',
+  workflowPrepare: 'project-coordinator.workflow.prepare',
+  workflowContinue: 'project-coordinator.workflow.continue',
   contentRecoveryObserveLink: 'project-coordinator.content-recovery.observe-link',
   contentRecoveryAbandon: 'project-coordinator.content-recovery.abandon',
   contentRecoveryRetrySuccessor: 'project-coordinator.content-recovery.retry-successor',
   membershipAdd: 'project-coordinator.membership.add',
+  membershipAccept: 'project-coordinator.membership.accept',
   membershipRemove: 'project-coordinator.membership.remove',
   humanNeededCreate: 'project-coordinator.human-needed.create',
   humanAnswer: 'project-coordinator.human-needed.answer',
@@ -174,7 +176,7 @@ export const projectCoordinatorPlanDraftSubmitInputSchema = z.object({
   expectedDraftRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
 }).strict().readonly()
 
-export const projectCoordinatorPlanConfirmActivateInputSchema = z.object({
+export const projectCoordinatorPlanConfirmInputSchema = z.object({
   projectId: projectIdSchema,
   projectPlanId: projectPlanSchema.shape.projectPlanId,
   expectedProjectRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
@@ -224,15 +226,48 @@ export const projectCoordinatorProvisioningPlanSchema = z.object({
   confirmedPlanDigest: domainMainFiniteCapabilityBatchPlanDigestSchema
 }).strict().readonly()
 
-export const projectCoordinatorProvisioningApplyInputSchema = z.object({
+export const projectCoordinatorWorkflowPlanSchema = z.object({
   projectId: projectIdSchema,
-  provisioningIntentId: projectContentProvisioningIntentSchema.shape.provisioningIntentId,
+  projectPlanId: projectPlanSchema.shape.projectPlanId,
   expectedProjectRevision: projectSchema.shape.revision,
-  expectedProvisioningRevision: projectContentProvisioningIntentSchema.shape.provisioningRevision,
-  expectedProvisioningIntentRevision: projectContentProvisioningIntentSchema.shape.revision,
-  intentDigest: projectContentProvisioningIntentSchema.shape.intentDigest,
-  attemptId: projectCoordinatorProvisioningAttemptIdSchema,
-  confirmedPlanDigest: domainMainFiniteCapabilityBatchPlanDigestSchema
+  expectedCoordinatorAuthorityEpoch: projectSchema.shape.coordinatorAuthorityEpoch,
+  expectedExecutionAuthorityEpoch: projectSchema.shape.executionAuthorityEpoch,
+  expectedPlanRevision: projectPlanSchema.shape.revision,
+  planDigest: projectPlanSchema.shape.planDigest,
+  purpose: z.enum(['launch', 'team_reconcile']),
+  provisioning: projectCoordinatorProvisioningPlanSchema.nullable(),
+  workflowDigest: domainMainFiniteCapabilityBatchPlanDigestSchema
+}).strict().superRefine((plan, context) => {
+  if (plan.purpose === 'team_reconcile' && plan.provisioning === null) {
+    context.addIssue({
+      code: 'custom',
+      path: ['provisioning'],
+      message: 'A Team reconcile workflow requires one exact finite provisioning plan.'
+    })
+  }
+  if (plan.provisioning !== null && (
+    plan.provisioning.projectId !== plan.projectId ||
+    plan.provisioning.expectedProjectRevision !== plan.expectedProjectRevision
+  )) {
+    context.addIssue({
+      code: 'custom',
+      path: ['provisioning'],
+      message: 'The finite provisioning plan must target the exact workflow Project revision.'
+    })
+  }
+}).readonly()
+
+export const projectCoordinatorWorkflowPrepareInputSchema = z.object({
+  projectId: projectIdSchema
+}).strict().readonly()
+
+export const projectCoordinatorWorkflowContinueInputSchema = projectCoordinatorWorkflowPlanSchema
+
+export const projectCoordinatorMembershipAcceptInputSchema = projectMembershipAcceptCommandSchema.omit({
+  protocolVersion: true,
+  requestId: true,
+  type: true,
+  idempotencyKey: true
 }).strict().readonly()
 
 export const projectCoordinatorContentRecoveryObserveLinkInputSchema = z.object({
@@ -696,6 +731,7 @@ export const projectCoordinatorWorkspaceSchema = z.object({
   observedAt: timestampSchema,
   focusedProjectId: projectIdSchema.optional(),
   availableWorkerUsers: z.array(projectCoordinatorAvailableWorkerUserSchema).max(1_000),
+  providerPrincipalFacts: z.array(providerDirectoryPrincipalFactSchema).max(10_000),
   projects: z.array(projectCoordinatorProjectSchema).max(1_000)
 }).strict().superRefine((workspace, context) => {
   if (workspace.connection.state !== 'ready' && workspace.projects.length > 0) {
@@ -710,6 +746,13 @@ export const projectCoordinatorWorkspaceSchema = z.object({
       code: 'custom',
       path: ['availableWorkerUsers'],
       message: 'Unavailable coordination state cannot claim Cloud Worker directory data.'
+    })
+  }
+  if (workspace.connection.state !== 'ready' && workspace.providerPrincipalFacts.length > 0) {
+    context.addIssue({
+      code: 'custom',
+      path: ['providerPrincipalFacts'],
+      message: 'Unavailable coordination state cannot claim Provider directory facts.'
     })
   }
   if (workspace.connection.state !== 'ready' && workspace.focusedProjectId) {
@@ -739,6 +782,16 @@ export const projectCoordinatorWorkspaceSchema = z.object({
       code: 'custom',
       path: ['availableWorkerUsers'],
       message: 'Available Worker groups must be unique by User.'
+    })
+  }
+  const providerFactIds = workspace.providerPrincipalFacts.map(({ providerPrincipalFactId }) => (
+    providerPrincipalFactId
+  ))
+  if (new Set(providerFactIds).size !== providerFactIds.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['providerPrincipalFacts'],
+      message: 'Provider directory facts must be unique by fact ID.'
     })
   }
 }).readonly()
@@ -805,8 +858,8 @@ export type ProjectCoordinatorPlanDraftSubmitInput = z.infer<
 export type ProjectCoordinatorPlanSubmitResult = z.infer<
   typeof projectCoordinatorPlanSubmitResultSchema
 >
-export type ProjectCoordinatorPlanConfirmActivateInput = z.infer<
-  typeof projectCoordinatorPlanConfirmActivateInputSchema
+export type ProjectCoordinatorPlanConfirmInput = z.infer<
+  typeof projectCoordinatorPlanConfirmInputSchema
 >
 export type ProjectCoordinatorProvisioningPlanInput = z.infer<
   typeof projectCoordinatorProvisioningPlanInputSchema
@@ -814,8 +867,17 @@ export type ProjectCoordinatorProvisioningPlanInput = z.infer<
 export type ProjectCoordinatorProvisioningPlan = z.infer<
   typeof projectCoordinatorProvisioningPlanSchema
 >
-export type ProjectCoordinatorProvisioningApplyInput = z.infer<
-  typeof projectCoordinatorProvisioningApplyInputSchema
+export type ProjectCoordinatorWorkflowPlan = z.infer<
+  typeof projectCoordinatorWorkflowPlanSchema
+>
+export type ProjectCoordinatorWorkflowPrepareInput = z.infer<
+  typeof projectCoordinatorWorkflowPrepareInputSchema
+>
+export type ProjectCoordinatorWorkflowContinueInput = z.infer<
+  typeof projectCoordinatorWorkflowContinueInputSchema
+>
+export type ProjectCoordinatorMembershipAcceptInput = z.infer<
+  typeof projectCoordinatorMembershipAcceptInputSchema
 >
 export type ProjectCoordinatorContentRecoveryObserveLinkInput = z.infer<
   typeof projectCoordinatorContentRecoveryObserveLinkInputSchema

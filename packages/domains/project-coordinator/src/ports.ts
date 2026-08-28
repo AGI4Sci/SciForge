@@ -9,11 +9,13 @@ import {
 import {
   CURRENT_PROTOCOL_VERSION,
   PROJECT_COORDINATION_COLLECTIONS,
+  PROJECT_INVITATION_READ_COLLECTIONS,
   PROJECT_COORDINATION_MAX_PAGE_SIZE,
   agentInboxMessageSchema,
   projectSchema,
   projectPlanSchema,
   projectPlanTaskSchema,
+  projectMembershipSchema,
   humanAnswerSchema,
   humanNeededSchema,
   type Project,
@@ -62,7 +64,7 @@ import {
   projectCoordinatorPlanDraftSchema,
   projectCoordinatorPlanDraftSubmitInputSchema,
   projectCoordinatorPlanSubmitResultSchema,
-  projectCoordinatorPlanConfirmActivateInputSchema,
+  projectCoordinatorPlanConfirmInputSchema,
   projectCoordinatorWorkspaceReadInputSchema,
   projectCoordinatorWorkspaceSchema,
   type ProjectCoordinatorProject,
@@ -81,7 +83,8 @@ import {
   type ProjectCoordinatorPlanDraftReadInput,
   type ProjectCoordinatorPlanDraftSubmitInput,
   type ProjectCoordinatorPlanSubmitResult,
-  type ProjectCoordinatorPlanConfirmActivateInput,
+  type ProjectCoordinatorPlanConfirmInput,
+  type ProjectCoordinatorWorkflowPlan,
   type ProjectCoordinatorWorkspace,
   type ProjectCoordinatorWorkspaceReadInput
 } from './contract.js'
@@ -114,8 +117,14 @@ export type ProjectCoordinatorPlanPort = Readonly<{
     input: ProjectCoordinatorPlanDraftSubmitInput,
     idempotencyKey: string
   ): Promise<ProjectCoordinatorPlanSubmitResult>
-  confirmAndActivate(
-    input: ProjectCoordinatorPlanConfirmActivateInput,
+  confirm(
+    input: ProjectCoordinatorPlanConfirmInput,
+    idempotencyKey: string
+  ): Promise<ProjectCoordinatorWorkspace>
+  activateAndDispatch(
+    input: Pick<ProjectCoordinatorWorkflowPlan,
+      'projectId' | 'projectPlanId' | 'expectedCoordinatorAuthorityEpoch' |
+      'expectedExecutionAuthorityEpoch' | 'expectedPlanRevision' | 'planDigest'>,
     idempotencyKey: string
   ): Promise<ProjectCoordinatorWorkspace>
 }>
@@ -197,29 +206,40 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
     const observedAt = now().toISOString()
     if (status.state === 'identity_required') {
       return projectCoordinatorWorkspaceSchema.parse({
-        connection: { state: 'identity_required' }, observedAt, availableWorkerUsers: [], projects: []
+        connection: { state: 'identity_required' }, observedAt,
+        availableWorkerUsers: [], providerPrincipalFacts: [], projects: []
       })
     }
     if (status.state === 'device_required') {
       return projectCoordinatorWorkspaceSchema.parse({
-        connection: { state: 'device_required', reason: status.reason }, observedAt, availableWorkerUsers: [], projects: []
+        connection: { state: 'device_required', reason: status.reason }, observedAt,
+        availableWorkerUsers: [], providerPrincipalFacts: [], projects: []
       })
     }
     if (status.state === 'unavailable') {
       return projectCoordinatorWorkspaceSchema.parse({
-        connection: { state: 'cloud_unavailable', reason: status.reason }, observedAt, availableWorkerUsers: [], projects: []
+        connection: { state: 'cloud_unavailable', reason: status.reason }, observedAt,
+        availableWorkerUsers: [], providerPrincipalFacts: [], projects: []
       })
     }
 
     const listed = await listAllProjects(options.transport, requestId)
     const workerDirectory = await readAllWorkerDirectory(options.transport, requestId)
+    const providerPrincipalFacts = await readAllProviderPrincipalFacts(
+      options.transport,
+      [...new Set([
+        status.userId,
+        ...workerDirectory.availability.map(({ userId }) => userId)
+      ])],
+      requestId
+    )
     const focusedProject = input.projectId
       ? listed.projects.find(({ projectId }) => projectId === input.projectId)
       : listed.projects.length === 1
         ? listed.projects[0]
         : undefined
     const facts = focusedProject
-      ? await readAllProjectFacts(options.transport, focusedProject, requestId)
+      ? await readAllProjectFacts(options.transport, focusedProject, status.userId, requestId)
       : undefined
     const projects = await Promise.all(listed.projects.map(async (project) => {
       let view = projectCoordinatorProjectView(
@@ -252,6 +272,7 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
       observedAt: facts?.observedAt ?? workerDirectory.observedAt ?? listed.observedAt,
       ...(focusedProject ? { focusedProjectId: focusedProject.projectId } : {}),
       availableWorkerUsers: availableWorkerUsers(workerDirectory),
+      providerPrincipalFacts,
       projects
     })
   }
@@ -574,8 +595,8 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       )
       return projectCoordinatorPlanSubmitResultSchema.parse({ plan, workspace })
     },
-    confirmAndActivate: async (rawInput, idempotencyKey) => {
-      const input = projectCoordinatorPlanConfirmActivateInputSchema.parse(rawInput)
+    confirm: async (rawInput, idempotencyKey) => {
+      const input = projectCoordinatorPlanConfirmInputSchema.parse(rawInput)
       if (!options.transport) throw new Error('OIDC Cloud transport is unavailable.')
       const confirmed = await executeUserCloud(options.transport, {
         protocolVersion: CURRENT_PROTOCOL_VERSION,
@@ -601,8 +622,36 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       ) {
         throw new Error('Plan confirmation did not return the exact confirmed Plan.')
       }
+      return projectCoordinatorWorkspaceSchema.parse(
+        await options.workspace.readWorkspace({ projectId: input.projectId })
+      )
+    },
+    activateAndDispatch: async (input, idempotencyKey) => {
+      if (!options.transport) throw new Error('OIDC Cloud transport is unavailable.')
       let workspace = await options.workspace.readWorkspace({ projectId: input.projectId })
       const projectView = requireReadyProject(workspace, input.projectId)
+      if (
+        projectView.project.coordinatorAuthorityEpoch !== input.expectedCoordinatorAuthorityEpoch ||
+        projectView.project.executionAuthorityEpoch !== input.expectedExecutionAuthorityEpoch
+      ) {
+        throw new Error('Project workflow lost its exact Coordinator or execution authority epoch.')
+      }
+      const confirmedPlan = projectView.plan?.plan
+      if (
+        !confirmedPlan ||
+        confirmedPlan.projectPlanId !== input.projectPlanId ||
+        confirmedPlan.revision !== input.expectedPlanRevision ||
+        confirmedPlan.planDigest !== input.planDigest ||
+        confirmedPlan.state !== 'confirmed'
+      ) {
+        throw new Error('Project workflow lost the exact current confirmed Plan.')
+      }
+      const currentMemberships = projectView.provisioning.memberships.filter(({ state }) => (
+        state !== 'removed'
+      ))
+      if (currentMemberships.some(({ state }) => state !== 'active')) {
+        throw new Error('Project workflow cannot activate before every invitation and Team Membership is ready.')
+      }
       if (projectView.project.status !== 'active') {
         if (projectView.project.contentMode === 'required' &&
             projectView.provisioning.binding?.status !== 'active') {
@@ -1194,6 +1243,35 @@ async function readAllWorkerDirectory(
   })
 }
 
+async function readAllProviderPrincipalFacts(
+  transport: AuthenticatedCloudTransport,
+  userIds: readonly string[],
+  requestId: () => `req_${string}`
+): Promise<readonly ProviderDirectoryPrincipalFact[]> {
+  const facts: ProviderDirectoryPrincipalFact[] = []
+  let afterFactId: string | undefined
+  do {
+    const response = await executeUserCloud(transport, {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      requestId: requestId(),
+      type: 'provider_directory_principal.list',
+      userIds: [...userIds],
+      includeDegraded: true,
+      ...(afterFactId ? { afterFactId } : {}),
+      limit: 1_000
+    })
+    if (response.type !== 'rest.provider_directory_principal_page') {
+      throw new Error(`Provider principal directory returned ${response.type}.`)
+    }
+    facts.push(...response.items)
+    afterFactId = response.nextFactId
+    if (facts.length > 10_000) {
+      throw new Error('Provider principal directory exceeds the Desktop workspace limit.')
+    }
+  } while (afterFactId)
+  return Object.freeze(facts)
+}
+
 type ProjectFactSnapshot = Readonly<{
   observedAt: string
   pages: ReadonlyMap<ProjectCoordinationCollection, readonly unknown[]>
@@ -1203,6 +1281,42 @@ type ProjectFactSnapshot = Readonly<{
 async function readAllProjectFacts(
   transport: AuthenticatedCloudTransport,
   project: Project,
+  currentUserId: string,
+  requestId: () => `req_${string}`
+): Promise<ProjectFactSnapshot> {
+  if (project.ownerUserId === currentUserId) {
+    return readProjectFactCollections(
+      transport,
+      project,
+      PROJECT_COORDINATOR_PROJECT_FACT_COLLECTIONS,
+      requestId
+    )
+  }
+  const invitationSnapshot = await readProjectFactCollections(
+    transport,
+    project,
+    PROJECT_INVITATION_READ_COLLECTIONS,
+    requestId
+  )
+  const membership = (invitationSnapshot.pages.get('memberships') ?? [])
+    .map((item) => projectMembershipSchema.safeParse(item))
+    .find((parsed) => parsed.success && parsed.data.userId === currentUserId)?.data
+  if (!membership) {
+    throw new Error('The current OIDC User has no readable Membership in the listed Project.')
+  }
+  if (membership.state === 'invited') return invitationSnapshot
+  return readProjectFactCollections(
+    transport,
+    project,
+    PROJECT_COORDINATOR_PROJECT_FACT_COLLECTIONS,
+    requestId
+  )
+}
+
+async function readProjectFactCollections(
+  transport: AuthenticatedCloudTransport,
+  project: Project,
+  collections: readonly ProjectCoordinationCollection[],
   requestId: () => `req_${string}`
 ): Promise<ProjectFactSnapshot> {
   const pages = new Map<ProjectCoordinationCollection, unknown[]>()
@@ -1210,7 +1324,7 @@ async function readAllProjectFacts(
     collection: ProjectCoordinationCollection
     cursor?: string
     limit: number
-  }>> = PROJECT_COORDINATOR_PROJECT_FACT_COLLECTIONS.map((collection) => ({
+  }>> = collections.map((collection) => ({
     collection,
     limit: PROJECT_COORDINATION_MAX_PAGE_SIZE
   }))

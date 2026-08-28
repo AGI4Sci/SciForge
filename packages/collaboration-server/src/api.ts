@@ -399,6 +399,12 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
         ...(result.contentReadiness === null ? [] : [toProjectContentReadiness(result.contentReadiness)]),
         ...(result.provisioningIntent === null ? [] : [toProjectContentProvisioningIntent(result.provisioningIntent)])])
     }
+    case 'project.membership.accept': {
+      const result = await service.acceptProjectMembership(requiredUser(actor), command)
+      return collectionResponse(command, [toProject(result.project), toProjectMembership(result.membership),
+        ...result.taskAuthorities.map(toTaskAuthority),
+        ...(result.provisioningIntent === null ? [] : [toProjectContentProvisioningIntent(result.provisioningIntent)])])
+    }
     case 'project.membership.remove': {
       const result = await service.removeProjectMembership(requiredUser(actor), command)
       return collectionResponse(command, [toProject(result.project), toProjectMembership(result.membership),

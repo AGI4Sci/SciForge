@@ -26,6 +26,7 @@ import {
 const unique = <T>(values: readonly T[]): boolean => new Set(values).size === values.length
 
 export const projectMembershipStateSchema = z.enum([
+  'invited',
   'pending_membership',
   'active',
   'membership_removal_pending',
@@ -46,15 +47,16 @@ export const projectMembershipSchema = z.object({
   removalRequestedByUserId: userIdSchema.nullable(),
   removedAt: timestampSchema.nullable()
 }).strict().superRefine((membership, context) => {
-  const pending = membership.state === 'pending_membership'
+  const activationPending = membership.state === 'invited' || membership.state === 'pending_membership'
+  const active = membership.state === 'active'
   const removalPending = membership.state === 'membership_removal_pending'
   const removed = membership.state === 'removed'
 
-  if (pending === (membership.activatedAt !== null)) {
+  if ((activationPending && membership.activatedAt !== null) || (active && membership.activatedAt === null)) {
     context.addIssue({
       code: 'custom',
       path: ['activatedAt'],
-      message: 'Pending membership has no activation time; every later state retains it.'
+      message: 'Invited and pending membership has no activation time; active membership requires it.'
     })
   }
   if ((removalPending || removed) !== (
@@ -81,6 +83,7 @@ export const taskAuthorityScopeSchema = z.enum(['text_tasks', 'file_tasks'])
 export const taskAuthorityReasonSchema = z.enum([
   'project_paused',
   'project_terminal',
+  'invitation_pending',
   'membership_pending',
   'membership_removal_pending',
   'membership_removed',

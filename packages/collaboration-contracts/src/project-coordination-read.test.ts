@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest'
 import { restRequestSchema, restResponseSchema } from './protocol.js'
 import {
   PROJECT_COORDINATION_COLLECTION_STABLE_ORDER,
+  PROJECT_INVITATION_READ_COLLECTIONS,
   PROJECT_COORDINATION_MAX_PAGE_SIZE,
   PROJECT_LIST_STABLE_ORDER,
+  canInvitedUserReadProjectCoordinationCollection,
   canUserReadProjectCoordination
 } from './project-coordination-read.js'
 import {
@@ -42,9 +44,9 @@ describe('Project Coordinator authoritative read protocol', () => {
     'project_records'
   ] as const
 
-  it('keeps Project reads visible only to the Owner or current active/removal-pending members', () => {
+  it('keeps Project reads visible only to the Owner or invited/active/removal-pending members', () => {
     expect(canUserReadProjectCoordination(projectFixture, TEST_IDS.userId, null)).toBe(true)
-    for (const state of ['active', 'membership_removal_pending'] as const) {
+    for (const state of ['invited', 'active', 'membership_removal_pending'] as const) {
       expect(canUserReadProjectCoordination(projectFixture, TEST_IDS.secondUserId, {
         projectId: TEST_IDS.projectId,
         userId: TEST_IDS.secondUserId,
@@ -64,6 +66,16 @@ describe('Project Coordinator authoritative read protocol', () => {
       TEST_IDS.secondUserId,
       { projectId: TEST_IDS.projectId, userId: TEST_IDS.secondUserId, state: 'active' }
     )).toBe(true)
+  })
+
+  it('limits invitation reads to labels, Memberships, and Plans', () => {
+    expect(PROJECT_INVITATION_READ_COLLECTIONS).toEqual([
+      'user_label_facts',
+      'memberships',
+      'plans'
+    ])
+    expect(allCoordinationCollections.filter(canInvitedUserReadProjectCoordinationCollection))
+      .toEqual(PROJECT_INVITATION_READ_COLLECTIONS)
   })
 
   it('freezes one stable ID seek order and an explicit maximum for every page', () => {
