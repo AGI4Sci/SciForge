@@ -83,19 +83,6 @@ export function createProjectCoordinatorContinuationPort(options: Readonly<{
       if (dispatched >= 1_000) {
         throw new Error('Project continuation exceeded the maximum Plan size without converging.')
       }
-      const assignments = project.plan.assignments
-      const planItemIds = new Set(plan.tasks.map(({ planItemId }) => planItemId))
-      if (
-        assignments.length !== plan.tasks.length ||
-        new Set(assignments.map(({ planItemId }) => planItemId)).size !== plan.tasks.length ||
-        assignments.some(({ planItemId }) => !planItemIds.has(planItemId))
-      ) {
-        throw new Error('Confirmed Plan continuation requires every durable Worker User assignment.')
-      }
-      const assignment = assignments.find(({ planItemId }) => planItemId === item.planItemId)
-      if (!assignment?.workerUserId) {
-        throw new Error(`Plan item ${item.planItemId} has no durable Worker User assignment.`)
-      }
       const offerExpiresAt = new Date(now().getTime() + 15 * 60_000).toISOString()
       const response = await options.coordinatorCloudCommands.execute({
         protocolVersion: CURRENT_PROTOCOL_VERSION,
@@ -109,10 +96,9 @@ export function createProjectCoordinatorContinuationPort(options: Readonly<{
         projectPlanId: plan.projectPlanId,
         expectedPlanRevision: plan.revision,
         planItemId: item.planItemId,
-        workerUserId: assignment.workerUserId,
         offerExpiresAt
       })
-      assertCreatedTaskOffer(response, project, plan, item, assignment.workerUserId, offerExpiresAt)
+      assertCreatedTaskOffer(response, project, plan, item, item.workerUserId, offerExpiresAt)
       workspace = await options.workspace.readWorkspace({ projectId })
       const createdTaskId = canonicalTaskIdForPlanItem(plan.projectPlanId, item.planItemId)
       const observedProject = findOwnedProject(workspace, projectId)

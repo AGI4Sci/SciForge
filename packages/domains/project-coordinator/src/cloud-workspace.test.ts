@@ -853,6 +853,7 @@ function planFixture(input: Readonly<{
     planRevision: input.planRevision,
     sourceInputLocators: [],
     tasks: [{
+      workerUserId: 'usr_Worker000001',
       planItemId: `item_meeting_${input.planRevision}`,
       title: 'Summarize meeting',
       objective: 'Produce one bounded meeting summary.',

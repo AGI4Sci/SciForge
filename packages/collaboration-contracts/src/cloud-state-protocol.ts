@@ -67,7 +67,7 @@ import {
   projectFinalSummarySchema,
   projectPlanRuntimeProvenanceSchema,
   projectPlanSchema,
-  projectPlanTaskSchema,
+  projectPlanTasksSchema,
   projectPlanStateSchema,
   taskResultOutputSchema,
   taskRecoveryObservedOutputSchema,
@@ -449,7 +449,7 @@ export const projectPlanSubmitCommandSchema = z.object({
   expectedCoordinatorAuthorityEpoch: revisionSchema,
   supersedesProjectPlanId: projectPlanIdSchema.nullable(),
   sourceInputLocators: z.array(portableContentSpaceLocatorSchema).max(100),
-  tasks: z.array(projectPlanTaskSchema).min(1).max(1_000),
+  tasks: projectPlanTasksSchema,
   rationale: nonEmptyTextSchema,
   runtimeProvenance: projectPlanRuntimeProvenanceSchema,
   planDigest: sha256Schema
@@ -486,7 +486,6 @@ export const taskOfferCreateCommandSchema = z.object({
   projectPlanId: projectPlanIdSchema,
   expectedPlanRevision: revisionSchema,
   planItemId: z.string().regex(/^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$/u),
-  workerUserId: userIdSchema,
   offerExpiresAt: timestampSchema
 }).strict()
 export type TaskOfferCreateCommand = z.infer<typeof taskOfferCreateCommandSchema>

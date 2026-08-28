@@ -17,7 +17,8 @@ import {
   agentInboxMessageSchema,
   projectSchema,
   projectPlanSchema,
-  projectPlanTaskSchema,
+  projectPlanTaskDeclarationSchema,
+  projectPlanTaskDeclarationsSchema,
   projectMembershipSchema,
   taskFileDestinationNameSchema,
   humanAnswerSchema,
@@ -29,7 +30,7 @@ import {
   type ProjectFinalSummary,
   type ProjectMembership,
   type ProjectPlan,
-  type ProjectPlanTask,
+  type ProjectPlanTaskDeclaration,
   type ProjectRecord,
   type ProjectWorkerAvailabilityView,
   type ProviderDirectoryPrincipalFact,
@@ -196,9 +197,6 @@ export function defineProjectCoordinatorWorkspacePort(
 export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
   transport: AuthenticatedCloudTransport
   coordinatorCloudCommands?: CoordinatorCloudCommandService
-  readPlanAssignments?: (
-    plan: ProjectPlan
-  ) => Promise<readonly ProjectCoordinatorPlanAssignment[]>
   readCoordinatorTransferFeedback?: (
     projectId: string
   ) => Promise<ProjectCoordinatorTransferFeedback | null>
@@ -268,15 +266,6 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
       ) {
         view = { ...view, coordinatorTransferFeedback: transferFeedback }
       }
-      if (view.plan && options.readPlanAssignments) {
-        view = {
-          ...view,
-          plan: {
-            ...view.plan,
-            assignments: [...await options.readPlanAssignments(view.plan.plan)]
-          }
-        }
-      }
       return view
     }))
     return projectCoordinatorWorkspaceSchema.parse({
@@ -344,28 +333,9 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
 }
 
 const generatedPlanContentSchema = z.object({
-  tasks: z.array(projectPlanTaskSchema).min(1).max(1_000),
+  tasks: projectPlanTaskDeclarationsSchema,
   rationale: projectCoordinatorPlanDraftSchema.unwrap().shape.rationale
-}).strict().superRefine((content, context) => {
-  const planItemIds = content.tasks.map(({ planItemId }) => planItemId)
-  if (new Set(planItemIds).size !== planItemIds.length) {
-    context.addIssue({
-      code: 'custom',
-      path: ['tasks'],
-      message: 'Generated Plan item IDs must be unique.'
-    })
-  }
-  const knownPlanItemIds = new Set(planItemIds)
-  for (const [index, task] of content.tasks.entries()) {
-    if (task.dependencyPlanItemIds.some((dependency) => !knownPlanItemIds.has(dependency))) {
-      context.addIssue({
-        code: 'custom',
-        path: ['tasks', index, 'dependencyPlanItemIds'],
-        message: 'Generated dependencies must name another item in the same Plan.'
-      })
-    }
-  }
-}).readonly()
+}).strict().readonly()
 
 const generatedPlanFileIntentSelectionSchema = z.object({
   inputs: z.array(z.object({
@@ -382,12 +352,12 @@ const generatedPlanFileIntentSelectionSchema = z.object({
 }).strict()
 
 const generatedPlanModelTaskShape = {
-  planItemId: projectPlanTaskSchema.shape.planItemId,
-  title: projectPlanTaskSchema.shape.title,
-  objective: projectPlanTaskSchema.shape.objective,
-  completionCriteria: projectPlanTaskSchema.shape.completionCriteria,
-  dependencyPlanItemIds: projectPlanTaskSchema.shape.dependencyPlanItemIds,
-  requiredCapabilityTags: projectPlanTaskSchema.shape.requiredCapabilityTags
+  planItemId: projectPlanTaskDeclarationSchema.shape.planItemId,
+  title: projectPlanTaskDeclarationSchema.shape.title,
+  objective: projectPlanTaskDeclarationSchema.shape.objective,
+  completionCriteria: projectPlanTaskDeclarationSchema.shape.completionCriteria,
+  dependencyPlanItemIds: projectPlanTaskDeclarationSchema.shape.dependencyPlanItemIds,
+  requiredCapabilityTags: projectPlanTaskDeclarationSchema.shape.requiredCapabilityTags
 }
 
 const generatedPlanModelContentSchema = z.object({
@@ -460,7 +430,7 @@ export class ProjectCoordinatorPlanGenerationError extends Error {
 function workerGroupCanPlanTask(
   project: ProjectCoordinatorProject,
   group: ProjectCoordinatorProject['workerGroups'][number],
-  task: ProjectPlanTask,
+  task: ProjectPlanTaskDeclaration,
   observedAt: string
 ): boolean {
   return group.agents.some(({ projectAvailability }) => (
@@ -475,7 +445,7 @@ function workerGroupCanPlanTask(
 
 function assertTasksHavePlanningCandidate(
   project: ProjectCoordinatorProject,
-  tasks: readonly ProjectPlanTask[],
+  tasks: readonly ProjectPlanTaskDeclaration[],
   observedAt: string
 ): void {
   for (const task of tasks) {
@@ -488,7 +458,7 @@ function assertTasksHavePlanningCandidate(
 
 function assertAssignmentsHavePlanningRuntime(
   project: ProjectCoordinatorProject,
-  tasks: readonly ProjectPlanTask[],
+  tasks: readonly ProjectPlanTaskDeclaration[],
   assignments: readonly ProjectCoordinatorPlanAssignment[],
   observedAt: string
 ): void {
@@ -744,13 +714,23 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       if (!options.coordinatorCloudCommands) {
         throw new Error('Coordinator Agent Cloud command mediation is unavailable.')
       }
+      const assignmentsByPlanItemId = new Map(
+        draft.assignments.map((assignment) => [assignment.planItemId, assignment])
+      )
+      const assignedTasks = draft.tasks.map((task) => {
+        const assignment = assignmentsByPlanItemId.get(task.planItemId)
+        if (!assignment?.workerUserId) {
+          throw new Error(`Plan item ${task.planItemId} requires a Worker User before submit.`)
+        }
+        return { ...task, workerUserId: assignment.workerUserId }
+      })
       const planFacts = {
         projectId: draft.projectId,
         expectedProjectRevision: draft.expectedProjectRevision,
         expectedCoordinatorAuthorityEpoch: draft.expectedCoordinatorAuthorityEpoch,
         supersedesProjectPlanId: draft.supersedesProjectPlanId,
         sourceInputLocators: draft.sourceInputLocators,
-        tasks: draft.tasks,
+        tasks: assignedTasks,
         rationale: draft.rationale,
         runtimeProvenance: draft.runtimeProvenance
       }
@@ -773,12 +753,8 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       if (plan.projectId !== draft.projectId || plan.planDigest !== planDigest) {
         throw new Error('Plan submit did not return the exact submitted Plan facts.')
       }
-      const assignments = await state.commitSubmittedDraft(plan, draft.draftRevision)
-      const workspace = attachPlanAssignments(
-        await options.workspace.readWorkspace({ projectId: draft.projectId }),
-        plan,
-        assignments
-      )
+      await state.completeSubmittedDraft(plan, draft.draftRevision)
+      const workspace = await options.workspace.readWorkspace({ projectId: draft.projectId })
       return projectCoordinatorPlanSubmitResultSchema.parse({ plan, workspace })
     },
     confirm: async (rawInput, idempotencyKey) => {
@@ -798,13 +774,7 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
         if (input.initialTeam === null) {
           throw new Error('The first confirmed Plan requires one exact initial Team/content configuration.')
         }
-        const assignmentUsers = currentPlan.assignments.map(({ workerUserId }) => workerUserId)
-        if (
-          currentPlan.assignments.length !== currentPlan.plan.tasks.length ||
-          assignmentUsers.some((userId) => userId === null)
-        ) {
-          throw new Error('Initial Team confirmation requires every durable Worker User assignment.')
-        }
+        const assignmentUsers = currentPlan.plan.tasks.map(({ workerUserId }) => workerUserId)
         const expectedUsers = new Set([
           currentProject.project.ownerUserId,
           ...assignmentUsers.filter((userId): userId is string => userId !== null)
@@ -1539,7 +1509,7 @@ function projectCoordinatorProjectView(
   return {
     project,
     coordinatorTransferFeedback: null,
-    plan: plan ? { plan, assignments: [] } : null,
+    plan: plan ? { plan } : null,
     memberUsers: factItems(snapshot, 'user_label_facts'),
     workerGroups: projectWorkerGroups(project, snapshot, workerDirectory),
     tasks: factItems<ProjectCoordinatorProject['tasks'][number]['task']>(snapshot, 'tasks')
@@ -1691,23 +1661,6 @@ function requireReadyProject(
   const project = workspace.projects.find((candidate) => candidate.project.projectId === projectId)
   if (!project) throw new Error('The exact Project is not visible to the current OIDC User.')
   return project
-}
-
-function attachPlanAssignments(
-  workspace: ProjectCoordinatorWorkspace,
-  plan: ProjectPlan,
-  assignments: readonly ProjectCoordinatorPlanAssignment[]
-): ProjectCoordinatorWorkspace {
-  return projectCoordinatorWorkspaceSchema.parse({
-    ...workspace,
-    projects: workspace.projects.map((project) => (
-      project.project.projectId === plan.projectId &&
-      project.plan?.plan.projectPlanId === plan.projectPlanId &&
-      project.plan.plan.planDigest === plan.planDigest
-        ? { ...project, plan: { ...project.plan, assignments } }
-        : project
-    ))
-  })
 }
 
 function scopedIdempotencyKey(base: string, operation: string): string {

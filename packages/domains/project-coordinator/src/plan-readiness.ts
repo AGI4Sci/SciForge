@@ -1,5 +1,5 @@
 import type {
-  ProjectPlanTask,
+  ProjectPlanTaskDeclaration,
   ProjectWorkerAvailabilityView,
   TaskAuthorityScope
 } from '@sciforge/collaboration-contracts'
@@ -73,7 +73,7 @@ export function projectCoordinatorPlanningRuntimeReadiness(
 export function projectCoordinatorPlanningTaskReadiness(
   project: ProjectCoordinatorProject,
   view: ProjectWorkerAvailabilityView,
-  task: ProjectPlanTask,
+  task: ProjectPlanTaskDeclaration,
   observedAt: string
 ): ProjectCoordinatorPlanningTaskReadiness {
   const scope = task.fileIntent === null ? 'text_tasks' : 'file_tasks'

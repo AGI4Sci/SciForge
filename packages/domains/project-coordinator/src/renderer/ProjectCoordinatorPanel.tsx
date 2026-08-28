@@ -753,9 +753,7 @@ export function ProjectCoordinatorPanel({
     const effectiveContentMode = plan.tasks.some(({ fileIntent }) => fileIntent !== null)
       ? 'required' as const
       : initialContentMode
-    const assignedUserIds = project.plan.assignments.flatMap(({ workerUserId }) => (
-      workerUserId === null ? [] : [workerUserId]
-    ))
+    const assignedUserIds = project.plan.plan.tasks.map(({ workerUserId }) => workerUserId)
     const initialMemberUserIds = [...new Set([
       project.project.ownerUserId,
       ...assignedUserIds.filter((userId) => userId !== project.project.ownerUserId)
@@ -2099,9 +2097,7 @@ export function ProjectCoordinatorPlanSection({
   const awaitingConfirmation = project?.plan?.plan.state === 'awaiting_confirmation'
   const initialMemberUserIds = [...new Set([
     ...(project ? [project.project.ownerUserId] : []),
-    ...(project?.plan?.assignments.flatMap(({ workerUserId }) => (
-      workerUserId === null ? [] : [workerUserId]
-    )) ?? [])
+    ...(project?.plan?.plan.tasks.map(({ workerUserId }) => workerUserId) ?? [])
   ])]
   const ownerProviderFacts = providerPrincipalFacts.filter(({ userId, readiness }) => (
     userId === currentUserId && readiness === 'ready'
@@ -2306,21 +2302,16 @@ export function ProjectCoordinatorPlanSection({
         <div className="space-y-2 text-xs">
           <Status value={project.plan.plan.state} />
           {project.plan.plan.tasks.map((item) => {
-            const assignment = project.plan?.assignments.find(
-              ({ planItemId }) => planItemId === item.planItemId
-            )
             return (
             <div key={item.planItemId} className="rounded border border-ds-border p-2">
               <div className="font-medium">{item.title}</div>
               <p className="mt-1 text-[11px] text-ds-muted">{item.objective}</p>
-              {assignment?.workerUserId ? (
-                <div className="mt-1 text-[10px] text-ds-faint">
-                  {t('projectCoordinatorWorkerUser')}: {
-                    visibleWorkerGroups.find(({ userId }) => userId === assignment.workerUserId)?.displayName ??
-                    assignment.workerUserId
-                  }
-                </div>
-              ) : null}
+              <div className="mt-1 text-[10px] text-ds-faint">
+                {t('projectCoordinatorWorkerUser')}: {
+                  visibleWorkerGroups.find(({ userId }) => userId === item.workerUserId)?.displayName ??
+                  item.workerUserId
+                }
+              </div>
             </div>
             )
           })}

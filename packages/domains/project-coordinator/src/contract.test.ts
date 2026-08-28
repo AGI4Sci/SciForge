@@ -81,6 +81,7 @@ const fixture = {
         planRevision: 1,
         sourceInputLocators: [],
         tasks: [{
+          workerUserId: 'usr_Worker000001',
           planItemId: 'item_architecture01',
           title: 'Architecture review',
           objective: 'Review the proposed boundaries.',
@@ -101,12 +102,7 @@ const fixture = {
         confirmedByUserId: null,
         confirmedAt: null,
         supersededAt: null
-      },
-      assignments: [{
-        planItemId: 'item_architecture01',
-        workerUserId: 'usr_Worker000001',
-        recommendationReason: 'The User has an eligible Runtime advertising the required capability.'
-      }]
+      }
     },
     memberUsers: [],
     workerGroups: [{
@@ -210,19 +206,17 @@ test('workspace composes canonical Cloud facts while selecting a Worker User fro
   const parsed = projectCoordinatorWorkspaceSchema.parse(fixture)
   assert.equal(parsed.projects[0]?.workerGroups[0]?.agents.length, 2)
   assert.equal(
-    parsed.projects[0]?.plan?.assignments[0]?.workerUserId,
+    parsed.projects[0]?.plan?.plan.tasks[0]?.workerUserId,
     'usr_Worker000001'
   )
   assert.equal(parsed.projects[0]?.plan?.plan.type, 'project_plan')
 })
 
-test('workspace rejects a selected Worker User outside the grouped canonical availability projection', () => {
-  const invalid = structuredClone(fixture)
-  invalid.projects[0]!.plan!.assignments[0]!.workerUserId = 'usr_UnknownUser001'
-  assert.throws(
-    () => projectCoordinatorWorkspaceSchema.parse(invalid),
-    /one User in the grouped candidate projection/u
-  )
+test('workspace retains a Cloud Plan assignment when the Worker has no current availability row', () => {
+  const offline = structuredClone(fixture)
+  offline.projects[0]!.workerGroups = []
+  const parsed = projectCoordinatorWorkspaceSchema.parse(offline)
+  assert.equal(parsed.projects[0]!.plan!.plan.tasks[0]!.workerUserId, 'usr_Worker000001')
 })
 
 test('unavailable state cannot claim Project data or secret material', () => {

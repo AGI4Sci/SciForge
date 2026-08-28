@@ -51,6 +51,7 @@ const commands = [
     supersedesProjectPlanId: null,
     sourceInputLocators: [],
     tasks: [{
+      workerUserId: TEST_IDS.secondUserId,
       planItemId: 'item_Plan00000001',
       title: 'Analyze the synthetic meeting input',
       objective: 'Produce one bounded synthetic result.',
@@ -79,7 +80,6 @@ const commands = [
     projectPlanId: TEST_IDS.projectPlanId,
     expectedPlanRevision: 1,
     planItemId: 'item_Plan00000001',
-    workerUserId: TEST_IDS.secondUserId,
     offerExpiresAt: TEST_TIMESTAMP
   },
   {
@@ -112,7 +112,7 @@ const commands = [
 
 test('Coordinator Cloud command service exposes one closed Agent-command allowlist', () => {
   assert.equal(COORDINATOR_CLOUD_COMMAND_SERVICE_ID, 'sciforge.collaboration.coordinator-cloud-command')
-  assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '4.0.0')
+  assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '4.1.0')
   assert.deepEqual(commands.map((command) => coordinatorCloudCommandSchema.parse(command).type), [
     'project.create',
     'project.plan.submit',

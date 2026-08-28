@@ -29,7 +29,8 @@ import {
   projectPlanConfirmCommandSchema,
   projectPlanSchema,
   projectPlanRuntimeProvenanceSchema,
-  projectPlanTaskSchema,
+  projectPlanTaskDeclarationSchema,
+  projectPlanTaskDeclarationsSchema,
   projectRecordSchema,
   projectSchema,
   projectUserLabelFactSchema,
@@ -205,7 +206,7 @@ export const projectCoordinatorConnectionSchema = z.discriminatedUnion('state', 
 
 /** UI-only assignment projection; the Plan and Agent facts remain canonical Cloud records. */
 export const projectCoordinatorPlanAssignmentSchema = z.object({
-  planItemId: projectPlanTaskSchema.shape.planItemId,
+  planItemId: projectPlanTaskDeclarationSchema.shape.planItemId,
   workerUserId: userIdSchema.nullable(),
   recommendationReason: safeReasonSchema.nullable()
 }).strict().superRefine((assignment, context) => {
@@ -229,7 +230,7 @@ export const projectCoordinatorPlanDraftSchema = z.object({
   expectedCoordinatorAuthorityEpoch: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
   supersedesProjectPlanId: projectPlanSchema.shape.projectPlanId.nullable(),
   sourceInputLocators: z.array(portableContentSpaceLocatorSchema).max(100),
-  tasks: z.array(projectPlanTaskSchema).min(1).max(1_000),
+  tasks: projectPlanTaskDeclarationsSchema,
   rationale: safeReasonSchema,
   runtimeProvenance: projectPlanRuntimeProvenanceSchema,
   assignments: z.array(projectCoordinatorPlanAssignmentSchema).min(1).max(1_000),
@@ -287,7 +288,7 @@ export const projectCoordinatorPlanDraftEditInputSchema = z.object({
   projectId: projectIdSchema,
   draftId: projectCoordinatorDraftIdSchema,
   expectedDraftRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
-  tasks: z.array(projectPlanTaskSchema).min(1).max(1_000),
+  tasks: projectPlanTaskDeclarationsSchema,
   rationale: safeReasonSchema,
   assignments: z.array(projectCoordinatorPlanAssignmentSchema).min(1).max(1_000)
 }).strict().readonly()
@@ -542,23 +543,8 @@ export const projectCoordinatorCompleteInputSchema = projectFinalSummarySubmitCo
 }).strict().readonly()
 
 export const projectCoordinatorPlanViewSchema = z.object({
-  plan: projectPlanSchema,
-  assignments: z.array(projectCoordinatorPlanAssignmentSchema).max(1_000)
-}).strict().superRefine((view, context) => {
-  const planItemIds = new Set(view.plan.tasks.map(({ planItemId }) => planItemId))
-  const assignmentIds = view.assignments.map(({ planItemId }) => planItemId)
-  if (new Set(assignmentIds).size !== assignmentIds.length) {
-    context.addIssue({ code: 'custom', path: ['assignments'], message: 'Plan assignments must be unique.' })
-  }
-  view.assignments.forEach((assignment, index) => {
-    if (planItemIds.has(assignment.planItemId)) return
-    context.addIssue({
-      code: 'custom',
-      path: ['assignments', index, 'planItemId'],
-      message: 'Every assignment must reference an item in the exact Plan revision.'
-    })
-  })
-}).readonly()
+  plan: projectPlanSchema
+}).strict().readonly()
 
 export const projectCoordinatorWorkerAgentSchema = z.object({
   displayName: displayNameSchema,
@@ -705,15 +691,6 @@ export const projectCoordinatorProjectSchema = z.object({
       message: 'Each Agent must occur in exactly one User group.'
     })
   }
-  const candidateUserIds = new Set(userIds)
-  view.plan?.assignments.forEach((assignment, index) => {
-    if (assignment.workerUserId === null || candidateUserIds.has(assignment.workerUserId)) return
-    context.addIssue({
-      code: 'custom',
-      path: ['plan', 'assignments', index, 'workerUserId'],
-      message: 'A selected Worker must reference one User in the grouped candidate projection.'
-    })
-  })
   view.workerGroups.forEach((group, index) => {
     if (group.agents.every(({ projectAvailability }) => (
       projectAvailability.projectId === projectId

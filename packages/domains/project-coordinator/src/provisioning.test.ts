@@ -575,12 +575,7 @@ function workspaceFixture(input: Readonly<{
         updatedAt: now
       },
       plan: {
-        plan: confirmedPlanFixture(),
-        assignments: [{
-          planItemId: 'item_team_launch',
-          workerUserId,
-          recommendationReason: 'The Worker User has the required ready Runtime.'
-        }]
+        plan: confirmedPlanFixture()
       },
       memberUsers: [],
       workerGroups: [{
@@ -719,6 +714,7 @@ function confirmedPlanFixture() {
     planRevision: 1,
     sourceInputLocators: [],
     tasks: [{
+      workerUserId,
       planItemId: 'item_team_launch',
       title: 'Run the first Team task',
       objective: 'Produce one bounded result for Owner review.',

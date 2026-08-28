@@ -97,7 +97,6 @@ describe('Project Content Space and Task file I/O contracts', () => {
       projectPlanId: 'pln_ProjectPlan01',
       expectedPlanRevision: 1,
       planItemId: 'item_analysis01',
-      workerUserId: TEST_IDS.secondUserId,
       offerExpiresAt: '2026-08-15T09:00:00.000Z'
     }
     expect(restRequestSchema.safeParse(request).success).toBe(true)

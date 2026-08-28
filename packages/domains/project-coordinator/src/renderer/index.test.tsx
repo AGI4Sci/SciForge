@@ -1769,6 +1769,7 @@ function awaitingConfirmationProjectFixture() {
         planRevision: 1,
         sourceInputLocators: [],
         tasks: [{
+          workerUserId: 'usr_ProjectMember01',
           planItemId: 'item_meeting_summary',
           title: 'Summarize decisions',
           objective: 'Produce a bounded meeting summary.',
@@ -1789,8 +1790,7 @@ function awaitingConfirmationProjectFixture() {
         confirmedByUserId: null,
         confirmedAt: null,
         supersededAt: null
-      },
-      assignments: []
+      }
     },
     memberUsers: [{
       schemaVersion: 1 as const,

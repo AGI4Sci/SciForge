@@ -18,6 +18,7 @@ import {
   projectRecordFixture,
   taskFixture
 } from '@sciforge/collaboration-contracts/testing'
+import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts/node'
 import { DurableCloudOutbox } from './outbox.js'
 import { createTestAgentCloudRuntime } from './test-agent-cloud-runtime.js'
 import {
@@ -1132,7 +1133,6 @@ function coordinatorCreateCommand(): RestRequest {
     projectPlanId: TEST_IDS.projectPlanId,
     expectedPlanRevision: 1,
     planItemId: 'item_Plan00000001',
-    workerUserId: TEST_IDS.secondUserId,
     offerExpiresAt: TEST_LATER_TIMESTAMP
   }
 }
@@ -1160,7 +1160,10 @@ function coordinatorOfferCollection(request: RestRequest): RestResponse {
   const taskRevision = request.type === 'task.offer.reassign'
     ? request.expectedTaskRevision + 1
     : 1
-  const workerUserId = request.type === 'task.offer.create' || request.type === 'task.offer.reassign'
+  const taskId = request.type === 'task.offer.create'
+    ? canonicalTaskIdForPlanItem(request.projectPlanId, request.planItemId)
+    : TEST_IDS.taskId
+  const workerUserId = request.type === 'task.offer.reassign'
     ? request.workerUserId
     : TEST_IDS.secondUserId
   const offer = taskOfferSchema.parse({
@@ -1168,7 +1171,7 @@ function coordinatorOfferCollection(request: RestRequest): RestResponse {
     type: 'task_offer',
     taskOfferId: TEST_IDS.taskOfferId,
     projectId: TEST_IDS.projectId,
-    taskId: TEST_IDS.taskId,
+    taskId,
     executionId: null,
     workerUserId,
     offeredByCoordinatorAgentId: TEST_IDS.agentId,
@@ -1186,6 +1189,7 @@ function coordinatorOfferCollection(request: RestRequest): RestResponse {
     requestId: request.requestId,
     items: [{
       ...taskFixture,
+      taskId,
       revision: taskRevision,
       updatedAt: taskRevision === 1 ? TEST_TIMESTAMP : TEST_LATER_TIMESTAMP
     }, offer]

@@ -76816,49 +76816,6 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "assignments": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "planItemId": {
-                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "recommendationReason": {
-                            "anyOf": [
-                              {
-                                "maxLength": 2000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "workerUserId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "readOnly": true,
-                        "required": [
-                          "planItemId",
-                          "workerUserId",
-                          "recommendationReason"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 1000,
-                      "type": "array"
-                    },
                     "plan": {
                       "additionalProperties": false,
                       "properties": {
@@ -77230,6 +77187,10 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                                 "maxLength": 200,
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -77239,7 +77200,8 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                               "completionCriteria",
                               "dependencyPlanItemIds",
                               "requiredCapabilityTags",
-                              "fileIntent"
+                              "fileIntent",
+                              "workerUserId"
                             ],
                             "type": "object"
                           },
@@ -77282,8 +77244,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                   },
                   "readOnly": true,
                   "required": [
-                    "plan",
-                    "assignments"
+                    "plan"
                   ],
                   "type": "object"
                 },
@@ -82531,49 +82492,6 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "assignments": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "planItemId": {
-                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "recommendationReason": {
-                            "anyOf": [
-                              {
-                                "maxLength": 2000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "workerUserId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "readOnly": true,
-                        "required": [
-                          "planItemId",
-                          "workerUserId",
-                          "recommendationReason"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 1000,
-                      "type": "array"
-                    },
                     "plan": {
                       "additionalProperties": false,
                       "properties": {
@@ -82945,6 +82863,10 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                                 "maxLength": 200,
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -82954,7 +82876,8 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                               "completionCriteria",
                               "dependencyPlanItemIds",
                               "requiredCapabilityTags",
-                              "fileIntent"
+                              "fileIntent",
+                              "workerUserId"
                             ],
                             "type": "object"
                           },
@@ -82997,8 +82920,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                   },
                   "readOnly": true,
                   "required": [
-                    "plan",
-                    "assignments"
+                    "plan"
                   ],
                   "type": "object"
                 },
@@ -88263,49 +88185,6 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "assignments": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "planItemId": {
-                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "recommendationReason": {
-                            "anyOf": [
-                              {
-                                "maxLength": 2000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "workerUserId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "readOnly": true,
-                        "required": [
-                          "planItemId",
-                          "workerUserId",
-                          "recommendationReason"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 1000,
-                      "type": "array"
-                    },
                     "plan": {
                       "additionalProperties": false,
                       "properties": {
@@ -88677,6 +88556,10 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                                 "maxLength": 200,
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -88686,7 +88569,8 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                               "completionCriteria",
                               "dependencyPlanItemIds",
                               "requiredCapabilityTags",
-                              "fileIntent"
+                              "fileIntent",
+                              "workerUserId"
                             ],
                             "type": "object"
                           },
@@ -88729,8 +88613,7 @@ Re-reads the completed abandon facts and asks only the current Coordinator Agent
                   },
                   "readOnly": true,
                   "required": [
-                    "plan",
-                    "assignments"
+                    "plan"
                   ],
                   "type": "object"
                 },
@@ -93978,49 +93861,6 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "assignments": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "planItemId": {
-                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "recommendationReason": {
-                            "anyOf": [
-                              {
-                                "maxLength": 2000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "workerUserId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "readOnly": true,
-                        "required": [
-                          "planItemId",
-                          "workerUserId",
-                          "recommendationReason"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 1000,
-                      "type": "array"
-                    },
                     "plan": {
                       "additionalProperties": false,
                       "properties": {
@@ -94392,6 +94232,10 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                                 "maxLength": 200,
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -94401,7 +94245,8 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                               "completionCriteria",
                               "dependencyPlanItemIds",
                               "requiredCapabilityTags",
-                              "fileIntent"
+                              "fileIntent",
+                              "workerUserId"
                             ],
                             "type": "object"
                           },
@@ -94444,8 +94289,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                   },
                   "readOnly": true,
                   "required": [
-                    "plan",
-                    "assignments"
+                    "plan"
                   ],
                   "type": "object"
                 },
@@ -99712,49 +99556,6 @@ Submits the exact target Project member User answer through the OIDC User path.
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "assignments": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "planItemId": {
-                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "recommendationReason": {
-                            "anyOf": [
-                              {
-                                "maxLength": 2000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "workerUserId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "readOnly": true,
-                        "required": [
-                          "planItemId",
-                          "workerUserId",
-                          "recommendationReason"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 1000,
-                      "type": "array"
-                    },
                     "plan": {
                       "additionalProperties": false,
                       "properties": {
@@ -100126,6 +99927,10 @@ Submits the exact target Project member User answer through the OIDC User path.
                                 "maxLength": 200,
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -100135,7 +99940,8 @@ Submits the exact target Project member User answer through the OIDC User path.
                               "completionCriteria",
                               "dependencyPlanItemIds",
                               "requiredCapabilityTags",
-                              "fileIntent"
+                              "fileIntent",
+                              "workerUserId"
                             ],
                             "type": "object"
                           },
@@ -100178,8 +99984,7 @@ Submits the exact target Project member User answer through the OIDC User path.
                   },
                   "readOnly": true,
                   "required": [
-                    "plan",
-                    "assignments"
+                    "plan"
                   ],
                   "type": "object"
                 },
@@ -105457,49 +105262,6 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "assignments": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "planItemId": {
-                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "recommendationReason": {
-                            "anyOf": [
-                              {
-                                "maxLength": 2000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "workerUserId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "readOnly": true,
-                        "required": [
-                          "planItemId",
-                          "workerUserId",
-                          "recommendationReason"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 1000,
-                      "type": "array"
-                    },
                     "plan": {
                       "additionalProperties": false,
                       "properties": {
@@ -105871,6 +105633,10 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                                 "maxLength": 200,
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -105880,7 +105646,8 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                               "completionCriteria",
                               "dependencyPlanItemIds",
                               "requiredCapabilityTags",
-                              "fileIntent"
+                              "fileIntent",
+                              "workerUserId"
                             ],
                             "type": "object"
                           },
@@ -105923,8 +105690,7 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                   },
                   "readOnly": true,
                   "required": [
-                    "plan",
-                    "assignments"
+                    "plan"
                   ],
                   "type": "object"
                 },
@@ -111198,49 +110964,6 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "assignments": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "planItemId": {
-                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "recommendationReason": {
-                            "anyOf": [
-                              {
-                                "maxLength": 2000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "workerUserId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "readOnly": true,
-                        "required": [
-                          "planItemId",
-                          "workerUserId",
-                          "recommendationReason"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 1000,
-                      "type": "array"
-                    },
                     "plan": {
                       "additionalProperties": false,
                       "properties": {
@@ -111612,6 +111335,10 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                                 "maxLength": 200,
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -111621,7 +111348,8 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                               "completionCriteria",
                               "dependencyPlanItemIds",
                               "requiredCapabilityTags",
-                              "fileIntent"
+                              "fileIntent",
+                              "workerUserId"
                             ],
                             "type": "object"
                           },
@@ -111664,8 +111392,7 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                   },
                   "readOnly": true,
                   "required": [
-                    "plan",
-                    "assignments"
+                    "plan"
                   ],
                   "type": "object"
                 },
@@ -116943,49 +116670,6 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "assignments": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "planItemId": {
-                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "recommendationReason": {
-                            "anyOf": [
-                              {
-                                "maxLength": 2000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "workerUserId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "readOnly": true,
-                        "required": [
-                          "planItemId",
-                          "workerUserId",
-                          "recommendationReason"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 1000,
-                      "type": "array"
-                    },
                     "plan": {
                       "additionalProperties": false,
                       "properties": {
@@ -117357,6 +117041,10 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                                 "maxLength": 200,
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -117366,7 +117054,8 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                               "completionCriteria",
                               "dependencyPlanItemIds",
                               "requiredCapabilityTags",
-                              "fileIntent"
+                              "fileIntent",
+                              "workerUserId"
                             ],
                             "type": "object"
                           },
@@ -117409,8 +117098,7 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                   },
                   "readOnly": true,
                   "required": [
-                    "plan",
-                    "assignments"
+                    "plan"
                   ],
                   "type": "object"
                 },
@@ -122668,49 +122356,6 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "assignments": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "planItemId": {
-                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "recommendationReason": {
-                            "anyOf": [
-                              {
-                                "maxLength": 2000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "workerUserId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "readOnly": true,
-                        "required": [
-                          "planItemId",
-                          "workerUserId",
-                          "recommendationReason"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 1000,
-                      "type": "array"
-                    },
                     "plan": {
                       "additionalProperties": false,
                       "properties": {
@@ -123082,6 +122727,10 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                                 "maxLength": 200,
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -123091,7 +122740,8 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                               "completionCriteria",
                               "dependencyPlanItemIds",
                               "requiredCapabilityTags",
-                              "fileIntent"
+                              "fileIntent",
+                              "workerUserId"
                             ],
                             "type": "object"
                           },
@@ -123134,8 +122784,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                   },
                   "readOnly": true,
                   "required": [
-                    "plan",
-                    "assignments"
+                    "plan"
                   ],
                   "type": "object"
                 },
@@ -130441,49 +130090,6 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "assignments": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "planItemId": {
-                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "recommendationReason": {
-                            "anyOf": [
-                              {
-                                "maxLength": 2000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "workerUserId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "readOnly": true,
-                        "required": [
-                          "planItemId",
-                          "workerUserId",
-                          "recommendationReason"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 1000,
-                      "type": "array"
-                    },
                     "plan": {
                       "additionalProperties": false,
                       "properties": {
@@ -130855,6 +130461,10 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                                 "maxLength": 200,
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -130864,7 +130474,8 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                               "completionCriteria",
                               "dependencyPlanItemIds",
                               "requiredCapabilityTags",
-                              "fileIntent"
+                              "fileIntent",
+                              "workerUserId"
                             ],
                             "type": "object"
                           },
@@ -130907,8 +130518,7 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                   },
                   "readOnly": true,
                   "required": [
-                    "plan",
-                    "assignments"
+                    "plan"
                   ],
                   "type": "object"
                 },
@@ -135893,6 +135503,10 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                   "maxLength": 200,
                   "minLength": 1,
                   "type": "string"
+                },
+                "workerUserId": {
+                  "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
                 }
               },
               "required": [
@@ -135902,7 +135516,8 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                 "completionCriteria",
                 "dependencyPlanItemIds",
                 "requiredCapabilityTags",
-                "fileIntent"
+                "fileIntent",
+                "workerUserId"
               ],
               "type": "object"
             },
@@ -136583,49 +136198,6 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                     {
                       "additionalProperties": false,
                       "properties": {
-                        "assignments": {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "planItemId": {
-                                "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              "recommendationReason": {
-                                "anyOf": [
-                                  {
-                                    "maxLength": 2000,
-                                    "minLength": 1,
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "workerUserId": {
-                                "anyOf": [
-                                  {
-                                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              }
-                            },
-                            "readOnly": true,
-                            "required": [
-                              "planItemId",
-                              "workerUserId",
-                              "recommendationReason"
-                            ],
-                            "type": "object"
-                          },
-                          "maxItems": 1000,
-                          "type": "array"
-                        },
                         "plan": {
                           "additionalProperties": false,
                           "properties": {
@@ -136997,6 +136569,10 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                     "maxLength": 200,
                                     "minLength": 1,
                                     "type": "string"
+                                  },
+                                  "workerUserId": {
+                                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                    "type": "string"
                                   }
                                 },
                                 "required": [
@@ -137006,7 +136582,8 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                   "completionCriteria",
                                   "dependencyPlanItemIds",
                                   "requiredCapabilityTags",
-                                  "fileIntent"
+                                  "fileIntent",
+                                  "workerUserId"
                                 ],
                                 "type": "object"
                               },
@@ -137049,8 +136626,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                       },
                       "readOnly": true,
                       "required": [
-                        "plan",
-                        "assignments"
+                        "plan"
                       ],
                       "type": "object"
                     },
@@ -142344,49 +141920,6 @@ Submits the Coordinator final summary and atomically completes the Project.
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "assignments": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "planItemId": {
-                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "recommendationReason": {
-                            "anyOf": [
-                              {
-                                "maxLength": 2000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "workerUserId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "readOnly": true,
-                        "required": [
-                          "planItemId",
-                          "workerUserId",
-                          "recommendationReason"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 1000,
-                      "type": "array"
-                    },
                     "plan": {
                       "additionalProperties": false,
                       "properties": {
@@ -142758,6 +142291,10 @@ Submits the Coordinator final summary and atomically completes the Project.
                                 "maxLength": 200,
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -142767,7 +142304,8 @@ Submits the Coordinator final summary and atomically completes the Project.
                               "completionCriteria",
                               "dependencyPlanItemIds",
                               "requiredCapabilityTags",
-                              "fileIntent"
+                              "fileIntent",
+                              "workerUserId"
                             ],
                             "type": "object"
                           },
@@ -142810,8 +142348,7 @@ Submits the Coordinator final summary and atomically completes the Project.
                   },
                   "readOnly": true,
                   "required": [
-                    "plan",
-                    "assignments"
+                    "plan"
                   ],
                   "type": "object"
                 },
@@ -148109,49 +147646,6 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                     {
                       "additionalProperties": false,
                       "properties": {
-                        "assignments": {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "planItemId": {
-                                "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              "recommendationReason": {
-                                "anyOf": [
-                                  {
-                                    "maxLength": 2000,
-                                    "minLength": 1,
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "workerUserId": {
-                                "anyOf": [
-                                  {
-                                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              }
-                            },
-                            "readOnly": true,
-                            "required": [
-                              "planItemId",
-                              "workerUserId",
-                              "recommendationReason"
-                            ],
-                            "type": "object"
-                          },
-                          "maxItems": 1000,
-                          "type": "array"
-                        },
                         "plan": {
                           "additionalProperties": false,
                           "properties": {
@@ -148523,6 +148017,10 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                     "maxLength": 200,
                                     "minLength": 1,
                                     "type": "string"
+                                  },
+                                  "workerUserId": {
+                                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                    "type": "string"
                                   }
                                 },
                                 "required": [
@@ -148532,7 +148030,8 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                   "completionCriteria",
                                   "dependencyPlanItemIds",
                                   "requiredCapabilityTags",
-                                  "fileIntent"
+                                  "fileIntent",
+                                  "workerUserId"
                                 ],
                                 "type": "object"
                               },
@@ -148575,8 +148074,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                       },
                       "readOnly": true,
                       "required": [
-                        "plan",
-                        "assignments"
+                        "plan"
                       ],
                       "type": "object"
                     },
@@ -154109,49 +153607,6 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "assignments": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "planItemId": {
-                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "recommendationReason": {
-                            "anyOf": [
-                              {
-                                "maxLength": 2000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "workerUserId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "readOnly": true,
-                        "required": [
-                          "planItemId",
-                          "workerUserId",
-                          "recommendationReason"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 1000,
-                      "type": "array"
-                    },
                     "plan": {
                       "additionalProperties": false,
                       "properties": {
@@ -154523,6 +153978,10 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                                 "maxLength": 200,
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -154532,7 +153991,8 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                               "completionCriteria",
                               "dependencyPlanItemIds",
                               "requiredCapabilityTags",
-                              "fileIntent"
+                              "fileIntent",
+                              "workerUserId"
                             ],
                             "type": "object"
                           },
@@ -154575,8 +154035,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                   },
                   "readOnly": true,
                   "required": [
-                    "plan",
-                    "assignments"
+                    "plan"
                   ],
                   "type": "object"
                 },
@@ -160371,49 +159830,6 @@ Executes the exact confirmed workflow, including finite Team operations when req
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "assignments": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "planItemId": {
-                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "recommendationReason": {
-                            "anyOf": [
-                              {
-                                "maxLength": 2000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "workerUserId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "readOnly": true,
-                        "required": [
-                          "planItemId",
-                          "workerUserId",
-                          "recommendationReason"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 1000,
-                      "type": "array"
-                    },
                     "plan": {
                       "additionalProperties": false,
                       "properties": {
@@ -160785,6 +160201,10 @@ Executes the exact confirmed workflow, including finite Team operations when req
                                 "maxLength": 200,
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -160794,7 +160214,8 @@ Executes the exact confirmed workflow, including finite Team operations when req
                               "completionCriteria",
                               "dependencyPlanItemIds",
                               "requiredCapabilityTags",
-                              "fileIntent"
+                              "fileIntent",
+                              "workerUserId"
                             ],
                             "type": "object"
                           },
@@ -160837,8 +160258,7 @@ Executes the exact confirmed workflow, including finite Team operations when req
                   },
                   "readOnly": true,
                   "required": [
-                    "plan",
-                    "assignments"
+                    "plan"
                   ],
                   "type": "object"
                 },
@@ -166421,49 +165841,6 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                 {
                   "additionalProperties": false,
                   "properties": {
-                    "assignments": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "planItemId": {
-                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "recommendationReason": {
-                            "anyOf": [
-                              {
-                                "maxLength": 2000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "workerUserId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "readOnly": true,
-                        "required": [
-                          "planItemId",
-                          "workerUserId",
-                          "recommendationReason"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 1000,
-                      "type": "array"
-                    },
                     "plan": {
                       "additionalProperties": false,
                       "properties": {
@@ -166835,6 +166212,10 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                                 "maxLength": 200,
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -166844,7 +166225,8 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                               "completionCriteria",
                               "dependencyPlanItemIds",
                               "requiredCapabilityTags",
-                              "fileIntent"
+                              "fileIntent",
+                              "workerUserId"
                             ],
                             "type": "object"
                           },
@@ -166887,8 +166269,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                   },
                   "readOnly": true,
                   "required": [
-                    "plan",
-                    "assignments"
+                    "plan"
                   ],
                   "type": "object"
                 },

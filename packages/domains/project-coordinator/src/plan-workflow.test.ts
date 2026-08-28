@@ -25,7 +25,6 @@ import {
 } from './ports.js'
 import { createProjectCoordinatorContinuationPort } from './continuation.js'
 import { projectCoordinatorWorkspaceSchema } from './contract.js'
-import { ProjectCoordinatorStateStore } from './state.js'
 
 test('local Coordinator Runtime creates an editable durable draft with structured output and Worker User assignment', async () => {
   const settings = inMemorySettings()
@@ -421,8 +420,8 @@ test('Plan confirmation keeps the Project paused until the canonical workflow ac
       assert.equal(phase, 'active')
       assert.equal(command.expectedProjectRevision, 4)
       assert.equal(command.expectedPlanRevision, 2)
-      assert.equal(command.workerUserId, 'usr_Worker000001')
-      offeredBundle = taskOfferResponse(command)
+      assert.equal('workerUserId' in command, false)
+      offeredBundle = taskOfferResponse(command, submittedPlan!)
       return offeredBundle
     },
     subscribe: () => () => undefined
@@ -524,23 +523,28 @@ test('Plan confirmation keeps the Project paused until the canonical workflow ac
   assert.equal(submitted.plan.state, 'awaiting_confirmation')
   assert.equal(await port.readDraft({ projectId: assigned.projectId }), null)
   assert.deepEqual(
-    submitted.workspace.projects[0]?.plan?.assignments,
-    assigned.assignments
+    submitted.workspace.projects[0]?.plan?.plan.tasks,
+    submitted.plan.tasks
   )
-  assert.deepEqual(
-    await new ProjectCoordinatorStateStore(settings).readPlanAssignments(
-      submitted.plan.projectPlanId,
-      submitted.plan.planDigest
-    ),
-    assigned.assignments
-  )
+  assert.deepEqual(submitted.plan.tasks.map(({ planItemId, workerUserId }) => ({
+    planItemId,
+    workerUserId
+  })), assigned.assignments.map(({ planItemId, workerUserId }) => ({
+    planItemId,
+    workerUserId
+  })))
   assert.equal(submitCommand.planDigest, stableDigest({
     projectId: assigned.projectId,
     expectedProjectRevision: assigned.expectedProjectRevision,
     expectedCoordinatorAuthorityEpoch: assigned.expectedCoordinatorAuthorityEpoch,
     supersedesProjectPlanId: assigned.supersedesProjectPlanId,
     sourceInputLocators: assigned.sourceInputLocators,
-    tasks: assigned.tasks,
+    tasks: assigned.tasks.map((task) => ({
+      ...task,
+      workerUserId: assigned.assignments.find(({ planItemId }) => (
+        planItemId === task.planItemId
+      ))!.workerUserId
+    })),
     rationale: assigned.rationale,
     runtimeProvenance: assigned.runtimeProvenance
   }))
@@ -897,12 +901,7 @@ function workflowWorkspace(
             : 'paused' as const
       },
       plan: plan ? {
-        plan,
-        assignments: [{
-          planItemId: 'item_meeting_summary',
-          workerUserId: 'usr_Worker000001',
-          recommendationReason: 'Owner selected the User with a ready meeting-review Runtime.'
-        }]
+        plan
       } : null,
       workerGroups: base.projects[0]!.workerGroups.map((group) => ({
         ...group,
@@ -999,9 +998,11 @@ function previousPlanTaskView() {
 function taskOfferResponse(command: Extract<
   Parameters<CoordinatorCloudCommandService['execute']>[0],
   { type: 'task.offer.create' }
->): Extract<RestResponse, { type: 'rest.collection' }> {
+>, plan: ProjectPlan): Extract<RestResponse, { type: 'rest.collection' }> {
   const at = '2026-08-25T01:06:00.000Z'
   const taskId = canonicalTaskIdForPlanItem(command.projectPlanId, command.planItemId)
+  const planItem = plan.tasks.find(({ planItemId }) => planItemId === command.planItemId)
+  if (!planItem) throw new Error('Unknown Plan item.')
   const task = taskSchema.parse({
     schemaVersion: 1,
     type: 'task',
@@ -1031,7 +1032,7 @@ function taskOfferResponse(command: Extract<
     projectId: command.projectId,
     taskId,
     executionId: null,
-    workerUserId: command.workerUserId,
+    workerUserId: planItem.workerUserId,
     offeredByCoordinatorAgentId: 'agt_Coordinator01',
     state: 'pending',
     offeredAt: at,

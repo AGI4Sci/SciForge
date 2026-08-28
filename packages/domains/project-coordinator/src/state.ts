@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import {
   projectIdSchema,
-  projectPlanSchema,
   userIdSchema,
   type ProjectPlan
 } from '@sciforge/collaboration-contracts'
@@ -12,24 +11,15 @@ import type {
 } from '@sciforge/domain-sdk/package-storage'
 
 import {
-  projectCoordinatorPlanAssignmentSchema,
   projectCoordinatorPlanDraftSchema,
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorCoordinatorSessionBindingRecordSchema,
   projectCoordinatorTransferFeedbackSchema,
   type ProjectCoordinatorCoordinatorSessionBindingRecord,
-  type ProjectCoordinatorPlanAssignment,
   type ProjectCoordinatorPlanDraft,
   type ProjectCoordinatorProjectCreateInput,
   type ProjectCoordinatorTransferFeedback
 } from './contract.js'
-
-const submittedPlanSelectionSchema = z.object({
-  projectId: projectPlanSchema.shape.projectId,
-  projectPlanId: projectPlanSchema.shape.projectPlanId,
-  planDigest: projectPlanSchema.shape.planDigest,
-  assignments: z.array(projectCoordinatorPlanAssignmentSchema).min(1).max(1_000)
-}).strict().readonly()
 
 const projectCreateIntentRecordSchema = z.object({
   createIntentId: projectCoordinatorProjectCreateInputSchema.unwrap().shape.createIntentId,
@@ -40,9 +30,8 @@ const projectCreateIntentRecordSchema = z.object({
 }).strict().readonly()
 
 const projectCoordinatorStateSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   planDrafts: z.array(projectCoordinatorPlanDraftSchema).max(1_000),
-  submittedPlanSelections: z.array(submittedPlanSelectionSchema).max(1_000),
   coordinatorSessionBindings: z.array(
     projectCoordinatorCoordinatorSessionBindingRecordSchema
   ).max(10_000).default([]),
@@ -57,9 +46,8 @@ const projectCoordinatorStateSchema = z.object({
 type ProjectCoordinatorState = z.infer<typeof projectCoordinatorStateSchema>
 
 const EMPTY_STATE: ProjectCoordinatorState = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   planDrafts: [],
-  submittedPlanSelections: [],
   coordinatorSessionBindings: [],
   coordinatorTransferFeedback: [],
   projectCreateIntents: []
@@ -302,68 +290,40 @@ export class ProjectCoordinatorStateStore {
     throw new Error('Unable to persist the Plan draft.')
   }
 
-  async commitSubmittedDraft(
+  async completeSubmittedDraft(
     plan: ProjectPlan,
     expectedDraftRevision: number
-  ): Promise<readonly ProjectCoordinatorPlanAssignment[]> {
+  ): Promise<void> {
     let snapshot = await this.settings.read()
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const state = parseState(snapshot)
-      const existing = state.submittedPlanSelections.find(
-        ({ projectPlanId }) => projectPlanId === plan.projectPlanId
-      )
-      if (existing) {
-        if (existing.planDigest !== plan.planDigest || existing.projectId !== plan.projectId) {
-          throw new Error('Submitted Plan selection identity conflict.')
-        }
-        return existing.assignments
-      }
       const current = state.planDrafts.find((draft) => draft.projectId === plan.projectId) ?? null
-      if (!current) throw new Error('Plan draft was not found.')
+      if (!current) return
       if (current.draftRevision !== expectedDraftRevision) {
         throw new Error('Plan draft revision conflict.')
       }
-      const planItemIds = new Set(plan.tasks.map(({ planItemId }) => planItemId))
+      const planTasksById = new Map(plan.tasks.map((task) => [task.planItemId, task]))
       if (
-        current.assignments.length !== planItemIds.size ||
-        current.assignments.some(({ planItemId }) => !planItemIds.has(planItemId))
+        current.assignments.length !== planTasksById.size ||
+        current.assignments.some(({ planItemId, workerUserId }) => (
+          workerUserId === null || planTasksById.get(planItemId)?.workerUserId !== workerUserId
+        ))
       ) {
-        throw new Error('Submitted Plan does not match the exact local assignment projection.')
+        throw new Error('Submitted Plan does not match the exact selected Worker Users.')
       }
-      const selection = submittedPlanSelectionSchema.parse({
-        projectId: plan.projectId,
-        projectPlanId: plan.projectPlanId,
-        planDigest: plan.planDigest,
-        assignments: current.assignments
-      })
       const value = projectCoordinatorStateSchema.parse({
         ...state,
-        planDrafts: state.planDrafts.filter((draft) => draft.projectId !== plan.projectId),
-        submittedPlanSelections: [
-          ...state.submittedPlanSelections.filter(({ projectId }) => projectId !== plan.projectId),
-          selection
-        ]
+        planDrafts: state.planDrafts.filter((draft) => draft.projectId !== plan.projectId)
       })
       try {
         await this.settings.write(value, snapshot.revision)
-        return selection.assignments
+        return
       } catch (error) {
         if (attempt > 0) throw error
         snapshot = await this.settings.read()
       }
     }
-    throw new Error('Unable to retain the submitted Plan assignment projection.')
-  }
-
-  async readPlanAssignments(
-    projectPlanId: string,
-    planDigest: string
-  ): Promise<readonly ProjectCoordinatorPlanAssignment[]> {
-    const { state } = await this.read()
-    const selection = state.submittedPlanSelections.find((candidate) => (
-      candidate.projectPlanId === projectPlanId && candidate.planDigest === planDigest
-    ))
-    return selection?.assignments ?? []
+    throw new Error('Unable to clear the submitted Plan draft.')
   }
 
   async readCoordinatorTransferFeedback(

@@ -6,6 +6,7 @@ import {
   type RestRequest,
   type RestResponse
 } from '@sciforge/collaboration-contracts'
+import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts/node'
 import type { AgentCloudRuntime } from '@sciforge/domain-identity-access/agent-cloud-runtime'
 import {
   coordinatorCloudCommandSchema,
@@ -391,7 +392,8 @@ function isExpectedCoordinatorResponse(
       return isUserTaskOfferCollection(response, {
         outcome: 'created',
         projectId: request.projectId,
-        workerUserId: request.workerUserId,
+        taskId: canonicalTaskIdForPlanItem(request.projectPlanId, request.planItemId),
+        offeredByCoordinatorAgentId: actor.agentId,
         offerExpiresAt: request.offerExpiresAt,
         taskRevision: 1,
         offerRevision: 1
@@ -409,6 +411,7 @@ function isExpectedCoordinatorResponse(
         outcome: 'reassigned',
         taskId: request.taskId,
         workerUserId: request.workerUserId,
+        offeredByCoordinatorAgentId: actor.agentId,
         offerExpiresAt: request.offerExpiresAt,
         taskRevision: request.expectedTaskRevision + 1,
         offerRevision: 1
@@ -605,6 +608,7 @@ function isUserTaskOfferCollection(
     taskId?: string
     taskOfferId?: string
     workerUserId?: string
+    offeredByCoordinatorAgentId?: string
     offerExpiresAt?: string
     taskRevision?: number
     offerRevision?: number
@@ -625,6 +629,8 @@ function isUserTaskOfferCollection(
     (expected.taskId === undefined || task.taskId === expected.taskId) &&
     (expected.taskOfferId === undefined || offer.taskOfferId === expected.taskOfferId) &&
     (expected.workerUserId === undefined || offer.workerUserId === expected.workerUserId) &&
+    (expected.offeredByCoordinatorAgentId === undefined ||
+      offer.offeredByCoordinatorAgentId === expected.offeredByCoordinatorAgentId) &&
     (expected.offerExpiresAt === undefined || offer.expiresAt === expected.offerExpiresAt) &&
     (expected.taskRevision === undefined || task.revision === expected.taskRevision) &&
     (expected.offerRevision === undefined || offer.revision === expected.offerRevision) &&

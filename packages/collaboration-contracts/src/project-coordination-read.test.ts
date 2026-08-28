@@ -922,6 +922,7 @@ describe('Project Coordinator authoritative read protocol', () => {
       planRevision: 2,
       sourceInputLocators: [],
       tasks: [{
+        workerUserId: TEST_IDS.secondUserId,
         planItemId: 'item_review0001',
         title: 'Review architecture',
         objective: 'Produce the architecture review.',

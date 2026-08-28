@@ -33,6 +33,7 @@ import {
 import { defineProjectCoordinatorWorkspacePort } from './ports.js'
 
 const rootItem: ProjectPlanTask = {
+  workerUserId: TEST_IDS.secondUserId,
   planItemId: 'item_collect',
   title: 'Collect evidence',
   objective: 'Collect the bounded source evidence.',
@@ -43,6 +44,7 @@ const rootItem: ProjectPlanTask = {
 }
 
 const dependentItem: ProjectPlanTask = {
+  workerUserId: TEST_IDS.secondUserId,
   planItemId: 'item_synthesize',
   title: 'Synthesize evidence',
   objective: 'Synthesize only after collection is accepted.',
@@ -203,36 +205,29 @@ test('reconciliation stops on stale Cloud authority instead of fabricating local
   assert.equal(workspace.projects[0]?.tasks.length, 0)
 })
 
-test('reconciliation requires the complete durable assignment set before any write', async () => {
-  const currentPlan = confirmedPlan([rootItem, { ...dependentItem, dependencyPlanItemIds: [] }])
-  const complete = continuationWorkspace(currentPlan)
-  const workspace = projectCoordinatorWorkspaceSchema.parse({
-    ...complete,
-    projects: [{
-      ...complete.projects[0]!,
-      plan: {
-        ...complete.projects[0]!.plan!,
-        assignments: complete.projects[0]!.plan!.assignments.slice(0, 1)
-      }
-    }]
-  })
-  let writes = 0
+test('reconciliation reads the Worker User only from the Cloud-confirmed Plan', async () => {
+  const currentPlan = confirmedPlan([rootItem])
+  const workspace = continuationWorkspace(currentPlan)
+  let commandCount = 0
   const continuation = createProjectCoordinatorContinuationPort({
     workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspace }),
     coordinatorCloudCommands: {
-      execute: async () => {
-        writes += 1
-        throw new Error('Incomplete assignments must fail before Cloud write.')
+      execute: async (command) => {
+        commandCount += 1
+        assert.equal(command.type, 'task.offer.create')
+        assert.equal('workerUserId' in command, false)
+        return offerResponse(command, currentPlan)
       },
       subscribe: () => () => undefined
-    }
+    },
+    now: () => new Date(TEST_TIMESTAMP)
   })
 
   await assert.rejects(
     continuation.reconcileProject(TEST_IDS.projectId),
-    /every durable Worker User assignment/u
+    /not observed in fresh Cloud facts/u
   )
-  assert.equal(writes, 0)
+  assert.equal(commandCount, 1)
 })
 
 test('a successful write must become visible before reconciliation dispatches again', async () => {
@@ -382,12 +377,7 @@ function continuationWorkspace(currentPlan: ProjectPlan): ProjectCoordinatorWork
     projects: [{
       project: projectFixture,
       plan: {
-        plan: currentPlan,
-        assignments: currentPlan.tasks.map(({ planItemId }) => ({
-          planItemId,
-          workerUserId: TEST_IDS.secondUserId,
-          recommendationReason: 'The confirmed Worker User has one ready analysis Runtime.'
-        }))
+        plan: currentPlan
       },
       memberUsers: [],
       workerGroups: [{
@@ -548,7 +538,7 @@ function offerResponse(
     projectId: command.projectId,
     taskId,
     executionId: null,
-    workerUserId: command.workerUserId,
+    workerUserId: item.workerUserId,
     offeredByCoordinatorAgentId: TEST_IDS.agentId,
     state: 'pending',
     offeredAt: TEST_TIMESTAMP,

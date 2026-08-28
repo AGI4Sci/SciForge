@@ -9,7 +9,7 @@ import {
   type CloudStateCommand,
   type ProjectContentProvisioningAttestation,
   type ProjectCreateCommand,
-  type ProjectPlanTask
+  type ProjectPlanTaskDeclaration
 } from '@sciforge/collaboration-contracts'
 import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts/node'
 import { FakeCollaborationRepository } from '../../../test-fixtures/collaboration/fake-adapters.mjs'
@@ -240,20 +240,24 @@ async function contentRecoveryProjectFixture(suffix: string) {
   return { repository, service, owner, worker, coordinator, ownerFact, workerFact, initialTeam, created }
 }
 
-type FixturePlanTask = ProjectPlanTask
+type FixturePlanTask = ProjectPlanTaskDeclaration
 
 async function confirmFixturePlan(
   fixture: Awaited<ReturnType<typeof contentRecoveryProjectFixture>>,
   suffix: string,
   tasks: readonly FixturePlanTask[]
 ) {
+  const assignedTasks = tasks.map((task) => ({
+    ...task,
+    workerUserId: fixture.worker.user.userId
+  }))
   const planFacts = {
     projectId: fixture.created.project.projectId,
     expectedProjectRevision: fixture.created.project.revision,
     expectedCoordinatorAuthorityEpoch: fixture.created.project.coordinatorAuthorityEpoch,
     supersedesProjectPlanId: null,
     sourceInputLocators: [],
-    tasks,
+    tasks: assignedTasks,
     rationale: `Confirm ${suffix} before Project invitation acceptance.`,
     runtimeProvenance: {
       runtimeId: `runtime_${stableDigest(suffix).slice(0, 24)}`,
@@ -547,6 +551,7 @@ async function activeTextOfferFixture(suffix: string) {
     generatedAt: at.toISOString()
   }
   const tasks = [{
+    workerUserId: firstWorker.userId,
     planItemId: 'item_workflow_task',
     title: 'Exercise workflow authority',
     objective: 'Produce one bounded result through the exact current execution.',
@@ -629,7 +634,6 @@ async function activeTextOfferFixture(suffix: string) {
     projectPlanId: confirmedPlan.projectPlanId,
     expectedPlanRevision: confirmedPlan.revision,
     planItemId: tasks[0]!.planItemId,
-    workerUserId: firstWorker.userId,
     offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
   })
   return {
@@ -807,7 +811,6 @@ async function manualRecoveryFileOfferFixture(
 
   const fileIntent = {
     schemaVersion: 1 as const,
-    bindingRevision: activatedContent.binding.revision,
     inputs: [],
     output: {
       kind: 'content-space.output-new' as const,
@@ -819,6 +822,7 @@ async function manualRecoveryFileOfferFixture(
     }
   }
   const tasks = [{
+    workerUserId: fixture.worker.user.userId,
     planItemId: 'item_recovery_output',
     title: 'Recover one uncertain output',
     objective: 'Link only a freshly observed exact Provider output.',
@@ -888,7 +892,6 @@ async function manualRecoveryFileOfferFixture(
     projectPlanId: confirmedPlan.projectPlanId,
     expectedPlanRevision: confirmedPlan.revision,
     planItemId: tasks[0]!.planItemId,
-    workerUserId: fixture.worker.user.userId,
     offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
   })
   const accepted = await fixture.service.acceptTaskOffer(workerAgent, {
@@ -1037,7 +1040,6 @@ describe('vNext Cloud application service', () => {
       projectPlanId: fixture.launch.confirmed.projectPlanId,
       expectedPlanRevision: fixture.launch.confirmed.revision,
       planItemId: planTask.planItemId,
-      workerUserId: fixture.worker.user.userId,
       offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
     })
     expect(offered.task.fileIntent).toEqual({
@@ -1279,6 +1281,7 @@ describe('vNext Cloud application service', () => {
       supersedesProjectPlanId: null,
       sourceInputLocators: [],
       tasks: [{
+        workerUserId: worker.user.userId,
         planItemId: 'item_availability_projection',
         title: 'Project Worker availability',
         objective: 'Project the selected Worker and Provider readiness facts.',
@@ -1446,6 +1449,7 @@ describe('vNext Cloud application service', () => {
       supersedesProjectPlanId: null,
       sourceInputLocators: [],
       tasks: [{
+        workerUserId: worker.userId,
         planItemId: 'item_initial_team',
         title: 'Review the shared Project content',
         objective: 'Exercise the exact initial Team facts.',
@@ -1575,6 +1579,7 @@ describe('vNext Cloud application service', () => {
     await expect(repository.getProjectMember(created.project.projectId, worker.userId)).resolves.toBeNull()
 
     const tasks = [{
+      workerUserId: worker.userId,
       planItemId: 'item_invitation_gate',
       title: 'Complete the accepted assignment',
       objective: 'Produce the result only after joining the Project.',
@@ -2186,7 +2191,6 @@ describe('vNext Cloud application service', () => {
     })
     const fileIntent = {
       schemaVersion: 1 as const,
-      bindingRevision: binding.revision,
       inputs: [{
         kind: 'content-space.input-file' as const,
         locator: {
@@ -2209,6 +2213,7 @@ describe('vNext Cloud application service', () => {
       }
     }
     const planTasks = [{
+      workerUserId: worker.userId,
       planItemId: 'item_membership_transfer_fence',
       title: 'Exercise the membership transfer fence',
       objective: 'Read one input and upload one new output only while membership remains active.',
@@ -2278,7 +2283,6 @@ describe('vNext Cloud application service', () => {
       projectPlanId: confirmed.projectPlanId,
       expectedPlanRevision: confirmed.revision,
       planItemId: planTasks[0]!.planItemId,
-      workerUserId: worker.userId,
       offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
     })
     const accepted = await service.acceptTaskOffer(workerAgent, {
@@ -2446,6 +2450,7 @@ describe('vNext Cloud application service', () => {
   it('links only a fresh exact Task output observation and then accepts the same Worker execution result', async () => {
     const fixture = await manualRecoveryFileOfferFixture('task_recovery_link')
     const task = fixture.unknown.task!
+    if (task.fileIntent === null) throw new Error('The recovery fixture requires one Cloud-bound file intent.')
     const execution = fixture.unknown.execution!
     const action = fixture.unknown.recoveryAction!
     const journal = fixture.unknown.journal
@@ -2599,11 +2604,11 @@ describe('vNext Cloud application service', () => {
       ...reviewBase,
       requestId: 'req_task_recovery_revision_same_name',
       idempotencyKey: 'idem_task_recovery_revision_same_name',
-      nextFileIntent: fixture.fileIntent
+      nextFileIntent: task.fileIntent
     })).rejects.toMatchObject({ code: 'validation_failed' })
     const nextFileIntent = {
-      ...fixture.fileIntent,
-      output: { ...fixture.fileIntent.output, fileName: 'task-recovery-reviewed-2.md' }
+      ...task.fileIntent,
+      output: { ...task.fileIntent.output, fileName: 'task-recovery-reviewed-2.md' }
     }
     const revised = await fixture.service.reviewTaskResult(fixture.coordinator, {
       ...reviewBase,
@@ -2686,6 +2691,7 @@ describe('vNext Cloud application service', () => {
   it('lets only the Coordinator Agent create a newly named successor after Human recovery abandon', async () => {
     const fixture = await manualRecoveryFileOfferFixture('task_recovery_successor')
     const task = fixture.unknown.task!
+    if (task.fileIntent === null) throw new Error('The recovery fixture requires one Cloud-bound file intent.')
     const execution = fixture.unknown.execution!
     const action = fixture.unknown.recoveryAction!
     const journal = fixture.unknown.journal
@@ -2723,26 +2729,26 @@ describe('vNext Cloud application service', () => {
       ...base,
       requestId: 'req_task_recovery_successor_same_name',
       idempotencyKey: 'idem_task_recovery_successor_same_name',
-      nextFileIntent: fixture.fileIntent
+      nextFileIntent: task.fileIntent
     })).rejects.toMatchObject({ code: 'validation_failed' })
     await expect(fixture.service.reassignTaskOffer(fixture.coordinator, {
       ...base,
       requestId: 'req_task_recovery_successor_fact_drift',
       idempotencyKey: 'idem_task_recovery_successor_fact_drift',
       nextFileIntent: {
-        ...fixture.fileIntent,
+        ...task.fileIntent,
         output: {
-          ...fixture.fileIntent.output,
+          ...task.fileIntent.output,
           fileName: 'recovered-output-successor-2.md',
-          maxBytes: fixture.fileIntent.output.maxBytes + 1
+          maxBytes: task.fileIntent.output.maxBytes + 1
         }
       }
     })).rejects.toMatchObject({ code: 'validation_failed' })
 
     const nextFileIntent = {
-      ...fixture.fileIntent,
+      ...task.fileIntent,
       output: {
-        ...fixture.fileIntent.output,
+        ...task.fileIntent.output,
         fileName: 'recovered-output-successor-2.md'
       }
     }
@@ -3331,6 +3337,7 @@ describe('vNext Cloud application service', () => {
       supersedesProjectPlanId: null,
       sourceInputLocators: [],
       tasks: [{
+        workerUserId: originalWorker.userId,
         planItemId: 'item_dynamic_membership',
         title: 'Maintain the dynamic Team',
         objective: 'Exercise content-free User membership changes.',
@@ -3529,6 +3536,7 @@ describe('vNext Cloud application service', () => {
     }
 
     const tasks = [{
+      workerUserId: owner.userId,
       planItemId: 'item_transfer_fence',
       title: 'Verify transferred authority',
       objective: 'Only the successor Coordinator may submit this plan.',
@@ -4430,7 +4438,8 @@ describe('vNext Cloud application service', () => {
 
     const runtimeProvenance = { runtimeId: 'runtime_meeting_coordinator', modelId: null,
       generatedByCoordinatorAgentId: coordinator.agentId, generatedAt: at.toISOString() }
-    const tasks = [{ planItemId: 'item_meeting_summary', title: 'Summarize decisions',
+    const tasks = [{ workerUserId: worker.userId,
+      planItemId: 'item_meeting_summary', title: 'Summarize decisions',
       objective: 'Produce a bounded meeting decision summary.', completionCriteria: ['Owner can review it'],
       dependencyPlanItemIds: [], requiredCapabilityTags: ['research.execute'], fileIntent: null }]
     const planFacts = { projectId: created.project.projectId, expectedProjectRevision: 1,
@@ -4476,7 +4485,6 @@ describe('vNext Cloud application service', () => {
       expectedProjectRevision: activeProject.revision, expectedCoordinatorAuthorityEpoch: 1,
       expectedExecutionAuthorityEpoch: 1, projectPlanId: confirmedPlan.projectPlanId,
       expectedPlanRevision: confirmedPlan.revision, planItemId: 'item_meeting_summary',
-      workerUserId: worker.userId,
       offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
     })
     expect(offered.task.taskId).toBe(canonicalTaskIdForPlanItem(

@@ -768,10 +768,6 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     transport,
     coordinatorCloudCommands,
     createIntentState: state,
-    readPlanAssignments: (plan) => state.readPlanAssignments(
-      plan.projectPlanId,
-      plan.planDigest
-    ),
     readCoordinatorTransferFeedback: (projectId) => (
       state.readCoordinatorTransferFeedback(projectId)
     )

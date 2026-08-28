@@ -4215,6 +4215,7 @@ export class CollaborationService {
         createdAt: at,
         updatedAt: at
       }
+      toProjectPlan(plan)
       await tx.insertProjectPlan(plan)
       await tx.updateProject({ ...project, revision: project.revision + 1, updatedAt: at }, project.revision)
       const message = await this.appendInbox(tx, { kind: 'user', id: actor.userId }, 'project.plan.awaiting_confirmation', {
@@ -4351,7 +4352,7 @@ export class CollaborationService {
       const eligibility = await requireEligibleWorkerUser({
         tx,
         project,
-        workerUserId: input.workerUserId,
+        workerUserId: item.workerUserId,
         fileIntent,
         requiredCapabilityTags: item.requiredCapabilityTags,
         at
@@ -4361,7 +4362,7 @@ export class CollaborationService {
         executionId: null,
         taskId,
         projectId: project.projectId,
-        workerUserId: input.workerUserId,
+        workerUserId: item.workerUserId,
         offeredByCoordinatorAgentId: actor.agentId,
         state: 'pending',
         offeredAt: at,
@@ -6559,6 +6560,14 @@ async function configureInitialProjectTeam(
   }
 
   const memberUserIds = team.members.map(({ userId }) => userId)
+  const assignedWorkerUserIds = plan.tasks.map(({ workerUserId }) => workerUserId)
+  const expectedMemberUserIds = new Set([ownerUserId, ...assignedWorkerUserIds])
+  if (
+    memberUserIds.length !== expectedMemberUserIds.size ||
+    memberUserIds.some((userId) => !expectedMemberUserIds.has(userId))
+  ) {
+    fail('validation_failed', 'The initial Team must exactly match the Owner and confirmed Plan Worker User assignments.')
+  }
   for (const userId of [...memberUserIds].sort()) {
     const user = required(await tx.getUserForUpdate(userId), 'Initial Project member')
     if (user.status !== 'active') fail('credential_revoked', 'Every initial Project member must be active.')
