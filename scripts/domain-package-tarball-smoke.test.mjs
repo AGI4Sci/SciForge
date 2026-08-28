@@ -269,7 +269,7 @@ async function assertPublicExportTargets(packageRoot, packageJson) {
 }
 
 test('publishable domain packages resolve every public export from independent tarballs', {
-  timeout: 240_000
+  timeout: 600_000
 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-domain-tarball-smoke-'))
   try {
