@@ -6,11 +6,33 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import {
+  domainPackageNpmInvocation,
   discoverMainBundlePackageNames,
   discoverDomainPackages,
   generatedDomainPackageContentMatches,
   renderGeneratedDomainPackageFiles
 } from './domain-packages.mjs'
+
+test('launches npm scripts without a Windows command-shell shim', () => {
+  assert.deepEqual(domainPackageNpmInvocation({
+    platform: 'win32',
+    npmExecPath: String.raw`C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js`,
+    nodeExecutable: String.raw`C:\Program Files\nodejs\node.exe`
+  }), {
+    command: String.raw`C:\Program Files\nodejs\node.exe`,
+    leadingArguments: [
+      String.raw`C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js`
+    ]
+  })
+  assert.deepEqual(domainPackageNpmInvocation({ platform: 'linux' }), {
+    command: 'npm',
+    leadingArguments: []
+  })
+  assert.throws(
+    () => domainPackageNpmInvocation({ platform: 'win32', npmExecPath: '' }),
+    /absolute npm_execpath/
+  )
+})
 
 test('treats Git CRLF checkout conversion as the same generated composition', () => {
   assert.equal(generatedDomainPackageContentMatches(

@@ -50,6 +50,11 @@ Evidence commit 可以只携带变化 session；worker 只与该 `projectKey` �
 handoff outbox；执行完成事件没有 Agent thread 时使用 SDK 定义的 synthetic
 runtime/thread scope。不存在第二条 execution 直连编译路径。
 
+handoff outbox 只解析当前 schema。已知旧版本或数值更高的 schema 不会被解释或重放；
+Domain 会保留其原始字节作为本地隔离备份，再写入唯一的当前格式空 outbox，避免
+Desktop 升级或降级时由不可安全重放的派生队列阻断启动。当前 schema 内部的未知字段、
+重复记录、非规范 identity 和状态矛盾仍然 fail closed。
+
 `POST /updates` 返回 durable receipt，而不是要求调用方猜测全局 queue 是否 idle：
 
 ```json

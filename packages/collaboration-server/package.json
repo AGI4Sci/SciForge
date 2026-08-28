@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/collaboration-server",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -60,7 +60,7 @@
   },
   "dependencies": {
     "@sciforge/collaboration-contracts": "4.0.0",
-    "@sciforge/collaboration-provider-zulip": "0.2.2",
+    "@sciforge/collaboration-provider-zulip": "0.2.3",
     "pg": "^8.16.3",
     "ws": "8.21.1",
     "zod": "^4.4.3"
