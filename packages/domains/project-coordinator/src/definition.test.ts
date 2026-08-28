@@ -4,7 +4,9 @@ import test from 'node:test'
 
 import {
   PROJECT_COORDINATOR_CAPABILITY_FACTORY_CONTRIBUTION,
+  PROJECT_COORDINATOR_COMPOSER_CONTEXT_CONTRIBUTION,
   PROJECT_COORDINATOR_I18N_CONTRIBUTION,
+  PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION,
   PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION,
   PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION,
   PROJECT_COORDINATOR_RUNTIME_LIFECYCLE_CONTRIBUTION,
@@ -16,7 +18,7 @@ test('manifest composes independent main and renderer entrypoints', () => {
   assert.equal(domainPackageDefinition.packageName, '@sciforge/domain-project-coordinator')
   assert.equal(domainPackageDefinition.module.id, 'sciforge.project-coordinator')
   assert.deepEqual(domainPackageDefinition.module.hostApi, {
-    minimum: '1.5.0',
+    minimum: '1.10.0',
     maximumExclusive: '2.0.0'
   })
   assert.deepEqual(
@@ -33,6 +35,8 @@ test('manifest composes independent main and renderer entrypoints', () => {
       PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
       PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION.id,
       PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRIBUTION.id,
+      PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION.id,
+      PROJECT_COORDINATOR_COMPOSER_CONTEXT_CONTRIBUTION.id,
       PROJECT_COORDINATOR_I18N_CONTRIBUTION.id
     ]
   )
@@ -48,6 +52,16 @@ test('manifest composes independent main and renderer entrypoints', () => {
         'content-space.provisioning-batch',
         'content-space.recovery-observation'
       ]
+    }
+  )
+  assert.deepEqual(
+    domainPackageDefinition.contributionContracts[
+      PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION.id
+    ],
+    {
+      location: 'workbench.navigation-section',
+      contractVersion: '1.0.0',
+      label: 'projectCoordinatorSidebarCloudProjects'
     }
   )
 })
@@ -82,7 +96,8 @@ test('package sources keep Host-private implementations and sibling domain inter
       .map((match) => match[1])
   ))
   assert.deepEqual([...new Set(collaborationImports)], [
-    '@sciforge/domain-collaboration/coordinator-cloud-command'
+    '@sciforge/domain-collaboration/coordinator-cloud-command',
+    '@sciforge/domain-collaboration/worker-session-projection'
   ])
 })
 
@@ -90,9 +105,9 @@ test('publishable dependencies target the frozen Host and domain contract majors
   const packageJson = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8')
   ) as { dependencies: Record<string, string> }
-  assert.equal(packageJson.dependencies['@sciforge/collaboration-contracts'], '4.0.0')
-  assert.equal(packageJson.dependencies['@sciforge/domain-collaboration'], '^5.0.0')
+  assert.equal(packageJson.dependencies['@sciforge/collaboration-contracts'], '4.1.0')
+  assert.equal(packageJson.dependencies['@sciforge/domain-collaboration'], '^5.1.0')
   assert.equal(packageJson.dependencies['@sciforge/domain-content-space'], '^5.0.0')
-  assert.equal(packageJson.dependencies['@sciforge/domain-identity-access'], '^3.0.1')
-  assert.equal(packageJson.dependencies['@sciforge/domain-sdk'], '^0.2.3')
+  assert.equal(packageJson.dependencies['@sciforge/domain-identity-access'], '^3.0.2')
+  assert.equal(packageJson.dependencies['@sciforge/domain-sdk'], '^0.2.11')
 })

@@ -17,6 +17,7 @@ import type {
   CapabilityAgentBroker,
   CapabilityAgentToolRequestContext
 } from '../../capabilities/agent-tools'
+import type { DomainMainOrdinarySessionIdentity } from '@sciforge/domain-sdk/host'
 import { discoverCapabilityDescriptors } from '../../capabilities/registry'
 import {
   type RuntimeMcpToolGateway
@@ -101,7 +102,25 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
     options: { signal?: AbortSignal; context?: CapabilityAgentToolRequestContext } = {}
   ): Promise<CapabilityInvocationResult> {
     const operation = this.#operationsByActionId.get(request.actionId)
-    if (!operation) return this.#broker.invoke(caller, request, { signal: options.signal })
+    if (!operation) {
+      const ordinarySession = ordinarySessionIdentity(options.context)
+      if (!ordinarySession) {
+        return this.#broker.invoke(caller, request, { signal: options.signal })
+      }
+      if (!this.#broker.invokeOrdinarySession) {
+        throw new RuntimeToolError('The Host ordinary Session invocation route is unavailable.', {
+          code: 'ordinary_session_route_unavailable',
+          failureClass: 'configuration',
+          retryable: false
+        })
+      }
+      return this.#broker.invokeOrdinarySession(
+        caller,
+        request,
+        ordinarySession,
+        { signal: options.signal }
+      )
+    }
     const context = options.context
     if (!context) throw new RuntimeToolError('Managed tool invocation requires runtime context.', {
       code: 'missing_runtime_context',
@@ -149,6 +168,27 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
       void execution.then(markSettled, markSettled)
     }
     return execution
+  }
+
+  invokeOrdinarySession(
+    caller: CapabilityCallerContext,
+    request: CapabilityInvocationRequest,
+    ordinarySession: DomainMainOrdinarySessionIdentity,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<CapabilityInvocationResult> {
+    if (!this.#broker.invokeOrdinarySession) {
+      throw new RuntimeToolError('The Host ordinary Session invocation route is unavailable.', {
+        code: 'ordinary_session_route_unavailable',
+        failureClass: 'configuration',
+        retryable: false
+      })
+    }
+    return Promise.resolve(this.#broker.invokeOrdinarySession(
+      caller,
+      request,
+      ordinarySession,
+      options
+    ))
   }
 
   abortTurn(identity: AgentRuntimeToolTurnIdentity, reason = 'user_stop'): number {
@@ -359,6 +399,14 @@ function managedInvocationFingerprint(request: CapabilityInvocationRequest): str
     resource: request.resource ?? null,
     expectedRevision: request.expectedRevision ?? null
   })).digest('hex')
+}
+
+function ordinarySessionIdentity(
+  context: Pick<CapabilityAgentToolRequestContext, 'runtimeId' | 'threadId'> | undefined
+): DomainMainOrdinarySessionIdentity | undefined {
+  const runtimeId = context?.runtimeId.trim()
+  const threadId = context?.threadId?.trim()
+  return runtimeId && threadId ? Object.freeze({ runtimeId, threadId }) : undefined
 }
 
 function slug(value: string): string {

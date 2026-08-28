@@ -12,6 +12,7 @@ import {
   idempotencyKeySchema,
   nonEmptyTextSchema,
   projectContentBindingIdSchema,
+  projectCreateIntentIdSchema,
   projectIdSchema,
   projectMembershipIdSchema,
   projectPlanIdSchema,
@@ -66,7 +67,7 @@ import {
   projectFinalSummarySchema,
   projectPlanRuntimeProvenanceSchema,
   projectPlanSchema,
-  projectPlanTaskSchema,
+  projectPlanTasksSchema,
   projectPlanStateSchema,
   taskResultOutputSchema,
   taskRecoveryObservedOutputSchema,
@@ -139,17 +140,17 @@ export const providerDirectoryPrincipalFactListQuerySchema = z.object({
   limit: z.number().int().min(1).max(1_000)
 }).strict()
 
-export const projectCreateMemberSchema = z.object({
+export const projectInitialTeamMemberSchema = z.object({
   userId: userIdSchema
 }).strict()
 
-export const projectCreateContentMemberSchema = z.object({
+export const projectInitialTeamContentMemberSchema = z.object({
   userId: userIdSchema,
   providerPrincipalFactId: providerPrincipalFactIdSchema,
   expectedFactRevision: revisionSchema
 }).strict()
 
-const uniqueProjectCreateUsers = (
+const uniqueProjectInitialTeamUsers = (
   members: readonly Readonly<{ userId: string }>[],
   context: z.RefinementCtx
 ): void => {
@@ -158,19 +159,19 @@ const uniqueProjectCreateUsers = (
   }
 }
 
-export const projectCreateContentSchema = z.discriminatedUnion('mode', [
+export const projectInitialTeamSchema = z.discriminatedUnion('mode', [
   z.object({
     mode: z.literal('none'),
-    members: z.array(projectCreateMemberSchema).min(1).max(1_000)
-  }).strict().superRefine(({ members }, context) => uniqueProjectCreateUsers(members, context)),
+    members: z.array(projectInitialTeamMemberSchema).min(1).max(1_000)
+  }).strict().superRefine(({ members }, context) => uniqueProjectInitialTeamUsers(members, context)),
   z.object({
     mode: z.literal('required'),
     contentOwnerUserId: userIdSchema,
     providerInstance: providerInstanceReferenceSchema,
     containerDisplayName: displayNameSchema,
-    members: z.array(projectCreateContentMemberSchema).min(1).max(1_000)
+    members: z.array(projectInitialTeamContentMemberSchema).min(1).max(1_000)
   }).strict().superRefine((content, context) => {
-    uniqueProjectCreateUsers(content.members, context)
+    uniqueProjectInitialTeamUsers(content.members, context)
     if (!content.members.some(({ userId }) => userId === content.contentOwnerUserId)) {
       context.addIssue({
         code: 'custom',
@@ -188,30 +189,31 @@ export const projectCreateContentSchema = z.discriminatedUnion('mode', [
     }
   })
 ])
+export type ProjectInitialTeam = z.infer<typeof projectInitialTeamSchema>
 
 /**
- * The sole Project creation transaction. The authenticated Agent machine
- * identity supplies both the current Device Coordinator and its owning User;
- * neither authority may be nominated by the caller. Required content facts
- * are validated and snapshotted with Memberships and the provisioning intent.
+ * The sole Project creation transaction. It creates only the authenticated
+ * Agent Owner's draft Project and Owner Membership. Initial Team and content
+ * facts are confirmed later with the first immutable Plan, after projectId
+ * exists and before any Provider provisioning operation can be prepared.
  */
 export const projectCreateCommandSchema = z.object({
   ...writeCommandShape,
   type: z.literal('project.create'),
+  createIntentId: projectCreateIntentIdSchema,
   displayName: displayNameSchema,
   goal: nonEmptyTextSchema,
-  budget: projectBudgetSchema,
-  content: projectCreateContentSchema
+  budget: projectBudgetSchema
 }).strict()
 export type ProjectCreateCommand = z.infer<typeof projectCreateCommandSchema>
 
-/** Service precondition because the authenticated Agent Owner is intentionally not caller input. */
-export function projectCreateIncludesAuthenticatedOwner(
-  command: ProjectCreateCommand,
+/** Service precondition because the authenticated Owner is intentionally not caller input. */
+export function projectInitialTeamIncludesAuthenticatedOwner(
+  team: z.infer<typeof projectInitialTeamSchema>,
   authenticatedOwnerUserId: string
 ): boolean {
   const ownerUserId = userIdSchema.parse(authenticatedOwnerUserId)
-  return command.content.members.some(({ userId }) => userId === ownerUserId)
+  return team.members.some(({ userId }) => userId === ownerUserId)
 }
 
 export const workerAvailabilityPublishCommandSchema = z.object({
@@ -253,6 +255,19 @@ export const projectMembershipAddCommandSchema = z.object({
     })
   }
 })
+
+/** The invited OIDC User accepts the exact current confirmed Project Plan. */
+export const projectMembershipAcceptCommandSchema = z.object({
+  ...writeCommandShape,
+  type: z.literal('project.membership.accept'),
+  projectId: projectIdSchema,
+  projectMembershipId: projectMembershipIdSchema,
+  expectedProjectRevision: revisionSchema,
+  expectedMembershipRevision: revisionSchema,
+  projectPlanId: projectPlanIdSchema,
+  expectedPlanRevision: revisionSchema,
+  planDigest: sha256Schema
+}).strict()
 
 /** Safety revocation is immediate; no public command can claim Provider removal succeeded. */
 export const projectMembershipRemoveCommandSchema = z.object({
@@ -434,7 +449,7 @@ export const projectPlanSubmitCommandSchema = z.object({
   expectedCoordinatorAuthorityEpoch: revisionSchema,
   supersedesProjectPlanId: projectPlanIdSchema.nullable(),
   sourceInputLocators: z.array(portableContentSpaceLocatorSchema).max(100),
-  tasks: z.array(projectPlanTaskSchema).min(1).max(1_000),
+  tasks: projectPlanTasksSchema,
   rationale: nonEmptyTextSchema,
   runtimeProvenance: projectPlanRuntimeProvenanceSchema,
   planDigest: sha256Schema
@@ -448,7 +463,8 @@ export const projectPlanConfirmCommandSchema = z.object({
   expectedProjectRevision: revisionSchema,
   expectedCoordinatorAuthorityEpoch: revisionSchema,
   expectedPlanRevision: revisionSchema,
-  planDigest: sha256Schema
+  planDigest: sha256Schema,
+  initialTeam: projectInitialTeamSchema.nullable()
 }).strict()
 
 const offerCommandShape = {
@@ -470,7 +486,6 @@ export const taskOfferCreateCommandSchema = z.object({
   projectPlanId: projectPlanIdSchema,
   expectedPlanRevision: revisionSchema,
   planItemId: z.string().regex(/^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$/u),
-  workerUserId: userIdSchema,
   offerExpiresAt: timestampSchema
 }).strict()
 export type TaskOfferCreateCommand = z.infer<typeof taskOfferCreateCommandSchema>
@@ -683,6 +698,7 @@ export const cloudStateCommandSchemas = [
   workerAvailabilityPublishCommandSchema,
   workerAvailabilityListQuerySchema,
   projectMembershipAddCommandSchema,
+  projectMembershipAcceptCommandSchema,
   projectMembershipRemoveCommandSchema,
   projectMembershipListQuerySchema,
   projectTaskAuthorityListQuerySchema,
@@ -942,16 +958,16 @@ export const cloudStateEventSchemas = [
     coordinatorAgentId: agentIdSchema,
     coordinatorAuthorityEpoch: revisionSchema,
     executionAuthorityEpoch: revisionSchema,
-    status: z.literal('paused'),
+    status: z.literal('draft'),
     contentMode: projectContentModeSchema,
     provisioningIntentId: provisioningIntentIdSchema.nullable(),
     revision: revisionSchema
   }).strict().superRefine((event, context) => {
-    if ((event.contentMode === 'required') !== (event.provisioningIntentId !== null)) {
+    if (event.contentMode !== 'none' || event.provisioningIntentId !== null) {
       context.addIssue({
         code: 'custom',
         path: ['provisioningIntentId'],
-        message: 'Only a content-required Project is created with a provisioning intent.'
+        message: 'A created draft Project has no content configuration or provisioning intent.'
       })
     }
   }),

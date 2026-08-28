@@ -16,26 +16,22 @@ import {
   type ProjectPlan,
   type RestResponse
 } from '@sciforge/collaboration-contracts'
+import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts/node'
 
 import {
   createProjectCoordinatorPlanPort,
   defineProjectCoordinatorWorkspacePort,
   ProjectCoordinatorPlanGenerationError
 } from './ports.js'
+import { createProjectCoordinatorContinuationPort } from './continuation.js'
 import { projectCoordinatorWorkspaceSchema } from './contract.js'
-import { ProjectCoordinatorStateStore } from './state.js'
 
-test('paused Project plans through project_paused authority before activation makes it eligible', async () => {
+test('local Coordinator Runtime creates an editable durable draft with structured output and Worker User assignment', async () => {
   const settings = inMemorySettings()
   const prompts: string[] = []
   const requests: DomainMainAgentExecutionRequest[] = []
-  const workspace = workspaceFixture()
+  const workspace = planningWorkspaceFixture('draft')
   const firstAgent = workspace.projects[0]!.workerGroups[0]!.agents[0]!
-  assert.equal(workspace.projects[0]!.project.status, 'paused')
-  assert.deepEqual(firstAgent.projectAvailability.taskAuthorities.map(({ state, reason }) => ({
-    state,
-    reason
-  })), [{ state: 'suspended', reason: 'project_paused' }])
   workspace.projects[0]!.workerGroups[0]!.agents.push({
     displayName: 'Worker Desktop B',
     projectAvailability: {
@@ -79,6 +75,10 @@ test('paused Project plans through project_paused authority before activation ma
       readWorkspace: async () => workspace
     }),
     getAgentExecution: () => agentExecution,
+    continuation: {
+      reconcileProject: async () => workspace,
+      reconcileVisibleProjects: async () => undefined
+    },
     now: () => new Date('2026-08-25T01:06:00.000Z')
   }
   const port = createProjectCoordinatorPlanPort(options)
@@ -92,7 +92,9 @@ test('paused Project plans through project_paused authority before activation ma
   assert.equal(generated.draftRevision, 1)
   assert.equal(generated.runtimeProvenance.generatedByCoordinatorAgentId, 'agt_Coordinator01')
   assert.equal(generated.assignments[0]?.workerUserId, null)
-  assert.match(prompts[0] ?? '', /Created meeting.*runtimeProfiles.*planningTaskScopes.*text_tasks.*capabilityTags.*meeting\.review.*document\.write/su)
+  assert.match(prompts[0] ?? '', /Created meeting.*runtimeProfiles.*eligibleTaskScopes.*text_tasks.*capabilityTags.*meeting\.review.*document\.write/su)
+  assert.match(prompts[0] ?? '', /logical Plan declaration only.*Never include a bindingRevision/su)
+  assert.doesNotMatch(prompts[0] ?? '', /declare bindingRevision 1/u)
   assert.doesNotMatch(prompts[0] ?? '', /runtimeCapabilityTags/u)
   assert.match(prompts[0] ?? '', /Do not emit id, description, assignee, dependencies, status/u)
   const generatedRequest = requests[0] as DomainMainAgentExecutionRequest & {
@@ -133,7 +135,7 @@ test('paused Project plans through project_paused authority before activation ma
     })),
     rationale: edited.rationale,
     assignments: edited.assignments
-  }), /one online planning-ready Runtime/u)
+  }), /one planning-ready Runtime/u)
 
   const reloaded = createProjectCoordinatorPlanPort(options)
   assert.deepEqual(await reloaded.readDraft({ projectId: generated.projectId }), edited)
@@ -148,7 +150,128 @@ test('paused Project plans through project_paused authority before activation ma
       workerUserId: 'usr_NotAProjectUser',
       recommendationReason: 'An invented candidate must be rejected.'
     }]
-  }), /active Project member/u)
+  }), /visible Worker User/u)
+})
+
+test('paused planning accepts only active membership with project_paused prospective authority', async () => {
+  const workspace = planningWorkspaceFixture('paused')
+  let runtimeRuns = 0
+  const port = createProjectCoordinatorPlanPort({
+    settings: inMemorySettings(),
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => workspace
+    }),
+    getAgentExecution: () => ({
+      run: async () => {
+        runtimeRuns += 1
+        return planAgentExecution().run({
+          clientDirectiveId: 'project-plan:paused',
+          prompt: 'paused',
+          interaction: 'reviewable',
+          mode: 'plan'
+        })
+      }
+    }),
+    continuation: {
+      reconcileProject: async () => workspace,
+      reconcileVisibleProjects: async () => undefined
+    },
+    now: () => new Date('2026-08-25T01:06:00.000Z')
+  })
+
+  const draft = await port.generateDraft({
+    projectId: 'prj_ProjectCreated01',
+    instruction: 'Replan while provisioning keeps execution paused.',
+    sourceInputLocators: [],
+    modelId: null
+  })
+  const edited = await port.editDraft({
+    projectId: draft.projectId,
+    draftId: draft.draftId,
+    expectedDraftRevision: draft.draftRevision,
+    tasks: draft.tasks,
+    rationale: draft.rationale,
+    assignments: [{
+      planItemId: 'item_meeting_summary',
+      workerUserId: 'usr_Worker000001',
+      recommendationReason: 'The paused Project exposes prospective text scope.'
+    }]
+  })
+
+  assert.equal(runtimeRuns, 1)
+  assert.equal(edited.assignments[0]?.workerUserId, 'usr_Worker000001')
+
+  const activeWithoutEligibleAuthority = planningWorkspaceFixture('active')
+  activeWithoutEligibleAuthority.projects[0]!.workerGroups[0]!.agents[0]!
+    .projectAvailability.taskAuthorities[0]!.state = 'suspended'
+  activeWithoutEligibleAuthority.projects[0]!.workerGroups[0]!.agents[0]!
+    .projectAvailability.taskAuthorities[0]!.reason = 'project_paused'
+  let activeRuntimeRuns = 0
+  const activePort = createProjectCoordinatorPlanPort({
+    settings: inMemorySettings(),
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => activeWithoutEligibleAuthority
+    }),
+    getAgentExecution: () => ({
+      run: async (request) => {
+        activeRuntimeRuns += 1
+        return planAgentExecution().run(request)
+      }
+    }),
+    continuation: {
+      reconcileProject: async () => activeWithoutEligibleAuthority,
+      reconcileVisibleProjects: async () => undefined
+    }
+  })
+  await assert.rejects(
+    activePort.generateDraft({
+      projectId: 'prj_ProjectCreated01',
+      instruction: 'Do not plan with suspended authority after activation.',
+      sourceInputLocators: [],
+      modelId: null
+    }),
+    (error: unknown) => error instanceof ProjectCoordinatorPlanGenerationError &&
+      error.reason === 'planning_candidates_unavailable'
+  )
+  assert.equal(activeRuntimeRuns, 0)
+})
+
+test('planning with no prospective Worker candidate fails before Runtime dispatch', async () => {
+  const workspace = planningWorkspaceFixture('draft')
+  Object.assign(
+    workspace.projects[0]!.workerGroups[0]!.agents[0]!
+      .projectAvailability.availability,
+    { connectionStatus: 'offline', acceptsNewOffers: false }
+  )
+  let runtimeRuns = 0
+  const port = createProjectCoordinatorPlanPort({
+    settings: inMemorySettings(),
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => workspace
+    }),
+    getAgentExecution: () => ({
+      run: async (request) => {
+        runtimeRuns += 1
+        return planAgentExecution().run(request)
+      }
+    }),
+    continuation: {
+      reconcileProject: async () => workspace,
+      reconcileVisibleProjects: async () => undefined
+    }
+  })
+
+  await assert.rejects(
+    port.generateDraft({
+      projectId: 'prj_ProjectCreated01',
+      instruction: 'This must fail before provider dispatch.',
+      sourceInputLocators: [],
+      modelId: null
+    }),
+    (error: unknown) => error instanceof ProjectCoordinatorPlanGenerationError &&
+      error.reason === 'planning_candidates_unavailable'
+  )
+  assert.equal(runtimeRuns, 0)
 })
 
 test('generic task JSON is rejected without persisting a Plan draft', async () => {
@@ -177,6 +300,10 @@ test('generic task JSON is rejected without persisting a Plan draft', async () =
         })
       })
     }),
+    continuation: {
+      reconcileProject: async () => workspaceFixture(),
+      reconcileVisibleProjects: async () => undefined
+    },
     now: () => new Date('2026-08-25T01:06:00.000Z')
   })
 
@@ -195,7 +322,7 @@ test('generic task JSON is rejected without persisting a Plan draft', async () =
   assert.equal(await port.readDraft({ projectId: 'prj_ProjectCreated01' }), null)
 })
 
-test('file Plan output selects an exact caller locator and binds the current content revision', async () => {
+test('file Plan output selects an exact caller locator without predicting a binding revision', async () => {
   const settings = inMemorySettings()
   const workspace = fileReadyWorkspaceFixture()
   const sourceLocator = {
@@ -245,6 +372,10 @@ test('file Plan output selects an exact caller locator and binds the current con
         }
       }
     }),
+    continuation: {
+      reconcileProject: async () => workspace,
+      reconcileVisibleProjects: async () => undefined
+    },
     now: () => new Date('2026-08-25T01:06:00.000Z')
   })
 
@@ -255,16 +386,16 @@ test('file Plan output selects an exact caller locator and binds the current con
     modelId: null
   })
 
-  assert.equal(draft.tasks[0]?.fileIntent?.bindingRevision, 3)
+  assert.equal('bindingRevision' in (draft.tasks[0]?.fileIntent ?? {}), false)
   assert.deepEqual(draft.tasks[0]?.fileIntent?.inputs[0]?.locator, sourceLocator)
-  assert.match(request?.prompt ?? '', /bindingRevision.*3.*sourceInputIndex/su)
+  assert.match(request?.prompt ?? '', /logical Plan declaration only.*Never include a bindingRevision/su)
   assert.match(request?.prompt ?? '', /Never copy or invent a locator identity/u)
   const outputSchema = JSON.stringify(request?.outputSchema)
   assert.match(outputSchema, /"sourceInputIndex"/u)
   assert.doesNotMatch(outputSchema, /"identity"/u)
 })
 
-test('immutable Plan submit uses Coordinator Agent authority before Owner confirmation and activation', async () => {
+test('Plan confirmation keeps the Project paused until the canonical workflow activates and reconciles', async () => {
   const settings = inMemorySettings()
   let phase: 'draft' | 'submitted' | 'confirmed' | 'active' = 'draft'
   let submittedPlan: ProjectPlan | undefined
@@ -289,8 +420,8 @@ test('immutable Plan submit uses Coordinator Agent authority before Owner confir
       assert.equal(phase, 'active')
       assert.equal(command.expectedProjectRevision, 4)
       assert.equal(command.expectedPlanRevision, 2)
-      assert.equal(command.workerUserId, 'usr_Worker000001')
-      offeredBundle = taskOfferResponse(command)
+      assert.equal('workerUserId' in command, false)
+      offeredBundle = taskOfferResponse(command, submittedPlan!)
       return offeredBundle
     },
     subscribe: () => () => undefined
@@ -345,12 +476,20 @@ test('immutable Plan submit uses Coordinator Agent authority before Owner confir
     }
   }
   let requestOrdinal = 0
+  const workspacePort = defineProjectCoordinatorWorkspacePort({
+    readWorkspace: async () => workflowWorkspace(phase, submittedPlan, offeredBundle)
+  })
+  const continuation = createProjectCoordinatorContinuationPort({
+    workspace: workspacePort,
+    coordinatorCloudCommands,
+    requestId: () => `req_PlanWorkflow${String(++requestOrdinal).padStart(4, '0')}`,
+    now: () => new Date('2026-08-25T01:06:00.000Z')
+  })
   const port = createProjectCoordinatorPlanPort({
     settings,
-    workspace: defineProjectCoordinatorWorkspacePort({
-      readWorkspace: async () => workflowWorkspace(phase, submittedPlan, offeredBundle)
-    }),
+    workspace: workspacePort,
     getAgentExecution: () => planAgentExecution(),
+    continuation,
     coordinatorCloudCommands,
     transport,
     requestId: () => `req_PlanWorkflow${String(++requestOrdinal).padStart(4, '0')}`,
@@ -384,35 +523,58 @@ test('immutable Plan submit uses Coordinator Agent authority before Owner confir
   assert.equal(submitted.plan.state, 'awaiting_confirmation')
   assert.equal(await port.readDraft({ projectId: assigned.projectId }), null)
   assert.deepEqual(
-    submitted.workspace.projects[0]?.plan?.assignments,
-    assigned.assignments
+    submitted.workspace.projects[0]?.plan?.plan.tasks,
+    submitted.plan.tasks
   )
-  assert.deepEqual(
-    await new ProjectCoordinatorStateStore(settings).readPlanAssignments(
-      submitted.plan.projectPlanId,
-      submitted.plan.planDigest
-    ),
-    assigned.assignments
-  )
+  assert.deepEqual(submitted.plan.tasks.map(({ planItemId, workerUserId }) => ({
+    planItemId,
+    workerUserId
+  })), assigned.assignments.map(({ planItemId, workerUserId }) => ({
+    planItemId,
+    workerUserId
+  })))
   assert.equal(submitCommand.planDigest, stableDigest({
     projectId: assigned.projectId,
     expectedProjectRevision: assigned.expectedProjectRevision,
     expectedCoordinatorAuthorityEpoch: assigned.expectedCoordinatorAuthorityEpoch,
     supersedesProjectPlanId: assigned.supersedesProjectPlanId,
     sourceInputLocators: assigned.sourceInputLocators,
-    tasks: assigned.tasks,
+    tasks: assigned.tasks.map((task) => ({
+      ...task,
+      workerUserId: assigned.assignments.find(({ planItemId }) => (
+        planItemId === task.planItemId
+      ))!.workerUserId
+    })),
     rationale: assigned.rationale,
     runtimeProvenance: assigned.runtimeProvenance
   }))
 
-  const activated = await port.confirmAndActivate({
+  const confirmed = await port.confirm({
     projectId: assigned.projectId,
     projectPlanId: submitted.plan.projectPlanId,
     expectedProjectRevision: 2,
     expectedCoordinatorAuthorityEpoch: 1,
     expectedPlanRevision: submitted.plan.revision,
-    planDigest: submitted.plan.planDigest
+    planDigest: submitted.plan.planDigest,
+    initialTeam: null
   }, 'idem_PlanConfirmTracer01')
+  assert.equal(confirmed.projects[0]?.project.status, 'paused')
+  assert.equal(confirmed.projects[0]?.tasks.length, 0)
+  assert.deepEqual((userCommands as Array<{ type: string }>).map(({ type }) => type), [
+    'project.plan.confirm'
+  ])
+  assert.deepEqual((coordinatorCommands as Array<{ type: string }>).map(({ type }) => type), [
+    'project.plan.submit'
+  ])
+
+  const activated = await port.activateAndReconcile({
+    projectId: assigned.projectId,
+    projectPlanId: submitted.plan.projectPlanId,
+    expectedCoordinatorAuthorityEpoch: 1,
+    expectedExecutionAuthorityEpoch: 1,
+    expectedPlanRevision: submittedPlan!.revision,
+    planDigest: submitted.plan.planDigest
+  }, 'idem_ProjectWorkflowContinue01')
   assert.equal(activated.projects[0]?.project.status, 'active')
   assert.equal(activated.projects[0]?.tasks.length, 2)
   assert.deepEqual((userCommands as Array<{ type: string }>).map(({ type }) => type), [
@@ -457,6 +619,7 @@ function workspaceFixture() {
     observedAt: updatedAt,
     focusedProjectId: 'prj_ProjectCreated01',
     availableWorkerUsers: [],
+    providerPrincipalFacts: [],
     projects: [{
       project: {
         schemaVersion: 1 as const,
@@ -552,6 +715,39 @@ function workspaceFixture() {
         recoveryActions: []
       }
     }]
+  }
+}
+
+function planningWorkspaceFixture(status: 'draft' | 'paused' | 'active') {
+  const base = workspaceFixture()
+  return {
+    ...base,
+    projects: base.projects.map((project) => ({
+      ...project,
+      project: {
+        ...project.project,
+        status
+      },
+      workerGroups: project.workerGroups.map((group) => ({
+        ...group,
+        agents: group.agents.map((agent) => ({
+          ...agent,
+          projectAvailability: {
+            ...agent.projectAvailability,
+            membership: status === 'draft'
+              ? null
+              : agent.projectAvailability.membership,
+            taskAuthorities: status === 'draft'
+              ? []
+              : agent.projectAvailability.taskAuthorities.map((authority) => ({
+                  ...authority,
+                  state: status === 'paused' ? 'suspended' as const : 'eligible' as const,
+                  reason: status === 'paused' ? 'project_paused' as const : null
+                }))
+          }
+        }))
+      }))
+    }))
   }
 }
 
@@ -698,15 +894,14 @@ function workflowWorkspace(
       project: {
         ...base.projects[0]!.project,
         revision: projectRevision,
-        status: phase === 'active' ? 'active' as const : 'paused' as const
+        status: phase === 'draft'
+          ? 'draft' as const
+          : phase === 'active'
+            ? 'active' as const
+            : 'paused' as const
       },
       plan: plan ? {
-        plan,
-        assignments: [{
-          planItemId: 'item_meeting_summary',
-          workerUserId: 'usr_Worker000001',
-          recommendationReason: 'Owner selected the User with a ready meeting-review Runtime.'
-        }]
+        plan
       } : null,
       workerGroups: base.projects[0]!.workerGroups.map((group) => ({
         ...group,
@@ -803,9 +998,11 @@ function previousPlanTaskView() {
 function taskOfferResponse(command: Extract<
   Parameters<CoordinatorCloudCommandService['execute']>[0],
   { type: 'task.offer.create' }
->): Extract<RestResponse, { type: 'rest.collection' }> {
+>, plan: ProjectPlan): Extract<RestResponse, { type: 'rest.collection' }> {
   const at = '2026-08-25T01:06:00.000Z'
-  const taskId = 'tsk_MeetingSummary01'
+  const taskId = canonicalTaskIdForPlanItem(command.projectPlanId, command.planItemId)
+  const planItem = plan.tasks.find(({ planItemId }) => planItemId === command.planItemId)
+  if (!planItem) throw new Error('Unknown Plan item.')
   const task = taskSchema.parse({
     schemaVersion: 1,
     type: 'task',
@@ -835,7 +1032,7 @@ function taskOfferResponse(command: Extract<
     projectId: command.projectId,
     taskId,
     executionId: null,
-    workerUserId: command.workerUserId,
+    workerUserId: planItem.workerUserId,
     offeredByCoordinatorAgentId: 'agt_Coordinator01',
     state: 'pending',
     offeredAt: at,

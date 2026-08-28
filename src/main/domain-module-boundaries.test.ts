@@ -452,6 +452,46 @@ describe('domain module boundaries', () => {
     }
   })
 
+  it('keeps ordinary Session invocation provenance generic at the SDK and Host boundary', () => {
+    const provenancePaths = [
+      'packages/domain-sdk/src/host.ts',
+      'src/main/capabilities/registry.ts',
+      'src/main/capabilities/broker.ts',
+      'src/main/capabilities/agent-tools.ts',
+      'src/main/runtime/agent-runtime/runtime-capability-broker.ts'
+    ]
+    const forbiddenDomainTerms = [
+      'projectId',
+      'coordinatorAuthorityEpoch',
+      'workerUserId',
+      'membership',
+      'executionFence',
+      'project-coordinator',
+      'domain-project'
+    ]
+    for (const path of provenancePaths) {
+      const source = readFileSync(resolve(projectRoot, path), 'utf8')
+      expect(
+        forbiddenDomainTerms.filter((term) => source.includes(term)),
+        `${path} must carry only generic ordinary Session provenance`
+      ).toEqual([])
+    }
+
+    const sdkSource = readFileSync(
+      resolve(projectRoot, 'packages/domain-sdk/src/host.ts'),
+      'utf8'
+    )
+    expect(sdkSource).toContain('DomainMainCapabilityInvocationContext')
+    expect(sdkSource).toContain('ordinarySession?: DomainMainOrdinarySessionIdentity')
+    const projectMain = readFileSync(
+      resolve(projectRoot, 'packages/domains/project-coordinator/src/main.ts'),
+      'utf8'
+    )
+    expect(projectMain).toMatch(
+      /context:\s*DomainMainCapabilityInvocationContext/u
+    )
+  })
+
   it('keeps the runtime installer on public SDK contracts and out of extension execution', () => {
     const installerFiles = productionSourceFiles('src/main/extensions')
     expect(installerFiles.length).toBeGreaterThan(0)

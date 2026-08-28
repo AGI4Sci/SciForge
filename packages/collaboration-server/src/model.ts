@@ -148,7 +148,7 @@ export type StoredProjectMember = {
   projectMembershipId: string
   projectId: string
   userId: string
-  state: 'pending_membership' | 'active' | 'membership_removal_pending' | 'removed'
+  state: 'invited' | 'pending_membership' | 'active' | 'membership_removal_pending' | 'removed'
   authorityEpoch: number
   activatedAt: string | null
   removalRequestedAt: string | null
@@ -257,6 +257,7 @@ export type StoredTaskAuthority = {
   reason:
     | 'project_paused'
     | 'project_terminal'
+    | 'invitation_pending'
     | 'membership_pending'
     | 'membership_removal_pending'
     | 'membership_removed'

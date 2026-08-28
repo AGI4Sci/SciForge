@@ -222,6 +222,11 @@ operation:
   Host API `1.9.0` requires every provider-credential operation to present the complete expected
   Principal lease. The Host re-verifies that lease inside its encrypted-storage lock before use or
   mutation, so a Principal transition cannot redirect another Principal's credential operation.
+- Host API `1.10.0` adds a generic, Host-authenticated ordinary Runtime Session identity to main
+  capability handler context. It contains only the exact runtime and thread IDs, is available only
+  on the Agent Runtime invocation route, and is part of the invocation fingerprint. It carries no
+  domain scope or authority; each package must join it to its own durable facts and reauthorize the
+  current Principal inside its canonical handler.
 - `@sciforge/domain-sdk/workflow-template` defines the versioned workflow-template bundle and the
   package-owned execution-receipt adapter used by workflow engines. Engines consume these generic
   contracts instead of another domain's private artifact directories or receipt layout.

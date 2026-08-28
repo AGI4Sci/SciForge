@@ -12,7 +12,7 @@ import {
   projectCoordinatorMembershipAddInputSchema,
   projectCoordinatorMembershipRemoveInputSchema,
   projectCoordinatorPlanDraftGenerateResultSchema,
-  projectCoordinatorProvisioningApplyInputSchema,
+  projectCoordinatorWorkflowContinueInputSchema,
   projectCoordinatorTransferInputSchema,
   projectCoordinatorWorkspaceSchema
 } from './contract.js'
@@ -44,6 +44,7 @@ const fixture = {
   observedAt: updatedAt,
   focusedProjectId: 'prj_Project000001',
   availableWorkerUsers: [],
+  providerPrincipalFacts: [],
   projects: [{
     project: {
       schemaVersion: 1 as const,
@@ -80,6 +81,7 @@ const fixture = {
         planRevision: 1,
         sourceInputLocators: [],
         tasks: [{
+          workerUserId: 'usr_Worker000001',
           planItemId: 'item_architecture01',
           title: 'Architecture review',
           objective: 'Review the proposed boundaries.',
@@ -100,12 +102,7 @@ const fixture = {
         confirmedByUserId: null,
         confirmedAt: null,
         supersededAt: null
-      },
-      assignments: [{
-        planItemId: 'item_architecture01',
-        workerUserId: 'usr_Worker000001',
-        recommendationReason: 'The User has an eligible Runtime advertising the required capability.'
-      }]
+      }
     },
     memberUsers: [],
     workerGroups: [{
@@ -209,19 +206,17 @@ test('workspace composes canonical Cloud facts while selecting a Worker User fro
   const parsed = projectCoordinatorWorkspaceSchema.parse(fixture)
   assert.equal(parsed.projects[0]?.workerGroups[0]?.agents.length, 2)
   assert.equal(
-    parsed.projects[0]?.plan?.assignments[0]?.workerUserId,
+    parsed.projects[0]?.plan?.plan.tasks[0]?.workerUserId,
     'usr_Worker000001'
   )
   assert.equal(parsed.projects[0]?.plan?.plan.type, 'project_plan')
 })
 
-test('workspace rejects a selected Worker User outside the grouped canonical availability projection', () => {
-  const invalid = structuredClone(fixture)
-  invalid.projects[0]!.plan!.assignments[0]!.workerUserId = 'usr_UnknownUser001'
-  assert.throws(
-    () => projectCoordinatorWorkspaceSchema.parse(invalid),
-    /one User in the grouped candidate projection/u
-  )
+test('workspace retains a Cloud Plan assignment when the Worker has no current availability row', () => {
+  const offline = structuredClone(fixture)
+  offline.projects[0]!.workerGroups = []
+  const parsed = projectCoordinatorWorkspaceSchema.parse(offline)
+  assert.equal(parsed.projects[0]!.plan!.plan.tasks[0]!.workerUserId, 'usr_Worker000001')
 })
 
 test('unavailable state cannot claim Project data or secret material', () => {
@@ -240,13 +235,21 @@ test('unavailable state cannot claim Project data or secret material', () => {
   }))
 })
 
-test('activation accepts only an exact Project focus', () => {
+test('activation accepts only an exact Project focus and bounded workspace view', () => {
   assert.deepEqual(projectCoordinatorActivationSchema.parse({
-    projectId: 'prj_Project000001'
-  }), { projectId: 'prj_Project000001' })
+    projectId: 'prj_Project000001',
+    view: 'tasks'
+  }), { projectId: 'prj_Project000001', view: 'tasks' })
+  assert.deepEqual(projectCoordinatorActivationSchema.parse({
+    view: 'create'
+  }), { view: 'create' })
   assert.throws(() => projectCoordinatorActivationSchema.parse({
     projectId: 'prj_Project000001',
     latest: true
+  }))
+  assert.throws(() => projectCoordinatorActivationSchema.parse({
+    projectId: 'prj_Project000001',
+    view: 'admin'
   }))
 })
 
@@ -310,29 +313,31 @@ test('artifact review selects immutable Cloud facts without accepting a locator 
   )
 })
 
-test('provisioning confirmation binds only exact Cloud CAS facts and the Host full-plan digest', () => {
-  const apply = {
+test('workflow continuation binds the confirmed Plan, exact Project CAS, and one workflow digest', () => {
+  const workflow = {
     projectId: 'prj_Project000001',
-    provisioningIntentId: 'pci_Provisioning01',
+    projectPlanId: 'pln_ProjectPlan01',
     expectedProjectRevision: 3,
-    expectedProvisioningRevision: 2,
-    expectedProvisioningIntentRevision: 1,
-    intentDigest: 'a'.repeat(64),
-    attemptId: 'attempt_Provisioning01',
-    confirmedPlanDigest: 'b'.repeat(64)
+    expectedCoordinatorAuthorityEpoch: 2,
+    expectedExecutionAuthorityEpoch: 2,
+    expectedPlanRevision: 2,
+    planDigest: 'a'.repeat(64),
+    purpose: 'launch' as const,
+    provisioning: null,
+    workflowDigest: 'b'.repeat(64)
   }
-  assert.deepEqual(projectCoordinatorProvisioningApplyInputSchema.parse(apply), apply)
-  assert.throws(() => projectCoordinatorProvisioningApplyInputSchema.parse({
-    ...apply,
+  assert.deepEqual(projectCoordinatorWorkflowContinueInputSchema.parse(workflow), workflow)
+  assert.throws(() => projectCoordinatorWorkflowContinueInputSchema.parse({
+    ...workflow,
     operations: [{ actionId: 'content-space.agent-admin-add-member' }]
   }))
-  assert.throws(() => projectCoordinatorProvisioningApplyInputSchema.parse({
-    ...apply,
-    confirmedPlanDigest: 'caller-selected-authority'
+  assert.throws(() => projectCoordinatorWorkflowContinueInputSchema.parse({
+    ...workflow,
+    workflowDigest: 'caller-selected-authority'
   }))
   assert.equal(
-    PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
-    'project-coordinator.content-provisioning.apply'
+    PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
+    'project-coordinator.workflow.continue'
   )
 })
 

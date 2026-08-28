@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
+import type { DomainMainOrdinarySessionIdentity } from '@sciforge/domain-sdk/host'
 import {
   principalContextSnapshotSchema,
   type PrincipalContextSnapshot
@@ -237,6 +238,13 @@ export type CapabilityAgentBroker = Readonly<{
     caller: CapabilityCallerContext,
     request: CapabilityInvocationRequest,
     options?: { signal?: AbortSignal; context?: CapabilityAgentToolRequestContext }
+  ) => CapabilityInvocationResult | Promise<CapabilityInvocationResult>
+  /** Host-only path; raw capability callers cannot attach Session provenance. */
+  invokeOrdinarySession?: (
+    caller: CapabilityCallerContext,
+    request: CapabilityInvocationRequest,
+    ordinarySession: DomainMainOrdinarySessionIdentity,
+    options?: { signal?: AbortSignal }
   ) => CapabilityInvocationResult | Promise<CapabilityInvocationResult>
   listEvents: (
     caller: CapabilityCallerContext,

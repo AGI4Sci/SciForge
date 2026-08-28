@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
 import {
+  idempotencyComparableCommandProjection,
   restRequestSchema,
   restResponseSchema,
   type RestRequest,
   type RestResponse
 } from '@sciforge/collaboration-contracts'
+import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts/node'
 import type { AgentCloudRuntime } from '@sciforge/domain-identity-access/agent-cloud-runtime'
 import {
   coordinatorCloudCommandSchema,
@@ -27,9 +29,15 @@ type CoordinatorActor = Readonly<{
   userId: string
 }>
 
+type TerminalWaiter = Readonly<{
+  resolve: (response: RestResponse) => void
+  reject: (error: Error) => void
+}>
+
 export class DurableCloudOutbox implements ProjectionCloudOutbox {
   private readonly now: () => Date
   private drainTail: Promise<void> = Promise.resolve()
+  private readonly terminalWaiters = new Map<string, Set<TerminalWaiter>>()
   private stopped = false
 
   constructor(private readonly options: DurableCloudOutboxOptions) {
@@ -127,21 +135,18 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
     kind: CollaborationOutboxEntry['kind'],
     request: RestRequest
   ): Promise<RestResponse> {
-    await this.enqueue(kind, request)
-    await this.waitForIdle()
-    if (!('idempotencyKey' in request)) {
+    const parsed = restRequestSchema.parse(request)
+    if (!('idempotencyKey' in parsed)) {
       throw new Error('Durable cloud outbox accepts idempotent write commands only.')
     }
-    const entry = this.options.store.snapshot().outbox.find((candidate) => (
-      candidate.idempotencyKey === request.idempotencyKey
+    const existingBeforeEnqueue = this.options.store.snapshot().outbox.find((candidate) => (
+      candidate.idempotencyKey === parsed.idempotencyKey
     ))
-    if (!entry || entry.state !== 'delivered') {
-      throw new Error(entry?.error ?? 'Cloud command is pending delivery.')
+    await this.enqueue(kind, parsed)
+    if (existingBeforeEnqueue?.state === 'failed') {
+      await this.retry(existingBeforeEnqueue.outboxId)
     }
-    if (!entry.response) {
-      throw new Error('Delivered Cloud command is missing its durable response.')
-    }
-    return restResponseSchema.parse(entry.response)
+    return this.waitForTerminal(parsed.idempotencyKey)
   }
 
   async retry(id?: string): Promise<void> {
@@ -248,6 +253,7 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
           queueItem.completedAt = deliveredAt
           queueItem.remoteMessageId = receipt.remoteMessageId
         })
+        this.settleTerminalWaiters(next.idempotencyKey)
       } catch (error) {
         const failedAt = this.now().toISOString()
         await this.options.store.transact((draft) => {
@@ -256,9 +262,55 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
           entry.error = safeError(error, this.options.sanitizeText)
           entry.updatedAt = failedAt
         })
+        this.settleTerminalWaiters(next.idempotencyKey)
         return
       }
     }
+  }
+
+  private waitForTerminal(idempotencyKey: string): Promise<RestResponse> {
+    const terminal = this.readTerminal(idempotencyKey)
+    if (terminal) return terminal
+    return new Promise<RestResponse>((resolve, reject) => {
+      const waiter = Object.freeze({ resolve, reject })
+      const waiters = this.terminalWaiters.get(idempotencyKey) ?? new Set<TerminalWaiter>()
+      waiters.add(waiter)
+      this.terminalWaiters.set(idempotencyKey, waiters)
+      this.settleTerminalWaiters(idempotencyKey)
+    })
+  }
+
+  private readTerminal(idempotencyKey: string): Promise<RestResponse> | undefined {
+    const entry = this.options.store.snapshot().outbox.find((candidate) => (
+      candidate.idempotencyKey === idempotencyKey
+    ))
+    if (!entry || !['delivered', 'failed'].includes(entry.state)) return undefined
+    if (entry.state === 'failed') {
+      return Promise.reject(new Error(entry.error ?? 'Cloud command delivery failed.'))
+    }
+    if (!entry.response) {
+      return Promise.reject(new Error('Delivered Cloud command is missing its durable response.'))
+    }
+    return Promise.resolve(restResponseSchema.parse(entry.response))
+  }
+
+  private settleTerminalWaiters(idempotencyKey: string): void {
+    const waiters = this.terminalWaiters.get(idempotencyKey)
+    if (!waiters) return
+    const terminal = this.readTerminal(idempotencyKey)
+    if (!terminal) return
+    this.terminalWaiters.delete(idempotencyKey)
+    void terminal.then(
+      (response) => {
+        for (const waiter of waiters) waiter.resolve(response)
+      },
+      (error: unknown) => {
+        const terminalError = error instanceof Error
+          ? error
+          : new Error('Cloud command delivery failed.')
+        for (const waiter of waiters) waiter.reject(terminalError)
+      }
+    )
   }
 }
 
@@ -280,14 +332,127 @@ function assertExpectedWriteResponse(
   if (response.type === 'rest.error') {
     throw new Error(response.error.message)
   }
-  const expected = kind === 'task.offer-decision' && request.type === 'task.offer.accept'
-    ? isExpectedTaskOfferClaimResponse(request, response)
-    : request.type === 'capability.approval.create'
-      ? response.type === 'capability.approval.created'
-      : request.type === 'capability.approval.result' || request.type === 'capability.approval.withdraw'
-        ? response.type === 'rest.entity' && response.entity.type === 'remote_capability_approval'
-        : response.type === 'rest.receipt' || response.type === 'rest.entity'
+  let expected: boolean
+  if (kind === 'task.offer-decision' && request.type === 'task.offer.accept') {
+    expected = isExpectedTaskOfferClaimResponse(request, response)
+  } else if (kind === 'task.external-operation') {
+    expected = isExpectedExternalOperationResponse(request, response)
+  } else if (kind === 'task.progress' && request.type === 'task.execution.start') {
+    expected = isExpectedTaskExecutionStartResponse(request, response, actor)
+  } else if (kind === 'task.failed' && request.type === 'task.execution.fail') {
+    expected = isExpectedTaskExecutionFailureResponse(request, response, actor)
+  } else if (kind === 'task.result' && request.type === 'task.result.submit') {
+    expected = isExpectedTaskResultSubmissionResponse(request, response, actor)
+  } else if (request.type === 'capability.approval.create') {
+    expected = response.type === 'capability.approval.created'
+  } else if (
+    request.type === 'capability.approval.result' ||
+    request.type === 'capability.approval.withdraw'
+  ) {
+    expected = response.type === 'rest.entity' && response.entity.type === 'remote_capability_approval'
+  } else {
+    expected = response.type === 'rest.receipt' || response.type === 'rest.entity'
+  }
   if (!expected) throw new Error(`Cloud write returned unexpected ${response.type}.`)
+}
+
+function isExpectedExternalOperationResponse(
+  request: RestRequest,
+  response: Exclude<RestResponse, { type: 'rest.error' }>
+): boolean {
+  if (response.requestId !== request.requestId) return false
+  if (request.type === 'external_operation.prepare') {
+    if (
+      response.type !== 'rest.entity' ||
+      response.entity.type !== 'external_operation_recovery_journal_entry'
+    ) return false
+    const journal = response.entity
+    return journal.scope === request.scope &&
+      journal.projectId === request.projectId &&
+      journal.taskId === request.taskId &&
+      journal.executionId === request.executionId &&
+      journal.preparedTaskRevision === request.preparedTaskRevision &&
+      journal.preparedExecutionRevision === request.preparedExecutionRevision &&
+      journal.provisioningIntentId === request.provisioningIntentId &&
+      journal.provisioningRevision === request.provisioningRevision &&
+      journal.logicalInvocationId === request.logicalInvocationId &&
+      journal.operation === request.operation &&
+      journal.state === 'prepared' &&
+      journal.requestDigest === request.requestDigest &&
+      journal.receiptDigest === null &&
+      journal.observationDigest === null &&
+      journal.safeFailureCode === null &&
+      journal.dispatchedAt === null &&
+      journal.resolvedAt === null &&
+      journal.revision === 1
+  }
+  if (request.type === 'external_operation.dispatch') {
+    if (
+      response.type !== 'rest.entity' ||
+      response.entity.type !== 'external_operation_recovery_journal_entry'
+    ) return false
+    const journal = response.entity
+    return journal.contentRecoveryJournalEntryId === request.journalEntryId &&
+      journal.state === 'dispatched' &&
+      journal.receiptDigest === null &&
+      journal.observationDigest === null &&
+      journal.safeFailureCode === null &&
+      journal.dispatchedAt !== null &&
+      journal.resolvedAt === null &&
+      journal.revision === request.expectedJournalRevision + 1
+  }
+  if (request.type !== 'external_operation.observe') return false
+  if (
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length < 1
+  ) return false
+  const [journal, ...companions] = response.items
+  if (
+    journal?.type !== 'external_operation_recovery_journal_entry' ||
+    journal.contentRecoveryJournalEntryId !== request.journalEntryId ||
+    journal.state !== request.outcome ||
+    journal.receiptDigest !== request.receiptDigest ||
+    journal.observationDigest !== request.observationDigest ||
+    journal.safeFailureCode !== request.safeFailureCode ||
+    journal.revision !== request.expectedJournalRevision + 1 ||
+    (request.outcome === 'outcome_unknown') !== (journal.resolvedAt === null)
+  ) return false
+  let previousRank = 0
+  for (const companion of companions) {
+    let rank: number
+    if (companion.type === 'visible_recovery_action') {
+      rank = 1
+      if (
+        companion.projectId !== journal.projectId ||
+        companion.journalEntryId !== journal.contentRecoveryJournalEntryId ||
+        companion.taskId !== journal.taskId ||
+        companion.executionId !== journal.executionId
+      ) return false
+    } else if (companion.type === 'task') {
+      rank = 2
+      if (
+        companion.projectId !== journal.projectId ||
+        companion.taskId !== journal.taskId
+      ) return false
+    } else if (companion.type === 'task_execution') {
+      rank = 3
+      if (
+        companion.projectId !== journal.projectId ||
+        companion.taskId !== journal.taskId ||
+        companion.executionId !== journal.executionId
+      ) return false
+    } else if (companion.type === 'project_content_provisioning_intent') {
+      rank = 4
+      if (
+        companion.projectId !== journal.projectId ||
+        companion.provisioningIntentId !== journal.provisioningIntentId
+      ) return false
+    } else return false
+    if (rank <= previousRank) return false
+    previousRank = rank
+  }
+  return true
 }
 
 function isExpectedCoordinatorResponse(
@@ -340,7 +505,8 @@ function isExpectedCoordinatorResponse(
       return isUserTaskOfferCollection(response, {
         outcome: 'created',
         projectId: request.projectId,
-        workerUserId: request.workerUserId,
+        taskId: canonicalTaskIdForPlanItem(request.projectPlanId, request.planItemId),
+        offeredByCoordinatorAgentId: actor.agentId,
         offerExpiresAt: request.offerExpiresAt,
         taskRevision: 1,
         offerRevision: 1
@@ -358,6 +524,7 @@ function isExpectedCoordinatorResponse(
         outcome: 'reassigned',
         taskId: request.taskId,
         workerUserId: request.workerUserId,
+        offeredByCoordinatorAgentId: actor.agentId,
         offerExpiresAt: request.offerExpiresAt,
         taskRevision: request.expectedTaskRevision + 1,
         offerRevision: 1
@@ -376,55 +543,25 @@ function isProjectCreatedResponse(
   actor: CoordinatorActor
 ): boolean {
   if (response.type !== 'rest.project_created') return false
-  const expectedMemberUserIds = request.content.members.map(({ userId }) => userId).sort()
-  const actualMemberUserIds = response.memberships.map(({ userId }) => userId).sort()
-  const commonFactsMatch = response.project.ownerUserId === actor.userId &&
+  const [ownerMembership] = response.memberships
+  return response.memberships.length === 1 &&
+    ownerMembership !== undefined &&
+    response.project.ownerUserId === actor.userId &&
     response.project.coordinatorAgentId === actor.agentId &&
     response.project.displayName === request.displayName &&
     response.project.goal === request.goal &&
-    response.project.contentMode === request.content.mode &&
-    response.project.status === 'paused' &&
+    response.project.contentMode === 'none' &&
+    response.project.status === 'draft' &&
     response.project.coordinatorAuthorityEpoch === 1 &&
     response.project.executionAuthorityEpoch === 1 &&
     response.project.revision === 1 &&
     canonicalJson(response.project.budget) === canonicalJson(request.budget) &&
-    canonicalJson(actualMemberUserIds) === canonicalJson(expectedMemberUserIds) &&
-    response.memberships.every((membership) => (
-      membership.projectId === response.project.projectId &&
-      membership.state === 'active' &&
-      membership.authorityEpoch === 1 &&
-      membership.revision === 1
-    ))
-  if (!commonFactsMatch) return false
-  if (request.content.mode === 'none') return response.provisioningIntent === null
-  const intent = response.provisioningIntent
-  if (intent === null) return false
-  const expectedDesiredMembers = request.content.members
-    .map((member) => ({
-      userId: member.userId,
-      providerPrincipalFactId: member.providerPrincipalFactId,
-      snapshottedFactRevision: member.expectedFactRevision
-    }))
-    .sort((left, right) => left.userId.localeCompare(right.userId))
-  const actualDesiredMembers = intent.desiredMembers
-    .map((member) => ({
-      userId: member.userId,
-      providerPrincipalFactId: member.providerPrincipalFactId,
-      snapshottedFactRevision: member.snapshottedFactRevision
-    }))
-    .sort((left, right) => left.userId.localeCompare(right.userId))
-  return intent.projectId === response.project.projectId &&
-    intent.provisioningRevision === 1 &&
-    intent.kind === 'initial_provisioning' &&
-    intent.state === 'pending' &&
-    intent.createdByOwnerUserId === actor.userId &&
-    intent.contentOwnerUserId === request.content.contentOwnerUserId &&
-    canonicalJson(intent.providerInstance) === canonicalJson(request.content.providerInstance) &&
-    canonicalJson(actualDesiredMembers) === canonicalJson(expectedDesiredMembers) &&
-    intent.containerDisplayName === request.content.containerDisplayName &&
-    intent.currentRootLocator === null &&
-    intent.currentBindingRevision === null &&
-    intent.revision === 1
+    ownerMembership.projectId === response.project.projectId &&
+    ownerMembership.userId === actor.userId &&
+    ownerMembership.state === 'active' &&
+    ownerMembership.authorityEpoch === 1 &&
+    ownerMembership.revision === 1 &&
+    response.provisioningIntent === null
 }
 
 function isProjectFinalSummaryCollection(
@@ -584,6 +721,7 @@ function isUserTaskOfferCollection(
     taskId?: string
     taskOfferId?: string
     workerUserId?: string
+    offeredByCoordinatorAgentId?: string
     offerExpiresAt?: string
     taskRevision?: number
     offerRevision?: number
@@ -604,6 +742,8 @@ function isUserTaskOfferCollection(
     (expected.taskId === undefined || task.taskId === expected.taskId) &&
     (expected.taskOfferId === undefined || offer.taskOfferId === expected.taskOfferId) &&
     (expected.workerUserId === undefined || offer.workerUserId === expected.workerUserId) &&
+    (expected.offeredByCoordinatorAgentId === undefined ||
+      offer.offeredByCoordinatorAgentId === expected.offeredByCoordinatorAgentId) &&
     (expected.offerExpiresAt === undefined || offer.expiresAt === expected.offerExpiresAt) &&
     (expected.taskRevision === undefined || task.revision === expected.taskRevision) &&
     (expected.offerRevision === undefined || offer.revision === expected.offerRevision) &&
@@ -661,6 +801,121 @@ function isExpectedTaskOfferClaimResponse(
     offer.revision === request.expectedOfferRevision + 1
 }
 
+function isExpectedTaskExecutionStartResponse(
+  request: Extract<RestRequest, { type: 'task.execution.start' }>,
+  response: Exclude<RestResponse, { type: 'rest.error' }>,
+  actor: CoordinatorActor
+): boolean {
+  if (
+    response.requestId !== request.requestId ||
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length !== 2
+  ) return false
+  const [task, execution] = response.items
+  return task?.type === 'task' &&
+    execution?.type === 'task_execution' &&
+    task.taskId === request.taskId &&
+    task.revision === request.expectedTaskRevision + 1 &&
+    task.status === 'in_progress' &&
+    task.currentExecutionId === request.executionId &&
+    task.currentExecutionState === 'running' &&
+    execution.taskId === task.taskId &&
+    execution.projectId === task.projectId &&
+    execution.executionId === request.executionId &&
+    execution.assigneeUserId === actor.userId &&
+    execution.assigneeAgentId === actor.agentId &&
+    execution.state === 'running' &&
+    execution.stateRevision === request.expectedExecutionRevision + 1 &&
+    execution.revision === request.expectedExecutionRevision + 1 &&
+    execution.startedAt === request.startedAt &&
+    execution.terminalAt === null &&
+    execution.fence.status === 'open'
+}
+
+function isExpectedTaskExecutionFailureResponse(
+  request: Extract<RestRequest, { type: 'task.execution.fail' }>,
+  response: Exclude<RestResponse, { type: 'rest.error' }>,
+  actor: CoordinatorActor
+): boolean {
+  if (
+    response.requestId !== request.requestId ||
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length !== 2
+  ) return false
+  const [task, execution] = response.items
+  return task?.type === 'task' &&
+    execution?.type === 'task_execution' &&
+    task.taskId === request.taskId &&
+    task.revision === request.expectedTaskRevision + 1 &&
+    task.status === 'failed' &&
+    task.currentExecutionId === request.executionId &&
+    task.currentExecutionState === 'failed' &&
+    task.completedAt === request.failedAt &&
+    execution.taskId === task.taskId &&
+    execution.projectId === task.projectId &&
+    execution.executionId === request.executionId &&
+    execution.assigneeUserId === actor.userId &&
+    execution.assigneeAgentId === actor.agentId &&
+    execution.state === 'failed' &&
+    execution.stateRevision === request.expectedExecutionRevision + 1 &&
+    execution.revision === request.expectedExecutionRevision + 1 &&
+    execution.terminalAt === request.failedAt &&
+    execution.fence.status === 'fenced' &&
+    execution.fence.reason === 'execution_failed' &&
+    execution.fence.fencedAt === request.failedAt
+}
+
+function isExpectedTaskResultSubmissionResponse(
+  request: Extract<RestRequest, { type: 'task.result.submit' }>,
+  response: Exclude<RestResponse, { type: 'rest.error' }>,
+  actor: CoordinatorActor
+): boolean {
+  if (
+    response.requestId !== request.requestId ||
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length !== 3
+  ) return false
+  const [task, execution, submission] = response.items
+  return task?.type === 'task' &&
+    execution?.type === 'task_execution' &&
+    submission?.type === 'task_result_submission' &&
+    task.taskId === request.taskId &&
+    task.revision === request.expectedTaskRevision + 1 &&
+    task.status === 'awaiting_review' &&
+    task.currentExecutionId === request.executionId &&
+    task.currentExecutionState === 'result_submitted' &&
+    execution.taskId === task.taskId &&
+    execution.projectId === task.projectId &&
+    execution.executionId === request.executionId &&
+    execution.assigneeUserId === actor.userId &&
+    execution.assigneeAgentId === actor.agentId &&
+    execution.state === 'result_submitted' &&
+    execution.stateRevision === request.expectedExecutionRevision + 1 &&
+    execution.revision === request.expectedExecutionRevision + 1 &&
+    execution.currentResultSubmissionId === submission.resultSubmissionId &&
+    execution.terminalAt === request.runtimeProvenance.completedAt &&
+    execution.fence.status === 'fenced' &&
+    execution.fence.reason === 'result_submitted' &&
+    execution.fence.fencedAt === request.runtimeProvenance.completedAt &&
+    submission.projectId === task.projectId &&
+    submission.taskId === task.taskId &&
+    submission.executionId === execution.executionId &&
+    submission.submittedByUserId === actor.userId &&
+    submission.submittedByAgentId === actor.agentId &&
+    submission.submittedTaskRevision === request.expectedTaskRevision &&
+    submission.submittedExecutionRevision === request.expectedExecutionRevision &&
+    submission.summary === request.summary &&
+    canonicalJson(submission.runtimeProvenance) === canonicalJson(request.runtimeProvenance) &&
+    canonicalJson(submission.outputs) === canonicalJson(request.outputs) &&
+    canonicalJson(submission.recoveryJournalEntryIds) ===
+      canonicalJson(request.recoveryJournalEntryIds) &&
+    submission.submissionDigest === request.submissionDigest &&
+    submission.revision === 1
+}
+
 function requireOutbox(
   entries: CollaborationOutboxEntry[],
   outboxId: string
@@ -698,8 +953,9 @@ function sha256(value: string): string {
 
 function idempotentCommandHash(value: unknown): string {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return sha256(canonicalJson(value))
-  const { requestId: _requestId, ...command } = value as Record<string, unknown>
-  return sha256(canonicalJson(command))
+  return sha256(canonicalJson(idempotencyComparableCommandProjection(
+    value as Record<string, unknown>
+  )))
 }
 
 type CommandSupersession = Readonly<{

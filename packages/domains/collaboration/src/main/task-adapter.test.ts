@@ -8,6 +8,7 @@ import {
   taskOfferSchema,
   taskExecutionPreflightSchema,
   taskExecutionSchema,
+  taskResultSubmissionSchema,
   taskSchema,
   type RestRequest,
   type RestResponse,
@@ -330,6 +331,41 @@ test('post-claim Cloud authority denial closes the execution through the canonic
   assert.deepEqual(cloud.preflightExpectedRevisions, [{ task: 1, execution: 1 }])
   assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), ['task.execution.fail'])
   assert.equal(created.store.snapshot().taskRuns[0]?.state, 'failed')
+})
+
+test('membership-removal Cloud denial reaches neither Provider DownloadCheck nor upload-new', async () => {
+  const cloud = new FakeWorkerCloud('running', true)
+  cloud.denyPreflight('membership_removal')
+  const initial = emptyState()
+  initial.tasks = [cloud.task]
+  initial.taskRuns = [durableTaskRun(cloud, {
+    expectedTaskRevision: cloud.task.revision,
+    expectedExecutionRevision: cloud.execution.revision
+  })]
+  const systemCapabilityCalls: string[] = []
+  let agentRuns = 0
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => {
+      agentRuns += 1
+      throw new Error('A removed member must not reach Runtime or Provider transfer.')
+    }
+  }, initial, capabilityInvoker(async (contract) => {
+    systemCapabilityCalls.push(contract.actionId)
+    throw new Error(`Removed membership reached ${contract.actionId}.`)
+  }))
+
+  await created.adapter.recover()
+  await created.adapter.waitForIdle()
+
+  assert.equal(agentRuns, 0)
+  assert.deepEqual(systemCapabilityCalls, [])
+  assert.deepEqual(cloud.preflight().decision, {
+    outcome: 'denied',
+    reasons: ['membership_not_active', 'user_authority_not_eligible', 'execution_fenced']
+  })
+  assert.equal(cloud.commands.includes('external_operation.prepare'), false)
+  assert.equal(cloud.commands.includes('task.result.submit'), false)
 })
 
 test('an unavailable Device leaves the User offer unclaimed without rejecting it globally', async () => {
@@ -1562,7 +1598,7 @@ class FakeWorkerCloud {
     typeof externalOperationRecoveryJournalEntrySchema.parse
   >>()
   private recoveryJournalOrdinal = 0
-  private preflightDenied = false
+  private preflightDenial: 'none' | 'execution_fenced' | 'membership_removal' = 'none'
   private readonly recoveryResources = new Map<string, ReturnType<typeof cloudResourceRefSchema.parse>>()
 
   constructor(
@@ -1599,9 +1635,16 @@ class FakeWorkerCloud {
     requestedTaskRevision = this.task.revision,
     requestedExecutionRevision = this.execution.revision
   ) {
+    const membershipRemoved = this.preflightDenial === 'membership_removal'
     const decisionReasons = [
-      ...(this.preflightDenied || this.execution.fence.status === 'fenced'
-        ? ['execution_fenced' as const]
+      ...(membershipRemoved
+        ? [
+            'membership_not_active' as const,
+            'user_authority_not_eligible' as const,
+            'execution_fenced' as const
+          ]
+        : this.preflightDenial === 'execution_fenced' || this.execution.fence.status === 'fenced'
+          ? ['execution_fenced' as const]
         : []),
       ...(this.task.currentExecutionId === this.execution.executionId
         ? []
@@ -1631,13 +1674,13 @@ class FakeWorkerCloud {
         projectMembershipId: 'pmb_Member000001',
         projectId: TEST_IDS.projectId,
         userId: TEST_IDS.userId,
-        state: 'active',
-        authorityEpoch: 1,
+        state: membershipRemoved ? 'membership_removal_pending' : 'active',
+        authorityEpoch: membershipRemoved ? 2 : 1,
         activatedAt: TEST_TIMESTAMP,
-        removalRequestedAt: null,
-        removalRequestedByUserId: null,
+        removalRequestedAt: membershipRemoved ? TEST_LATER_TIMESTAMP : null,
+        removalRequestedByUserId: membershipRemoved ? TEST_IDS.secondUserId : null,
         removedAt: null,
-        revision: 1,
+        revision: membershipRemoved ? 2 : 1,
         createdAt: TEST_TIMESTAMP,
         updatedAt: TEST_TIMESTAMP
       },
@@ -1648,9 +1691,9 @@ class FakeWorkerCloud {
         projectId: TEST_IDS.projectId,
         userId: TEST_IDS.userId,
         scope: this.fileMode ? 'file_tasks' : 'text_tasks',
-        state: 'eligible',
-        authorityEpoch: 1,
-        reason: null,
+        state: membershipRemoved ? 'fenced' : 'eligible',
+        authorityEpoch: membershipRemoved ? 2 : 1,
+        reason: membershipRemoved ? 'membership_removal_pending' : null,
         effectiveAt: TEST_TIMESTAMP,
         revision: 1,
         createdAt: TEST_TIMESTAMP,
@@ -1753,11 +1796,11 @@ class FakeWorkerCloud {
         }
         if (request.type === 'task.execution.start') {
           this.advance('running')
-          return entityResponse(request, this.execution)
+          return collectionResponse(request, [this.task, this.execution])
         }
         if (request.type === 'task.execution.fail') {
           this.advance('failed')
-          return entityResponse(request, this.execution)
+          return collectionResponse(request, [this.task, this.execution])
         }
         if (request.type === 'external_operation.prepare') {
           this.recoveryJournalOrdinal += 1
@@ -1817,7 +1860,7 @@ class FakeWorkerCloud {
             updatedAt: TEST_LATER_TIMESTAMP
           })
           this.recoveryJournals.set(entry.contentRecoveryJournalEntryId, entry)
-          return entityResponse(request, entry)
+          return collectionResponse(request, [entry])
         }
         if (request.type === 'human.needed.create') {
           assert.deepEqual(request.context, {
@@ -1838,10 +1881,8 @@ class FakeWorkerCloud {
         if (request.type === 'task.result.submit') {
           assert.equal(request.outputs.length, this.fileMode ? 1 : 0)
           assert.equal(request.recoveryJournalEntryIds.length, this.fileMode ? 2 : 0)
-          return entityResponse(request, {
-            type: 'task_result_submission',
-            resultSubmissionId: 'rsu_Result000001'
-          })
+          const submitted = this.submitResult(request)
+          return collectionResponse(request, [this.task, this.execution, submitted])
         }
         throw new Error(`Unexpected command ${request.type}.`)
       }
@@ -1854,8 +1895,8 @@ class FakeWorkerCloud {
     this.recoveryJournals.set(entry.contentRecoveryJournalEntryId, entry)
   }
 
-  denyPreflight(): void {
-    this.preflightDenied = true
+  denyPreflight(reason: 'execution_fenced' | 'membership_removal' = 'execution_fenced'): void {
+    this.preflightDenial = reason
   }
 
   enterManualRecovery(resource: ReturnType<typeof cloudResourceRefSchema.parse>): void {
@@ -1950,6 +1991,53 @@ class FakeWorkerCloud {
       fileIntent: this.fileMode ? fileExecutionIntent(assignmentTaskRevision) : null
     })
     this.task = makeTask(state, taskRevision, this.fileMode)
+  }
+
+  private submitResult(request: Extract<RestRequest, { type: 'task.result.submit' }>) {
+    const resultSubmissionId = 'rsu_Result000001'
+    this.execution = taskExecutionSchema.parse({
+      ...this.execution,
+      state: 'result_submitted',
+      stateRevision: this.execution.stateRevision + 1,
+      currentResultSubmissionId: resultSubmissionId,
+      terminalAt: request.runtimeProvenance.completedAt,
+      fence: {
+        ...this.execution.fence,
+        status: 'fenced',
+        reason: 'result_submitted',
+        fencedAt: request.runtimeProvenance.completedAt
+      },
+      revision: this.execution.revision + 1,
+      updatedAt: TEST_LATER_TIMESTAMP
+    })
+    this.task = taskSchema.parse({
+      ...this.task,
+      status: 'awaiting_review',
+      currentExecutionState: 'result_submitted',
+      revision: this.task.revision + 1,
+      updatedAt: TEST_LATER_TIMESTAMP
+    })
+    return taskResultSubmissionSchema.parse({
+      schemaVersion: 1,
+      type: 'task_result_submission',
+      resultSubmissionId,
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      submittedTaskRevision: request.expectedTaskRevision,
+      submittedExecutionRevision: request.expectedExecutionRevision,
+      submittedByUserId: TEST_IDS.userId,
+      submittedByAgentId: TEST_IDS.agentId,
+      summary: request.summary,
+      runtimeProvenance: request.runtimeProvenance,
+      outputs: request.outputs,
+      recoveryJournalEntryIds: request.recoveryJournalEntryIds,
+      submittedAt: request.runtimeProvenance.completedAt,
+      submissionDigest: request.submissionDigest,
+      revision: 1,
+      createdAt: TEST_LATER_TIMESTAMP,
+      updatedAt: TEST_LATER_TIMESTAMP
+    })
   }
 
   private requireRecoveryJournal(journalEntryId: string) {

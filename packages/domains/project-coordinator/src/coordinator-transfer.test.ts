@@ -56,6 +56,7 @@ test('Owner transfer derives every Cloud CAS fact from the exact fresh Owner Age
     coordinatorCloudCommands: unusedCoordinatorCommands(),
     transport,
     state: new ProjectCoordinatorStateStore(memorySettings()),
+    continuation: { reconcileProject: async () => current },
     requestId: () => 'req_CoordinatorTransfer01'
   })
 
@@ -93,6 +94,7 @@ test('durable Coordinator transfer Inbox records explicit old-authority fencing 
     coordinatorCloudCommands: unusedCoordinatorCommands(),
     transport: unusedTransport(),
     state,
+    continuation: { reconcileProject: async () => workspace },
     requestId: () => 'req_CoordinatorTransferInbox'
   })
   const message = agentInboxMessageSchema.parse({
@@ -145,6 +147,7 @@ function transferWorkspace(transferred: boolean) {
     observedAt: TEST_TIMESTAMP,
     focusedProjectId: TEST_IDS.projectId,
     availableWorkerUsers: [],
+    providerPrincipalFacts: [],
     projects: [{
       project,
       plan: null,

@@ -287,6 +287,7 @@ export function toProjectContentProvisioningAttestation(
   return projectContentProvisioningAttestationSchema.parse({
     schemaVersion: 1,
     type: 'project_content_provisioning_attestation',
+    format: 'sciforge.project-content-provisioning-attestation.v1',
     ...attestation
   })
 }

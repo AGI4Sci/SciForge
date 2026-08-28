@@ -407,10 +407,10 @@ export function SidebarProjectsSection({
           type="button"
           onClick={toggleAllGroups}
           className="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-muted"
-          title={t('sidebarProjects')}
-          aria-label={t('sidebarProjects')}
+          title={t('sidebarLocalWorkspaces')}
+          aria-label={t('sidebarLocalWorkspaces')}
         >
-          <span className="truncate">{t('sidebarProjects')}</span>
+          <span className="truncate">{t('sidebarLocalWorkspaces')}</span>
           {allGroupsCollapsed ? (
             <ChevronRight className="h-3 w-3 shrink-0" strokeWidth={2} />
           ) : (

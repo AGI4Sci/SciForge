@@ -570,10 +570,10 @@ describe('production HTTP OIDC-only boundary', () => {
       items: [{ userId: identity.userId }] })
     const projectCommand = {
       protocolVersion: '1.0', requestId: 'req_HttpProjectCreate1', type: 'project.create',
+      createIntentId: 'pct_HttpProjectCreate01',
       idempotencyKey: 'idem_http_project_create_01', displayName: 'HTTP meeting',
       goal: 'Verify the canonical atomic response.',
-      budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 },
-      content: { mode: 'none', members: [{ userId: identity.userId }] }
+      budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 }
     } as const
     const oidcCreate = await postCommand(baseUrl, {
       ...projectCommand,
@@ -586,7 +586,7 @@ describe('production HTTP OIDC-only boundary', () => {
     expect(project.status).toBe(200)
     const projectBody = await project.json() as { project: { projectId: string } }
     expect(projectBody).toMatchObject({ type: 'rest.project_created',
-      project: { ownerUserId: identity.userId, status: 'paused', contentMode: 'none' },
+      project: { ownerUserId: identity.userId, status: 'draft', contentMode: 'none' },
       memberships: [{ userId: identity.userId, state: 'active' }], provisioningIntent: null })
 
     const projects = await postCommand(baseUrl, {

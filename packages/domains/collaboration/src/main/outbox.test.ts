@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   createCollaborationError,
+  restRequestSchema,
   restResponseSchema,
   taskOfferSchema,
   type RestRequest,
@@ -18,6 +19,7 @@ import {
   projectRecordFixture,
   taskFixture
 } from '@sciforge/collaboration-contracts/testing'
+import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts/node'
 import { DurableCloudOutbox } from './outbox.js'
 import { createTestAgentCloudRuntime } from './test-agent-cloud-runtime.js'
 import {
@@ -70,6 +72,63 @@ test('a pending command wakes after exact Agent authority becomes ready', async 
   assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
   assert.equal(authority.attempts, 1)
   assert.equal(authority.businessCommits, 1)
+})
+
+test('enqueueAndWait joins the exact pending command until authority wakes it to one terminal receipt', async () => {
+  const store = await localStore()
+  let ready = false
+  let attempts = 0
+  let projectsCreated = 0
+  const command = coordinatorProjectCreateCommand()
+  const outbox = new DurableCloudOutbox({
+    store,
+    agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: async (agentId) => ready
+        ? {
+            state: 'ready',
+            agentId,
+            userId: agentNodeFixture.ownerUserId,
+            deviceId: agentNodeFixture.deviceId!,
+            generation: agentNodeFixture.credentialVersion,
+            runtimeId: 'codex',
+            capabilityTags: ['agent-runtime.codex', 'model-access.api']
+          }
+        : { state: 'agent_required', agentId },
+      execute: async (_agentId, request) => {
+        attempts += 1
+        projectsCreated += 1
+        return coordinatorProjectCreatedResponse(request)
+      }
+    }),
+    localAgentId: () => TEST_IDS.agentId
+  })
+
+  await outbox.enqueue('coordinator.command', command)
+  await outbox.waitForIdle()
+  let settled = 0
+  const first = outbox.enqueueAndWait('coordinator.command', command).then((response) => {
+    settled += 1
+    return response
+  })
+  const second = outbox.enqueueAndWait('coordinator.command', {
+    ...command,
+    requestId: 'req_ProjectCreateRetry1'
+  }).then((response) => {
+    settled += 1
+    return response
+  })
+  await outbox.waitForIdle()
+
+  assert.equal(settled, 0)
+  assert.equal(store.snapshot().outbox.length, 1)
+  assert.equal(store.snapshot().outbox[0]?.state, 'pending')
+  ready = true
+  outbox.wake()
+  const expected = coordinatorProjectCreatedResponse(command)
+  assert.deepEqual(await Promise.all([first, second]), [expected, expected])
+  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+  assert.equal(attempts, 1)
+  assert.equal(projectsCreated, 1)
 })
 
 test('a current Worker availability supersedes stale undelivered heartbeat facts', async () => {
@@ -276,16 +335,6 @@ test('delivers project.create through its exact canonical creation response', as
   assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
 })
 
-test('delivers content-required project.create with its exact provisioning intent', async () => {
-  const store = await localStore()
-  const command = coordinatorContentProjectCreateCommand()
-  const response = coordinatorContentProjectCreatedResponse(command)
-  const outbox = coordinatorOutbox(store, async () => response)
-
-  assert.deepEqual(await outbox.enqueueAndWait('coordinator.command', command), response)
-  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
-})
-
 test('rejects a project.create response whose durable facts drift from the request', async () => {
   const store = await localStore()
   const command = coordinatorProjectCreateCommand()
@@ -392,6 +441,34 @@ test('delivers task.offer.reassign only through its exact replacement collection
   assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
 })
 
+test('delivers external_operation.observe through its exact canonical recovery collection', async () => {
+  const store = await localStore()
+  const command = externalOperationObserveCommand()
+  const response = externalOperationObservedCollection(command)
+  const outbox = coordinatorOutbox(store, async () => response)
+
+  assert.deepEqual(await outbox.enqueueAndWait('task.external-operation', command), response)
+  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+})
+
+test('rejects an external_operation.observe collection whose journal facts drift', async () => {
+  const store = await localStore()
+  const command = externalOperationObserveCommand()
+  const response = externalOperationObservedCollection(command)
+  assert.equal(response.type, 'rest.collection')
+  const [journal] = response.items
+  assert.equal(journal?.type, 'external_operation_recovery_journal_entry')
+  const drifted = restResponseSchema.parse({
+    ...response,
+    items: [{ ...journal, observationDigest: 'd'.repeat(64) }]
+  })
+  const outbox = coordinatorOutbox(store, async () => drifted)
+
+  await assert.rejects(outbox.enqueueAndWait('task.external-operation', command))
+  assert.equal(store.snapshot().outbox[0]?.state, 'failed')
+  assert.equal(store.snapshot().outbox[0]?.response, undefined)
+})
+
 test('rejects collection response drift instead of treating an arbitrary page as write success', async () => {
   const store = await localStore()
   const command = coordinatorCreateCommand()
@@ -408,7 +485,7 @@ test('rejects collection response drift instead of treating an arbitrary page as
   assert.equal(store.snapshot().outbox[0]?.response, undefined)
 })
 
-test('recovers an idempotent Coordinator collection after the first response is lost', async () => {
+test('a repeated idempotent Coordinator command retries its original durable body after response loss', async () => {
   const store = await localStore()
   const command = coordinatorCreateCommand()
   const committedResponse = coordinatorOfferCollection(command)
@@ -431,18 +508,14 @@ test('recovers an idempotent Coordinator collection after the first response is 
 
   await assert.rejects(outbox.enqueueAndWait('coordinator.command', command))
   assert.equal(store.snapshot().outbox[0]?.state, 'failed')
-  await outbox.retry('idem_task.offer.create-outbox-01')
-  await outbox.waitForIdle()
-
-  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
-  assert.deepEqual(store.snapshot().outbox[0]?.response, committedResponse)
-  assert.equal(attempts, 2)
-  assert.equal(businessCommits, 1)
   assert.deepEqual(
     await outbox.enqueueAndWait('coordinator.command', command),
     committedResponse
   )
+  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+  assert.deepEqual(store.snapshot().outbox[0]?.response, committedResponse)
   assert.equal(attempts, 2)
+  assert.equal(businessCommits, 1)
 })
 
 test('does not change existing fire-and-retry outbox error semantics', async () => {
@@ -690,6 +763,7 @@ function coordinatorProjectCreateCommand(): RestRequest {
     requestId: TEST_IDS.requestId,
     idempotencyKey: 'idem_project.create-outbox-01',
     type: 'project.create',
+    createIntentId: 'pct_OutboxCreateIntent01',
     displayName: 'Durable Project',
     goal: 'Create a durable collaboration Project exactly once.',
     budget: {
@@ -697,13 +771,6 @@ function coordinatorProjectCreateCommand(): RestRequest {
       maxTasksPerRound: 4,
       maxCoordinationRounds: 10,
       maxTaskRetries: 2
-    },
-    content: {
-      mode: 'none',
-      members: [
-        { userId: TEST_IDS.userId },
-        { userId: TEST_IDS.secondUserId }
-      ]
     }
   }
 }
@@ -719,16 +786,15 @@ function coordinatorProjectCreatedResponse(request: RestRequest): RestResponse {
       displayName: request.displayName,
       goal: request.goal,
       budget: request.budget,
-      status: 'paused'
+      contentMode: 'none',
+      status: 'draft'
     },
-    memberships: request.content.members.map(({ userId }, index) => ({
+    memberships: [{
       schemaVersion: 1,
       type: 'project_membership',
-      projectMembershipId: index === 0
-        ? TEST_IDS.projectMembershipId
-        : 'pmb_Member000002',
+      projectMembershipId: TEST_IDS.projectMembershipId,
       projectId: TEST_IDS.projectId,
-      userId,
+      userId: TEST_IDS.userId,
       state: 'active',
       authorityEpoch: 1,
       activatedAt: TEST_TIMESTAMP,
@@ -738,111 +804,9 @@ function coordinatorProjectCreatedResponse(request: RestRequest): RestResponse {
       revision: 1,
       createdAt: TEST_TIMESTAMP,
       updatedAt: TEST_TIMESTAMP
-    })),
+    }],
     provisioningIntent: null
   })
-}
-
-function coordinatorContentProjectCreateCommand(): RestRequest {
-  const command = coordinatorProjectCreateCommand()
-  assert.equal(command.type, 'project.create')
-  return {
-    ...command,
-    idempotencyKey: 'idem_project.create-content-outbox-01',
-    content: {
-      mode: 'required',
-      contentOwnerUserId: TEST_IDS.userId,
-      providerInstance: {
-        schemaVersion: 1,
-        type: 'provider_instance_reference',
-        providerInstanceRef: 'provider-instance-alpha'
-      },
-      containerDisplayName: 'Durable Project Team Library',
-      members: [{
-        userId: TEST_IDS.userId,
-        providerPrincipalFactId: TEST_IDS.providerPrincipalFactId,
-        expectedFactRevision: 1
-      }, {
-        userId: TEST_IDS.secondUserId,
-        providerPrincipalFactId: 'ppf_Principal00002',
-        expectedFactRevision: 2
-      }]
-    }
-  }
-}
-
-function coordinatorContentProjectCreatedResponse(request: RestRequest): RestResponse {
-  assert.equal(request.type, 'project.create')
-  assert.equal(request.content.mode, 'required')
-  const content = request.content
-  return restResponseSchema.parse({
-    protocolVersion: '1.0',
-    type: 'rest.project_created',
-    requestId: request.requestId,
-    project: {
-      ...projectFixture,
-      displayName: request.displayName,
-      goal: request.goal,
-      budget: request.budget,
-      contentMode: 'required',
-      status: 'paused'
-    },
-    memberships: projectCreationMemberships(request),
-    provisioningIntent: {
-      schemaVersion: 1,
-      type: 'project_content_provisioning_intent',
-      provisioningIntentId: TEST_IDS.provisioningIntentId,
-      projectId: TEST_IDS.projectId,
-      provisioningRevision: 1,
-      kind: 'initial_provisioning',
-      state: 'pending',
-      createdByOwnerUserId: TEST_IDS.userId,
-      contentOwnerUserId: content.contentOwnerUserId,
-      providerInstance: content.providerInstance,
-      desiredMembers: content.members.map((member, index) => ({
-        userId: member.userId,
-        providerPrincipalFactId: member.providerPrincipalFactId,
-        snapshottedFactRevision: member.expectedFactRevision,
-        principal: {
-          schemaVersion: 1,
-          type: 'provider_directory_principal_reference',
-          providerInstance: content.providerInstance,
-          principalKind: 'user',
-          principalId: `principal-${index + 1}`
-        }
-      })),
-      containerDisplayName: content.containerDisplayName,
-      currentRootLocator: null,
-      currentBindingRevision: null,
-      intentDigest: TEST_HASH,
-      revision: 1,
-      createdAt: TEST_TIMESTAMP,
-      updatedAt: TEST_TIMESTAMP
-    }
-  })
-}
-
-function projectCreationMemberships(
-  request: Extract<RestRequest, { type: 'project.create' }>
-): unknown[] {
-  return request.content.members.map(({ userId }, index) => ({
-    schemaVersion: 1,
-    type: 'project_membership',
-    projectMembershipId: index === 0
-      ? TEST_IDS.projectMembershipId
-      : 'pmb_Member000002',
-    projectId: TEST_IDS.projectId,
-    userId,
-    state: 'active',
-    authorityEpoch: 1,
-    activatedAt: TEST_TIMESTAMP,
-    removalRequestedAt: null,
-    removalRequestedByUserId: null,
-    removedAt: null,
-    revision: 1,
-    createdAt: TEST_TIMESTAMP,
-    updatedAt: TEST_TIMESTAMP
-  }))
 }
 
 function coordinatorHumanNeededCommand(): RestRequest {
@@ -1198,7 +1162,6 @@ function coordinatorCreateCommand(): RestRequest {
     projectPlanId: TEST_IDS.projectPlanId,
     expectedPlanRevision: 1,
     planItemId: 'item_Plan00000001',
-    workerUserId: TEST_IDS.secondUserId,
     offerExpiresAt: TEST_LATER_TIMESTAMP
   }
 }
@@ -1226,7 +1189,10 @@ function coordinatorOfferCollection(request: RestRequest): RestResponse {
   const taskRevision = request.type === 'task.offer.reassign'
     ? request.expectedTaskRevision + 1
     : 1
-  const workerUserId = request.type === 'task.offer.create' || request.type === 'task.offer.reassign'
+  const taskId = request.type === 'task.offer.create'
+    ? canonicalTaskIdForPlanItem(request.projectPlanId, request.planItemId)
+    : TEST_IDS.taskId
+  const workerUserId = request.type === 'task.offer.reassign'
     ? request.workerUserId
     : TEST_IDS.secondUserId
   const offer = taskOfferSchema.parse({
@@ -1234,7 +1200,7 @@ function coordinatorOfferCollection(request: RestRequest): RestResponse {
     type: 'task_offer',
     taskOfferId: TEST_IDS.taskOfferId,
     projectId: TEST_IDS.projectId,
-    taskId: TEST_IDS.taskId,
+    taskId,
     executionId: null,
     workerUserId,
     offeredByCoordinatorAgentId: TEST_IDS.agentId,
@@ -1252,6 +1218,7 @@ function coordinatorOfferCollection(request: RestRequest): RestResponse {
     requestId: request.requestId,
     items: [{
       ...taskFixture,
+      taskId,
       revision: taskRevision,
       updatedAt: taskRevision === 1 ? TEST_TIMESTAMP : TEST_LATER_TIMESTAMP
     }, offer]
@@ -1293,6 +1260,57 @@ function coordinatorReassignCollection(request: RestRequest): RestResponse {
   return restResponseSchema.parse({
     ...created,
     items: [task, { ...offer, taskOfferId: 'ofr_Offer00000002' }]
+  })
+}
+
+function externalOperationObserveCommand(): Extract<RestRequest, { type: 'external_operation.observe' }> {
+  return restRequestSchema.parse({
+    protocolVersion: '1.0',
+    type: 'external_operation.observe',
+    requestId: 'req_ExternalObserve01',
+    idempotencyKey: 'idem_external-operation-observe-01',
+    journalEntryId: TEST_IDS.contentRecoveryJournalEntryId,
+    expectedJournalRevision: 2,
+    outcome: 'observed_success',
+    receiptDigest: 'b'.repeat(64),
+    observationDigest: 'c'.repeat(64),
+    safeFailureCode: null
+  }) as Extract<RestRequest, { type: 'external_operation.observe' }>
+}
+
+function externalOperationObservedCollection(
+  request: Extract<RestRequest, { type: 'external_operation.observe' }>
+): RestResponse {
+  return restResponseSchema.parse({
+    protocolVersion: '1.0',
+    type: 'rest.collection',
+    requestId: request.requestId,
+    items: [{
+      schemaVersion: 1,
+      type: 'external_operation_recovery_journal_entry',
+      contentRecoveryJournalEntryId: request.journalEntryId,
+      scope: 'task_content_transfer',
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      preparedTaskRevision: 2,
+      preparedExecutionRevision: 2,
+      provisioningIntentId: null,
+      provisioningRevision: null,
+      logicalInvocationId: 'download-input-01',
+      operation: 'download',
+      state: request.outcome,
+      requestDigest: TEST_HASH,
+      receiptDigest: request.receiptDigest,
+      observationDigest: request.observationDigest,
+      safeFailureCode: request.safeFailureCode,
+      preparedAt: TEST_TIMESTAMP,
+      dispatchedAt: TEST_LATER_TIMESTAMP,
+      resolvedAt: TEST_LATER_TIMESTAMP,
+      revision: request.expectedJournalRevision + 1,
+      createdAt: TEST_TIMESTAMP,
+      updatedAt: TEST_LATER_TIMESTAMP
+    }]
   })
 }
 

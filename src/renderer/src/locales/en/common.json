@@ -404,7 +404,7 @@
   "workspaceCardHint": "Threads use this folder as workspace",
   "sidebarThreadsLabel": "Threads",
   "sidebarThreadsCount": "threads",
-  "sidebarProjects": "Projects",
+  "sidebarLocalWorkspaces": "Local Workspaces",
   "sidebarCollapse": "Collapse sidebar",
   "sidebarExpand": "Expand sidebar",
   "workspaceNotSelected": "No local folder selected yet",

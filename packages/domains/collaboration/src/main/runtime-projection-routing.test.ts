@@ -65,6 +65,18 @@ test('runtime reserves Project lifecycle and Coordinator feedback for the single
     type: 'project.started'
   } as AgentInboxMessage['payload']), true)
   assert.equal(isCoordinatorProjectInboxPayload({
+    type: 'project.plan.confirmed'
+  } as AgentInboxMessage['payload']), true)
+  assert.equal(isCoordinatorProjectInboxPayload({
+    type: 'task.result.submitted'
+  } as AgentInboxMessage['payload']), true)
+  assert.equal(isCoordinatorProjectInboxPayload({
+    type: 'project_record.submitted'
+  } as AgentInboxMessage['payload']), true)
+  assert.equal(isWorkerTaskInboxPayload({
+    type: 'project_record.submitted'
+  } as AgentInboxMessage['payload']), false)
+  assert.equal(isCoordinatorProjectInboxPayload({
     type: 'coordinator.transferred'
   } as AgentInboxMessage['payload']), true)
   assert.equal(isCoordinatorProjectInboxPayload({

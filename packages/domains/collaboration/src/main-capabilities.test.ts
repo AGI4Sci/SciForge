@@ -31,13 +31,19 @@ import {
 } from './main.js'
 import {
   COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRIBUTION,
-  COLLABORATION_RUNTIME_LIFECYCLE_CONTRIBUTION
+  COLLABORATION_RUNTIME_LIFECYCLE_CONTRIBUTION,
+  COLLABORATION_WORKER_SESSION_PROJECTION_CONTRIBUTION
 } from './definition.js'
 import {
   COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION,
   COORDINATOR_CLOUD_COMMAND_SERVICE_ID,
   type CoordinatorCloudCommandService
 } from './coordinator-cloud-command.js'
+import {
+  WORKER_SESSION_PROJECTION_CONTRACT_VERSION,
+  WORKER_SESSION_PROJECTION_SERVICE_ID,
+  type WorkerSessionProjectionService
+} from './worker-session-projection.js'
 import {
   collaborationStatePath,
   type CollaborationRuntime,
@@ -234,16 +240,17 @@ test('the Collaboration entry publishes one Coordinator command service backed b
     executeCoordinatorCloudCommand: async (command: unknown) => {
       coordinatorCommand = command
       return fenceResponse
-    }
+    },
+    listWorkerSessionBindings: () => []
   } as unknown as CollaborationRuntime
-  let registration: DomainMainInternalServiceRegistration | undefined
+  const registrations: DomainMainInternalServiceRegistration[] = []
 
   const entry = createDomainMainEntry<CollaborationCapabilityOptions>({
     getUserDataDir: () => '/unused',
     defineCapability: (definition) => definition,
     packageSettings,
     internalServices: {
-      register: (value) => { registration = value },
+      register: (value) => { registrations.push(value) },
       acquire: ((serviceId: string, contractVersion: string) => {
         acquisitions.push({ serviceId, contractVersion })
         return serviceId === AGENT_CLOUD_RUNTIME_SERVICE_ID ? agentCloudRuntime : transport
@@ -256,10 +263,19 @@ test('the Collaboration entry publishes one Coordinator command service backed b
   })
 
   assert.deepEqual(acquisitions, [])
-  assert.equal(registration?.serviceId, COORDINATOR_CLOUD_COMMAND_SERVICE_ID)
-  assert.equal(registration?.contractVersion, COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION)
-  assert.deepEqual(registration?.allowedConsumerModuleIds, ['sciforge.project-coordinator'])
-  const coordinatorService = registration?.service as CoordinatorCloudCommandService
+  const coordinatorRegistration = registrations.find(({ serviceId }) => (
+    serviceId === COORDINATOR_CLOUD_COMMAND_SERVICE_ID
+  ))
+  assert.equal(coordinatorRegistration?.contractVersion, COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION)
+  assert.deepEqual(coordinatorRegistration?.allowedConsumerModuleIds, ['sciforge.project-coordinator'])
+  const coordinatorService = coordinatorRegistration?.service as CoordinatorCloudCommandService
+  const workerRegistration = registrations.find(({ serviceId }) => (
+    serviceId === WORKER_SESSION_PROJECTION_SERVICE_ID
+  ))
+  assert.equal(workerRegistration?.contractVersion, WORKER_SESSION_PROJECTION_CONTRACT_VERSION)
+  assert.deepEqual(workerRegistration?.allowedConsumerModuleIds, ['sciforge.project-coordinator'])
+  const workerService = workerRegistration?.service as WorkerSessionProjectionService
+  assert.throws(() => workerService.listBindings(), /runtime is not active/u)
   const command = {
     protocolVersion: '1.0' as const,
     requestId: TEST_IDS.requestId,
@@ -286,6 +302,15 @@ test('the Collaboration entry publishes one Coordinator command service backed b
     location: 'main.internal-service-descriptor',
     serviceId: COORDINATOR_CLOUD_COMMAND_SERVICE_ID,
     contractVersion: COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION,
+    allowedConsumerModuleIds: ['sciforge.project-coordinator']
+  })
+  const workerDescriptorContribution = entry.contributions.find(({ id }) => (
+    id === COLLABORATION_WORKER_SESSION_PROJECTION_CONTRIBUTION.id
+  ))
+  assert.deepEqual(workerDescriptorContribution?.value, {
+    location: 'main.internal-service-descriptor',
+    serviceId: WORKER_SESSION_PROJECTION_SERVICE_ID,
+    contractVersion: WORKER_SESSION_PROJECTION_CONTRACT_VERSION,
     allowedConsumerModuleIds: ['sciforge.project-coordinator']
   })
 
@@ -317,6 +342,7 @@ test('the Collaboration entry publishes one Coordinator command service backed b
   assert.equal(typeof runtimeOptions?.coordinatorInboxHandler?.(), 'function')
   assert.deepEqual(await coordinatorService.execute(command), fenceResponse)
   assert.deepEqual(coordinatorCommand, command)
+  assert.deepEqual(workerService.listBindings(), [])
   assert.equal(typeof deactivate, 'function')
   await deactivate?.()
   assert.equal(deactivationCount, 1)

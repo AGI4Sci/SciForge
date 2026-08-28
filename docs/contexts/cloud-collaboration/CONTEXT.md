@@ -22,8 +22,12 @@ _Avoid_: implicit administrator, borrowed Connection, arbitrary initial member
 An explicit relationship between a SciForge User and a Collaboration Project carrying that user's Project permissions.
 _Avoid_: OpenContent Team member, Workspace collaborator, Agent
 
+**Project Invitation**:
+The pre-activation `invited` phase of a Project Membership addressed to one exact OIDC User. It permits that User to inspect and accept the current confirmed Plan, but grants no Task Authority and claims no Provider membership.
+_Avoid_: active member, Task Offer, OpenContent Team invitation, unilateral add
+
 **Project Membership State**:
-The Cloud lifecycle of one Project Member: pending addition, active, pending removal, or removed. It neither reports Provider membership nor grants Task execution by itself.
+The Cloud lifecycle of one Project relationship: invited, accepted but pending Provider addition, active, pending removal, or removed. It neither reports Provider membership nor grants Task execution by itself.
 _Avoid_: Provider ACL, Worker availability, Task authority
 
 **Project Content Space Binding**:

@@ -56,8 +56,9 @@ export const PROJECT_PLAN_TRANSITIONS = {
 } as const
 
 export const PROJECT_MEMBERSHIP_TRANSITIONS = {
-  pending_membership: ['active'],
-  active: ['membership_removal_pending'],
+  invited: ['pending_membership', 'active', 'removed'],
+  pending_membership: ['active', 'membership_removal_pending'],
+  active: ['membership_removal_pending', 'removed'],
   membership_removal_pending: ['removed'],
   removed: []
 } as const

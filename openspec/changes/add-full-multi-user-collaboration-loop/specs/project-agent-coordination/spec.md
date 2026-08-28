@@ -26,6 +26,16 @@ Coordinator HCI SHALL 从 Cloud-global online Worker directory 中聚合 Worker 
 - **THEN** HCI SHALL 只显示并提交该 `workerUserId`，不得暴露或选择两个 Agent/Device
 - **AND** Cloud SHALL 向该 User 所有满足 Task capability/authority/readiness 的在线 Agent/Device Runtime 广播同一个 User-level Task Offer。
 
+### Requirement: 非 Owner Worker 必须接受当前确认 Plan 的 Project 邀请
+
+非 Owner 的初始 Project 关系 SHALL 以 `invited` 状态保存，且不得拥有 Task Authority。Owner 确认当前 Plan 后，Cloud SHALL 向每个精确目标 OIDC User 投递邀请；只有该 User 可针对同一 Project、Membership、Plan revision 与 Plan digest 接受。存在任一未接受邀请时，Cloud SHALL 拒绝 Team provisioning、Project activation 与 Task dispatch；Content-required 接受 SHALL 进入 `pending_membership`，并继续等待真实 Provider observation/readiness，绝不能直接声称 active。
+
+#### Scenario: Worker 尚未接受邀请
+
+- **WHEN** Owner 已确认 Plan，但一个目标 Worker User 尚未在自己的 OIDC Desktop 接受邀请
+- **THEN** 该 User SHALL 只能读取接受邀请所需的有界 Project/Plan 事实，且 SHALL 没有 Task Authority
+- **AND** Owner Desktop SHALL NOT 创建或修改 Provider Team，也 SHALL NOT 激活 Project 或派发 Task。
+
 ### Requirement: Worker Availability Projection 只描述当前事实
 
 Cloud SHALL 为 Coordinator 提供包含 Agent/Device active 状态、online/offline、last heartbeat、runtime capability tags、是否接受新 offer、active Task count、Provider identity readiness 和当前 Project content readiness 的 Worker Availability Projection。Agent heartbeat SHALL 使用 Identity 从 canonical Host Runtime readiness 观察到的完整 capability tags；Worker availability 发布 SHALL 绑定该精确 Agent revision、connection status、last heartbeat 和 capability-tag set，Cloud SHALL 拒绝调用方声明与当前 heartbeat 不一致的事实。全局 availability SHALL 保持 Project-independent；Project-scoped view SHALL 嵌套组合独立的 Membership、Task Authority、当前 Provider principal fact 和 Project content readiness，并显式标记 Provider principal snapshot 为 match、missing 或 stale，而不得复制一套 Project 授权字段到全局 availability。该 projection SHALL 带 observation time/revision 且仅作选择辅助；它 SHALL NOT 自动接受 Task、保证未来可用或替代 Worker 本地检查。

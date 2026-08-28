@@ -12,6 +12,8 @@ import {
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND,
+  WORKBENCH_NAVIGATION_SECTION_CONTRACT_VERSION,
+  WORKBENCH_NAVIGATION_SECTION_LOCATION,
   WORKBENCH_WORKSPACE_SECTION_CONTRACT_VERSION,
   WORKBENCH_WORKSPACE_SECTION_LOCATION,
   WORKBENCH_TOPBAR_LOCATION,
@@ -21,6 +23,8 @@ import {
   domainRendererCommandInvocationSchema,
   domainRendererComposerContextResultSchema,
   domainRendererResourceNavigationContractSchema,
+  domainRendererWorkbenchNavigationSectionContractSchema,
+  domainRendererWorkbenchNavigationSessionCatalogSchema,
   domainRendererWorkbenchWorkspaceSectionContractSchema,
   domainRendererWorkspacePickResultSchema,
   domainWorkbenchOpenResourceInputSchema,
@@ -31,9 +35,11 @@ import {
   isDomainRendererResourceNavigationValue,
   isDomainRendererWorkbenchSurfaceValue,
   isDomainRendererWorkbenchToolbarActionValue,
+  isDomainRendererWorkbenchNavigationSectionValue,
   isDomainRendererWorkbenchWorkspaceSectionValue,
   type DomainRendererCommandHandler,
   type DomainRendererCommandInvocation,
+  type DomainRendererWorkbenchNavigationSectionRenderContext,
   type DomainRendererWorkbenchRightPanelRenderContext
 } from './renderer-contributions.js'
 
@@ -223,6 +229,73 @@ describe('renderer extension contribution contracts', () => {
       ...contract,
       placement: 'host-private'
     }), z.ZodError)
+  })
+
+  it('publishes a package-neutral Workbench navigation section over ordinary Sessions', () => {
+    const contract = domainRendererWorkbenchNavigationSectionContractSchema.parse({
+      location: WORKBENCH_NAVIGATION_SECTION_LOCATION,
+      contractVersion: WORKBENCH_NAVIGATION_SECTION_CONTRACT_VERSION,
+      label: 'fixtureCloudProjects'
+    })
+
+    assert.deepEqual(contract, {
+      location: 'workbench.navigation-section',
+      contractVersion: '1.0.0',
+      label: 'fixtureCloudProjects'
+    })
+    assert.equal(isDomainRendererWorkbenchNavigationSectionValue({
+      render: () => ({})
+    }), true)
+    assert.equal(isDomainRendererWorkbenchNavigationSectionValue({
+      render: () => ({}),
+      projectId: 'host-private-project'
+    }), false)
+    assert.equal(isDomainRendererWorkbenchNavigationSectionValue({
+      render: () => ({}),
+      selectSession: () => undefined
+    }), false)
+    assert.throws(() => domainRendererWorkbenchNavigationSectionContractSchema.parse({
+      ...contract,
+      projectId: 'host-private-project'
+    }), z.ZodError)
+
+    const sessions = domainRendererWorkbenchNavigationSessionCatalogSchema.parse([{
+      id: ' session-1 ',
+      runtimeId: ' codex ',
+      title: 'Project planning',
+      updatedAt: '2026-08-28T00:00:00.000Z',
+      workspaceRoot: '/workspace/lab',
+      status: 'idle',
+      archived: false
+    }])
+    assert.deepEqual(sessions, [{
+      id: 'session-1',
+      runtimeId: 'codex',
+      title: 'Project planning',
+      updatedAt: '2026-08-28T00:00:00.000Z',
+      workspaceRoot: '/workspace/lab',
+      status: 'idle',
+      archived: false
+    }])
+    assert.throws(() => domainRendererWorkbenchNavigationSessionCatalogSchema.parse([{
+      ...sessions[0],
+      projectId: 'project-private-to-domain'
+    }]), z.ZodError)
+    assert.throws(() => domainRendererWorkbenchNavigationSessionCatalogSchema.parse([
+      sessions[0],
+      sessions[0]
+    ]), /duplicated/u)
+
+    const selected: string[] = []
+    const context: DomainRendererWorkbenchNavigationSectionRenderContext = {
+      active: true,
+      className: 'navigation-section',
+      session: { id: 'session-1' },
+      sessions,
+      selectSession: (sessionId) => selected.push(sessionId)
+    }
+    context.selectSession(context.sessions[0]!.id)
+    assert.deepEqual(selected, ['session-1'])
   })
 
   it('keeps mounted offscreen right-panel renderers viewport-inactive', () => {

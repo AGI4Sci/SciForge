@@ -47,33 +47,44 @@ import {
 
 import {
   projectCoordinatorMembershipAddInputSchema,
+  projectCoordinatorMembershipAcceptInputSchema,
   projectCoordinatorMembershipRemoveInputSchema,
-  projectCoordinatorProvisioningApplyInputSchema,
-  projectCoordinatorProvisioningPlanInputSchema,
   projectCoordinatorProvisioningPlanSchema,
+  projectCoordinatorWorkflowContinueInputSchema,
+  projectCoordinatorWorkflowPlanSchema,
+  projectCoordinatorWorkflowPrepareInputSchema,
   projectCoordinatorWorkspaceSchema,
   type ProjectCoordinatorMembershipAddInput,
+  type ProjectCoordinatorMembershipAcceptInput,
   type ProjectCoordinatorMembershipRemoveInput,
   type ProjectCoordinatorProject,
-  type ProjectCoordinatorProvisioningApplyInput,
   type ProjectCoordinatorProvisioningPlan,
-  type ProjectCoordinatorProvisioningPlanInput,
+  type ProjectCoordinatorWorkflowContinueInput,
+  type ProjectCoordinatorWorkflowPlan,
+  type ProjectCoordinatorWorkflowPrepareInput,
   type ProjectCoordinatorWorkspace
 } from './contract.js'
-import type { ProjectContentProvisioningAttestationSigningPort } from './ports.js'
+import type {
+  ProjectContentProvisioningAttestationSigningPort,
+  ProjectCoordinatorPlanPort
+} from './ports.js'
 
 type WorkspaceReader = Readonly<{
   readWorkspace(input: Readonly<{ projectId?: string }>): Promise<ProjectCoordinatorWorkspace>
 }>
 
 export type ProjectCoordinatorProvisioningPort = Readonly<{
-  preview(input: ProjectCoordinatorProvisioningPlanInput): Promise<ProjectCoordinatorProvisioningPlan>
-  apply(
-    input: ProjectCoordinatorProvisioningApplyInput,
+  prepareWorkflow(input: ProjectCoordinatorWorkflowPrepareInput): Promise<ProjectCoordinatorWorkflowPlan>
+  continueWorkflow(
+    input: ProjectCoordinatorWorkflowContinueInput,
     idempotencyKey: string
   ): Promise<ProjectCoordinatorWorkspace>
   addMember(
     input: ProjectCoordinatorMembershipAddInput,
+    idempotencyKey: string
+  ): Promise<ProjectCoordinatorWorkspace>
+  acceptInvitation(
+    input: ProjectCoordinatorMembershipAcceptInput,
     idempotencyKey: string
   ): Promise<ProjectCoordinatorWorkspace>
   removeMember(
@@ -86,6 +97,7 @@ type ProvisioningOptions = Readonly<{
   workspace: WorkspaceReader
   transport: AuthenticatedCloudTransport
   signing: ProjectContentProvisioningAttestationSigningPort
+  activateAndReconcile: ProjectCoordinatorPlanPort['activateAndReconcile']
   getCapabilities(): DomainMainSystemCapabilityInvoker
   now?: () => Date
   attemptId?: () => string
@@ -95,7 +107,7 @@ type ProvisioningOptions = Readonly<{
 }>
 
 type BuiltProvisioningPlan = Readonly<{
-  preview: ProjectCoordinatorProvisioningPlan
+  plan: ProjectCoordinatorProvisioningPlan
   batch: DomainMainFiniteCapabilityBatchPlan
   project: ProjectCoordinatorProject
   intent: ProjectContentProvisioningIntent
@@ -119,21 +131,31 @@ export function createProjectCoordinatorProvisioningPort(
   )
   const requestId = options.requestId ?? (() => `req_${randomUUID().replaceAll('-', '')}`)
 
-  const readOwnerProject = async (
-    projectId: string,
-    contentRequired = false
-  ): Promise<ProjectCoordinatorProject> => {
+  const readVisibleProject = async (
+    projectId: string
+  ): Promise<Readonly<{
+    project: ProjectCoordinatorProject
+    currentUserId: string
+  }>> => {
     const workspace = projectCoordinatorWorkspaceSchema.parse(
       await options.workspace.readWorkspace({ projectId })
     )
     if (workspace.connection.state !== 'ready') {
-      throw new Error(`Project content provisioning is ${workspace.connection.state}.`)
+      throw new Error(`Project workflow is ${workspace.connection.state}.`)
     }
     const project = workspace.projects.find((candidate) => (
       candidate.project.projectId === projectId
     ))
     if (!project) throw new Error('The exact Project is not visible to the current OIDC User.')
-    if (workspace.connection.userId !== project.project.ownerUserId) {
+    return { project, currentUserId: workspace.connection.userId }
+  }
+
+  const readOwnerProject = async (
+    projectId: string,
+    contentRequired = false
+  ): Promise<ProjectCoordinatorProject> => {
+    const { project, currentUserId } = await readVisibleProject(projectId)
+    if (currentUserId !== project.project.ownerUserId) {
       throw new Error('Only the OIDC Project Owner may manage Project membership or content.')
     }
     if (contentRequired && project.project.contentMode !== 'required') {
@@ -169,7 +191,7 @@ export function createProjectCoordinatorProvisioningPort(
     const confirmedPlanDigest = digestFinitePlan(built.batch)
     return Object.freeze({
       ...built,
-      preview: projectCoordinatorProvisioningPlanSchema.parse({
+      plan: projectCoordinatorProvisioningPlanSchema.parse({
         projectId: project.project.projectId,
         provisioningIntentId: intent.provisioningIntentId,
         expectedProjectRevision: project.project.revision,
@@ -187,36 +209,121 @@ export function createProjectCoordinatorProvisioningPort(
     })
   }
 
+  const prepareWorkflow = async (
+    rawInput: ProjectCoordinatorWorkflowPrepareInput,
+    stableAttemptId = attemptId()
+  ): Promise<ProjectCoordinatorWorkflowPlan> => {
+    const input = projectCoordinatorWorkflowPrepareInputSchema.parse(rawInput)
+    const project = await readOwnerProject(input.projectId)
+    const plan = project.plan?.plan
+    if (!plan || plan.state !== 'confirmed') {
+      throw new Error('Project workflow requires the exact current confirmed Plan.')
+    }
+    if (project.project.status !== 'paused' && project.project.status !== 'active') {
+      throw new Error('Only a paused launch or active Team reconcile can prepare a Project workflow.')
+    }
+    const currentMemberships = project.provisioning.memberships.filter(({ state }) => (
+      state !== 'removed'
+    ))
+    if (currentMemberships.some(({ state }) => state === 'invited')) {
+      throw new Error('Every invited OIDC User must accept the confirmed Plan before Team provisioning.')
+    }
+    const purpose = project.project.status === 'active' ? 'team_reconcile' as const : 'launch' as const
+    const intent = project.provisioning.intent
+    const needsProvisioning = project.project.contentMode === 'required' && intent !== null &&
+      !['completed', 'superseded', 'cancelled'].includes(intent.state)
+    const provisioning = needsProvisioning
+      ? (await build(input.projectId, stableAttemptId)).plan
+      : null
+    if (purpose === 'team_reconcile' && provisioning === null) {
+      throw new Error('The active Project has no pending Team reconcile workflow.')
+    }
+    if (
+      purpose === 'launch' &&
+      project.project.contentMode === 'required' &&
+      project.provisioning.binding?.status !== 'active' &&
+      provisioning === null
+    ) {
+      throw new Error('The content-required Project has no executable Team provisioning intent.')
+    }
+    if (purpose === 'launch' && provisioning === null && currentMemberships.some(({ state }) => (
+      state !== 'active'
+    ))) {
+      throw new Error('Every Project Membership must be active before a content-free launch.')
+    }
+    const facts = {
+      projectId: project.project.projectId,
+      projectPlanId: plan.projectPlanId,
+      expectedProjectRevision: project.project.revision,
+      expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: project.project.executionAuthorityEpoch,
+      expectedPlanRevision: plan.revision,
+      planDigest: plan.planDigest,
+      purpose,
+      provisioning
+    }
+    return projectCoordinatorWorkflowPlanSchema.parse({
+      ...facts,
+      workflowDigest: stableDigest(facts)
+    })
+  }
+
   return Object.freeze({
-    preview: async (rawInput) => {
-      const input = projectCoordinatorProvisioningPlanInputSchema.parse(rawInput)
-      return (await build(input.projectId, attemptId())).preview
-    },
-    apply: async (rawInput, baseIdempotencyKey) => {
-      const input = projectCoordinatorProvisioningApplyInputSchema.parse(rawInput)
-      const built = await build(input.projectId, input.attemptId)
-      assertPreviewStillCurrent(input, built.preview)
-      const capabilities = options.getCapabilities()
-      const batch = capabilities.createApprovedBatch(built.batch)
-      if (batch.planDigest !== input.confirmedPlanDigest) {
-        batch.discard()
-        throw new Error('The Host captured a different provisioning plan digest.')
+    prepareWorkflow,
+    continueWorkflow: async (rawInput, baseIdempotencyKey) => {
+      const input = projectCoordinatorWorkflowContinueInputSchema.parse(rawInput)
+      const current = await prepareWorkflow(
+        { projectId: input.projectId },
+        input.provisioning?.attemptId
+      )
+      if (stableDigest(current) !== stableDigest(input)) {
+        throw new Error('Cloud facts changed after workflow preparation; confirm a fresh Project workflow.')
       }
-      try {
-        const workspace = await executeProvisioning({
-          options,
-          requestId,
-          now,
-          attestationId,
-          providerObservationId,
-          baseIdempotencyKey,
-          built,
-          batch
-        })
-        return projectCoordinatorWorkspaceSchema.parse(workspace)
-      } finally {
-        batch.discard()
+      if (input.provisioning !== null) {
+        const built = await build(input.projectId, input.provisioning.attemptId)
+        assertProvisioningPlanStillCurrent(input.provisioning, built.plan)
+        const capabilities = options.getCapabilities()
+        const batch = capabilities.createApprovedBatch(built.batch)
+        if (batch.planDigest !== input.provisioning.confirmedPlanDigest) {
+          batch.discard()
+          throw new Error('The Host captured a different Team provisioning plan digest.')
+        }
+        try {
+          await executeProvisioning({
+            options,
+            requestId,
+            now,
+            attestationId,
+            providerObservationId,
+            baseIdempotencyKey: scopedIdempotencyKey(baseIdempotencyKey, 'team'),
+            built,
+            batch
+          })
+        } finally {
+          batch.discard()
+        }
       }
+      if (input.purpose === 'launch') {
+        return options.activateAndReconcile({
+          projectId: input.projectId,
+          projectPlanId: input.projectPlanId,
+          expectedCoordinatorAuthorityEpoch: input.expectedCoordinatorAuthorityEpoch,
+          expectedExecutionAuthorityEpoch: input.expectedExecutionAuthorityEpoch,
+          expectedPlanRevision: input.expectedPlanRevision,
+          planDigest: input.planDigest
+        }, scopedIdempotencyKey(baseIdempotencyKey, 'launch'))
+      }
+      const workspace = projectCoordinatorWorkspaceSchema.parse(
+        await options.workspace.readWorkspace({ projectId: input.projectId })
+      )
+      const reconciled = workspace.projects.find(({ project }) => project.projectId === input.projectId)
+      if (!reconciled || reconciled.project.status !== 'active' ||
+        reconciled.provisioning.memberships.some(({ state }) => (
+          state !== 'active' && state !== 'removed'
+        ))) {
+        throw new Error('Team reconcile did not produce fresh active Membership facts.')
+      }
+      return workspace
     },
     addMember: async (rawInput, baseIdempotencyKey) => {
       const input = projectCoordinatorMembershipAddInputSchema.parse(rawInput)
@@ -235,14 +342,48 @@ export function createProjectCoordinatorProvisioningPort(
         ? response.items.map((item) => projectMembershipSchema.safeParse(item))
           .find((parsed) => parsed.success && parsed.data.userId === input.userId)?.data
         : undefined
+      if (!membership || membership.projectId !== input.projectId ||
+        membership.state !== 'invited') {
+        throw new Error('Project member add did not create the canonical OIDC User invitation.')
+      }
+      return options.workspace.readWorkspace({ projectId: input.projectId })
+    },
+    acceptInvitation: async (rawInput, baseIdempotencyKey) => {
+      const input = projectCoordinatorMembershipAcceptInputSchema.parse(rawInput)
+      const { project, currentUserId } = await readVisibleProject(input.projectId)
+      const invitation = project.provisioning.memberships.find(({ projectMembershipId }) => (
+        projectMembershipId === input.projectMembershipId
+      ))
+      if (!invitation || invitation.userId !== currentUserId || invitation.state !== 'invited') {
+        throw new Error('Only the exact invited OIDC User may accept this Project invitation.')
+      }
+      if (
+        project.project.revision !== input.expectedProjectRevision ||
+        project.plan?.plan.projectPlanId !== input.projectPlanId ||
+        project.plan.plan.revision !== input.expectedPlanRevision ||
+        project.plan.plan.planDigest !== input.planDigest ||
+        project.plan.plan.state !== 'confirmed'
+      ) {
+        throw new Error('Project invitation acceptance lost the exact current confirmed Plan.')
+      }
+      const response = await executeUserCloud(options.transport, {
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        requestId: requestId(),
+        type: 'project.membership.accept',
+        idempotencyKey: scopedIdempotencyKey(baseIdempotencyKey, 'membership-accept'),
+        ...input
+      })
+      const membership = response.type === 'rest.collection'
+        ? response.items.map((item) => projectMembershipSchema.safeParse(item))
+          .find((parsed) => parsed.success && (
+            parsed.data.projectMembershipId === input.projectMembershipId
+          ))?.data
+        : undefined
       const expectedState = project.project.contentMode === 'required'
         ? 'pending_membership' as const
         : 'active' as const
-      if (!membership || membership.projectId !== input.projectId ||
-        membership.state !== expectedState) {
-        throw new Error(project.project.contentMode === 'required'
-          ? 'Content-required member add did not enter pending_membership.'
-          : 'Content-free member add did not become directly active.')
+      if (!membership || membership.userId !== currentUserId || membership.state !== expectedState) {
+        throw new Error('Cloud did not return the accepted Project Membership state.')
       }
       return options.workspace.readWorkspace({ projectId: input.projectId })
     },
@@ -265,14 +406,18 @@ export function createProjectCoordinatorProvisioningPort(
             parsed.data.projectMembershipId === input.projectMembershipId
           ))?.data
         : undefined
-      const expectedState = project.project.contentMode === 'required'
+      const currentMembership = project.provisioning.memberships.find(({ projectMembershipId }) => (
+        projectMembershipId === input.projectMembershipId
+      ))
+      const expectedState = project.project.contentMode === 'required' &&
+        currentMembership?.state !== 'invited'
         ? 'membership_removal_pending' as const
         : 'removed' as const
       if (!membership || membership.projectId !== input.projectId ||
         membership.state !== expectedState) {
-        throw new Error(project.project.contentMode === 'required'
+        throw new Error(expectedState === 'membership_removal_pending'
           ? 'Content-required member removal did not remain safety-fenced pending.'
-          : 'Content-free member removal did not complete immediately.')
+          : 'The invitation or content-free Membership removal did not complete immediately.')
       }
       return options.workspace.readWorkspace({ projectId: input.projectId })
     }
@@ -452,7 +597,7 @@ async function executeProvisioning(input: Readonly<{
   const { options, built, batch } = input
   const observedOperations: ProvisioningObservedOperation[] = []
   const startedAt = input.now().toISOString()
-  if (built.preview.rootStrategy === 'create') {
+  if (built.plan.rootStrategy === 'create') {
     const authorization = await batch.invoke(
       'authorize-provider',
       CONTENT_SPACE_AUTHORIZE_PROVIDER_ADMINISTRATION_CONTRACT
@@ -602,7 +747,7 @@ async function executeRootObservation(input: Parameters<typeof executeProvisioni
 > {
   const prepared = await prepareAndDispatch(input, 'observe-root', 'observe_root', null)
   try {
-    if (input.built.preview.rootStrategy === 'reauthorize') {
+    if (input.built.plan.rootStrategy === 'reauthorize') {
       const authorized = await input.batch.invoke(
         'authorize-root',
         CONTENT_SPACE_AUTHORIZE_AGENT_ROOT_CONTRACT
@@ -683,11 +828,11 @@ async function prepareAndDispatch(
   subjectPrincipal: ProviderDirectoryPrincipalReference | null
 ): Promise<ExternalOperationRecoveryJournalEntry> {
   const logicalInvocationId = `pcp:${stableDigest({
-    attemptId: input.built.preview.attemptId,
+    attemptId: input.built.plan.attemptId,
     operationId
   }).slice(0, 48)}`
   const requestDigest = stableDigest({
-    planDigest: input.built.preview.confirmedPlanDigest,
+    planDigest: input.built.plan.confirmedPlanDigest,
     operationId,
     operation,
     subjectPrincipal,
@@ -938,8 +1083,8 @@ function requireCompleteMemberPage(page: ContentSpaceAgentAdministrationMemberPa
   }
 }
 
-function assertPreviewStillCurrent(
-  input: ProjectCoordinatorProvisioningApplyInput,
+function assertProvisioningPlanStillCurrent(
+  input: ProjectCoordinatorProvisioningPlan,
   current: ProjectCoordinatorProvisioningPlan
 ): void {
   if (
@@ -951,7 +1096,7 @@ function assertPreviewStillCurrent(
     input.intentDigest !== current.intentDigest ||
     input.confirmedPlanDigest !== current.confirmedPlanDigest
   ) {
-    throw new Error('Cloud facts changed after the provisioning preview; confirm a fresh full plan.')
+    throw new Error('Cloud facts changed after workflow preparation; prepare a fresh Project workflow.')
   }
 }
 

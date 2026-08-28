@@ -22,18 +22,22 @@ import {
   projectFinalSummarySubmitCommandSchema,
   projectIdSchema,
   projectMembershipAddCommandSchema,
+  projectMembershipAcceptCommandSchema,
   projectMembershipRemoveCommandSchema,
   projectMembershipSchema,
   projectProviderMembershipObservationSchema,
+  projectPlanConfirmCommandSchema,
   projectPlanSchema,
   projectPlanRuntimeProvenanceSchema,
-  projectPlanTaskSchema,
+  projectPlanTaskDeclarationSchema,
+  projectPlanTaskDeclarationsSchema,
   projectRecordSchema,
   projectSchema,
   projectUserLabelFactSchema,
   projectWorkerAvailabilityViewSchema,
   workerAvailabilityProjectionSchema,
   taskExecutionSchema,
+  taskIdSchema,
   taskOfferSchema,
   taskFileDestinationNameSchema,
   taskResultOutputSchema,
@@ -53,17 +57,19 @@ const safeReasonSchema = z.string().trim().min(1).max(2_000)
 export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   workspaceRead: 'project-coordinator.workspace.read',
   projectCreate: 'project-coordinator.project.create',
+  sessionProjectionRead: 'project-coordinator.session-projection.read',
   planDraftRead: 'project-coordinator.plan-draft.read',
   planDraftGenerate: 'project-coordinator.plan-draft.generate',
   planDraftEdit: 'project-coordinator.plan-draft.edit',
   planSubmit: 'project-coordinator.plan.submit',
-  planConfirmActivate: 'project-coordinator.plan.confirm-activate',
-  contentProvisioningPlan: 'project-coordinator.content-provisioning.plan',
-  contentProvisioningApply: 'project-coordinator.content-provisioning.apply',
+  planConfirm: 'project-coordinator.plan.confirm',
+  workflowPrepare: 'project-coordinator.workflow.prepare',
+  workflowContinue: 'project-coordinator.workflow.continue',
   contentRecoveryObserveLink: 'project-coordinator.content-recovery.observe-link',
   contentRecoveryAbandon: 'project-coordinator.content-recovery.abandon',
   contentRecoveryRetrySuccessor: 'project-coordinator.content-recovery.retry-successor',
   membershipAdd: 'project-coordinator.membership.add',
+  membershipAccept: 'project-coordinator.membership.accept',
   membershipRemove: 'project-coordinator.membership.remove',
   humanNeededCreate: 'project-coordinator.human-needed.create',
   humanAnswer: 'project-coordinator.human-needed.answer',
@@ -72,6 +78,107 @@ export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   resultReview: 'project-coordinator.result.review',
   projectComplete: 'project-coordinator.project.complete'
 } as const)
+
+export const projectCoordinatorSessionAccessSchema = z.enum([
+  'coordinator',
+  'worker',
+  'read_only'
+])
+
+export const projectCoordinatorSessionFenceReasonSchema = z.enum([
+  'authority_changed',
+  'execution_fenced',
+  'execution_not_current',
+  'membership_inactive',
+  'principal_changed',
+  'project_terminal',
+  'project_unavailable'
+])
+
+const projectCoordinatorCoordinatorSessionBindingRecordObjectSchema = z.object({
+  schemaVersion: z.literal(1),
+  role: z.literal('coordinator'),
+  projectId: projectIdSchema,
+  principalUserId: userIdSchema,
+  coordinatorAgentId: agentIdSchema,
+  coordinatorAuthorityEpoch: projectSchema.shape.coordinatorAuthorityEpoch,
+  runtimeId: z.string().trim().min(1).max(256),
+  threadId: z.string().trim().min(1).max(512),
+  boundAt: timestampSchema
+}).strict()
+
+export const projectCoordinatorCoordinatorSessionBindingRecordSchema =
+  projectCoordinatorCoordinatorSessionBindingRecordObjectSchema.readonly()
+
+export const projectCoordinatorCoordinatorSessionBindingSchema =
+  projectCoordinatorCoordinatorSessionBindingRecordObjectSchema.extend({
+    access: z.enum(['coordinator', 'read_only']),
+    fenceReason: projectCoordinatorSessionFenceReasonSchema.nullable()
+  }).strict().superRefine((binding, context) => {
+    if ((binding.access === 'read_only') !== (binding.fenceReason !== null)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['fenceReason'],
+        message: 'A read-only Coordinator Session requires its exact fence reason.'
+      })
+    }
+  }).readonly()
+
+export const projectCoordinatorWorkerSessionBindingSchema = z.object({
+  schemaVersion: z.literal(1),
+  role: z.literal('worker'),
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  executionId: taskExecutionSchema.shape.executionId,
+  principalUserId: userIdSchema,
+  assigneeAgentId: agentIdSchema,
+  assigneeDeviceId: deviceIdSchema,
+  runtimeId: z.string().trim().min(1).max(256),
+  threadId: z.string().trim().min(1).max(512),
+  taskRevision: taskSchema.shape.revision,
+  executionRevision: taskExecutionSchema.shape.revision,
+  projectExecutionAuthorityEpoch:
+    taskExecutionSchema.shape.fence.shape.projectExecutionAuthorityEpoch,
+  userTaskAuthorityEpoch:
+    taskExecutionSchema.shape.fence.shape.userTaskAuthorityEpoch,
+  access: z.enum(['worker', 'read_only']),
+  fenceReason: projectCoordinatorSessionFenceReasonSchema.nullable(),
+  updatedAt: timestampSchema
+}).strict().superRefine((binding, context) => {
+  if ((binding.access === 'read_only') !== (binding.fenceReason !== null)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['fenceReason'],
+      message: 'A read-only Worker Session requires its exact fence reason.'
+    })
+  }
+}).readonly()
+
+export const projectCoordinatorSessionBindingSchema = z.discriminatedUnion('role', [
+  projectCoordinatorCoordinatorSessionBindingSchema,
+  projectCoordinatorWorkerSessionBindingSchema
+])
+
+export const projectCoordinatorSessionProjectionSchema = z.object({
+  schemaVersion: z.literal(1),
+  observedAt: timestampSchema,
+  bindings: z.array(projectCoordinatorSessionBindingSchema).max(100_000)
+}).strict().superRefine((projection, context) => {
+  const identities = projection.bindings.map(({ runtimeId, threadId }) => (
+    `${runtimeId}\u0000${threadId}`
+  ))
+  if (new Set(identities).size !== identities.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['bindings'],
+      message: 'Each ordinary Session has at most one Project binding.'
+    })
+  }
+}).readonly()
+
+export const projectCoordinatorSessionProjectionReadInputSchema = z.object({})
+  .strict()
+  .readonly()
 
 export const projectCoordinatorProjectCreateInputSchema = projectCreateCommandSchema.omit({
   protocolVersion: true,
@@ -99,7 +206,7 @@ export const projectCoordinatorConnectionSchema = z.discriminatedUnion('state', 
 
 /** UI-only assignment projection; the Plan and Agent facts remain canonical Cloud records. */
 export const projectCoordinatorPlanAssignmentSchema = z.object({
-  planItemId: projectPlanTaskSchema.shape.planItemId,
+  planItemId: projectPlanTaskDeclarationSchema.shape.planItemId,
   workerUserId: userIdSchema.nullable(),
   recommendationReason: safeReasonSchema.nullable()
 }).strict().superRefine((assignment, context) => {
@@ -123,7 +230,7 @@ export const projectCoordinatorPlanDraftSchema = z.object({
   expectedCoordinatorAuthorityEpoch: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
   supersedesProjectPlanId: projectPlanSchema.shape.projectPlanId.nullable(),
   sourceInputLocators: z.array(portableContentSpaceLocatorSchema).max(100),
-  tasks: z.array(projectPlanTaskSchema).min(1).max(1_000),
+  tasks: projectPlanTaskDeclarationsSchema,
   rationale: safeReasonSchema,
   runtimeProvenance: projectPlanRuntimeProvenanceSchema,
   assignments: z.array(projectCoordinatorPlanAssignmentSchema).min(1).max(1_000),
@@ -156,6 +263,7 @@ export const projectCoordinatorPlanDraftGenerateInputSchema = z.object({
 }).strict().readonly()
 
 export const projectCoordinatorPlanDraftGenerateFailureReasonSchema = z.enum([
+  'planning_candidates_unavailable',
   'runtime_unavailable',
   'runtime_execution_failed',
   'invalid_structured_output'
@@ -180,7 +288,7 @@ export const projectCoordinatorPlanDraftEditInputSchema = z.object({
   projectId: projectIdSchema,
   draftId: projectCoordinatorDraftIdSchema,
   expectedDraftRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
-  tasks: z.array(projectPlanTaskSchema).min(1).max(1_000),
+  tasks: projectPlanTaskDeclarationsSchema,
   rationale: safeReasonSchema,
   assignments: z.array(projectCoordinatorPlanAssignmentSchema).min(1).max(1_000)
 }).strict().readonly()
@@ -191,14 +299,12 @@ export const projectCoordinatorPlanDraftSubmitInputSchema = z.object({
   expectedDraftRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
 }).strict().readonly()
 
-export const projectCoordinatorPlanConfirmActivateInputSchema = z.object({
-  projectId: projectIdSchema,
-  projectPlanId: projectPlanSchema.shape.projectPlanId,
-  expectedProjectRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
-  expectedCoordinatorAuthorityEpoch: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
-  expectedPlanRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
-  planDigest: projectPlanSchema.shape.planDigest
-}).strict().readonly()
+export const projectCoordinatorPlanConfirmInputSchema = projectPlanConfirmCommandSchema.omit({
+  protocolVersion: true,
+  requestId: true,
+  type: true,
+  idempotencyKey: true
+}).readonly()
 
 export const projectCoordinatorProvisioningAttemptIdSchema = z.string()
   .trim()
@@ -241,15 +347,48 @@ export const projectCoordinatorProvisioningPlanSchema = z.object({
   confirmedPlanDigest: domainMainFiniteCapabilityBatchPlanDigestSchema
 }).strict().readonly()
 
-export const projectCoordinatorProvisioningApplyInputSchema = z.object({
+export const projectCoordinatorWorkflowPlanSchema = z.object({
   projectId: projectIdSchema,
-  provisioningIntentId: projectContentProvisioningIntentSchema.shape.provisioningIntentId,
+  projectPlanId: projectPlanSchema.shape.projectPlanId,
   expectedProjectRevision: projectSchema.shape.revision,
-  expectedProvisioningRevision: projectContentProvisioningIntentSchema.shape.provisioningRevision,
-  expectedProvisioningIntentRevision: projectContentProvisioningIntentSchema.shape.revision,
-  intentDigest: projectContentProvisioningIntentSchema.shape.intentDigest,
-  attemptId: projectCoordinatorProvisioningAttemptIdSchema,
-  confirmedPlanDigest: domainMainFiniteCapabilityBatchPlanDigestSchema
+  expectedCoordinatorAuthorityEpoch: projectSchema.shape.coordinatorAuthorityEpoch,
+  expectedExecutionAuthorityEpoch: projectSchema.shape.executionAuthorityEpoch,
+  expectedPlanRevision: projectPlanSchema.shape.revision,
+  planDigest: projectPlanSchema.shape.planDigest,
+  purpose: z.enum(['launch', 'team_reconcile']),
+  provisioning: projectCoordinatorProvisioningPlanSchema.nullable(),
+  workflowDigest: domainMainFiniteCapabilityBatchPlanDigestSchema
+}).strict().superRefine((plan, context) => {
+  if (plan.purpose === 'team_reconcile' && plan.provisioning === null) {
+    context.addIssue({
+      code: 'custom',
+      path: ['provisioning'],
+      message: 'A Team reconcile workflow requires one exact finite provisioning plan.'
+    })
+  }
+  if (plan.provisioning !== null && (
+    plan.provisioning.projectId !== plan.projectId ||
+    plan.provisioning.expectedProjectRevision !== plan.expectedProjectRevision
+  )) {
+    context.addIssue({
+      code: 'custom',
+      path: ['provisioning'],
+      message: 'The finite provisioning plan must target the exact workflow Project revision.'
+    })
+  }
+}).readonly()
+
+export const projectCoordinatorWorkflowPrepareInputSchema = z.object({
+  projectId: projectIdSchema
+}).strict().readonly()
+
+export const projectCoordinatorWorkflowContinueInputSchema = projectCoordinatorWorkflowPlanSchema
+
+export const projectCoordinatorMembershipAcceptInputSchema = projectMembershipAcceptCommandSchema.omit({
+  protocolVersion: true,
+  requestId: true,
+  type: true,
+  idempotencyKey: true
 }).strict().readonly()
 
 export const projectCoordinatorContentRecoveryObserveLinkInputSchema = z.object({
@@ -404,23 +543,8 @@ export const projectCoordinatorCompleteInputSchema = projectFinalSummarySubmitCo
 }).strict().readonly()
 
 export const projectCoordinatorPlanViewSchema = z.object({
-  plan: projectPlanSchema,
-  assignments: z.array(projectCoordinatorPlanAssignmentSchema).max(1_000)
-}).strict().superRefine((view, context) => {
-  const planItemIds = new Set(view.plan.tasks.map(({ planItemId }) => planItemId))
-  const assignmentIds = view.assignments.map(({ planItemId }) => planItemId)
-  if (new Set(assignmentIds).size !== assignmentIds.length) {
-    context.addIssue({ code: 'custom', path: ['assignments'], message: 'Plan assignments must be unique.' })
-  }
-  view.assignments.forEach((assignment, index) => {
-    if (planItemIds.has(assignment.planItemId)) return
-    context.addIssue({
-      code: 'custom',
-      path: ['assignments', index, 'planItemId'],
-      message: 'Every assignment must reference an item in the exact Plan revision.'
-    })
-  })
-}).readonly()
+  plan: projectPlanSchema
+}).strict().readonly()
 
 export const projectCoordinatorWorkerAgentSchema = z.object({
   displayName: displayNameSchema,
@@ -567,15 +691,6 @@ export const projectCoordinatorProjectSchema = z.object({
       message: 'Each Agent must occur in exactly one User group.'
     })
   }
-  const candidateUserIds = new Set(userIds)
-  view.plan?.assignments.forEach((assignment, index) => {
-    if (assignment.workerUserId === null || candidateUserIds.has(assignment.workerUserId)) return
-    context.addIssue({
-      code: 'custom',
-      path: ['plan', 'assignments', index, 'workerUserId'],
-      message: 'A selected Worker must reference one User in the grouped candidate projection.'
-    })
-  })
   view.workerGroups.forEach((group, index) => {
     if (group.agents.every(({ projectAvailability }) => (
       projectAvailability.projectId === projectId
@@ -704,8 +819,18 @@ export const projectCoordinatorWorkspaceReadInputSchema = z.object({
   projectId: projectIdSchema.optional()
 }).strict().readonly()
 
+export const projectCoordinatorActivationViewSchema = z.enum([
+  'overview',
+  'tasks',
+  'files',
+  'decisions',
+  'recovery',
+  'create'
+])
+
 export const projectCoordinatorActivationSchema = z.object({
-  projectId: projectIdSchema.optional()
+  projectId: projectIdSchema.optional(),
+  view: projectCoordinatorActivationViewSchema.optional()
 }).strict().readonly()
 
 export const projectCoordinatorWorkspaceSchema = z.object({
@@ -713,6 +838,7 @@ export const projectCoordinatorWorkspaceSchema = z.object({
   observedAt: timestampSchema,
   focusedProjectId: projectIdSchema.optional(),
   availableWorkerUsers: z.array(projectCoordinatorAvailableWorkerUserSchema).max(1_000),
+  providerPrincipalFacts: z.array(providerDirectoryPrincipalFactSchema).max(10_000),
   projects: z.array(projectCoordinatorProjectSchema).max(1_000)
 }).strict().superRefine((workspace, context) => {
   if (workspace.connection.state !== 'ready' && workspace.projects.length > 0) {
@@ -727,6 +853,13 @@ export const projectCoordinatorWorkspaceSchema = z.object({
       code: 'custom',
       path: ['availableWorkerUsers'],
       message: 'Unavailable coordination state cannot claim Cloud Worker directory data.'
+    })
+  }
+  if (workspace.connection.state !== 'ready' && workspace.providerPrincipalFacts.length > 0) {
+    context.addIssue({
+      code: 'custom',
+      path: ['providerPrincipalFacts'],
+      message: 'Unavailable coordination state cannot claim Provider directory facts.'
     })
   }
   if (workspace.connection.state !== 'ready' && workspace.focusedProjectId) {
@@ -758,6 +891,16 @@ export const projectCoordinatorWorkspaceSchema = z.object({
       message: 'Available Worker groups must be unique by User.'
     })
   }
+  const providerFactIds = workspace.providerPrincipalFacts.map(({ providerPrincipalFactId }) => (
+    providerPrincipalFactId
+  ))
+  if (new Set(providerFactIds).size !== providerFactIds.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['providerPrincipalFacts'],
+      message: 'Provider directory facts must be unique by fact ID.'
+    })
+  }
 }).readonly()
 
 export const projectCoordinatorPlanSubmitResultSchema = z.object({
@@ -773,6 +916,7 @@ export const projectCoordinatorPlanSubmitResultSchema = z.object({
 }).readonly()
 
 export const projectCoordinatorProjectCreateResultSchema = z.object({
+  createIntentId: projectCoordinatorProjectCreateInputSchema.unwrap().shape.createIntentId,
   createdProjectId: projectIdSchema,
   workspace: projectCoordinatorWorkspaceSchema
 }).strict().superRefine((result, context) => {
@@ -786,6 +930,15 @@ export const projectCoordinatorProjectCreateResultSchema = z.object({
 }).readonly()
 
 export type ProjectCoordinatorConnection = z.infer<typeof projectCoordinatorConnectionSchema>
+export type ProjectCoordinatorCoordinatorSessionBindingRecord = z.infer<
+  typeof projectCoordinatorCoordinatorSessionBindingRecordSchema
+>
+export type ProjectCoordinatorSessionBinding = z.infer<
+  typeof projectCoordinatorSessionBindingSchema
+>
+export type ProjectCoordinatorSessionProjection = z.infer<
+  typeof projectCoordinatorSessionProjectionSchema
+>
 export type ProjectCoordinatorProject = z.infer<typeof projectCoordinatorProjectSchema>
 export type ProjectCoordinatorWorkspace = z.infer<typeof projectCoordinatorWorkspaceSchema>
 export type ProjectCoordinatorWorkspaceReadInput = z.infer<
@@ -828,8 +981,8 @@ export type ProjectCoordinatorPlanDraftSubmitInput = z.infer<
 export type ProjectCoordinatorPlanSubmitResult = z.infer<
   typeof projectCoordinatorPlanSubmitResultSchema
 >
-export type ProjectCoordinatorPlanConfirmActivateInput = z.infer<
-  typeof projectCoordinatorPlanConfirmActivateInputSchema
+export type ProjectCoordinatorPlanConfirmInput = z.infer<
+  typeof projectCoordinatorPlanConfirmInputSchema
 >
 export type ProjectCoordinatorProvisioningPlanInput = z.infer<
   typeof projectCoordinatorProvisioningPlanInputSchema
@@ -837,8 +990,17 @@ export type ProjectCoordinatorProvisioningPlanInput = z.infer<
 export type ProjectCoordinatorProvisioningPlan = z.infer<
   typeof projectCoordinatorProvisioningPlanSchema
 >
-export type ProjectCoordinatorProvisioningApplyInput = z.infer<
-  typeof projectCoordinatorProvisioningApplyInputSchema
+export type ProjectCoordinatorWorkflowPlan = z.infer<
+  typeof projectCoordinatorWorkflowPlanSchema
+>
+export type ProjectCoordinatorWorkflowPrepareInput = z.infer<
+  typeof projectCoordinatorWorkflowPrepareInputSchema
+>
+export type ProjectCoordinatorWorkflowContinueInput = z.infer<
+  typeof projectCoordinatorWorkflowContinueInputSchema
+>
+export type ProjectCoordinatorMembershipAcceptInput = z.infer<
+  typeof projectCoordinatorMembershipAcceptInputSchema
 >
 export type ProjectCoordinatorContentRecoveryObserveLinkInput = z.infer<
   typeof projectCoordinatorContentRecoveryObserveLinkInputSchema
@@ -874,3 +1036,6 @@ export type ProjectCoordinatorCompleteInput = z.infer<
   typeof projectCoordinatorCompleteInputSchema
 >
 export type ProjectCoordinatorActivation = z.infer<typeof projectCoordinatorActivationSchema>
+export type ProjectCoordinatorActivationView = z.infer<
+  typeof projectCoordinatorActivationViewSchema
+>

@@ -875,11 +875,11 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       displayName: required(label),
       goal: `Zulip 六用户真实验收 ${runId}`,
       budget: { maxTasks: 20, maxTasksPerRound: 20, maxCoordinationRounds: 5, maxTaskRetries: 1 },
-      content: { mode: 'none', members: memberStates.map(({ public: participant }) => ({ userId: participant.userId })) },
       idempotencyKey: idempotency('project_create')
     })
     if (created.type !== 'rest.project_created' || created.project.type !== 'project' ||
-        created.memberships.length !== memberStates.length || created.provisioningIntent !== null) {
+        created.project.status !== 'draft' || created.memberships.length !== 1 ||
+        created.memberships[0]?.userId !== ownerState.public.userId || created.provisioningIntent !== null) {
       fail('COLLABORATION_RESPONSE_INVALID')
     }
     const planItems = Array.from({ length: 20 }, (_, index) => ({
@@ -929,11 +929,47 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       expectedCoordinatorAuthorityEpoch: created.project.coordinatorAuthorityEpoch,
       expectedPlanRevision: submittedPlanResponse.entity.revision,
       planDigest: submittedPlanResponse.entity.planDigest,
+      initialTeam: {
+        mode: 'none',
+        members: memberStates.map(({ public: participant }) => ({ userId: participant.userId }))
+      },
       idempotencyKey: idempotency('project_plan_confirm')
     })
     if (confirmedPlanResponse.type !== 'rest.entity' || confirmedPlanResponse.entity.type !== 'project_plan' ||
         confirmedPlanResponse.entity.state !== 'confirmed') {
       fail('COLLABORATION_RESPONSE_INVALID')
+    }
+    const membershipResponse = await collaborationCommand(ownerState.oidcAccessToken, {
+      type: 'project.membership.list',
+      projectId: created.project.projectId,
+      includeRemoved: false,
+      limit: 1000
+    })
+    if (membershipResponse.type !== 'rest.collection') fail('COLLABORATION_RESPONSE_INVALID')
+    for (const memberState of memberStates) {
+      if (memberState.public.userId === ownerState.public.userId) continue
+      const membership = membershipResponse.items.find((item) => (
+        item.type === 'project_membership' && item.userId === memberState.public.userId
+      ))
+      if (!membership || membership.state !== 'invited') fail('COLLABORATION_RESPONSE_INVALID')
+      const current = await collaborationCommand(ownerState.oidcAccessToken, {
+        type: 'project.get', projectId: created.project.projectId
+      })
+      if (current.type !== 'rest.entity' || current.entity.type !== 'project') {
+        fail('COLLABORATION_RESPONSE_INVALID')
+      }
+      const accepted = await collaborationCommand(memberState.oidcAccessToken, {
+        type: 'project.membership.accept',
+        projectId: created.project.projectId,
+        projectMembershipId: membership.projectMembershipId,
+        expectedProjectRevision: current.entity.revision,
+        expectedMembershipRevision: membership.revision,
+        projectPlanId: confirmedPlanResponse.entity.projectPlanId,
+        expectedPlanRevision: confirmedPlanResponse.entity.revision,
+        planDigest: confirmedPlanResponse.entity.planDigest,
+        idempotencyKey: idempotency(`project_membership_accept_${memberState.public.userId}`)
+      })
+      if (accepted.type !== 'rest.collection') fail('COLLABORATION_RESPONSE_INVALID')
     }
     const confirmedProject = await collaborationCommand(ownerState.oidcAccessToken, {
       type: 'project.get', projectId: created.project.projectId
@@ -1399,6 +1435,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       expectedCoordinatorAuthorityEpoch: afterSubmit.coordinatorAuthorityEpoch,
       expectedPlanRevision: submittedPlan.entity.revision,
       planDigest: submittedPlan.entity.planDigest,
+      initialTeam: null,
       idempotencyKey: idempotency('handoff_plan_confirm')
     })
     if (confirmedPlan.type !== 'rest.entity' || confirmedPlan.entity.type !== 'project_plan' ||

@@ -43,22 +43,27 @@ import type { DomainWorkbenchRightPanelSession } from '@sciforge/domain-sdk/host
 import type {
   ProjectCoordinatorCompleteInput,
   ProjectCoordinatorArtifactReviewPrepareInput,
+  ProjectCoordinatorActivationView,
   ProjectCoordinatorContentRecoveryAbandonInput,
   ProjectCoordinatorContentRecoveryObserveLinkInput,
   ProjectCoordinatorContentRecoveryRetrySuccessorInput,
   ProjectCoordinatorHumanAnswerInput,
   ProjectCoordinatorHumanNeededCreateInput,
   ProjectCoordinatorMembershipAddInput,
+  ProjectCoordinatorMembershipAcceptInput,
   ProjectCoordinatorMembershipRemoveInput,
   ProjectCoordinatorPlanDraft,
   ProjectCoordinatorPlanDraftEditInput,
   ProjectCoordinatorProjectCreateResult,
   ProjectCoordinatorProject,
-  ProjectCoordinatorProvisioningApplyInput,
-  ProjectCoordinatorProvisioningPlan,
+  ProjectCoordinatorWorkflowPlan,
   ProjectCoordinatorResultReviewInput,
   ProjectCoordinatorWorkspace
 } from '../contract.js'
+import {
+  projectCoordinatorPlanningRuntimeReadiness,
+  projectCoordinatorPlanningTaskReadiness
+} from '../plan-readiness.js'
 import {
   ProjectCoordinatorPlanDraftGenerationClientError,
   type ProjectCoordinatorRendererClient
@@ -80,6 +85,8 @@ function projectCoordinatorPlanGenerationFailureMessageKey(
   reason: ProjectCoordinatorPlanDraftGenerationClientError['reason']
 ): string {
   switch (reason) {
+    case 'planning_candidates_unavailable':
+      return 'projectCoordinatorPlanCandidatesUnavailable'
     case 'runtime_unavailable':
       return 'projectCoordinatorPlanRuntimeUnavailable'
     case 'runtime_execution_failed':
@@ -395,11 +402,45 @@ export type ProjectCoordinatorPanelProps = Readonly<{
   client: ProjectCoordinatorRendererClient
   session: DomainWorkbenchRightPanelSession
   initialProjectId?: string
+  initialView?: ProjectCoordinatorActivationView
+  activationRevision?: number
   className?: string
   onCollapse?: () => void
   onOpenArtifact?: (input: ProjectCoordinatorArtifactReviewPrepareInput) => Promise<void>
   workspaceSections?: readonly ProjectCoordinatorWorkspaceSection[]
 }>
+
+export type ProjectCoordinatorActivationTarget = Readonly<{
+  workspaceView: string
+  sectionId?: (typeof PROJECT_COORDINATOR_PANEL_SECTION_IDS)[number] | 'create'
+  requestCreate?: true
+}>
+
+export function projectCoordinatorActivationTarget(
+  view: ProjectCoordinatorActivationView,
+  availableWorkspaceViews: ReadonlySet<string>
+): ProjectCoordinatorActivationTarget {
+  switch (view) {
+    case 'overview':
+      return Object.freeze({ workspaceView: 'overview' })
+    case 'tasks':
+      return Object.freeze({ workspaceView: 'projects', sectionId: 'tasks' })
+    case 'files':
+      return Object.freeze({
+        workspaceView: availableWorkspaceViews.has('files') ? 'files' : 'overview'
+      })
+    case 'decisions':
+      return Object.freeze({ workspaceView: 'reviews' })
+    case 'recovery':
+      return Object.freeze({ workspaceView: 'projects', sectionId: 'provisioning' })
+    case 'create':
+      return Object.freeze({
+        workspaceView: 'projects',
+        sectionId: 'create',
+        requestCreate: true
+      })
+  }
+}
 
 export function selectFocusedProject(
   workspace: ProjectCoordinatorWorkspace | undefined,
@@ -423,29 +464,12 @@ export function projectCoordinatorCreatedSelection(
   })
 }
 
-/**
- * Narrows the Human-reviewed full plan to the immutable Cloud/Host CAS facts accepted by apply.
- * Provider operations remain Host-owned and cannot be replaced by renderer input.
- */
-export function projectCoordinatorProvisioningApplyInput(
-  plan: ProjectCoordinatorProvisioningPlan
-): ProjectCoordinatorProvisioningApplyInput {
-  return {
-    projectId: plan.projectId,
-    provisioningIntentId: plan.provisioningIntentId,
-    expectedProjectRevision: plan.expectedProjectRevision,
-    expectedProvisioningRevision: plan.expectedProvisioningRevision,
-    expectedProvisioningIntentRevision: plan.expectedProvisioningIntentRevision,
-    intentDigest: plan.intentDigest,
-    attemptId: plan.attemptId,
-    confirmedPlanDigest: plan.confirmedPlanDigest
-  }
-}
-
 export function ProjectCoordinatorPanel({
   client,
   session,
   initialProjectId,
+  initialView,
+  activationRevision = 0,
   className,
   onCollapse,
   onOpenArtifact,
@@ -459,14 +483,24 @@ export function ProjectCoordinatorPanel({
   const [nowMilliseconds, setNowMilliseconds] = useState(() => Date.now())
   const [error, setError] = useState<string>()
   const [draft, setDraft] = useState<ProjectCoordinatorPlanDraft | null>(null)
-  const [provisioningPlan, setProvisioningPlan] = useState<ProjectCoordinatorProvisioningPlan>()
+  const [workflowPlan, setWorkflowPlan] = useState<ProjectCoordinatorWorkflowPlan>()
   const [busyAction, setBusyAction] = useState<string>()
   const [createDisplayName, setCreateDisplayName] = useState('')
   const [createGoal, setCreateGoal] = useState('')
-  const [createWorkerUserIds, setCreateWorkerUserIds] = useState<readonly string[]>([])
+  const createIntentRef = useRef<Readonly<{
+    fingerprint: string
+    createIntentId: `pct_${string}`
+  }> | undefined>(undefined)
+  const createInFlightRef = useRef<Promise<void> | null>(null)
+  const [initialContentMode, setInitialContentMode] = useState<'none' | 'required'>('none')
+  const [initialProviderFactId, setInitialProviderFactId] = useState('')
   const [activeView, setActiveView] = useState<string>('overview')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [newProjectRequest, setNewProjectRequest] = useState(0)
+  const [activationSectionRequest, setActivationSectionRequest] = useState<Readonly<{
+    revision: number
+    sectionId: (typeof PROJECT_COORDINATOR_PANEL_SECTION_IDS)[number]
+  }>>()
   const refreshRequestRef = useRef(0)
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
 
@@ -484,6 +518,10 @@ export function ProjectCoordinatorPanel({
     )),
     [activeView, workspaceSections]
   )
+  const availableWorkspaceViews = useMemo(
+    () => new Set(navigationItems.map(({ id }) => id)),
+    [navigationItems]
+  )
 
   const refresh = useCallback(async (
     projectId?: string,
@@ -496,7 +534,7 @@ export function ProjectCoordinatorPanel({
       setLoading(true)
       setBackgroundRefreshing(false)
       setError(undefined)
-      setProvisioningPlan(undefined)
+      setWorkflowPlan(undefined)
     } else {
       setBackgroundRefreshing(true)
     }
@@ -537,6 +575,24 @@ export function ProjectCoordinatorPanel({
   }, [initialProjectId, refresh, session.id])
 
   useEffect(() => {
+    if (!initialView) return
+    const target = projectCoordinatorActivationTarget(
+      initialView,
+      availableWorkspaceViews
+    )
+    setSettingsOpen(false)
+    setActiveView(target.workspaceView)
+    if (target.requestCreate) {
+      setNewProjectRequest((request) => request + 1)
+      setActivationSectionRequest(undefined)
+      return
+    }
+    setActivationSectionRequest(target.sectionId && target.sectionId !== 'create'
+      ? { revision: activationRevision, sectionId: target.sectionId }
+      : undefined)
+  }, [activationRevision, availableWorkspaceViews, initialView])
+
+  useEffect(() => {
     const timer = setInterval(() => setNowMilliseconds(Date.now()), 10_000)
     return () => clearInterval(timer)
   }, [])
@@ -561,7 +617,7 @@ export function ProjectCoordinatorPanel({
   }, [activeView, workspace])
 
   useEffect(() => {
-    setProvisioningPlan(undefined)
+    setWorkflowPlan(undefined)
   }, [project?.project.projectId, project?.project.revision])
 
   useEffect(() => {
@@ -611,51 +667,48 @@ export function ProjectCoordinatorPanel({
 
   const createProject = useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (workspace?.connection.state !== 'ready') return
-    const creatorUserId = workspace.connection.userId
-    const visibleWorkerUserIds = new Set(workspace.availableWorkerUsers.map(({ userId }) => userId))
-    const memberUserIds = [
-      creatorUserId,
-      ...createWorkerUserIds.filter((userId) => (
-        userId !== creatorUserId && visibleWorkerUserIds.has(userId)
-      ))
-    ]
-    void runAction('project-create', () => client.createProject({
+    if (workspace?.connection.state !== 'ready' || createInFlightRef.current) return
+    const budget = {
+      maxTasks: 32,
+      maxTasksPerRound: 8,
+      maxTaskRetries: 2,
+      maxCoordinationRounds: 4
+    }
+    const fingerprint = JSON.stringify({
+      displayName: createDisplayName.trim(),
+      goal: createGoal.trim(),
+      budget
+    })
+    const existingIntent = createIntentRef.current
+    const createIntentId = existingIntent?.fingerprint === fingerprint
+      ? existingIntent.createIntentId
+      : newProjectCreateIntentId()
+    createIntentRef.current = Object.freeze({ fingerprint, createIntentId })
+    const operation = runAction('project-create', () => client.createProject({
+      createIntentId,
       displayName: createDisplayName,
       goal: createGoal,
-      budget: {
-        maxTasks: 32,
-        maxTasksPerRound: 8,
-        maxTaskRetries: 2,
-        maxCoordinationRounds: 4
-      },
-      content: {
-        mode: 'none',
-        members: memberUserIds.map((userId) => ({ userId }))
-      }
+      budget
     }), async (result) => {
       const selected = projectCoordinatorCreatedSelection(result)
       setWorkspace(selected.workspace)
       setSelectedProjectId(selected.selectedProjectId)
       setDraft(await client.readPlanDraft({ projectId: selected.selectedProjectId }))
+      createIntentRef.current = undefined
       setCreateDisplayName('')
       setCreateGoal('')
-      setCreateWorkerUserIds([])
+    })
+    createInFlightRef.current = operation
+    void operation.finally(() => {
+      if (createInFlightRef.current === operation) createInFlightRef.current = null
     })
   }, [
     client,
     createDisplayName,
     createGoal,
-    createWorkerUserIds,
     runAction,
     workspace
   ])
-
-  const toggleCreateWorkerUser = useCallback((userId: string, selected: boolean) => {
-    setCreateWorkerUserIds((current) => selected
-      ? [...new Set([...current, userId])]
-      : current.filter((candidate) => candidate !== userId))
-  }, [])
 
   const generateDraft = useCallback(() => {
     if (!project) return
@@ -693,21 +746,89 @@ export function ProjectCoordinatorPanel({
     })
   }, [client, draft, runAction])
 
-  const confirmActivate = useCallback(() => {
-    if (!project?.plan || project.plan.plan.state !== 'awaiting_confirmation') return
+  const confirmPlan = useCallback(() => {
+    if (
+      !project?.plan ||
+      project.plan.plan.state !== 'awaiting_confirmation' ||
+      workspace?.connection.state !== 'ready'
+    ) return
     const plan = project.plan.plan
-    void runAction('plan-confirm', () => client.confirmPlanAndActivate({
+    const effectiveContentMode = plan.tasks.some(({ fileIntent }) => fileIntent !== null)
+      ? 'required' as const
+      : initialContentMode
+    const assignedUserIds = project.plan.plan.tasks.map(({ workerUserId }) => workerUserId)
+    const initialMemberUserIds = [...new Set([
+      project.project.ownerUserId,
+      ...assignedUserIds.filter((userId) => userId !== project.project.ownerUserId)
+    ])]
+    const ownerProviderFacts = workspace.providerPrincipalFacts
+      .filter(({ userId, readiness }) => (
+        userId === project.project.ownerUserId && readiness === 'ready'
+      ))
+      .sort((left, right) => right.revision - left.revision)
+    const ownerProviderFact = ownerProviderFacts.find(({ providerPrincipalFactId }) => (
+      providerPrincipalFactId === initialProviderFactId
+    )) ?? ownerProviderFacts[0]
+    const requiredMembers = effectiveContentMode === 'required' && ownerProviderFact
+      ? initialMemberUserIds.map((userId) => {
+          const fact = workspace.providerPrincipalFacts
+            .filter((candidate) => (
+              candidate.userId === userId &&
+              candidate.readiness === 'ready' &&
+              candidate.providerPrincipal.providerInstance.providerInstanceRef ===
+                ownerProviderFact.providerPrincipal.providerInstance.providerInstanceRef
+            ))
+            .sort((left, right) => right.revision - left.revision)[0]
+          return fact ? {
+            userId,
+            providerPrincipalFactId: fact.providerPrincipalFactId,
+            expectedFactRevision: fact.revision
+          } : null
+        })
+      : []
+    if (
+      project.project.status === 'draft' &&
+      effectiveContentMode === 'required' &&
+      (!ownerProviderFact || requiredMembers.some((member) => member === null))
+    ) {
+      setError(t('projectCoordinatorCreateProviderFactsMissing'))
+      return
+    }
+    const initialTeam = project.project.status !== 'draft'
+      ? null
+      : effectiveContentMode === 'none'
+        ? {
+            mode: 'none' as const,
+            members: initialMemberUserIds.map((userId) => ({ userId }))
+          }
+        : {
+            mode: 'required' as const,
+            contentOwnerUserId: project.project.ownerUserId,
+            providerInstance: ownerProviderFact!.providerPrincipal.providerInstance,
+            containerDisplayName: project.project.displayName,
+            members: requiredMembers as Exclude<(typeof requiredMembers)[number], null>[]
+          }
+    void runAction('plan-confirm', () => client.confirmPlan({
       projectId: project.project.projectId,
       projectPlanId: plan.projectPlanId,
       expectedProjectRevision: project.project.revision,
       expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
       expectedPlanRevision: plan.revision,
-      planDigest: plan.planDigest
+      planDigest: plan.planDigest,
+      initialTeam
     }), (next) => {
       setWorkspace(next)
       setSelectedProjectId(project.project.projectId)
     })
-  }, [client, project, runAction])
+  }, [
+    client,
+    initialContentMode,
+    initialProviderFactId,
+    project,
+    runAction,
+    t,
+    workspace
+  ])
 
   const applyProjectWorkspace = useCallback((next: ProjectCoordinatorWorkspace) => {
     setWorkspace(next)
@@ -744,19 +865,17 @@ export function ProjectCoordinatorPanel({
     void runAction('project-complete', () => client.completeProject(input), applyProjectWorkspace)
   }, [applyProjectWorkspace, client, runAction])
 
-  const previewProvisioning = useCallback(() => {
+  const prepareWorkflow = useCallback(() => {
     if (!project) return
-    void runAction('provisioning-preview', () => client.previewProvisioning({
+    void runAction('workflow-prepare', () => client.prepareWorkflow({
       projectId: project.project.projectId
-    }), setProvisioningPlan)
+    }), setWorkflowPlan)
   }, [client, project, runAction])
 
-  const applyProvisioning = useCallback((plan: ProjectCoordinatorProvisioningPlan) => {
-    void runAction('provisioning-apply', () => client.applyProvisioning(
-      projectCoordinatorProvisioningApplyInput(plan)
-    ), (next) => {
+  const continueWorkflow = useCallback((plan: ProjectCoordinatorWorkflowPlan) => {
+    void runAction('workflow-continue', () => client.continueWorkflow(plan), (next) => {
       applyProjectWorkspace(next)
-      setProvisioningPlan(undefined)
+      setWorkflowPlan(undefined)
     })
   }, [applyProjectWorkspace, client, runAction])
 
@@ -787,14 +906,18 @@ export function ProjectCoordinatorPanel({
   const addMember = useCallback((input: ProjectCoordinatorMembershipAddInput) => {
     void runAction('membership-add', () => client.addMember(input), (next) => {
       applyProjectWorkspace(next)
-      setProvisioningPlan(undefined)
+      setWorkflowPlan(undefined)
     })
+  }, [applyProjectWorkspace, client, runAction])
+
+  const acceptInvitation = useCallback((input: ProjectCoordinatorMembershipAcceptInput) => {
+    void runAction('membership-accept', () => client.acceptInvitation(input), applyProjectWorkspace)
   }, [applyProjectWorkspace, client, runAction])
 
   const removeMember = useCallback((input: ProjectCoordinatorMembershipRemoveInput) => {
     void runAction('membership-remove', () => client.removeMember(input), (next) => {
       applyProjectWorkspace(next)
-      setProvisioningPlan(undefined)
+      setWorkflowPlan(undefined)
     })
   }, [applyProjectWorkspace, client, runAction])
 
@@ -819,6 +942,16 @@ export function ProjectCoordinatorPanel({
       if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame)
     }
   }, [activeView, newProjectRequest])
+
+  useEffect(() => {
+    if (activeView !== 'projects' || !activationSectionRequest) return
+    const frame = globalThis.requestAnimationFrame?.(() => {
+      focusCoordinatorSection(activationSectionRequest.sectionId)
+    })
+    return () => {
+      if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame)
+    }
+  }, [activationSectionRequest, activeView])
 
   return (
     <aside
@@ -983,25 +1116,38 @@ export function ProjectCoordinatorPanel({
                     defaultExpanded={workspace.projects.length === 0}
                     requestOpen={newProjectRequest}
                     busy={busyAction === 'project-create'}
-                    creatorUserId={workspace.connection.userId}
                     displayName={createDisplayName}
                     goal={createGoal}
-                    selectedWorkerUserIds={createWorkerUserIds}
-                    workerUsers={workspace.availableWorkerUsers}
-                    onDisplayName={setCreateDisplayName}
-                    onGoal={setCreateGoal}
+                    onDisplayName={(value) => {
+                      createIntentRef.current = undefined
+                      setCreateDisplayName(value)
+                    }}
+                    onGoal={(value) => {
+                      createIntentRef.current = undefined
+                      setCreateGoal(value)
+                    }}
                     onSubmit={createProject}
-                    onWorkerUserToggle={toggleCreateWorkerUser}
                   />
                 ) : null}
                 <ProjectCoordinatorPlanSection
                   project={project}
                   draft={draft}
+                  observedAt={workspace?.observedAt ?? project?.project.updatedAt ?? ''}
                   busy={Boolean(busyAction?.startsWith('plan-'))}
                   onGenerate={generateDraft}
                   onEditDraft={editDraft}
                   onSubmitDraft={submitDraft}
-                  onConfirmActivate={confirmActivate}
+                  canConfirm={workspace?.connection.state === 'ready' &&
+                    workspace.connection.userId === project?.project.ownerUserId}
+                  currentUserId={workspace?.connection.state === 'ready'
+                    ? workspace.connection.userId
+                    : null}
+                  providerPrincipalFacts={workspace?.providerPrincipalFacts ?? []}
+                  initialContentMode={initialContentMode}
+                  initialProviderFactId={initialProviderFactId}
+                  onInitialContentMode={setInitialContentMode}
+                  onInitialProviderFactId={setInitialProviderFactId}
+                  onConfirm={confirmPlan}
                 />
                 <TasksSection project={project} />
                 <ProjectCoordinatorTransferSection
@@ -1013,15 +1159,19 @@ export function ProjectCoordinatorPanel({
                 />
                 <ProjectCoordinatorProvisioningSection
                   project={project}
-                  plan={provisioningPlan ?? null}
+                  plan={workflowPlan ?? null}
+                  currentUserId={workspace?.connection.state === 'ready'
+                    ? workspace.connection.userId
+                    : null}
                   canManage={workspace?.connection.state === 'ready' &&
                     workspace.connection.userId === project?.project.ownerUserId}
-                  busy={Boolean(busyAction?.startsWith('provisioning-') ||
+                  busy={Boolean(busyAction?.startsWith('workflow-') ||
                     busyAction?.startsWith('membership-') ||
                     busyAction?.startsWith('recovery-'))}
-                  onPreview={previewProvisioning}
-                  onApply={applyProvisioning}
+                  onPrepareWorkflow={prepareWorkflow}
+                  onContinueWorkflow={continueWorkflow}
                   onAddMember={addMember}
+                  onAcceptInvitation={acceptInvitation}
                   onRemoveMember={removeMember}
                   onObserveAndLinkRecovery={observeAndLinkRecovery}
                   onAbandonRecovery={abandonRecovery}
@@ -1346,32 +1496,23 @@ export function ProjectCreateForm({
   defaultExpanded = false,
   requestOpen = 0,
   busy,
-  creatorUserId,
   displayName,
   goal,
-  selectedWorkerUserIds,
-  workerUsers,
   onDisplayName,
   onGoal,
-  onSubmit,
-  onWorkerUserToggle
+  onSubmit
 }: Readonly<{
   defaultExpanded?: boolean
   requestOpen?: number
   busy: boolean
-  creatorUserId: string
   displayName: string
   goal: string
-  selectedWorkerUserIds: readonly string[]
-  workerUsers: ProjectCoordinatorWorkspace['availableWorkerUsers']
   onDisplayName(value: string): void
   onGoal(value: string): void
   onSubmit(event: FormEvent<HTMLFormElement>): void
-  onWorkerUserToggle(userId: string, selected: boolean): void
 }>): ReactElement {
   const { t } = useTranslation('common')
   const [expanded, setExpanded] = useState(defaultExpanded)
-  const candidates = workerUsers.filter(({ userId }) => userId !== creatorUserId)
   useEffect(() => {
     if (defaultExpanded) setExpanded(true)
   }, [defaultExpanded])
@@ -1422,30 +1563,6 @@ export function ProjectCreateForm({
             <small>{t('projectCoordinatorCreatorRoleHint')}</small>
           </span>
         </div>
-        <fieldset className="project-coordinator-create-workers">
-          <legend>{t('projectCoordinatorWorkerMembers')}</legend>
-          <p>{t('projectCoordinatorWorkerMembersHint')}</p>
-          {candidates.length === 0 ? (
-            <p className="project-coordinator-create-workers-empty">
-              {t('projectCoordinatorNoOnlineWorkerUsers')}
-            </p>
-          ) : candidates.map((group) => (
-            <label className="project-coordinator-create-worker" key={group.userId}>
-              <input
-                type="checkbox"
-                checked={selectedWorkerUserIds.includes(group.userId)}
-                onChange={(event) => onWorkerUserToggle(group.userId, event.currentTarget.checked)}
-              />
-              <span className="project-coordinator-create-worker-avatar" aria-hidden="true">
-                <UserRound />
-              </span>
-              <span className="project-coordinator-create-worker-copy">
-                <strong>{group.displayName}</strong>
-                <small>{t('projectCoordinatorWorkerUserStatus')}</small>
-              </span>
-            </label>
-          ))}
-        </fieldset>
         <button disabled={busy} type="submit" className="project-coordinator-primary-button">
           {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Zap aria-hidden="true" />}
           {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorCreateProject')}
@@ -1507,9 +1624,6 @@ function ProjectOverview({
   const asOf = new Date(nowMilliseconds).toISOString()
   const presence = projectCoordinatorWorkerPresenceSummary(project, asOf)
   const agents = project.workerGroups.flatMap(({ agents }) => agents)
-  const readyUsers = project.workerGroups.filter((group) => group.agents.some((agent) => (
-    projectCoordinatorAgentOperationalState(agent, asOf).state === 'ready'
-  ))).length
   const coordinator = agents.find(({ projectAvailability }) => (
     projectAvailability.agentId === record.coordinatorAgentId
   ))
@@ -1567,7 +1681,7 @@ function ProjectOverview({
         <div>
           <UserRoundCheck aria-hidden="true" />
           <span>
-            <strong>{readyUsers}/{presence.visibleUsers}</strong>
+            <strong>{presence.readyUsers}/{presence.visibleUsers}</strong>
             {t('projectCoordinatorWorkerUsersReadyShort')}
           </span>
         </div>
@@ -1810,7 +1924,9 @@ export type ProjectCoordinatorWorkerPresenceSummary = Readonly<{
 /**
  * Summarises the exact Cloud worker projection without inventing a second presence source.
  * A User is online when at least one of their visible Agents is online, so multiple Devices
- * owned by the same Human never inflate the online member count.
+ * owned by the same Human never inflate the online member count. Planning readiness uses the
+ * same package-owned draft/paused/active predicate as the Plan Worker selector; execution-only
+ * operational state remains separate and cannot hide prospective planning candidates.
  */
 export function projectCoordinatorWorkerPresenceSummary(
   project: ProjectCoordinatorProject,
@@ -1819,19 +1935,34 @@ export function projectCoordinatorWorkerPresenceSummary(
   let onlineUsers = 0
   let readyUsers = 0
   for (const group of project.workerGroups) {
-    const operationalStates = group.agents.map((agent) => (
-      projectCoordinatorAgentOperationalState(
-        agent,
-        observedAt ?? agent.projectAvailability.availability.observedAt
-      )
+    const states = group.agents.map((agent) => projectCoordinatorWorkerPlanningState(
+      project,
+      agent,
+      observedAt
     ))
-    if (operationalStates.some(({ online }) => online)) onlineUsers += 1
-    if (operationalStates.some(({ state }) => state === 'ready')) readyUsers += 1
+    if (states.some(({ operational }) => operational.online)) onlineUsers += 1
+    if (states.some(({ planning }) => planning.eligible)) readyUsers += 1
   }
   return Object.freeze({
     onlineUsers,
     readyUsers,
     visibleUsers: project.workerGroups.length
+  })
+}
+
+function projectCoordinatorWorkerPlanningState(
+  project: ProjectCoordinatorProject,
+  agent: ProjectCoordinatorWorkerAgent,
+  observedAt?: string
+) {
+  const asOf = observedAt ?? agent.projectAvailability.availability.observedAt
+  return Object.freeze({
+    operational: projectCoordinatorAgentOperationalState(agent, asOf),
+    planning: projectCoordinatorPlanningRuntimeReadiness(
+      project,
+      agent.projectAvailability,
+      asOf
+    )
   })
 }
 
@@ -1945,14 +2076,23 @@ export function ProjectCoordinatorTransferSection({
 export function ProjectCoordinatorPlanSection({
   project,
   draft,
+  observedAt,
   busy,
   onGenerate,
   onEditDraft,
   onSubmitDraft,
-  onConfirmActivate
+  canConfirm,
+  currentUserId,
+  providerPrincipalFacts,
+  initialContentMode,
+  initialProviderFactId,
+  onInitialContentMode,
+  onInitialProviderFactId,
+  onConfirm
 }: Readonly<{
   project?: ProjectCoordinatorProject
   draft: ProjectCoordinatorPlanDraft | null
+  observedAt: string
   busy: boolean
   onGenerate(): void
   onEditDraft(content: Pick<
@@ -1960,20 +2100,95 @@ export function ProjectCoordinatorPlanSection({
     'tasks' | 'rationale' | 'assignments'
   >): void
   onSubmitDraft(): void
-  onConfirmActivate(): void
+  canConfirm: boolean
+  currentUserId: string | null
+  providerPrincipalFacts: ProjectCoordinatorWorkspace['providerPrincipalFacts']
+  initialContentMode: 'none' | 'required'
+  initialProviderFactId: string
+  onInitialContentMode(value: 'none' | 'required'): void
+  onInitialProviderFactId(value: string): void
+  onConfirm(): void
 }>): ReactElement {
   const { t } = useTranslation('common')
   const visibleWorkerGroups = project?.workerGroups ?? []
   const awaitingConfirmation = project?.plan?.plan.state === 'awaiting_confirmation'
+  const initialMemberUserIds = [...new Set([
+    ...(project ? [project.project.ownerUserId] : []),
+    ...(project?.plan?.plan.tasks.map(({ workerUserId }) => workerUserId) ?? [])
+  ])]
+  const ownerProviderFacts = providerPrincipalFacts.filter(({ userId, readiness }) => (
+    userId === currentUserId && readiness === 'ready'
+  ))
+  const selectedOwnerFact = ownerProviderFacts.find(({ providerPrincipalFactId }) => (
+    providerPrincipalFactId === initialProviderFactId
+  )) ?? ownerProviderFacts[0]
+  const planRequiresContent = project?.plan?.plan.tasks.some(({ fileIntent }) => (
+    fileIntent !== null
+  )) ?? false
+  const effectiveContentMode = planRequiresContent ? 'required' : initialContentMode
+  const missingInitialProviderFacts = project?.project.status === 'draft' &&
+    effectiveContentMode === 'required' && (
+      !selectedOwnerFact || initialMemberUserIds.some((userId) => (
+        !providerPrincipalFacts.some((fact) => (
+          fact.userId === userId &&
+          fact.readiness === 'ready' &&
+          fact.providerPrincipal.providerInstance.providerInstanceRef ===
+            selectedOwnerFact.providerPrincipal.providerInstance.providerInstanceRef
+        ))
+      ))
+    )
   return (
     <Section id="plan" title={t('projectCoordinatorPlan')} icon={<ListChecks className="h-4 w-4" />}>
       {!project ? <Empty /> : awaitingConfirmation ? (
         <div className="space-y-2 rounded border border-amber-500/40 p-2" data-default-visible-card="plan-confirmation">
           <Status value="awaiting_confirmation" />
           <p className="text-[11px] text-ds-muted">{project.plan!.plan.rationale}</p>
-          <button type="button" disabled={busy} onClick={onConfirmActivate} className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50">
-            {t('projectCoordinatorConfirmActivate')}
-          </button>
+          {canConfirm && project.project.status === 'draft' ? (
+            <div className="space-y-2 rounded border border-ds-border p-2">
+              <label className="block text-xs">
+                <span className="text-ds-muted">{t('projectCoordinatorContentMode')}</span>
+                <select
+                  value={effectiveContentMode}
+                  disabled={planRequiresContent}
+                  data-content-required-by-plan={planRequiresContent ? 'true' : 'false'}
+                  onChange={(event) => onInitialContentMode(
+                    event.currentTarget.value as 'none' | 'required'
+                  )}
+                  className="mt-1 w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+                >
+                  <option value="none">{t('projectCoordinatorContentModeNone')}</option>
+                  <option value="required">{t('projectCoordinatorContentModeTeam')}</option>
+                </select>
+              </label>
+              {effectiveContentMode === 'required' ? (
+                <label className="block text-xs">
+                  <span className="text-ds-muted">{t('projectCoordinatorProviderInstance')}</span>
+                  <select
+                    required
+                    value={selectedOwnerFact?.providerPrincipalFactId ?? ''}
+                    onChange={(event) => onInitialProviderFactId(event.currentTarget.value)}
+                    className="mt-1 w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+                  >
+                    {ownerProviderFacts.length === 0 ? (
+                      <option value="">{t('projectCoordinatorCreateProviderFactsMissing')}</option>
+                    ) : ownerProviderFacts.map((fact) => (
+                      <option key={fact.providerPrincipalFactId} value={fact.providerPrincipalFactId}>
+                        {fact.providerPrincipal.providerInstance.providerInstanceRef} · rev {fact.revision}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <p className="text-[11px] text-ds-muted">
+                {t('projectCoordinatorWorkerMembers')}: {initialMemberUserIds.join(', ')}
+              </p>
+            </div>
+          ) : null}
+          {canConfirm ? (
+            <button type="button" disabled={busy || missingInitialProviderFacts} onClick={onConfirm} className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50">
+              {t('projectCoordinatorConfirmPlan')}
+            </button>
+          ) : null}
         </div>
       ) : draft ? (
         <div className="space-y-2" data-default-visible-card="plan-draft" key={draft.draftRevision}>
@@ -1994,7 +2209,14 @@ export function ProjectCoordinatorPlanSection({
                   ),
                   requiredCapabilityTags: splitCommaSeparated(
                     String(values.get(`plan-item-capabilities-${item.planItemId}`) ?? '')
-                  )
+                  ),
+                  dependencyPlanItemIds: splitCommaSeparated(
+                    String(values.get(`plan-item-dependencies-${item.planItemId}`) ?? '')
+                  ),
+                  fileIntent: item.fileIntent !== null &&
+                    values.get(`plan-item-file-enabled-${item.planItemId}`) === 'on'
+                    ? item.fileIntent
+                    : null
                 })),
                 assignments: draft.assignments.map((assignment) => {
                   const workerUserId = String(
@@ -2030,7 +2252,18 @@ export function ProjectCoordinatorPlanSection({
                 <input required name={`plan-item-title-${item.planItemId}`} defaultValue={item.title} aria-label={t('projectCoordinatorTaskTitle')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
                 <textarea required name={`plan-item-objective-${item.planItemId}`} defaultValue={item.objective} aria-label={t('projectCoordinatorTaskObjective')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
                 <textarea required name={`plan-item-criteria-${item.planItemId}`} defaultValue={item.completionCriteria.join('\n')} aria-label={t('projectCoordinatorCompletionCriteria')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+                <input name={`plan-item-dependencies-${item.planItemId}`} defaultValue={item.dependencyPlanItemIds.join(', ')} aria-label={t('projectCoordinatorTaskDependencies')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
                 <input required name={`plan-item-capabilities-${item.planItemId}`} defaultValue={item.requiredCapabilityTags.join(', ')} aria-label={t('projectCoordinatorCapabilityTags')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+                {item.fileIntent !== null ? (
+                  <label className="flex items-center gap-2 text-xs text-ds-muted">
+                    <input
+                      type="checkbox"
+                      name={`plan-item-file-enabled-${item.planItemId}`}
+                      defaultChecked
+                    />
+                    {t('projectCoordinatorKeepFileDeclaration')}
+                  </label>
+                ) : null}
                 <select
                   name={`plan-item-user-${item.planItemId}`}
                   className="mt-1 w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
@@ -2039,15 +2272,20 @@ export function ProjectCoordinatorPlanSection({
                 >
                   <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
                   {visibleWorkerGroups.map((group) => {
-                    const online = group.agents.some((agent) => {
-                      const operational = projectCoordinatorAgentOperationalState(agent)
-                      return operational.state !== 'blocked' && operational.state !== 'offline'
-                    })
+                    const planningEligible = project !== undefined && group.agents.some(({
+                      projectAvailability
+                    }) => projectCoordinatorPlanningTaskReadiness(
+                      project,
+                      projectAvailability,
+                      item,
+                      observedAt
+                    ).eligible)
                     return (
                       <option
                         key={group.userId}
                         value={group.userId}
-                        disabled={!online}
+                        disabled={!planningEligible}
+                        data-planning-eligible={planningEligible ? 'true' : 'false'}
                       >
                         {group.displayName}
                       </option>
@@ -2081,21 +2319,16 @@ export function ProjectCoordinatorPlanSection({
         <div className="space-y-2 text-xs">
           <Status value={project.plan.plan.state} />
           {project.plan.plan.tasks.map((item) => {
-            const assignment = project.plan?.assignments.find(
-              ({ planItemId }) => planItemId === item.planItemId
-            )
             return (
             <div key={item.planItemId} className="rounded border border-ds-border p-2">
               <div className="font-medium">{item.title}</div>
               <p className="mt-1 text-[11px] text-ds-muted">{item.objective}</p>
-              {assignment?.workerUserId ? (
-                <div className="mt-1 text-[10px] text-ds-faint">
-                  {t('projectCoordinatorWorkerUser')}: {
-                    visibleWorkerGroups.find(({ userId }) => userId === assignment.workerUserId)?.displayName ??
-                    assignment.workerUserId
-                  }
-                </div>
-              ) : null}
+              <div className="mt-1 text-[10px] text-ds-faint">
+                {t('projectCoordinatorWorkerUser')}: {
+                  visibleWorkerGroups.find(({ userId }) => userId === item.workerUserId)?.displayName ??
+                  item.workerUserId
+                }
+              </div>
             </div>
             )
           })}
@@ -2150,14 +2383,13 @@ export function WorkersSection({
 
           <div className="project-coordinator-member-list">
             {project.workerGroups.map((group) => {
-              const operationalStates = group.agents.map((agent) => (
-                projectCoordinatorAgentOperationalState(
-                  agent,
-                  asOf ?? agent.projectAvailability.availability.observedAt
-                )
+              const states = group.agents.map((agent) => projectCoordinatorWorkerPlanningState(
+                project,
+                agent,
+                asOf
               ))
-              const groupOnline = operationalStates.some(({ online }) => online)
-              const groupReady = operationalStates.some(({ state }) => state === 'ready')
+              const groupOnline = states.some(({ operational }) => operational.online)
+              const groupReady = states.some(({ planning }) => planning.eligible)
               const membership = group.agents.find(({ projectAvailability }) => (
                 projectAvailability.membership !== null
               ))?.projectAvailability.membership
@@ -2190,7 +2422,7 @@ export function WorkersSection({
   )
 }
 
-function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProject }>): ReactElement {
+export function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProject }>): ReactElement {
   const { t } = useTranslation('common')
   const queue = project ? {
     active: project.tasks.filter(({ task }) => (
@@ -2237,16 +2469,49 @@ function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProjec
               const execution = task.currentExecutionId
                 ? taskView.executions.find(({ executionId }) => executionId === task.currentExecutionId)
                 : undefined
-              const worker = execution ? project.workerGroups.flatMap(({ agents }) => agents).find(
+              const pendingOffer = execution ? undefined : project.offers.find((offer) => (
+                offer.taskId === task.taskId &&
+                offer.state === 'pending' &&
+                offer.executionId === null
+              ))
+              const claimedOffer = execution ? project.offers.find((offer) => (
+                offer.taskId === task.taskId &&
+                offer.state === 'accepted' &&
+                offer.executionId === execution.executionId
+              )) : undefined
+              const workerUserId = execution?.assigneeUserId ?? pendingOffer?.workerUserId
+              const workerUser = workerUserId
+                ? project.memberUsers.find(({ userId }) => userId === workerUserId) ??
+                  project.workerGroups.find(({ userId }) => userId === workerUserId)
+                : undefined
+              const workerAgent = execution ? project.workerGroups.flatMap(({ agents }) => agents).find(
                 ({ projectAvailability }) => (
                   projectAvailability.agentId === execution.assigneeAgentId
                 )
               ) : undefined
+              const assignmentState = execution
+                ? 'claimed'
+                : pendingOffer
+                  ? 'awaiting-claim'
+                  : 'not-published'
+              const workerUserLabel = workerUser?.displayName ?? (
+                workerUserId ? shortIdentifier(workerUserId) : null
+              )
+              const assignmentLabel = assignmentState === 'claimed'
+                ? `${workerUserLabel ?? shortIdentifier(execution!.assigneeUserId)} · ${
+                    workerAgent?.displayName ?? shortIdentifier(execution!.assigneeAgentId)
+                  }`
+                : assignmentState === 'awaiting-claim'
+                  ? `${workerUserLabel ?? shortIdentifier(pendingOffer!.workerUserId)} · ${
+                      t('projectCoordinatorAwaitingDeviceClaim')
+                    }`
+                  : t('projectCoordinatorNotPublished')
               return (
                 <article
                   key={task.taskId}
                   className="project-coordinator-task"
                   data-task-status={task.status}
+                  data-task-assignment-state={assignmentState}
                 >
                   <span className="project-coordinator-task-signal" aria-hidden="true" />
                   <div className="project-coordinator-task-heading">
@@ -2261,10 +2526,8 @@ function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProjec
                   </div>
                   <dl className="project-coordinator-task-meta">
                     <div>
-                      <dt>{t('projectCoordinatorAssignedAgent')}</dt>
-                      <dd>{worker?.displayName ?? (execution
-                        ? shortIdentifier(execution.assigneeAgentId)
-                        : t('projectCoordinatorUnassigned'))}</dd>
+                      <dt>{t('projectCoordinatorAssignment')}</dt>
+                      <dd>{assignmentLabel}</dd>
                     </div>
                     <div>
                       <dt>{t('projectCoordinatorExecution')}</dt>
@@ -2297,6 +2560,20 @@ function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProjec
                             <dd>{execution.executionId}</dd>
                             <dt>Agent</dt>
                             <dd>{execution.assigneeAgentId}</dd>
+                          </>
+                        ) : null}
+                        {pendingOffer ? (
+                          <>
+                            <dt>Offer</dt>
+                            <dd>{pendingOffer.taskOfferId}</dd>
+                            <dt>Worker User</dt>
+                            <dd>{pendingOffer.workerUserId}</dd>
+                          </>
+                        ) : null}
+                        {claimedOffer ? (
+                          <>
+                            <dt>Offer</dt>
+                            <dd>{claimedOffer.taskOfferId}</dd>
                           </>
                         ) : null}
                       </dl>
@@ -2598,18 +2875,25 @@ export function projectCoordinatorCompletionInput(
     project.project.status !== 'active' ||
     project.finalSummary !== null ||
     project.plan?.plan.state !== 'confirmed' ||
-    !project.records.some(({ kind }) => kind === 'decision') ||
     project.tasks.length === 0
   ) return null
   const acceptedResultSubmissionIds = acceptedCurrentResultIds(project)
-  if (acceptedResultSubmissionIds === null) return null
+  if (
+    acceptedResultSubmissionIds === null ||
+    acceptedResultSubmissionIds.some((resultSubmissionId) => (
+      !project.records.some((record) => (
+        record.kind === 'observation' &&
+        record.sourceResultSubmissionId === resultSubmissionId
+      ))
+    ))
+  ) return null
   return {
     projectId: project.project.projectId,
     expectedProjectRevision: project.project.revision,
     expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
     expectedExecutionAuthorityEpoch: project.project.executionAuthorityEpoch,
     projectPlanId: project.plan.plan.projectPlanId,
-    confirmedPlanRevision: project.plan.plan.revision,
+    confirmedPlanRevision: project.plan.plan.planRevision,
     acceptedResultSubmissionIds,
     summary: summary || project.project.goal
   }
@@ -2634,23 +2918,27 @@ function acceptedCurrentResultIds(project: ProjectCoordinatorProject): string[] 
 export function ProjectCoordinatorProvisioningSection({
   project,
   plan,
+  currentUserId,
   canManage = true,
   busy,
-  onPreview,
-  onApply,
+  onPrepareWorkflow,
+  onContinueWorkflow,
   onAddMember,
+  onAcceptInvitation,
   onRemoveMember,
   onObserveAndLinkRecovery,
   onAbandonRecovery,
   onRetryRecoverySuccessor
 }: Readonly<{
   project?: ProjectCoordinatorProject
-  plan: ProjectCoordinatorProvisioningPlan | null
+  plan: ProjectCoordinatorWorkflowPlan | null
+  currentUserId: string | null
   canManage?: boolean
   busy: boolean
-  onPreview(): void
-  onApply(plan: ProjectCoordinatorProvisioningPlan): void
+  onPrepareWorkflow(): void
+  onContinueWorkflow(plan: ProjectCoordinatorWorkflowPlan): void
   onAddMember(input: ProjectCoordinatorMembershipAddInput): void
+  onAcceptInvitation(input: ProjectCoordinatorMembershipAcceptInput): void
   onRemoveMember(input: ProjectCoordinatorMembershipRemoveInput): void
   onObserveAndLinkRecovery(input: ProjectCoordinatorContentRecoveryObserveLinkInput): void
   onAbandonRecovery(input: ProjectCoordinatorContentRecoveryAbandonInput): void
@@ -2697,6 +2985,15 @@ export function ProjectCoordinatorProvisioningSection({
     ? project?.tasks.find(({ task }) => task.taskId === abandonedRecoveryAction.taskId)
     : undefined
   const rootLost = provisioning?.binding?.status === 'degraded'
+  const invitationsPending = memberships.some(({ state }) => state === 'invited')
+  const confirmedPlan = project?.plan?.plan.state === 'confirmed'
+  const pendingTeamIntent = project?.project.contentMode === 'required' &&
+    provisioning?.intent !== null && provisioning?.intent !== undefined &&
+    !['completed', 'superseded', 'cancelled'].includes(provisioning.intent.state)
+  const workflowAvailable = confirmedPlan && !invitationsPending && (
+    project?.project.status === 'paused' ||
+    (project?.project.status === 'active' && pendingTeamIntent)
+  )
 
   const addExactMember = () => {
     if (!project) return
@@ -2797,10 +3094,10 @@ export function ProjectCoordinatorProvisioningSection({
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={onPreview}
+                  onClick={onPrepareWorkflow}
                   className="rounded border border-ds-border px-2 py-1 text-[11px] disabled:opacity-50"
                 >
-                  {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorPreviewReconcile')}
+                  {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorPrepareReconcileWorkflow')}
                 </button>
               ) : null}
             </div>
@@ -2883,21 +3180,21 @@ export function ProjectCoordinatorProvisioningSection({
             </div>
           ) : null}
 
-          {canManage && project.project.contentMode === 'required' && provisioning.intent && !plan ? (
+          {canManage && workflowAvailable && !plan ? (
             <div
               className="space-y-2 rounded border border-ds-border bg-ds-bg p-2"
-              data-default-visible-card="content-provisioning"
+              data-default-visible-card="project-workflow"
             >
               <p className="text-[11px] text-ds-muted">
-                {t('projectCoordinatorProvisioningReviewRequired')}
+                {t('projectCoordinatorWorkflowReviewRequired')}
               </p>
               <button
                 type="button"
                 disabled={busy}
-                onClick={onPreview}
+                onClick={onPrepareWorkflow}
                 className="rounded bg-ds-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
               >
-                {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorPreviewProvisioning')}
+                {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorPrepareWorkflow')}
               </button>
             </div>
           ) : null}
@@ -2905,14 +3202,14 @@ export function ProjectCoordinatorProvisioningSection({
           {plan ? (
             <div
               className="space-y-2 rounded border border-ds-border bg-ds-bg p-2"
-              data-default-visible-card="content-provisioning-confirmation"
+              data-default-visible-card="project-workflow-confirmation"
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="font-medium">{t('projectCoordinatorProvisioningFullPlan')}</span>
-                <Status value={plan.rootStrategy} />
+                <span className="font-medium">{t('projectCoordinatorWorkflowFullPlan')}</span>
+                <Status value={plan.purpose} />
               </div>
-              <ol className="space-y-1">
-                {plan.operations.map((operation, index) => (
+              {plan.provisioning ? <ol className="space-y-1">
+                {plan.provisioning.operations.map((operation, index) => (
                   <li
                     key={operation.operationId}
                     className="rounded border border-ds-border px-2 py-1 text-[10px]"
@@ -2924,17 +3221,21 @@ export function ProjectCoordinatorProvisioningSection({
                     {operation.userId ? <span> · <code>{operation.userId}</code></span> : null}
                   </li>
                 ))}
-              </ol>
+              </ol> : (
+                <p className="text-[10px] text-ds-muted">
+                  {t('projectCoordinatorWorkflowNoProviderOperations')}
+                </p>
+              )}
               <div className="break-all font-mono text-[9px] text-ds-muted">
-                {t('projectCoordinatorConfirmedPlanDigest')}: {plan.confirmedPlanDigest}
+                {t('projectCoordinatorWorkflowDigest')}: {plan.workflowDigest}
               </div>
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => onApply(plan)}
+                onClick={() => onContinueWorkflow(plan)}
                 className="rounded bg-ds-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
               >
-                {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorApplyProvisioning')}
+                {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorContinueWorkflow')}
               </button>
             </div>
           ) : null}
@@ -2945,7 +3246,8 @@ export function ProjectCoordinatorProvisioningSection({
               const readiness = provisioning.contentReadiness.find(({ userId }) => (
                 userId === membership.userId
               ))
-              const authoritySuspended = membership.state === 'pending_membership' ||
+              const authoritySuspended = membership.state === 'invited' ||
+                membership.state === 'pending_membership' ||
                 membership.state === 'membership_removal_pending'
               return (
                 <div
@@ -2965,8 +3267,27 @@ export function ProjectCoordinatorProvisioningSection({
                       <span>{t('projectCoordinatorTaskAuthoritySuspended')}</span>
                     ) : null}
                   </div>
+                  {membership.userId === currentUserId && membership.state === 'invited' &&
+                    project.plan?.plan.state === 'confirmed' ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onAcceptInvitation({
+                          projectId: project.project.projectId,
+                          projectMembershipId: membership.projectMembershipId,
+                          expectedProjectRevision: project.project.revision,
+                          expectedMembershipRevision: membership.revision,
+                          projectPlanId: project.plan!.plan.projectPlanId,
+                          expectedPlanRevision: project.plan!.plan.revision,
+                          planDigest: project.plan!.plan.planDigest
+                        })}
+                        className="rounded bg-ds-accent px-1.5 py-0.5 text-[10px] text-white disabled:opacity-50"
+                      >
+                        {t('projectCoordinatorAcceptInvitation')}
+                      </button>
+                    ) : null}
                   {canManage && membership.userId !== project.project.ownerUserId &&
-                    membership.state === 'active' ? (
+                    ['invited', 'pending_membership', 'active'].includes(membership.state) ? (
                       <button
                         type="button"
                         disabled={busy}
@@ -3240,6 +3561,13 @@ function splitLines(value: string): string[] {
 
 function splitCommaSeparated(value: string): string[] {
   return [...new Set(value.split(',').map((entry) => entry.trim()).filter(Boolean))]
+}
+
+function newProjectCreateIntentId(): `pct_${string}` {
+  if (typeof globalThis.crypto?.randomUUID !== 'function') {
+    throw new Error('Secure Project create intent generation is unavailable.')
+  }
+  return `pct_${globalThis.crypto.randomUUID().replaceAll('-', '')}`
 }
 
 function connectionMessageKey(

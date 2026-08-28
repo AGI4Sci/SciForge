@@ -761,7 +761,7 @@ class PostgresReadRepository implements CollaborationReadRepository {
          SELECT member.project_id
          FROM sciforge_collaboration.project_members AS member
          WHERE member.user_id=$1
-           AND member.state IN ('active','membership_removal_pending')
+           AND member.state IN ('invited','active','membership_removal_pending')
            AND member.project_id>COALESCE($2::text,'')
        )
        SELECT project.* FROM sciforge_collaboration.projects AS project

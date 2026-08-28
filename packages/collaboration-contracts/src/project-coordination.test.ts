@@ -114,7 +114,7 @@ describe('orthogonal Project collaboration authority', () => {
     }).success).toBe(false)
   })
 
-  it('retains activation history throughout removal pending and removed states', () => {
+  it('retains activation history for an activated member throughout removal', () => {
     const pendingRemoval = projectMembershipSchema.parse({
       ...activeMembership,
       state: 'membership_removal_pending',
@@ -130,8 +130,33 @@ describe('orthogonal Project collaboration authority', () => {
       removedAt: '2026-08-15T08:02:00.000Z'
     })
     expect(removed.activatedAt).toBe(TEST_TIMESTAMP)
+  })
+
+  it('represents withdrawal or cleanup of a never-activated invitation without inventing activation', () => {
+    const invited = {
+      ...activeMembership,
+      state: 'invited' as const,
+      authorityEpoch: 1,
+      activatedAt: null
+    }
+    expect(projectMembershipSchema.safeParse(invited).success).toBe(true)
     expect(projectMembershipSchema.safeParse({
-      ...removed,
+      ...invited,
+      state: 'membership_removal_pending',
+      authorityEpoch: 2,
+      removalRequestedAt: TEST_LATER_TIMESTAMP,
+      removalRequestedByUserId: TEST_IDS.userId
+    }).success).toBe(true)
+    expect(projectMembershipSchema.safeParse({
+      ...invited,
+      state: 'removed',
+      authorityEpoch: 2,
+      removalRequestedAt: TEST_LATER_TIMESTAMP,
+      removalRequestedByUserId: TEST_IDS.userId,
+      removedAt: '2026-08-15T08:02:00.000Z'
+    }).success).toBe(true)
+    expect(projectMembershipSchema.safeParse({
+      ...activeMembership,
       activatedAt: null
     }).success).toBe(false)
   })

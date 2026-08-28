@@ -15,7 +15,7 @@ if (!connectionString || !expectedSource) {
 }
 if (![
   'fresh-v4', 'upstream-v4', 'public-v5', 'staging-v9', 'a-v11', 'current-v12',
-  'current-v13', 'current-v14', 'current-v15', 'current-v16', 'current-v17'
+  'current-v13', 'current-v14', 'current-v15', 'current-v16', 'current-v17', 'current-v18'
 ].includes(expectedSource)) {
   throw new Error('SCIFORGE_A_POSTGRES17_SOURCE names an unsupported forward-upgrade source')
 }
@@ -251,6 +251,6 @@ async function sourceRoute(): Promise<string> {
   if (version === 9 && row.managed === true && row.oidc === true && row.legacy_refs === true) return 'staging-v9'
   if (version === 11) return 'a-v11'
   if (version === 12) return 'current-v12'
-  if (version >= 13 && version <= 16) return `current-v${version}`
+  if (version >= 13 && version <= 18) return `current-v${version}`
   return `unsupported-${String(version)}`
 }

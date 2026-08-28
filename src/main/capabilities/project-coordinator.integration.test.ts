@@ -12,14 +12,25 @@ import {
 } from '@sciforge/collaboration-contracts/testing'
 
 import type { CapabilityCallerContextInput } from '../../shared/capability-broker'
+import {
+  CAPABILITY_AGENT_TOOL_NAMES,
+  createCapabilityAgentToolSurface
+} from './agent-tools'
 import { CapabilityBroker } from './broker'
 import {
   CapabilityRegistry,
   defineCapability,
   type CapabilityDefinition
 } from './registry'
+import {
+  createRuntimeCapabilityBroker
+} from '../runtime/agent-runtime/runtime-capability-broker'
+import {
+  createRuntimeMcpToolGateway
+} from '../runtime/agent-runtime/runtime-mcp-tool-gateway'
 
 const created: ProjectCoordinatorProjectCreateResult = {
+  createIntentId: 'pct_HostCreateIntent0001',
   createdProjectId: TEST_IDS.projectId,
   workspace: {
     connection: {
@@ -30,6 +41,7 @@ const created: ProjectCoordinatorProjectCreateResult = {
     observedAt: '2026-08-27T01:30:00.000Z',
     focusedProjectId: TEST_IDS.projectId,
     availableWorkerUsers: [],
+    providerPrincipalFacts: [],
     projects: [{
       project: projectFixture,
       coordinatorTransferFeedback: null,
@@ -60,6 +72,7 @@ const created: ProjectCoordinatorProjectCreateResult = {
 describe('Project Coordinator Host capability integration', () => {
   it('returns a successful global Project create without claiming a Broker resource revision', async () => {
     const createProject = vi.fn(async () => created)
+    const completeProjectCreate = vi.fn(async () => undefined)
     const definitions = createProjectCoordinatorCapabilityFactory<CapabilityDefinition>({
       defineCapability: ({ audiences, tags, producedResourceKinds, ...input }) => defineCapability({
         ...input,
@@ -70,9 +83,11 @@ describe('Project Coordinator Host capability integration', () => {
       ports: {
         workspace: {
           readWorkspace: async () => created.workspace,
-          createProject
+          createProject,
+          completeProjectCreate
         }
-      } as never
+      } as never,
+      sessions: {} as never
     }).createDefinitions()
     const createDefinition = definitions.find(
       ({ descriptor }) => descriptor.id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate
@@ -96,6 +111,7 @@ describe('Project Coordinator Host capability integration', () => {
       actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
       invocationId,
       input: {
+        createIntentId: created.createIntentId,
         displayName: 'Meeting',
         goal: 'Run the meeting.',
         budget: {
@@ -103,8 +119,7 @@ describe('Project Coordinator Host capability integration', () => {
           maxTasksPerRound: 4,
           maxTaskRetries: 1,
           maxCoordinationRounds: 2
-        },
-        content: { mode: 'none', members: [{ userId: 'usr_Owner0000001' }] }
+        }
       }
     })).resolves.toMatchObject({
       output: created,
@@ -112,5 +127,162 @@ describe('Project Coordinator Host capability integration', () => {
       replayed: false
     })
     expect(createProject).toHaveBeenCalledTimes(1)
+    expect(completeProjectCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ createIntentId: created.createIntentId }),
+      created
+    )
+  })
+
+  it('exposes the explicit Project capability allowlist through sciforge_discover', async () => {
+    const definitions = createProjectCoordinatorCapabilityFactory<CapabilityDefinition>({
+      defineCapability: ({ audiences, tags, producedResourceKinds, ...input }) => defineCapability({
+        ...input,
+        audiences: [...audiences],
+        tags: [...tags],
+        ...(producedResourceKinds ? { producedResourceKinds: [...producedResourceKinds] } : {})
+      }),
+      ports: {} as never,
+      sessions: {} as never
+    }).createDefinitions()
+    const surface = createCapabilityAgentToolSurface({
+      broker: new CapabilityBroker(new CapabilityRegistry(definitions)),
+      resolveCaller: () => ({
+        audience: 'agent',
+        callerId: 'thread-project-discovery',
+        approvals: []
+      })
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { text: 'Project', limit: 50 },
+      context: {
+        requestId: 'request-project-discovery',
+        runtimeId: 'runtime-project-discovery',
+        threadId: 'thread-project-discovery'
+      }
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) {
+      throw new Error('Expected Project capabilities from sciforge_discover.')
+    }
+    const visibleTitles = discovered.value.map(({ title }) => title)
+    expect(visibleTitles).toContain('Read Project coordination workspace')
+    expect(visibleTitles).toContain('Create Project')
+    expect(visibleTitles).toContain('Continue Project workflow')
+    expect(visibleTitles).toContain('Review Task result')
+    expect(visibleTitles).toContain('Complete Project with final summary')
+    expect(visibleTitles).not.toContain('Bind Project Session')
+  })
+
+  it('creates and binds a Project through the ordinary Agent Runtime capability route', async () => {
+    const createProject = vi.fn(async () => created)
+    const completeProjectCreate = vi.fn(async () => undefined)
+    const withUnboundSession = vi.fn(async (
+      _session: Readonly<{ runtimeId: string; threadId: string }>,
+      operation: () => Promise<unknown>
+    ) => operation())
+    const bindCreatedProject = vi.fn(async () => undefined)
+    const definitions = createProjectCoordinatorCapabilityFactory<CapabilityDefinition>({
+      defineCapability: ({ audiences, tags, producedResourceKinds, ...input }) => defineCapability({
+        ...input,
+        audiences: [...audiences],
+        tags: [...tags],
+        ...(producedResourceKinds ? { producedResourceKinds: [...producedResourceKinds] } : {})
+      }),
+      ports: {
+        workspace: {
+          readWorkspace: async () => created.workspace,
+          createProject,
+          completeProjectCreate
+        }
+      } as never,
+      sessions: {
+        withUnboundSession,
+        bindCreatedProject
+      } as never
+    }).createDefinitions()
+    const createDefinition = definitions.find(
+      ({ descriptor }) => descriptor.id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate
+    )
+    expect(createDefinition).toBeDefined()
+
+    const runtimeBroker = createRuntimeCapabilityBroker({
+      broker: new CapabilityBroker(new CapabilityRegistry([createDefinition!])),
+      managedTools: createRuntimeMcpToolGateway({
+        servers: [],
+        clientFactory: async () => { throw new Error('unused') }
+      })
+    })
+    const surface = createCapabilityAgentToolSurface({
+      broker: runtimeBroker,
+      resolveCaller: ({ runtimeId, threadId }) => ({
+        audience: 'agent',
+        callerId: `${runtimeId}:${threadId ?? 'missing'}`,
+        approvals: []
+      }),
+      requestApproval: async () => 'allowed' as const
+    })
+    const context = {
+      requestId: 'request-project-create-agent-runtime',
+      runtimeId: 'runtime-project-coordinator',
+      threadId: 'thread-project-coordinator',
+      turnId: 'turn-project-create',
+      callId: 'call-project-create'
+    }
+    const discovery = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {
+        capabilityId: PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
+        includeSchema: true,
+        limit: 1
+      },
+      context
+    })
+    if (discovery.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) {
+      throw new Error('Expected Project create from sciforge_discover.')
+    }
+    const operationRef = discovery.value[0]?.operationRef
+    expect(operationRef).toBeDefined()
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: {
+        operationRef,
+        input: {
+          createIntentId: created.createIntentId,
+          displayName: 'Meeting',
+          goal: 'Run the meeting.',
+          budget: {
+            maxTasks: 4,
+            maxTasksPerRound: 4,
+            maxTaskRetries: 1,
+            maxCoordinationRounds: 2
+          }
+        }
+      },
+      context
+    })).resolves.toMatchObject({
+      tool: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      value: {
+        capabilityId: PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
+        output: created
+      }
+    })
+    expect(withUnboundSession).toHaveBeenCalledWith(
+      {
+        runtimeId: context.runtimeId,
+        threadId: context.threadId
+      },
+      expect.any(Function)
+    )
+    expect(bindCreatedProject).toHaveBeenCalledWith(
+      created,
+      {
+        runtimeId: context.runtimeId,
+        threadId: context.threadId
+      },
+      expect.objectContaining({ createIntentId: created.createIntentId })
+    )
+    expect(createProject).toHaveBeenCalledTimes(1)
+    expect(completeProjectCreate).not.toHaveBeenCalled()
   })
 })

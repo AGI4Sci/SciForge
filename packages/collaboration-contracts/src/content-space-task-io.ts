@@ -77,23 +77,57 @@ export const taskFileOutputIntentSchema = z.object({
   maxBytes: z.number().int().min(1).max(1_073_741_824)
 }).strict()
 
-/** Coordinator declaration. Cloud binds it to the created Task execution later. */
-export const taskFileIntentSchema = z.object({
+const taskFileDeclarationShape = {
   schemaVersion: z.literal(1),
-  bindingRevision: revisionSchema,
   inputs: z.array(taskFileInputIntentSchema).max(100),
   output: taskFileOutputIntentSchema
-}).strict().superRefine((intent, context) => {
-  const destinations = intent.inputs.map((input) => input.destinationName)
+} as const
+
+function validateTaskFileDeclaration(
+  declaration: Readonly<{
+    inputs: readonly z.infer<typeof taskFileInputIntentSchema>[]
+  }>,
+  context: z.RefinementCtx
+): void {
+  const destinations = declaration.inputs.map((input) => input.destinationName)
   if (new Set(destinations).size !== destinations.length) {
     context.addIssue({ code: 'custom', path: ['inputs'], message: 'Task input destination names must be unique.' })
   }
-  const locators = intent.inputs.map((input) => JSON.stringify(input.locator))
+  const locators = declaration.inputs.map((input) => JSON.stringify(input.locator))
   if (new Set(locators).size !== locators.length) {
     context.addIssue({ code: 'custom', path: ['inputs'], message: 'Task input locators must be unique.' })
   }
-})
+}
+
+/** Immutable logical file declaration stored in a confirmed Project Plan. */
+export const taskFileDeclarationSchema = z.object(taskFileDeclarationShape)
+  .strict()
+  .superRefine(validateTaskFileDeclaration)
+export type TaskFileDeclaration = z.infer<typeof taskFileDeclarationSchema>
+
+/** Cloud-bound Task intent created from a Plan declaration at offer time. */
+export const taskFileIntentSchema = z.object({
+  ...taskFileDeclarationShape,
+  bindingRevision: revisionSchema
+}).strict().superRefine(validateTaskFileDeclaration)
 export type TaskFileIntent = z.infer<typeof taskFileIntentSchema>
+
+export function bindTaskFileDeclaration(
+  declaration: TaskFileDeclaration,
+  bindingRevision: number
+): TaskFileIntent {
+  return taskFileIntentSchema.parse({ ...declaration, bindingRevision })
+}
+
+export function taskFileDeclarationFromIntent(
+  intent: TaskFileIntent
+): TaskFileDeclaration {
+  return taskFileDeclarationSchema.parse({
+    schemaVersion: intent.schemaVersion,
+    inputs: intent.inputs,
+    output: intent.output
+  })
+}
 
 export const taskExecutionFileInputSchema = z.object({
   resourceRefId: resourceRefIdSchema,

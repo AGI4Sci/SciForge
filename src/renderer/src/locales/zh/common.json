@@ -404,7 +404,7 @@
   "workspaceCardHint": "当前会话与此目录绑定",
   "sidebarThreadsLabel": "会话",
   "sidebarThreadsCount": "条会话",
-  "sidebarProjects": "项目",
+  "sidebarLocalWorkspaces": "本地工作区",
   "sidebarCollapse": "收起侧边栏",
   "sidebarExpand": "展开侧边栏",
   "workspaceNotSelected": "还没有选择本地目录",

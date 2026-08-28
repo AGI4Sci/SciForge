@@ -22,7 +22,7 @@ import {
 import {
   portableContentSpaceLocatorSchema,
   taskFileDestinationNameSchema,
-  taskFileIntentSchema
+  taskFileDeclarationSchema
 } from './content-space-task-io.js'
 
 const unique = <T>(values: readonly T[]): boolean => new Set(values).size === values.length
@@ -37,7 +37,7 @@ export const projectPlanStateSchema = z.enum([
 ])
 export type ProjectPlanState = z.infer<typeof projectPlanStateSchema>
 
-export const projectPlanTaskSchema = z.object({
+const projectPlanTaskDeclarationShape = {
   planItemId: planItemIdSchema,
   title: z.string().trim().min(1).max(200),
   objective: nonEmptyTextSchema,
@@ -46,8 +46,13 @@ export const projectPlanTaskSchema = z.object({
     .refine(unique, 'Plan item dependencies must be unique.'),
   requiredCapabilityTags: z.array(z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u)).max(256)
     .refine(unique, 'Required capability tags must be unique.'),
-  fileIntent: taskFileIntentSchema.nullable()
-}).strict().superRefine((item, context) => {
+  fileIntent: taskFileDeclarationSchema.nullable()
+} as const
+
+function validateProjectPlanTaskDeclaration(
+  item: Readonly<{ planItemId: string, dependencyPlanItemIds: readonly string[] }>,
+  context: z.RefinementCtx
+): void {
   if (item.dependencyPlanItemIds.includes(item.planItemId)) {
     context.addIssue({
       code: 'custom',
@@ -55,8 +60,85 @@ export const projectPlanTaskSchema = z.object({
       message: 'A plan item cannot depend on itself.'
     })
   }
-})
+}
+
+/** Coordinator/Runtime-authored logical Task before a Worker User is selected. */
+export const projectPlanTaskDeclarationSchema = z.object(projectPlanTaskDeclarationShape)
+  .strict()
+  .superRefine(validateProjectPlanTaskDeclaration)
+export type ProjectPlanTaskDeclaration = z.infer<typeof projectPlanTaskDeclarationSchema>
+
+/** Cloud-authoritative Plan Task with its immutable Worker User selection. */
+export const projectPlanTaskSchema = z.object({
+  ...projectPlanTaskDeclarationShape,
+  workerUserId: userIdSchema
+}).strict().superRefine(validateProjectPlanTaskDeclaration)
 export type ProjectPlanTask = z.infer<typeof projectPlanTaskSchema>
+
+type ProjectPlanTaskDependencyFacts = Readonly<{
+  planItemId: string
+  dependencyPlanItemIds: readonly string[]
+}>
+
+function validateProjectPlanTaskGraph(
+  tasks: readonly ProjectPlanTaskDependencyFacts[],
+  context: z.RefinementCtx
+): void {
+  const planItemIds = tasks.map(({ planItemId }) => planItemId)
+  if (!unique(planItemIds)) {
+    context.addIssue({ code: 'custom', message: 'Plan item IDs must be unique.' })
+    return
+  }
+  const planItemSet = new Set(planItemIds)
+  let referencesValid = true
+  for (const [index, task] of tasks.entries()) {
+    if (task.dependencyPlanItemIds.some((dependency) => !planItemSet.has(dependency))) {
+      referencesValid = false
+      context.addIssue({
+        code: 'custom',
+        path: [index, 'dependencyPlanItemIds'],
+        message: 'Every dependency must name another item in the same plan revision.'
+      })
+    }
+  }
+  if (!referencesValid) return
+
+  const remainingDependencies = new Map(tasks.map((task) => (
+    [task.planItemId, task.dependencyPlanItemIds.length]
+  )))
+  const dependents = new Map(planItemIds.map((planItemId) => (
+    [planItemId, [] as string[]]
+  )))
+  for (const task of tasks) {
+    for (const dependency of task.dependencyPlanItemIds) {
+      dependents.get(dependency)!.push(task.planItemId)
+    }
+  }
+  const ready = planItemIds.filter((planItemId) => remainingDependencies.get(planItemId) === 0)
+  let visited = 0
+  while (ready.length > 0) {
+    const planItemId = ready.pop()!
+    visited += 1
+    for (const dependent of dependents.get(planItemId)!) {
+      const remaining = remainingDependencies.get(dependent)! - 1
+      remainingDependencies.set(dependent, remaining)
+      if (remaining === 0) ready.push(dependent)
+    }
+  }
+  if (visited !== tasks.length) {
+    context.addIssue({ code: 'custom', message: 'Plan Task dependencies must form an acyclic graph.' })
+  }
+}
+
+export const projectPlanTaskDeclarationsSchema = z.array(projectPlanTaskDeclarationSchema)
+  .min(1)
+  .max(1_000)
+  .superRefine(validateProjectPlanTaskGraph)
+
+export const projectPlanTasksSchema = z.array(projectPlanTaskSchema)
+  .min(1)
+  .max(1_000)
+  .superRefine(validateProjectPlanTaskGraph)
 
 export const projectPlanRuntimeProvenanceSchema = z.object({
   runtimeId: runtimeIdSchema,
@@ -74,7 +156,7 @@ export const projectPlanSchema = z.object({
   state: projectPlanStateSchema,
   planRevision: revisionSchema,
   sourceInputLocators: z.array(portableContentSpaceLocatorSchema).max(100),
-  tasks: z.array(projectPlanTaskSchema).min(1).max(1_000),
+  tasks: projectPlanTasksSchema,
   rationale: nonEmptyTextSchema,
   runtimeProvenance: projectPlanRuntimeProvenanceSchema,
   planDigest: sha256Schema,
@@ -83,20 +165,6 @@ export const projectPlanSchema = z.object({
   confirmedAt: timestampSchema.nullable(),
   supersededAt: timestampSchema.nullable()
 }).strict().superRefine((plan, context) => {
-  const planItemIds = plan.tasks.map(({ planItemId }) => planItemId)
-  if (!unique(planItemIds)) {
-    context.addIssue({ code: 'custom', path: ['tasks'], message: 'Plan item IDs must be unique.' })
-  }
-  const planItemSet = new Set(planItemIds)
-  for (const [index, task] of plan.tasks.entries()) {
-    if (task.dependencyPlanItemIds.some((dependency) => !planItemSet.has(dependency))) {
-      context.addIssue({
-        code: 'custom',
-        path: ['tasks', index, 'dependencyPlanItemIds'],
-        message: 'Every dependency must name another item in the same plan revision.'
-      })
-    }
-  }
   const submittedRequired = plan.state === 'awaiting_confirmation' || plan.state === 'confirmed'
   if (submittedRequired && plan.submittedAt === null) {
     context.addIssue({ code: 'custom', path: ['submittedAt'], message: 'Awaiting and confirmed plans retain their submission time.' })

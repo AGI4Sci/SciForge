@@ -11,8 +11,9 @@ import {
   projectCoordinatorHumanAnswerInputSchema,
   projectCoordinatorHumanNeededCreateInputSchema,
   projectCoordinatorMembershipAddInputSchema,
+  projectCoordinatorMembershipAcceptInputSchema,
   projectCoordinatorMembershipRemoveInputSchema,
-  projectCoordinatorPlanConfirmActivateInputSchema,
+  projectCoordinatorPlanConfirmInputSchema,
   projectCoordinatorPlanDraftEditInputSchema,
   projectCoordinatorPlanDraftGenerateInputSchema,
   projectCoordinatorPlanDraftGenerateResultSchema,
@@ -20,16 +21,18 @@ import {
   projectCoordinatorPlanDraftSchema,
   projectCoordinatorPlanDraftSubmitInputSchema,
   projectCoordinatorPlanSubmitResultSchema,
-  projectCoordinatorProvisioningApplyInputSchema,
-  projectCoordinatorProvisioningPlanInputSchema,
-  projectCoordinatorProvisioningPlanSchema,
+  projectCoordinatorWorkflowContinueInputSchema,
+  projectCoordinatorWorkflowPlanSchema,
+  projectCoordinatorWorkflowPrepareInputSchema,
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateResultSchema,
+  projectCoordinatorSessionProjectionReadInputSchema,
+  projectCoordinatorSessionProjectionSchema,
   projectCoordinatorResultReviewInputSchema,
   projectCoordinatorTransferInputSchema,
   projectCoordinatorWorkspaceReadInputSchema,
   projectCoordinatorWorkspaceSchema,
-  type ProjectCoordinatorPlanConfirmActivateInput,
+  type ProjectCoordinatorPlanConfirmInput,
   type ProjectCoordinatorArtifactReviewPrepareInput,
   type ProjectCoordinatorArtifactReviewPrepared,
   type ProjectCoordinatorCompleteInput,
@@ -39,6 +42,7 @@ import {
   type ProjectCoordinatorHumanAnswerInput,
   type ProjectCoordinatorHumanNeededCreateInput,
   type ProjectCoordinatorMembershipAddInput,
+  type ProjectCoordinatorMembershipAcceptInput,
   type ProjectCoordinatorMembershipRemoveInput,
   type ProjectCoordinatorPlanDraft,
   type ProjectCoordinatorPlanDraftEditInput,
@@ -47,16 +51,18 @@ import {
   type ProjectCoordinatorPlanDraftReadInput,
   type ProjectCoordinatorPlanDraftSubmitInput,
   type ProjectCoordinatorPlanSubmitResult,
-  type ProjectCoordinatorProvisioningApplyInput,
-  type ProjectCoordinatorProvisioningPlan,
-  type ProjectCoordinatorProvisioningPlanInput,
+  type ProjectCoordinatorWorkflowContinueInput,
+  type ProjectCoordinatorWorkflowPlan,
+  type ProjectCoordinatorWorkflowPrepareInput,
   type ProjectCoordinatorProjectCreateInput,
   type ProjectCoordinatorProjectCreateResult,
+  type ProjectCoordinatorSessionProjection,
   type ProjectCoordinatorResultReviewInput,
   type ProjectCoordinatorTransferInput,
   type ProjectCoordinatorWorkspace,
   type ProjectCoordinatorWorkspaceReadInput
 } from '../contract.js'
+import { publishProjectCoordinatorWorkspaceInvalidation } from './workspace-invalidation.js'
 
 const workspaceReadContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
@@ -70,6 +76,13 @@ const projectCreateContract = Object.freeze({
   effect: 'external-write' as const,
   inputSchema: projectCoordinatorProjectCreateInputSchema,
   outputSchema: projectCoordinatorProjectCreateResultSchema
+})
+
+const sessionProjectionReadContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead,
+  effect: 'read' as const,
+  inputSchema: projectCoordinatorSessionProjectionReadInputSchema,
+  outputSchema: projectCoordinatorSessionProjectionSchema
 })
 
 const planDraftReadContract = Object.freeze({
@@ -110,24 +123,24 @@ const planSubmitContract = Object.freeze({
   outputSchema: projectCoordinatorPlanSubmitResultSchema
 })
 
-const planConfirmActivateContract = Object.freeze({
-  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirmActivate,
+const planConfirmContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirm,
   effect: 'external-write' as const,
-  inputSchema: projectCoordinatorPlanConfirmActivateInputSchema,
+  inputSchema: projectCoordinatorPlanConfirmInputSchema,
   outputSchema: projectCoordinatorWorkspaceSchema
 })
 
-const contentProvisioningPlanContract = Object.freeze({
-  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningPlan,
+const workflowPrepareContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.workflowPrepare,
   effect: 'read' as const,
-  inputSchema: projectCoordinatorProvisioningPlanInputSchema,
-  outputSchema: projectCoordinatorProvisioningPlanSchema
+  inputSchema: projectCoordinatorWorkflowPrepareInputSchema,
+  outputSchema: projectCoordinatorWorkflowPlanSchema
 })
 
-const contentProvisioningApplyContract = Object.freeze({
-  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.contentProvisioningApply,
+const workflowContinueContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
   effect: 'external-write' as const,
-  inputSchema: projectCoordinatorProvisioningApplyInputSchema,
+  inputSchema: projectCoordinatorWorkflowContinueInputSchema,
   outputSchema: projectCoordinatorWorkspaceSchema
 })
 
@@ -156,6 +169,13 @@ const membershipAddContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
   effect: 'external-write' as const,
   inputSchema: projectCoordinatorMembershipAddInputSchema,
+  outputSchema: projectCoordinatorWorkspaceSchema
+})
+
+const membershipAcceptContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept,
+  effect: 'external-write' as const,
+  inputSchema: projectCoordinatorMembershipAcceptInputSchema,
   outputSchema: projectCoordinatorWorkspaceSchema
 })
 
@@ -215,13 +235,14 @@ const confirmationApproval = Object.freeze({
 export type ProjectCoordinatorRendererClient = Readonly<{
   readWorkspace(input?: ProjectCoordinatorWorkspaceReadInput): Promise<ProjectCoordinatorWorkspace>
   createProject(input: ProjectCoordinatorProjectCreateInput): Promise<ProjectCoordinatorProjectCreateResult>
+  readSessionProjection(): Promise<ProjectCoordinatorSessionProjection>
   readPlanDraft(input: ProjectCoordinatorPlanDraftReadInput): Promise<ProjectCoordinatorPlanDraft | null>
   generatePlanDraft(input: ProjectCoordinatorPlanDraftGenerateInput): Promise<ProjectCoordinatorPlanDraft>
   editPlanDraft(input: ProjectCoordinatorPlanDraftEditInput): Promise<ProjectCoordinatorPlanDraft>
   submitPlanDraft(input: ProjectCoordinatorPlanDraftSubmitInput): Promise<ProjectCoordinatorPlanSubmitResult>
-  confirmPlanAndActivate(input: ProjectCoordinatorPlanConfirmActivateInput): Promise<ProjectCoordinatorWorkspace>
-  previewProvisioning(input: ProjectCoordinatorProvisioningPlanInput): Promise<ProjectCoordinatorProvisioningPlan>
-  applyProvisioning(input: ProjectCoordinatorProvisioningApplyInput): Promise<ProjectCoordinatorWorkspace>
+  confirmPlan(input: ProjectCoordinatorPlanConfirmInput): Promise<ProjectCoordinatorWorkspace>
+  prepareWorkflow(input: ProjectCoordinatorWorkflowPrepareInput): Promise<ProjectCoordinatorWorkflowPlan>
+  continueWorkflow(input: ProjectCoordinatorWorkflowContinueInput): Promise<ProjectCoordinatorWorkspace>
   observeAndLinkRecovery(
     input: ProjectCoordinatorContentRecoveryObserveLinkInput
   ): Promise<ProjectCoordinatorWorkspace>
@@ -232,6 +253,7 @@ export type ProjectCoordinatorRendererClient = Readonly<{
     input: ProjectCoordinatorContentRecoveryRetrySuccessorInput
   ): Promise<ProjectCoordinatorWorkspace>
   addMember(input: ProjectCoordinatorMembershipAddInput): Promise<ProjectCoordinatorWorkspace>
+  acceptInvitation(input: ProjectCoordinatorMembershipAcceptInput): Promise<ProjectCoordinatorWorkspace>
   removeMember(input: ProjectCoordinatorMembershipRemoveInput): Promise<ProjectCoordinatorWorkspace>
   createHumanNeeded(input: ProjectCoordinatorHumanNeededCreateInput): Promise<ProjectCoordinatorWorkspace>
   answerHumanNeeded(input: ProjectCoordinatorHumanAnswerInput): Promise<ProjectCoordinatorWorkspace>
@@ -249,7 +271,12 @@ export function createProjectCoordinatorRendererClient(
 ): ProjectCoordinatorRendererClient {
   return Object.freeze({
     readWorkspace: (input = {}) => invoker.invoke(workspaceReadContract, input),
-    createProject: (input) => invoker.invoke(projectCreateContract, input, confirmationApproval),
+    createProject: async (input) => {
+      const result = await invoker.invoke(projectCreateContract, input, confirmationApproval)
+      publishProjectCoordinatorWorkspaceInvalidation()
+      return result
+    },
+    readSessionProjection: () => invoker.invoke(sessionProjectionReadContract, {}),
     readPlanDraft: (input) => invoker.invoke(planDraftReadContract, input),
     generatePlanDraft: async (input) => {
       const result = await invoker.invoke(planDraftGenerateContract, input)
@@ -260,14 +287,14 @@ export function createProjectCoordinatorRendererClient(
     },
     editPlanDraft: (input) => invoker.invoke(planDraftEditContract, input),
     submitPlanDraft: (input) => invoker.invoke(planSubmitContract, input, confirmationApproval),
-    confirmPlanAndActivate: (input) => invoker.invoke(
-      planConfirmActivateContract,
+    confirmPlan: (input) => invoker.invoke(
+      planConfirmContract,
       input,
       confirmationApproval
     ),
-    previewProvisioning: (input) => invoker.invoke(contentProvisioningPlanContract, input),
-    applyProvisioning: (input) => invoker.invoke(
-      contentProvisioningApplyContract,
+    prepareWorkflow: (input) => invoker.invoke(workflowPrepareContract, input),
+    continueWorkflow: (input) => invoker.invoke(
+      workflowContinueContract,
       input,
       confirmationApproval
     ),
@@ -288,6 +315,11 @@ export function createProjectCoordinatorRendererClient(
     ),
     addMember: (input) => invoker.invoke(
       membershipAddContract,
+      input,
+      confirmationApproval
+    ),
+    acceptInvitation: (input) => invoker.invoke(
+      membershipAcceptContract,
       input,
       confirmationApproval
     ),

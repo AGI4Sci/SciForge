@@ -22,7 +22,10 @@ const updatedAt = '2026-08-25T01:05:00.000Z'
 test('current Device Agent Project create returns a workspace focused on the exact new Project after paginated Cloud reads', async () => {
   const requests: AuthenticatedCloudRequest[] = []
   const coordinatorRequests: CoordinatorCloudCommand[] = []
-  const project = projectFixture('prj_ProjectCreated01', 'Created meeting')
+  const project = {
+    ...projectFixture('prj_ProjectCreated01', 'Created meeting'),
+    status: 'draft' as const
+  }
   const existing = projectFixture('prj_ProjectExisting1', 'Existing meeting')
   const responses = [
     response(200, {
@@ -44,6 +47,7 @@ test('current Device Agent Project create returns a workspace focused on the exa
       observedAt: updatedAt
     }),
     emptyWorkerDirectoryResponse('req_ListWorkers00001'),
+    emptyProviderDirectoryResponse('req_ListProviderFacts1'),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_coordination',
@@ -53,22 +57,7 @@ test('current Device Agent Project create returns a workspace focused on the exa
       pages: [{
         collection: 'user_label_facts',
         limit: 250,
-        items: [userLabelFixture('usr_Owner0000001', 'Owner')],
-        nextCursor: 'cursor-user-page-2'
-      }],
-      finalSummary: null
-    }),
-    response(200, {
-      protocolVersion: '1.0',
-      type: 'rest.project_coordination',
-      requestId: 'req_ReadProject00002',
-      project,
-      observedAt: updatedAt,
-      pages: [{
-        collection: 'user_label_facts',
-        cursor: 'cursor-user-page-2',
-        limit: 250,
-        items: [userLabelFixture('usr_Worker000001', 'Worker')]
+        items: [userLabelFixture('usr_Owner0000001', 'Owner')]
       }],
       finalSummary: null
     })
@@ -108,6 +97,7 @@ test('current Device Agent Project create returns a workspace focused on the exa
   })
 
   const result = await port.createProject({
+    createIntentId: 'pct_CloudWorkspaceCreate01',
     displayName: 'Created meeting',
     goal: 'Run one realistic multi-user meeting.',
     budget: {
@@ -115,21 +105,13 @@ test('current Device Agent Project create returns a workspace focused on the exa
       maxTasksPerRound: 4,
       maxTaskRetries: 2,
       maxCoordinationRounds: 3
-    },
-    content: {
-      mode: 'none',
-      members: [
-        { userId: 'usr_Owner0000001' },
-        { userId: 'usr_Worker000001' }
-      ]
     }
-  }, 'idem_CreateProjectTracer01')
+  })
 
   assert.equal(result.createdProjectId, project.projectId)
   assert.equal(result.workspace.focusedProjectId, project.projectId)
   assert.deepEqual(result.workspace.projects[1]?.memberUsers.map(({ userId }) => userId), [
-    'usr_Owner0000001',
-    'usr_Worker000001'
+    'usr_Owner0000001'
   ])
   assert.deepEqual(
     result.workspace.projects.map(({ project }) => project.projectId),
@@ -141,7 +123,7 @@ test('current Device Agent Project create returns a workspace focused on the exa
       'project.list',
       'project.list',
       'worker.availability.list',
-      'project.coordination.read',
+      'provider_directory_principal.list',
       'project.coordination.read'
     ]
   )
@@ -149,7 +131,8 @@ test('current Device Agent Project create returns a workspace focused on the exa
     protocolVersion: '1.0',
     requestId: 'req_TracerRequest0001',
     type: 'project.create',
-    idempotencyKey: 'idem_CreateProjectTracer01',
+    idempotencyKey: coordinatorRequests[0]!.idempotencyKey,
+    createIntentId: 'pct_CloudWorkspaceCreate01',
     displayName: 'Created meeting',
     goal: 'Run one realistic multi-user meeting.',
     budget: {
@@ -157,30 +140,25 @@ test('current Device Agent Project create returns a workspace focused on the exa
       maxTasksPerRound: 4,
       maxTaskRetries: 2,
       maxCoordinationRounds: 3
-    },
-    content: {
-      mode: 'none',
-      members: [
-        { userId: 'usr_Owner0000001' },
-        { userId: 'usr_Worker000001' }
-      ]
     }
   }])
+  assert.match(
+    coordinatorRequests[0]!.idempotencyKey,
+    /^idem_project\.create\.[a-f0-9]{48}$/u
+  )
   assert.deepEqual(
-    requests.slice(3).map(({ payload }) => (
+    requests.slice(4).map(({ payload }) => (
       payload.type === 'project.coordination.read' ? payload.collections : []
     )),
-    [
-      expectProjectCollections(),
-      [{ collection: 'user_label_facts', cursor: 'cursor-user-page-2', limit: 250 }]
-    ]
+    [expectProjectCollections()]
   )
 })
 
 test('Agent-authored Project create rejects a Cloud response that changes the creator Owner', async () => {
   const project = {
     ...projectFixture('prj_ProjectWrongOwner1', 'Wrong owner'),
-    ownerUserId: 'usr_OtherOwner0001'
+    ownerUserId: 'usr_OtherOwner0001',
+    status: 'draft' as const
   }
   const transport: AuthenticatedCloudTransport = {
     status: () => ({
@@ -207,15 +185,96 @@ test('Agent-authored Project create rejects a Cloud response that changes the cr
         subscribe: () => () => undefined
       }
     }).createProject({
+      createIntentId: 'pct_CloudWorkspaceWrong01',
       displayName: project.displayName,
       goal: project.goal,
-      budget: project.budget,
-      content: {
-        mode: 'none',
-        members: [{ userId: 'usr_Owner0000001' }]
-      }
-    }, `idem_${project.projectId}`),
+      budget: project.budget
+    }),
     /current Agent owner authority/
+  )
+})
+
+test('invited User workspace reads only the bounded invitation fact collections', async () => {
+  const project = projectFixture('prj_ProjectCreated01', 'Invitation review')
+  const invitation = {
+    ...membershipFixture(project.projectId),
+    projectMembershipId: 'pmb_InvitedMember01',
+    userId: 'usr_Worker000001',
+    state: 'invited' as const,
+    activatedAt: null
+  }
+  const plan = {
+    ...planFixture({
+      projectPlanId: 'pln_CurrentMeeting01',
+      state: 'awaiting_confirmation',
+      planRevision: 1
+    }),
+    state: 'confirmed' as const,
+    confirmedByUserId: project.ownerUserId,
+    confirmedAt: updatedAt,
+    revision: 2
+  }
+  const requests: AuthenticatedCloudRequest[] = []
+  const responses = [
+    response(200, {
+      protocolVersion: '1.0',
+      type: 'rest.project_page',
+      requestId: 'req_ListInvitations01',
+      limit: 250,
+      projects: [project],
+      observedAt: updatedAt
+    }),
+    emptyWorkerDirectoryResponse('req_ListInvitationWorkers'),
+    emptyProviderDirectoryResponse('req_ListInvitationFacts1'),
+    response(200, {
+      protocolVersion: '1.0',
+      type: 'rest.project_coordination',
+      requestId: 'req_ReadInvitation01',
+      project,
+      observedAt: updatedAt,
+      pages: [
+        {
+          collection: 'user_label_facts',
+          limit: 250,
+          items: [userLabelFixture('usr_Worker000001', 'Invited Worker')]
+        },
+        { collection: 'memberships', limit: 250, items: [invitation] },
+        { collection: 'plans', limit: 250, items: [plan] }
+      ],
+      finalSummary: null
+    })
+  ]
+  const transport: AuthenticatedCloudTransport = {
+    status: () => ({
+      state: 'ready',
+      baseUrl: 'https://cloud.run0.invalid/',
+      userId: invitation.userId,
+      deviceId: 'dev_WorkerDevice01'
+    }),
+    execute: async (request) => {
+      requests.push(request)
+      const next = responses.shift()
+      if (!next) throw new Error('Unexpected Cloud request.')
+      return next
+    }
+  }
+
+  const workspace = await createProjectCoordinatorCloudWorkspacePort({ transport })
+    .readWorkspace({ projectId: project.projectId })
+
+  assert.equal(workspace.projects[0]?.plan?.plan.projectPlanId, plan.projectPlanId)
+  assert.equal(workspace.projects[0]?.provisioning.memberships[0]?.state, 'invited')
+  assert.deepEqual(workspace.projects[0]?.tasks, [])
+  const invitationRead = requests.at(-1)?.payload
+  assert.deepEqual(
+    invitationRead?.type === 'project.coordination.read'
+      ? invitationRead.collections
+      : null,
+    [
+      { collection: 'user_label_facts', limit: 250 },
+      { collection: 'memberships', limit: 250 },
+      { collection: 'plans', limit: 250 }
+    ]
   )
 })
 
@@ -263,6 +322,7 @@ test('Cloud-global online Worker Users stay visible outside current Project memb
         revision: 1
       }]
     }),
+    emptyProviderDirectoryResponse('req_ListCandidateFacts1'),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_coordination',
@@ -350,6 +410,7 @@ test('Project read selects the one non-superseded Plan instead of relying on pag
       observedAt: updatedAt
     }),
     emptyWorkerDirectoryResponse('req_ListHumanWorkers1'),
+    emptyProviderDirectoryResponse('req_ListPlanFacts001'),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_coordination',
@@ -426,6 +487,7 @@ test('Project read projects pending member-targeted HumanNeeded and accepted Coo
       observedAt: updatedAt
     }),
     emptyWorkerDirectoryResponse('req_ListContentWorkers'),
+    emptyProviderDirectoryResponse('req_ListHumanProvider1'),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_coordination',
@@ -600,6 +662,7 @@ test('Project read keeps membership, Provider observation, readiness, and recove
       observedAt: updatedAt
     }),
     emptyWorkerDirectoryResponse('req_ListContentFactsWorkers'),
+    providerDirectoryResponse('req_ListContentProviderFacts', [principalFact]),
     response(200, {
       protocolVersion: '1.0',
       type: 'rest.project_coordination',
@@ -633,6 +696,7 @@ test('Project read keeps membership, Provider observation, readiness, and recove
     .readWorkspace({ projectId: project.projectId })
   const provisioning = workspace.projects[0]?.provisioning
 
+  assert.deepEqual(workspace.providerPrincipalFacts, [principalFact])
   assert.deepEqual(provisioning?.memberships, [membership])
   assert.deepEqual(provisioning?.providerPrincipalFacts, [principalFact])
   assert.deepEqual(provisioning?.providerMembershipObservations, [observation])
@@ -657,6 +721,22 @@ function emptyWorkerDirectoryResponse(requestId: `req_${string}`): Authenticated
     items: [],
     userLabels: [],
     agentLabels: []
+  })
+}
+
+function emptyProviderDirectoryResponse(requestId: `req_${string}`): AuthenticatedCloudResponse {
+  return providerDirectoryResponse(requestId, [])
+}
+
+function providerDirectoryResponse(
+  requestId: `req_${string}`,
+  items: readonly import('@sciforge/collaboration-contracts').ProviderDirectoryPrincipalFact[]
+): AuthenticatedCloudResponse {
+  return response(200, {
+    protocolVersion: '1.0',
+    type: 'rest.provider_directory_principal_page',
+    requestId,
+    items: [...items]
   })
 }
 
@@ -773,6 +853,7 @@ function planFixture(input: Readonly<{
     planRevision: input.planRevision,
     sourceInputLocators: [],
     tasks: [{
+      workerUserId: 'usr_Worker000001',
       planItemId: `item_meeting_${input.planRevision}`,
       title: 'Summarize meeting',
       objective: 'Produce one bounded meeting summary.',

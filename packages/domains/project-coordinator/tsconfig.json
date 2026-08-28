@@ -16,6 +16,7 @@
     "baseUrl": ".",
     "paths": {
       "@sciforge/collaboration-contracts": ["../../collaboration-contracts/src/index.ts"],
+      "@sciforge/collaboration-contracts/node": ["../../collaboration-contracts/src/node.ts"],
       "@sciforge/domain-collaboration/*": ["../collaboration/src/*"],
       "@sciforge/domain-identity-access/*": ["../identity-access/src/*"],
       "@sciforge/domain-sdk/*": ["../../domain-sdk/src/*"]

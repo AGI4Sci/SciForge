@@ -282,8 +282,13 @@ export class CollaborationTaskAdapter {
       if (run.state !== 'manual-recovery') {
         throw new Error('Recovery output was already linked outside the exact manual-recovery state.')
       }
-      if (this.hasDeliveredResultSubmission(run)) {
-        await this.completeRecoveredRun(run.offer.executionId)
+      const delivered = this.deliveredResultSubmission(run)
+      if (delivered) {
+        await this.completeRecoveredRun(
+          run.offer.executionId,
+          delivered.task,
+          delivered.execution
+        )
         return
       }
       await this.submitRecoveredResult(run)
@@ -875,8 +880,9 @@ export class CollaborationTaskAdapter {
           idempotencyKey: idempotencyKey('task.execution.start', requestFacts),
           ...requestFacts
         }))
-      execution = requireResponseEntity(response, 'task_execution')
-      const task = await this.readTask(run.offer.taskId)
+      const started = requireTaskExecutionBundle(response)
+      execution = started.execution
+      const task = started.task
       run = await this.updateRun(run.offer.executionId, {
         task, execution,
         expectedTaskRevision: task.revision,
@@ -1545,7 +1551,7 @@ export class CollaborationTaskAdapter {
         idempotencyKey: idempotencyKey('external_operation.observe', requestFacts),
         ...requestFacts
       }))
-    return requireResponseEntity(response, 'external_operation_recovery_journal_entry')
+    return requireResponseCollectionEntity(response, 'external_operation_recovery_journal_entry')
   }
 
   private async createHumanNeeded(
@@ -1693,11 +1699,14 @@ export class CollaborationTaskAdapter {
     }
   }
 
-  private hasDeliveredResultSubmission(run: CollaborationTaskRun): boolean {
+  private deliveredResultSubmission(run: CollaborationTaskRun): Readonly<{
+    task: Task
+    execution: TaskExecution
+  }> | null {
     const expectedFacts = this.resultSubmissionFacts(run)
     const expectedKey = idempotencyKey('task.result.submit', expectedFacts)
-    return this.options.store.snapshot().outbox.some((entry) => {
-      if (entry.kind !== 'task.result' || entry.state !== 'delivered' || !entry.response) return false
+    return this.options.store.snapshot().outbox.map((entry) => {
+      if (entry.kind !== 'task.result' || entry.state !== 'delivered' || !entry.response) return null
       const request = restRequestSchema.safeParse(entry.body)
       const response = restResponseSchema.safeParse(entry.response)
       if (
@@ -1705,12 +1714,21 @@ export class CollaborationTaskAdapter {
         request.data.type !== 'task.result.submit' ||
         request.data.idempotencyKey !== expectedKey ||
         !response.success ||
-        response.data.type !== 'rest.entity' ||
+        response.data.type !== 'rest.collection' ||
         response.data.requestId !== request.data.requestId ||
-        response.data.entity.type !== 'task_result_submission'
-      ) return false
-      return canonicalJson(taskResultRequestFacts(request.data)) === canonicalJson(expectedFacts)
-    })
+        response.data.nextCursor !== undefined ||
+        response.data.items.length !== 3 ||
+        response.data.items[0]?.type !== 'task' ||
+        response.data.items[1]?.type !== 'task_execution' ||
+        response.data.items[2]?.type !== 'task_result_submission'
+      ) return null
+      if (canonicalJson(taskResultRequestFacts(request.data)) !== canonicalJson(expectedFacts)) {
+        return null
+      }
+      return requireTaskResultBundle(response.data)
+    }).find((result): result is Readonly<{ task: Task; execution: TaskExecution }> => (
+      result !== null
+    )) ?? null
   }
 
   private async sendResultSubmission(
@@ -1734,12 +1752,20 @@ export class CollaborationTaskAdapter {
     })
     if (markSubmitting) await this.updateRun(run.offer.executionId, { state: 'submitting' })
     const response = await this.options.outbox.enqueueAndWait('task.result', request)
-    requireResponseEntity(response, 'task_result_submission')
-    await this.completeRecoveredRun(run.offer.executionId)
+    const submitted = requireTaskResultBundle(response)
+    await this.completeRecoveredRun(run.offer.executionId, submitted.task, submitted.execution)
   }
 
-  private async completeRecoveredRun(executionId: string): Promise<void> {
+  private async completeRecoveredRun(
+    executionId: string,
+    task: Task,
+    execution: TaskExecution
+  ): Promise<void> {
     await this.updateRun(executionId, {
+      task,
+      execution,
+      expectedTaskRevision: task.revision,
+      expectedExecutionRevision: execution.revision,
       state: 'completed', completedAt: this.now().toISOString(), error: null
     })
     await this.publishAvailability('online')
@@ -1773,10 +1799,12 @@ export class CollaborationTaskAdapter {
         idempotencyKey: idempotencyKey('task.execution.fail', requestFacts),
         ...requestFacts
       }))
-    const failed = requireResponseEntity(response, 'task_execution')
+    const failed = requireTaskExecutionBundle(response)
     await this.updateRun(run.offer.executionId, {
-      execution: failed,
-      expectedExecutionRevision: failed.revision,
+      task: failed.task,
+      execution: failed.execution,
+      expectedTaskRevision: failed.task.revision,
+      expectedExecutionRevision: failed.execution.revision,
       state: 'failed', completedAt: failedAt,
       error: safeMessage.slice(0, 4_000)
     })
@@ -2344,6 +2372,60 @@ function requireResponseEntity<Type extends RestEntity['type']>(
     throw new Error(`Cloud command returned unexpected ${response.type}; expected ${type}.`)
   }
   return response.entity as Extract<RestEntity, { type: Type }>
+}
+
+function requireResponseCollectionEntity<Type extends RestEntity['type']>(
+  response: RestResponse,
+  type: Type
+): Extract<RestEntity, { type: Type }> {
+  if (response.type !== 'rest.collection' || response.nextCursor !== undefined) {
+    throw new Error(`Cloud command returned unexpected ${response.type}; expected ${type} collection.`)
+  }
+  const matches = response.items.filter((entity) => entity.type === type)
+  if (matches.length !== 1) {
+    throw new Error(`Cloud command returned ${matches.length} ${type} entities; expected exactly one.`)
+  }
+  return matches[0] as Extract<RestEntity, { type: Type }>
+}
+
+function requireTaskExecutionBundle(response: RestResponse): Readonly<{
+  task: Task
+  execution: TaskExecution
+}> {
+  if (
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length !== 2
+  ) {
+    throw new Error(`Cloud command returned unexpected ${response.type}; expected Task/Execution bundle.`)
+  }
+  const [task, execution] = response.items
+  if (task?.type !== 'task' || execution?.type !== 'task_execution') {
+    throw new Error('Cloud command returned a malformed Task/Execution bundle.')
+  }
+  return { task, execution }
+}
+
+function requireTaskResultBundle(response: RestResponse): Readonly<{
+  task: Task
+  execution: TaskExecution
+}> {
+  if (
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length !== 3
+  ) {
+    throw new Error(`Cloud command returned unexpected ${response.type}; expected Task result bundle.`)
+  }
+  const [task, execution, submission] = response.items
+  if (
+    task?.type !== 'task' ||
+    execution?.type !== 'task_execution' ||
+    submission?.type !== 'task_result_submission'
+  ) {
+    throw new Error('Cloud command returned a malformed Task result bundle.')
+  }
+  return { task, execution }
 }
 
 function taskResultRequestFacts(request: Extract<

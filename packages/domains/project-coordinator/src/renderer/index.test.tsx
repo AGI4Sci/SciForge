@@ -14,7 +14,9 @@ import {
 import type { ProjectCoordinatorProject } from '../contract.js'
 
 import {
+  PROJECT_COORDINATOR_COMPOSER_CONTEXT_CONTRIBUTION,
   PROJECT_COORDINATOR_I18N_CONTRIBUTION,
+  PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION,
   PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION,
   PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION,
   PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRIBUTION
@@ -27,15 +29,16 @@ import {
   ProjectCoordinatorPlanSection,
   ProjectCoordinatorProvisioningSection,
   ProjectCoordinatorTransferSection,
+  TasksSection,
   WorkersSection,
   formatRelativeTime,
   projectCoordinatorAgentOperationalState,
+  projectCoordinatorActivationTarget,
   projectCoordinatorAttentionSummary,
   projectCoordinatorCompletionInput,
   projectCoordinatorCreatedSelection,
   projectCoordinatorFlowStages,
   projectCoordinatorMeetingPackageSummary,
-  projectCoordinatorProvisioningApplyInput,
   projectCoordinatorResultReviewInput,
   projectCoordinatorTransferCandidates,
   projectCoordinatorWorkspaceNavigationItems,
@@ -44,6 +47,7 @@ import {
 import { createProjectCoordinatorRendererClient } from './project-coordinator-capability-client.js'
 import {
   createDomainRendererEntry,
+  createProjectCoordinatorNavigationSectionContribution,
   createProjectCoordinatorOpenCommand,
   createProjectCoordinatorRightPanelContribution
 } from './index.js'
@@ -54,7 +58,8 @@ import {
 } from './workspace-sections.js'
 
 test('renderer entry owns one generic Workbench surface without Identity UI contributions', () => {
-  const host = rendererHost([])
+  const opened: unknown[] = []
+  const host = rendererHost(opened)
   const entry = createDomainRendererEntry(host)
   assert.equal(entry.process, 'renderer')
   assert.deepEqual(
@@ -63,6 +68,8 @@ test('renderer entry owns one generic Workbench surface without Identity UI cont
       PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
       PROJECT_COORDINATOR_OPEN_COMMAND_CONTRIBUTION.id,
       PROJECT_COORDINATOR_TOOLBAR_ACTION_CONTRIBUTION.id,
+      PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION.id,
+      PROJECT_COORDINATOR_COMPOSER_CONTEXT_CONTRIBUTION.id,
       PROJECT_COORDINATOR_I18N_CONTRIBUTION.id
     ]
   )
@@ -80,7 +87,7 @@ test('renderer entry owns one generic Workbench surface without Identity UI cont
       activation: {
         contributionId: string
         revision: number
-        payload: { projectId: string }
+        payload: { projectId: string; view: 'tasks' }
       }
     }): ReactElement<Record<string, unknown>>
   }>
@@ -94,11 +101,112 @@ test('renderer entry owns one generic Workbench surface without Identity UI cont
     activation: {
       contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
       revision: 1,
-      payload: { projectId: 'prj_Project000001' }
+      payload: { projectId: 'prj_Project000001', view: 'tasks' }
     }
   })
   assert.equal(rendered.props.initialProjectId, 'prj_Project000001')
+  assert.equal(rendered.props.initialView, 'tasks')
+  assert.equal(rendered.props.activationRevision, 1)
   assert.equal(rendered.props.className, 'fixture-panel')
+
+  const navigationContribution = entry.contributions.find(
+    ({ id }) => id === PROJECT_COORDINATOR_NAVIGATION_SECTION_CONTRIBUTION.id
+  )!
+  const navigation = navigationContribution.value as ReturnType<
+    typeof createProjectCoordinatorNavigationSectionContribution
+  >
+  const selectSession = () => undefined
+  const context = {
+    active: true,
+    className: 'fixture-navigation',
+    session: { id: 'session-1' },
+    sessions: [{
+      id: 'session-1',
+      title: 'Ordinary Agent Session',
+      updatedAt: '2026-08-28T00:00:00.000Z'
+    }],
+    selectSession
+  }
+  const renderedNavigation = navigation.render(context) as ReactElement<{
+    context: typeof context
+    onCreateProject: () => void
+    onOpenProject: (projectId: string, view: 'files') => void
+  }>
+  assert.equal(renderedNavigation.props.context, context)
+  assert.equal(renderedNavigation.props.context.selectSession, selectSession)
+  renderedNavigation.props.onCreateProject()
+  renderedNavigation.props.onOpenProject('prj_Project000001', 'files')
+  assert.deepEqual(opened.slice(-2), [{
+    contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
+    sessionId: 'session-1',
+    activation: {
+      contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
+      revision: 1,
+      payload: { view: 'create' }
+    }
+  }, {
+    contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
+    sessionId: 'session-1',
+    activation: {
+      contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
+      revision: 2,
+      payload: { projectId: 'prj_Project000001', view: 'files' }
+    }
+  }])
+})
+
+test('Project activation intents resolve only to package-owned safe views', () => {
+  const withoutFiles = new Set(['overview', 'projects', 'reviews'])
+  const withFiles = new Set([...withoutFiles, 'files'])
+  assert.deepEqual(projectCoordinatorActivationTarget('overview', withoutFiles), {
+    workspaceView: 'overview'
+  })
+  assert.deepEqual(projectCoordinatorActivationTarget('tasks', withoutFiles), {
+    workspaceView: 'projects',
+    sectionId: 'tasks'
+  })
+  assert.deepEqual(projectCoordinatorActivationTarget('files', withoutFiles), {
+    workspaceView: 'overview'
+  })
+  assert.deepEqual(projectCoordinatorActivationTarget('files', withFiles), {
+    workspaceView: 'files'
+  })
+  assert.deepEqual(projectCoordinatorActivationTarget('decisions', withoutFiles), {
+    workspaceView: 'reviews'
+  })
+  assert.deepEqual(projectCoordinatorActivationTarget('recovery', withoutFiles), {
+    workspaceView: 'projects',
+    sectionId: 'provisioning'
+  })
+  assert.deepEqual(projectCoordinatorActivationTarget('create', withoutFiles), {
+    workspaceView: 'projects',
+    sectionId: 'create',
+    requestCreate: true
+  })
+})
+
+test('Cloud Projects create reuses a draft presentation Session without inventing a Thread', () => {
+  const opened: unknown[] = []
+  const navigation = createProjectCoordinatorNavigationSectionContribution(
+    rendererHost(opened)
+  )
+  const rendered = navigation.render({
+    active: true,
+    className: 'fixture-navigation',
+    session: { id: 'draft:/workspace', workspaceRoot: '/workspace' },
+    sessions: [],
+    selectSession: () => undefined
+  }) as ReactElement<{ onCreateProject: () => void }>
+  rendered.props.onCreateProject()
+  assert.deepEqual(opened, [{
+    contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
+    sessionId: 'draft:/workspace',
+    activation: {
+      contributionId: PROJECT_COORDINATOR_RIGHT_PANEL_CONTRIBUTION.id,
+      revision: 1,
+      payload: { view: 'create' }
+    }
+  }])
 })
 
 test('Collaboration Center keeps package-owned HCI behind one ordered workspace navigation', () => {
@@ -152,17 +260,24 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
         connection: { state: 'identity_required' as const },
         observedAt: '2026-08-24T09:00:00.000Z',
         availableWorkerUsers: [],
+        providerPrincipalFacts: [],
         projects: []
       }),
       createProject: async () => { throw new Error('unused') },
+      readSessionProjection: async () => ({
+        schemaVersion: 1 as const,
+        observedAt: '2026-08-24T09:00:00.000Z',
+        bindings: []
+      }),
       readPlanDraft: async () => null,
       generatePlanDraft: async () => { throw new Error('unused') },
       editPlanDraft: async () => { throw new Error('unused') },
       submitPlanDraft: async () => { throw new Error('unused') },
-      confirmPlanAndActivate: async () => { throw new Error('unused') },
-      previewProvisioning: async () => { throw new Error('unused') },
-      applyProvisioning: async () => { throw new Error('unused') },
+      confirmPlan: async () => { throw new Error('unused') },
+      prepareWorkflow: async () => { throw new Error('unused') },
+      continueWorkflow: async () => { throw new Error('unused') },
       addMember: async () => { throw new Error('unused') },
+      acceptInvitation: async () => { throw new Error('unused') },
       removeMember: async () => { throw new Error('unused') },
       observeAndLinkRecovery: async () => { throw new Error('unused') },
       abandonRecovery: async () => { throw new Error('unused') },
@@ -187,30 +302,19 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
   assert.doesNotMatch(markup, /password|access token|refresh token|register agent|enroll device/iu)
 })
 
-test('New Project auto-binds only this Project Coordinator and lists only Cloud Worker Users', () => {
-  const project = coordinatorTransferProjectFixture()
-  const workerUsers = project.workerGroups.map((group) => ({
-    userId: group.userId,
-    displayName: group.displayName
-  }))
+test('New Project creates only the draft Project before Team/content selection', () => {
   const markup = renderToStaticMarkup(createElement(ProjectCreateForm, {
     defaultExpanded: true,
     busy: false,
-    creatorUserId: project.project.ownerUserId,
     displayName: '',
     goal: '',
-    selectedWorkerUserIds: [],
-    workerUsers,
     onDisplayName: () => undefined,
     onGoal: () => undefined,
-    onSubmit: () => undefined,
-    onWorkerUserToggle: () => undefined
+    onSubmit: () => undefined
   }))
 
   assert.match(markup, /projectCoordinatorCreatorRole/u)
-  assert.match(markup, /Project Member/u)
-  assert.match(markup, /type="checkbox"/u)
-  assert.doesNotMatch(markup, /Member Desktop|agt_MemberAgent001/u)
+  assert.doesNotMatch(markup, /type="checkbox"|projectCoordinatorContentMode/u)
   assert.doesNotMatch(markup, /type="number"/u)
 })
 
@@ -406,6 +510,86 @@ test('workflow signal and attention derive only from canonical Project facts', (
   ), '—')
 })
 
+test('Task assignment renders unpublished, pending User offer, and claimed Agent as distinct Cloud states', () => {
+  const project = planningProjectFixture('paused')
+  const source = decisionProjectFixture('review').tasks[0]!
+  const timestamp = project.project.updatedAt
+  const unpublishedTask = {
+    ...source.task,
+    taskId: 'tsk_Unpublished001',
+    currentExecutionId: null,
+    currentExecutionState: null,
+    status: 'revision_requested' as const,
+    executionCount: 0
+  }
+  const pendingTask = {
+    ...unpublishedTask,
+    taskId: 'tsk_PendingOffer001',
+    status: 'offered' as const
+  }
+  const claimedTask = {
+    ...source.task,
+    taskId: 'tsk_ClaimedAgent001',
+    currentExecutionId: 'exe_ClaimedAgent001',
+    currentExecutionState: 'running' as const,
+    status: 'in_progress' as const
+  }
+  const claimedExecution = {
+    ...source.executions[0]!,
+    taskId: claimedTask.taskId,
+    executionId: claimedTask.currentExecutionId,
+    assigneeUserId: 'usr_ProjectMember01',
+    assigneeAgentId: 'agt_MemberAgent001',
+    state: 'running' as const,
+    currentResultSubmissionId: null,
+    terminalAt: null
+  }
+  const commonOffer = {
+    schemaVersion: 1 as const,
+    type: 'task_offer' as const,
+    projectId: project.project.projectId,
+    workerUserId: 'usr_ProjectMember01',
+    offeredByCoordinatorAgentId: project.project.coordinatorAgentId,
+    offeredAt: timestamp,
+    expiresAt: '2026-08-25T02:08:00.000Z',
+    revision: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  }
+  const snapshot = {
+    ...project,
+    tasks: [
+      { task: unpublishedTask, executions: [] },
+      { task: pendingTask, executions: [] },
+      { task: claimedTask, executions: [claimedExecution] }
+    ],
+    offers: [{
+      ...commonOffer,
+      taskOfferId: 'ofr_PendingOffer001',
+      taskId: pendingTask.taskId,
+      executionId: null,
+      state: 'pending' as const,
+      respondedAt: null
+    }, {
+      ...commonOffer,
+      taskOfferId: 'ofr_ClaimedAgent001',
+      taskId: claimedTask.taskId,
+      executionId: claimedExecution.executionId,
+      state: 'accepted' as const,
+      respondedAt: timestamp
+    }]
+  } as ProjectCoordinatorProject
+
+  const markup = renderToStaticMarkup(createElement(TasksSection, { project: snapshot }))
+  assert.match(markup, /data-task-assignment-state="not-published"/u)
+  assert.match(markup, /data-task-assignment-state="awaiting-claim"/u)
+  assert.match(markup, /data-task-assignment-state="claimed"/u)
+  assert.match(markup, /projectCoordinatorNotPublished/u)
+  assert.match(markup, /Project Member/u)
+  assert.match(markup, /projectCoordinatorAwaitingDeviceClaim/u)
+  assert.match(markup, /Member Desktop/u)
+})
+
 test('completed Project meeting package includes only accepted records and artifact refs', () => {
   const base = decisionProjectFixture('completion')
   const acceptedResultId = base.reviews[0]!.submission.resultSubmissionId
@@ -470,12 +654,14 @@ test('renderer Project create applies the exact Cloud-returned workspace focus w
     invoke: async (contract, input) => {
       invoked.push({ actionId: contract.actionId, effect: contract.effect, input })
       return {
+        createIntentId: 'pct_RendererCreateIntent1',
         createdProjectId: 'prj_ProjectCreated01',
         workspace: returnedWorkspace
       } as never
     }
   })
   const result = await client.createProject({
+    createIntentId: 'pct_RendererCreateIntent1',
     displayName: 'Meeting',
     goal: 'Run a realistic meeting.',
     budget: {
@@ -483,8 +669,7 @@ test('renderer Project create applies the exact Cloud-returned workspace focus w
       maxTasksPerRound: 4,
       maxTaskRetries: 1,
       maxCoordinationRounds: 2
-    },
-    content: { mode: 'none', members: [{ userId: 'usr_Owner0000001' }] }
+    }
   })
 
   assert.deepEqual(projectCoordinatorCreatedSelection(result), {
@@ -495,6 +680,7 @@ test('renderer Project create applies the exact Cloud-returned workspace focus w
     actionId: 'project-coordinator.project.create',
     effect: 'external-write',
     input: {
+      createIntentId: 'pct_RendererCreateIntent1',
       displayName: 'Meeting',
       goal: 'Run a realistic meeting.',
       budget: {
@@ -502,8 +688,7 @@ test('renderer Project create applies the exact Cloud-returned workspace focus w
         maxTasksPerRound: 4,
         maxTaskRetries: 1,
         maxCoordinationRounds: 2
-      },
-      content: { mode: 'none', members: [{ userId: 'usr_Owner0000001' }] }
+      }
     }
   }])
 })
@@ -673,7 +858,7 @@ test('renderer decision HCI invokes only the four governed canonical actions', a
     expectedCoordinatorAuthorityEpoch: 1,
     expectedExecutionAuthorityEpoch: 1,
     projectPlanId: 'pln_MeetingPlan001',
-    confirmedPlanRevision: 2,
+    confirmedPlanRevision: 1,
     acceptedResultSubmissionIds: ['rsu_MeetingResult01'],
     summary: 'Resolved the work, recorded the decision, and assigned the next step.'
   })
@@ -688,34 +873,44 @@ test('renderer decision HCI invokes only the four governed canonical actions', a
   ])
 })
 
-test('renderer provisioning client keeps the reviewed full plan behind its confirmed digest', async () => {
+test('renderer client carries the reviewed full workflow through its canonical continuation', async () => {
   const invoked: unknown[] = []
-  const plan = provisioningPlanFixture()
+  const plan = workflowPlanFixture()
   const workspace = {
     connection: { state: 'ready' as const, userId: 'usr_Owner0000001', deviceId: 'dev_Device0000001' },
     observedAt: '2026-08-25T01:08:00.000Z',
     focusedProjectId: 'prj_ProjectCreated01',
     availableWorkerUsers: [],
+    providerPrincipalFacts: [],
     projects: [contentProvisioningProjectFixture()]
   }
   const client = createProjectCoordinatorRendererClient({
     observe: async () => { throw new Error('not observed') },
     invoke: async (contract, input) => {
       invoked.push({ actionId: contract.actionId, effect: contract.effect, input })
-      return (contract.actionId === 'project-coordinator.content-provisioning.plan'
+      return (contract.actionId === 'project-coordinator.workflow.prepare'
         ? plan
         : workspace) as never
     }
   })
 
-  const reviewed = await client.previewProvisioning({ projectId: plan.projectId })
-  await client.applyProvisioning(projectCoordinatorProvisioningApplyInput(reviewed))
+  const reviewed = await client.prepareWorkflow({ projectId: plan.projectId })
+  await client.continueWorkflow(reviewed)
   await client.addMember({
     projectId: plan.projectId,
     expectedProjectRevision: 3,
     userId: 'usr_NewWorker00001',
     providerPrincipalFactId: 'ppf_NewWorker00001',
     expectedProviderPrincipalFactRevision: 2
+  })
+  await client.acceptInvitation({
+    projectId: plan.projectId,
+    projectMembershipId: 'pmb_InvitedMember01',
+    expectedProjectRevision: 3,
+    expectedMembershipRevision: 1,
+    projectPlanId: plan.projectPlanId,
+    expectedPlanRevision: plan.expectedPlanRevision,
+    planDigest: plan.planDigest
   })
   await client.removeMember({
     projectId: plan.projectId,
@@ -742,23 +937,14 @@ test('renderer provisioning client keeps the reviewed full plan behind its confi
 
   assert.deepEqual(invoked, [
     {
-      actionId: 'project-coordinator.content-provisioning.plan',
+      actionId: 'project-coordinator.workflow.prepare',
       effect: 'read',
       input: { projectId: plan.projectId }
     },
     {
-      actionId: 'project-coordinator.content-provisioning.apply',
+      actionId: 'project-coordinator.workflow.continue',
       effect: 'external-write',
-      input: {
-        projectId: plan.projectId,
-        provisioningIntentId: plan.provisioningIntentId,
-        expectedProjectRevision: plan.expectedProjectRevision,
-        expectedProvisioningRevision: plan.expectedProvisioningRevision,
-        expectedProvisioningIntentRevision: plan.expectedProvisioningIntentRevision,
-        intentDigest: plan.intentDigest,
-        attemptId: plan.attemptId,
-        confirmedPlanDigest: plan.confirmedPlanDigest
-      }
+      input: plan
     },
     {
       actionId: 'project-coordinator.membership.add',
@@ -769,6 +955,19 @@ test('renderer provisioning client keeps the reviewed full plan behind its confi
         userId: 'usr_NewWorker00001',
         providerPrincipalFactId: 'ppf_NewWorker00001',
         expectedProviderPrincipalFactRevision: 2
+      }
+    },
+    {
+      actionId: 'project-coordinator.membership.accept',
+      effect: 'external-write',
+      input: {
+        projectId: plan.projectId,
+        projectMembershipId: 'pmb_InvitedMember01',
+        expectedProjectRevision: 3,
+        expectedMembershipRevision: 1,
+        projectPlanId: plan.projectPlanId,
+        expectedPlanRevision: plan.expectedPlanRevision,
+        planDigest: plan.planDigest
       }
     },
     {
@@ -810,7 +1009,7 @@ test('renderer provisioning client keeps the reviewed full plan behind its confi
       }
     }
   ])
-  assert.equal('operations' in (invoked[1] as { input: object }).input, false)
+  assert.deepEqual((invoked[1] as { input: object }).input, plan)
 })
 
 test('content-required provisioning, membership fences, and root recovery are default-visible HCI', () => {
@@ -818,17 +1017,19 @@ test('content-required provisioning, membership fences, and root recovery are de
   const pendingMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorProvisioningSection, {
     project,
     plan: null,
+    currentUserId: 'usr_Owner0000001',
     busy: false,
-    onPreview: () => undefined,
-    onApply: () => undefined,
+    onPrepareWorkflow: () => undefined,
+    onContinueWorkflow: () => undefined,
     onAddMember: () => undefined,
+    onAcceptInvitation: () => undefined,
     onRemoveMember: () => undefined,
     onObserveAndLinkRecovery: () => undefined,
     onAbandonRecovery: () => undefined,
     onRetryRecoverySuccessor: () => undefined
   }))
-  assert.match(pendingMarkup, /data-default-visible-card="content-provisioning"/u)
-  assert.match(pendingMarkup, /projectCoordinatorPreviewProvisioning/u)
+  assert.match(pendingMarkup, /data-default-visible-card="project-workflow"/u)
+  assert.match(pendingMarkup, /projectCoordinatorPrepareWorkflow/u)
   assert.match(pendingMarkup, /pending_membership/u)
   assert.match(pendingMarkup, /membership_removal_pending/u)
   assert.match(pendingMarkup, /projectCoordinatorTaskAuthoritySuspended/u)
@@ -839,29 +1040,33 @@ test('content-required provisioning, membership fences, and root recovery are de
 
   const reviewedMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorProvisioningSection, {
     project,
-    plan: provisioningPlanFixture(),
+    plan: workflowPlanFixture(),
+    currentUserId: 'usr_Owner0000001',
     busy: false,
-    onPreview: () => undefined,
-    onApply: () => undefined,
+    onPrepareWorkflow: () => undefined,
+    onContinueWorkflow: () => undefined,
     onAddMember: () => undefined,
+    onAcceptInvitation: () => undefined,
     onRemoveMember: () => undefined,
     onObserveAndLinkRecovery: () => undefined,
     onAbandonRecovery: () => undefined,
     onRetryRecoverySuccessor: () => undefined
   }))
-  assert.match(reviewedMarkup, /data-default-visible-card="content-provisioning-confirmation"/u)
+  assert.match(reviewedMarkup, /data-default-visible-card="project-workflow-confirmation"/u)
   assert.match(reviewedMarkup, /content-space\.authorize-provider-administration/u)
   assert.match(reviewedMarkup, /content-space\.agent-admin-add-member/u)
-  assert.match(reviewedMarkup, /projectCoordinatorApplyProvisioning/u)
-  assert.match(reviewedMarkup, new RegExp(provisioningPlanFixture().confirmedPlanDigest, 'u'))
+  assert.match(reviewedMarkup, /projectCoordinatorContinueWorkflow/u)
+  assert.match(reviewedMarkup, new RegExp(workflowPlanFixture().workflowDigest, 'u'))
 
   const contentFreeMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorProvisioningSection, {
     project: awaitingConfirmationProjectFixture(),
     plan: null,
+    currentUserId: 'usr_Owner0000001',
     busy: false,
-    onPreview: () => undefined,
-    onApply: () => undefined,
+    onPrepareWorkflow: () => undefined,
+    onContinueWorkflow: () => undefined,
     onAddMember: () => undefined,
+    onAcceptInvitation: () => undefined,
     onRemoveMember: () => undefined,
     onObserveAndLinkRecovery: () => undefined,
     onAbandonRecovery: () => undefined,
@@ -896,10 +1101,12 @@ test('content-required provisioning, membership fences, and root recovery are de
   const recoveryMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorProvisioningSection, {
     project: degraded,
     plan: null,
+    currentUserId: 'usr_Owner0000001',
     busy: false,
-    onPreview: () => undefined,
-    onApply: () => undefined,
+    onPrepareWorkflow: () => undefined,
+    onContinueWorkflow: () => undefined,
     onAddMember: () => undefined,
+    onAcceptInvitation: () => undefined,
     onRemoveMember: () => undefined,
     onObserveAndLinkRecovery: () => undefined,
     onAbandonRecovery: () => undefined,
@@ -908,7 +1115,7 @@ test('content-required provisioning, membership fences, and root recovery are de
   assert.match(recoveryMarkup, /data-default-visible-card="content-recovery"/u)
   assert.match(recoveryMarkup, /owner_access_lost/u)
   assert.match(recoveryMarkup, /Re-authorize the exact shared root/u)
-  assert.match(recoveryMarkup, /projectCoordinatorPreviewReconcile/u)
+  assert.match(recoveryMarkup, /projectCoordinatorPrepareReconcileWorkflow/u)
 
   const taskRecovery = {
     ...project,
@@ -933,10 +1140,12 @@ test('content-required provisioning, membership fences, and root recovery are de
     {
       project: taskRecovery,
       plan: null,
+      currentUserId: 'usr_Owner0000001',
       busy: false,
-      onPreview: () => undefined,
-      onApply: () => undefined,
+      onPrepareWorkflow: () => undefined,
+      onContinueWorkflow: () => undefined,
       onAddMember: () => undefined,
+      onAcceptInvitation: () => undefined,
       onRemoveMember: () => undefined,
       onObserveAndLinkRecovery: () => undefined,
       onAbandonRecovery: () => undefined,
@@ -1007,10 +1216,12 @@ test('content-required provisioning, membership fences, and root recovery are de
     {
       project: abandonedTaskRecovery,
       plan: null,
+      currentUserId: 'usr_Owner0000001',
       busy: false,
-      onPreview: () => undefined,
-      onApply: () => undefined,
+      onPrepareWorkflow: () => undefined,
+      onContinueWorkflow: () => undefined,
       onAddMember: () => undefined,
+      onAcceptInvitation: () => undefined,
       onRemoveMember: () => undefined,
       onObserveAndLinkRecovery: () => undefined,
       onAbandonRecovery: () => undefined,
@@ -1026,19 +1237,27 @@ test('an awaiting-confirmation Plan renders its Owner action as a default-visibl
   const markup = renderToStaticMarkup(createElement(ProjectCoordinatorPlanSection, {
     project: awaitingConfirmationProjectFixture(),
     draft: null,
+    observedAt: '2026-08-25T01:08:00.000Z',
     busy: false,
     onGenerate: () => undefined,
     onEditDraft: () => undefined,
     onSubmitDraft: () => undefined,
-    onConfirmActivate: () => undefined
+    canConfirm: true,
+    currentUserId: 'usr_Owner0000001',
+    providerPrincipalFacts: [],
+    initialContentMode: 'none',
+    initialProviderFactId: '',
+    onInitialContentMode: () => undefined,
+    onInitialProviderFactId: () => undefined,
+    onConfirm: () => undefined
   }))
 
   assert.match(markup, /data-default-visible-card="plan-confirmation"/u)
-  assert.match(markup, /projectCoordinatorConfirmActivate/u)
+  assert.match(markup, /projectCoordinatorConfirmPlan/u)
 })
 
 test('a local Plan draft exposes full content editing before immutable submit', () => {
-  const project = awaitingConfirmationProjectFixture()
+  const project = planningProjectFixture('draft')
   const task = project.plan.plan.tasks[0]!
   const markup = renderToStaticMarkup(createElement(ProjectCoordinatorPlanSection, {
     project: { ...project, plan: null },
@@ -1061,20 +1280,189 @@ test('a local Plan draft exposes full content editing before immutable submit', 
       createdAt: project.project.createdAt,
       updatedAt: project.project.updatedAt
     },
+    observedAt: '2026-08-25T01:08:00.000Z',
     busy: false,
     onGenerate: () => undefined,
     onEditDraft: () => undefined,
     onSubmitDraft: () => undefined,
-    onConfirmActivate: () => undefined
+    canConfirm: false,
+    currentUserId: 'usr_Owner0000001',
+    providerPrincipalFacts: [],
+    initialContentMode: 'none',
+    initialProviderFactId: '',
+    onInitialContentMode: () => undefined,
+    onInitialProviderFactId: () => undefined,
+    onConfirm: () => undefined
   }))
 
   assert.match(markup, /name="plan-rationale"/u)
   assert.match(markup, /name="plan-item-title-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-objective-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-criteria-item_meeting_summary"/u)
+  assert.match(markup, /name="plan-item-dependencies-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-capabilities-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-user-item_meeting_summary"/u)
+  assert.match(markup, /data-planning-eligible="true"/u)
   assert.match(markup, /projectCoordinatorSavePlanEdits/u)
+})
+
+test('a paused Project keeps a Worker option enabled for project_paused prospective authority', () => {
+  const project = planningProjectFixture('paused')
+  const task = project.plan.plan.tasks[0]!
+  const markup = renderToStaticMarkup(createElement(ProjectCoordinatorPlanSection, {
+    project: { ...project, plan: null },
+    draft: {
+      draftId: 'draft_MeetingReplan01',
+      draftRevision: 1,
+      projectId: project.project.projectId,
+      expectedProjectRevision: project.project.revision,
+      expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
+      supersedesProjectPlanId: project.plan.plan.projectPlanId,
+      sourceInputLocators: [],
+      tasks: [task],
+      rationale: project.plan.plan.rationale,
+      runtimeProvenance: project.plan.plan.runtimeProvenance,
+      assignments: [{
+        planItemId: task.planItemId,
+        workerUserId: null,
+        recommendationReason: null
+      }],
+      createdAt: project.project.createdAt,
+      updatedAt: project.project.updatedAt
+    },
+    observedAt: '2026-08-25T01:08:00.000Z',
+    busy: false,
+    onGenerate: () => undefined,
+    onEditDraft: () => undefined,
+    onSubmitDraft: () => undefined,
+    canConfirm: false,
+    currentUserId: 'usr_Owner0000001',
+    providerPrincipalFacts: [],
+    initialContentMode: 'none',
+    initialProviderFactId: '',
+    onInitialContentMode: () => undefined,
+    onInitialProviderFactId: () => undefined,
+    onConfirm: () => undefined
+  }))
+
+  assert.match(markup, /value="usr_ProjectMember01" data-planning-eligible="true"/u)
+})
+
+test('paused planning counts the same selectable Worker User shown by the Plan option', () => {
+  const project = planningProjectFixture('paused')
+  const observedAt = '2026-08-25T01:08:00.000Z'
+
+  assert.deepEqual(projectCoordinatorWorkerPresenceSummary(project, observedAt), {
+    onlineUsers: 1,
+    readyUsers: 1,
+    visibleUsers: 1
+  })
+
+  const markup = renderToStaticMarkup(createElement(WorkersSection, {
+    project,
+    observedAt
+  }))
+  assert.match(markup, /data-project-online-users="1"/u)
+  assert.match(markup, /data-project-ready-users="1"/u)
+})
+
+test('draft planning counts a Runtime-ready User before Membership and TaskAuthority exist', () => {
+  const project = planningProjectFixture('draft')
+
+  assert.deepEqual(projectCoordinatorWorkerPresenceSummary(
+    project,
+    '2026-08-25T01:08:00.000Z'
+  ), {
+    onlineUsers: 1,
+    readyUsers: 1,
+    visibleUsers: 1
+  })
+})
+
+test('file Plan editing can clear the logical declaration and confirmation requires Team content', () => {
+  const draftProject = planningProjectFixture('draft')
+  const logicalFileTask = {
+    ...draftProject.plan.plan.tasks[0]!,
+    fileIntent: {
+      schemaVersion: 1 as const,
+      inputs: [],
+      output: {
+        kind: 'content-space.output-new' as const,
+        target: 'project-binding-root' as const,
+        mode: 'upload-new' as const,
+        fileName: 'meeting-summary.md',
+        mediaType: 'text/markdown',
+        maxBytes: 65_536
+      }
+    }
+  }
+  const draftMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorPlanSection, {
+    project: { ...draftProject, plan: null },
+    draft: {
+      draftId: 'draft_FilePlan001',
+      draftRevision: 1,
+      projectId: draftProject.project.projectId,
+      expectedProjectRevision: draftProject.project.revision,
+      expectedCoordinatorAuthorityEpoch: draftProject.project.coordinatorAuthorityEpoch,
+      supersedesProjectPlanId: null,
+      sourceInputLocators: [],
+      tasks: [logicalFileTask],
+      rationale: draftProject.plan.plan.rationale,
+      runtimeProvenance: draftProject.plan.plan.runtimeProvenance,
+      assignments: [{
+        planItemId: logicalFileTask.planItemId,
+        workerUserId: null,
+        recommendationReason: null
+      }],
+      createdAt: draftProject.project.createdAt,
+      updatedAt: draftProject.project.updatedAt
+    },
+    observedAt: draftProject.project.updatedAt,
+    busy: false,
+    onGenerate: () => undefined,
+    onEditDraft: () => undefined,
+    onSubmitDraft: () => undefined,
+    canConfirm: false,
+    currentUserId: draftProject.project.ownerUserId,
+    providerPrincipalFacts: [],
+    initialContentMode: 'none',
+    initialProviderFactId: '',
+    onInitialContentMode: () => undefined,
+    onInitialProviderFactId: () => undefined,
+    onConfirm: () => undefined
+  }))
+  assert.match(draftMarkup, /name="plan-item-file-enabled-item_meeting_summary"/u)
+  assert.match(draftMarkup, /projectCoordinatorKeepFileDeclaration/u)
+
+  const confirmationProject = {
+    ...draftProject,
+    plan: {
+      ...draftProject.plan,
+      plan: {
+        ...draftProject.plan.plan,
+        tasks: [logicalFileTask]
+      }
+    }
+  }
+  const confirmationMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorPlanSection, {
+    project: confirmationProject,
+    draft: null,
+    observedAt: draftProject.project.updatedAt,
+    busy: false,
+    onGenerate: () => undefined,
+    onEditDraft: () => undefined,
+    onSubmitDraft: () => undefined,
+    canConfirm: true,
+    currentUserId: draftProject.project.ownerUserId,
+    providerPrincipalFacts: [],
+    initialContentMode: 'none',
+    initialProviderFactId: '',
+    onInitialContentMode: () => undefined,
+    onInitialProviderFactId: () => undefined,
+    onConfirm: () => undefined
+  }))
+  assert.match(confirmationMarkup, /data-content-required-by-plan="true"/u)
+  assert.match(confirmationMarkup, /<select[^>]*disabled[^>]*data-content-required-by-plan="true"/u)
 })
 
 test('pending HumanNeeded, result review, and eligible completion are default-visible decision cards', () => {
@@ -1260,7 +1648,7 @@ test('decision HCI derives exact review and completion CAS facts from the visibl
     expectedCoordinatorAuthorityEpoch: 1,
     expectedExecutionAuthorityEpoch: 1,
     projectPlanId: 'pln_MeetingPlan001',
-    confirmedPlanRevision: 2,
+    confirmedPlanRevision: 1,
     acceptedResultSubmissionIds: ['rsu_MeetingResult01'],
     summary: 'Final bounded summary.'
   })
@@ -1493,6 +1881,7 @@ function awaitingConfirmationProjectFixture() {
         planRevision: 1,
         sourceInputLocators: [],
         tasks: [{
+          workerUserId: 'usr_ProjectMember01',
           planItemId: 'item_meeting_summary',
           title: 'Summarize decisions',
           objective: 'Produce a bounded meeting summary.',
@@ -1513,8 +1902,7 @@ function awaitingConfirmationProjectFixture() {
         confirmedByUserId: null,
         confirmedAt: null,
         supersededAt: null
-      },
-      assignments: []
+      }
     },
     memberUsers: [{
       schemaVersion: 1 as const,
@@ -1587,7 +1975,104 @@ function awaitingConfirmationProjectFixture() {
   }
 }
 
-function provisioningPlanFixture() {
+function planningProjectFixture(
+  status: 'draft' | 'paused'
+): ProjectCoordinatorProject & {
+  plan: NonNullable<ProjectCoordinatorProject['plan']>
+} {
+  const base = awaitingConfirmationProjectFixture()
+  const userId = 'usr_ProjectMember01'
+  const agentId = 'agt_MemberAgent001'
+  return {
+    ...base,
+    project: {
+      ...base.project,
+      status
+    },
+    workerGroups: [{
+      userId,
+      displayName: 'Project Member',
+      agents: [{
+        displayName: 'Member Desktop',
+        projectAvailability: {
+          schemaVersion: 1,
+          type: 'project_worker_availability_view',
+          projectId: base.project.projectId,
+          userId,
+          agentId,
+          revision: 1,
+          availability: {
+            schemaVersion: 1,
+            type: 'worker_availability_projection',
+            userId,
+            agentId,
+            deviceId: 'dev_MemberDevice001',
+            agentActive: true,
+            deviceActive: true,
+            connectionStatus: 'online',
+            lastHeartbeatAt: base.project.updatedAt,
+            runtimeReadiness: 'ready',
+            runtimeCapabilityTags: ['meeting.review'],
+            acceptsNewOffers: true,
+            activeTaskCount: 0,
+            observedAt: base.project.updatedAt,
+            expiresAt: '2026-08-25T02:08:00.000Z',
+            revision: 1,
+            createdAt: base.project.createdAt,
+            updatedAt: base.project.updatedAt
+          },
+          membership: status === 'draft'
+            ? null
+            : {
+                ...base.provisioning.memberships[1]!,
+                state: 'active'
+              },
+          taskAuthorities: status === 'draft'
+            ? []
+            : [{
+                schemaVersion: 1,
+                type: 'task_authority',
+                taskAuthorityId: 'tau_MemberText001',
+                projectId: base.project.projectId,
+                userId,
+                scope: 'text_tasks',
+                state: 'suspended',
+                authorityEpoch: 1,
+                reason: 'project_paused',
+                effectiveAt: base.project.createdAt,
+                revision: 1,
+                createdAt: base.project.createdAt,
+                updatedAt: base.project.updatedAt
+              }],
+          providerPrincipalFact: null,
+          providerPrincipalSnapshotStatus: 'not_applicable',
+          contentReadiness: null,
+          observedAt: base.project.updatedAt
+        }
+      }]
+    }]
+  } as ProjectCoordinatorProject & {
+    plan: NonNullable<ProjectCoordinatorProject['plan']>
+  }
+}
+
+function workflowPlanFixture() {
+  const provisioning = finiteProvisioningPlanFixture()
+  return {
+    projectId: provisioning.projectId,
+    projectPlanId: 'pln_MeetingPlan001',
+    expectedProjectRevision: provisioning.expectedProjectRevision,
+    expectedCoordinatorAuthorityEpoch: 1,
+    expectedExecutionAuthorityEpoch: 1,
+    expectedPlanRevision: 2,
+    planDigest: 'a'.repeat(64),
+    purpose: 'launch' as const,
+    provisioning,
+    workflowDigest: 'f'.repeat(64)
+  }
+}
+
+function finiteProvisioningPlanFixture() {
   return {
     projectId: 'prj_ProjectCreated01',
     provisioningIntentId: 'pvi_ContentIntent001',
@@ -1672,6 +2157,16 @@ function contentProvisioningProjectFixture(): ProjectCoordinatorProject {
       ...base.project,
       contentMode: 'required',
       revision: 3
+    },
+    plan: {
+      ...base.plan,
+      plan: {
+        ...base.plan.plan,
+        state: 'confirmed' as const,
+        revision: 2,
+        confirmedByUserId: base.project.ownerUserId,
+        confirmedAt: timestamp
+      }
     },
     provisioning: {
       intent: {
@@ -1822,8 +2317,9 @@ function decisionProjectFixture(
       expiresAt: '2026-08-26T01:08:00.000Z'
     }] : [],
     records: state === 'completion' ? [{
-      kind: 'decision' as const,
-      projectId: base.project.projectId
+      kind: 'observation' as const,
+      projectId: base.project.projectId,
+      sourceResultSubmissionId: submission.resultSubmissionId
     }] : []
   } as unknown as ProjectCoordinatorProject
 }

@@ -1,17 +1,22 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createProjectCoordinatorCapabilityFactory } from '../main.js'
+import {
+  createProjectCoordinatorCapabilityFactory,
+  type ProjectCoordinatorCapabilityOptions
+} from '../main.js'
 import { PROJECT_COORDINATOR_CAPABILITY_IDS } from '../contract.js'
 import {
   createProjectCoordinatorRendererClient,
   ProjectCoordinatorPlanDraftGenerationClientError
 } from './project-coordinator-capability-client.js'
+import { subscribeProjectCoordinatorWorkspaceInvalidation } from './workspace-invalidation.js'
 
 test('renderer invocation approvals stay aligned with the main capability definitions', async () => {
-  const definitions = createProjectCoordinatorCapabilityFactory({
+  const definitions = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
     defineCapability: (input) => input,
-    ports: {} as never
+    ports: {} as never,
+    sessions: {} as never
   }).createDefinitions()
   const invoked: Array<Readonly<{ actionId: string; approval: 'none' | 'confirmation' }>> = []
   const client = createProjectCoordinatorRendererClient({
@@ -30,17 +35,19 @@ test('renderer invocation approvals stay aligned with the main capability defini
 
   await client.readWorkspace(undefined)
   await client.createProject(undefined as never)
+  await client.readSessionProjection()
   await client.readPlanDraft(undefined as never)
   await client.generatePlanDraft(undefined as never)
   await client.editPlanDraft(undefined as never)
   await client.submitPlanDraft(undefined as never)
-  await client.confirmPlanAndActivate(undefined as never)
-  await client.previewProvisioning(undefined as never)
-  await client.applyProvisioning(undefined as never)
+  await client.confirmPlan(undefined as never)
+  await client.prepareWorkflow(undefined as never)
+  await client.continueWorkflow(undefined as never)
   await client.observeAndLinkRecovery(undefined as never)
   await client.abandonRecovery(undefined as never)
   await client.retryRecoverySuccessor(undefined as never)
   await client.addMember(undefined as never)
+  await client.acceptInvitation(undefined as never)
   await client.removeMember(undefined as never)
   await client.createHumanNeeded(undefined as never)
   await client.answerHumanNeeded(undefined as never)
@@ -53,6 +60,27 @@ test('renderer invocation approvals stay aligned with the main capability defini
     invoked,
     definitions.map(({ id: actionId, approval }) => ({ actionId, approval }))
   )
+})
+
+test('canonical create success invalidates readers without publishing optimistic Project data', async () => {
+  let invalidations = 0
+  const dispose = subscribeProjectCoordinatorWorkspaceInvalidation(() => {
+    invalidations += 1
+  })
+  const successful = createProjectCoordinatorRendererClient({
+    observe: async () => { throw new Error('not observed') },
+    invoke: async () => ({}) as never
+  })
+  const failing = createProjectCoordinatorRendererClient({
+    observe: async () => { throw new Error('not observed') },
+    invoke: async () => { throw new Error('canonical create failed') }
+  })
+
+  await successful.createProject(undefined as never)
+  await assert.rejects(() => failing.createProject(undefined as never), /canonical create failed/u)
+  dispose()
+
+  assert.equal(invalidations, 1)
 })
 
 test('renderer maps bounded Plan generation failures without exposing Runtime details', async () => {

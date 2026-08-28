@@ -4,24 +4,30 @@ import {
   canonicalProjectContentProvisioningAttestationFactualPayloadBytes,
   canonicalProjectContentProvisioningAttestationSignatureBytes,
   canonicalProvisionedMemberSetBytes,
+  bindTaskFileDeclaration,
+  canInvitedUserReadProjectCoordinationCollection,
   canUserReadProjectCoordination,
   cloudStateEventSchema,
+  idempotencyComparableCommandProjection,
   type CloudStateCommand,
   confirmableHumanActionSchema,
-  projectCreateIncludesAuthenticatedOwner,
+  projectInitialTeamIncludesAuthenticatedOwner,
   providerDirectRecipientSchema,
   type AgentCredentialBootstrapPublicKey,
   type AgentCredentialEnvelope,
   type ProviderDirectRecipient,
   type ProviderIdentity,
   type ProjectCoordinationFactPage,
+  type ProjectInitialTeam,
   type ProjectWorkerAvailabilityView,
   type RestRequest,
   type TaskExecutionPreflight,
+  type TaskFileDeclaration,
   type TaskFileIntent,
   type TaskExecutionFileIntent,
   type TaskResultOutput
 } from '@sciforge/collaboration-contracts'
+import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts/node'
 
 import { actorInboxRecipient, type AgentActor, type AuthContext, type HumanEndpointActor, type UserActor } from './actor.js'
 import { fenceTaskExecution, revokeAgentAuthorityInTransaction } from './authority-revocation.js'
@@ -1926,6 +1932,15 @@ export class CollaborationService {
     observedAt: string
   }>> {
     const project = await requireProjectReader(this.repository, actor, input.projectId)
+    const actorMembership = project.ownerUserId === actor.userId
+      ? null
+      : await this.repository.getProjectMember(project.projectId, actor.userId)
+    const invitationRead = actorMembership?.state === 'invited'
+    if (invitationRead && input.collections.some(({ collection }) => (
+      !canInvitedUserReadProjectCoordinationCollection(collection)
+    ))) {
+      fail('permission_denied', 'An invited User may read only the bounded facts needed to review and accept the current Plan.')
+    }
     const decodedCursors = input.collections.map((request) => request.cursor === undefined
       ? null
       : decodeProjectCoordinationCursor(request.cursor, actor.userId, project.projectId, request.collection))
@@ -1946,7 +1961,9 @@ export class CollaborationService {
         decodedCursors[index]?.after ?? null
       ))
     }
-    const finalSummaries = await this.repository.listProjectFinalSummaries(project.projectId)
+    const finalSummaries = invitationRead
+      ? []
+      : await this.repository.listProjectFinalSummaries(project.projectId)
     return { project, pages, finalSummary: finalSummaries.at(-1) ?? null, observedAt }
   }
 
@@ -1958,18 +1975,9 @@ export class CollaborationService {
     memberships: StoredProjectMember[]
     provisioningIntent: StoredProjectContentProvisioningIntent | null
   }>> {
-    if (!projectCreateIncludesAuthenticatedOwner(input, actor.userId)) {
-      fail('permission_denied', 'The explicit Project Memberships must include the authenticated OIDC Owner.')
-    }
-    if (input.content.mode === 'required' && input.content.contentOwnerUserId !== actor.userId) {
-      fail('permission_denied', 'The initial Project Content Owner is derived from the authenticated OIDC Owner.')
-    }
-    const memberUserIds = input.content.members.map(({ userId }) => userId)
     return this.commit(actor, 'project.create', input.idempotencyKey, input, async (tx, at) => {
-      for (const userId of [...memberUserIds].sort()) {
-        const user = required(await tx.getUserForUpdate(userId), 'Project member')
-        if (user.status !== 'active') fail('credential_revoked', 'Every Project member must be active.')
-      }
+      const owner = required(await tx.getUserForUpdate(actor.userId), 'Project Owner')
+      if (owner.status !== 'active') fail('credential_revoked', 'The Project Owner must be active.')
 
       const coordinator = required(await tx.getAgentForUpdate(actor.agentId), 'Coordinator Agent')
       const coordinatorDevice = required(await tx.getDeviceForUpdate(actor.deviceId), 'Coordinator Device')
@@ -1981,34 +1989,12 @@ export class CollaborationService {
         coordinator.ownerUserId !== actor.userId ||
         coordinatorDevice.userId !== actor.userId ||
         coordinatorDevice.deviceId !== coordinator.deviceId ||
-        coordinatorDevice.userId !== coordinator.ownerUserId ||
-        !memberUserIds.includes(coordinator.ownerUserId)
+        coordinatorDevice.userId !== coordinator.ownerUserId
       ) {
         fail(
           'permission_denied',
           'Project creation requires the exact authenticated Agent and Device owned by the Project creator.'
         )
-      }
-
-      const facts = new Map<string, StoredProviderDirectoryPrincipalFact>()
-      if (input.content.mode === 'required') {
-        const orderedFactRequests = [...input.content.members]
-          .sort((left, right) => left.providerPrincipalFactId.localeCompare(right.providerPrincipalFactId))
-        for (const requested of orderedFactRequests) {
-          const fact = required(
-            await tx.getProviderDirectoryPrincipalFactForUpdate(requested.providerPrincipalFactId),
-            'Provider directory principal fact'
-          )
-          if (
-            fact.userId !== requested.userId ||
-            fact.readiness !== 'ready' ||
-            !sameProviderInstanceReference(fact.providerPrincipal.providerInstance, input.content.providerInstance)
-          ) {
-            fail('permission_denied', 'Every content member requires its exact ready same-instance Provider principal fact.')
-          }
-          expectRevision(fact.revision, requested.expectedFactRevision)
-          facts.set(fact.providerPrincipalFactId, fact)
-        }
       }
 
       const projectId = newId('prj')
@@ -2017,22 +2003,22 @@ export class CollaborationService {
         ownerUserId: actor.userId,
         displayName: input.displayName,
         goal: input.goal,
-        contentMode: input.content.mode,
-        status: 'paused',
+        contentMode: 'none',
+        status: 'draft',
         coordinatorAgentId: coordinator.agentId,
         coordinatorAuthorityEpoch: 1,
         executionAuthorityEpoch: 1,
-        contentOwnerUserId: input.content.mode === 'required' ? input.content.contentOwnerUserId : null,
+        contentOwnerUserId: null,
         budget: input.budget,
         coordinationRound: 1,
         revision: 1,
         createdAt: at,
         updatedAt: at
       }
-      const memberships: StoredProjectMember[] = memberUserIds.map((userId) => ({
+      const ownerMembership: StoredProjectMember = {
         projectMembershipId: newId('pmb'),
         projectId,
-        userId,
+        userId: actor.userId,
         state: 'active',
         authorityEpoch: 1,
         activatedAt: at,
@@ -2042,104 +2028,28 @@ export class CollaborationService {
         revision: 1,
         createdAt: at,
         updatedAt: at
-      }))
+      }
+      const memberships = [ownerMembership]
       await tx.insertProject(project, memberships)
 
-      for (const userId of memberUserIds) {
-        if (input.content.mode === 'required') {
-          const requestedFact = input.content.members.find((member) => member.userId === userId)!
-          const fact = facts.get(requestedFact.providerPrincipalFactId)!
-          const readiness: StoredProjectContentReadiness = {
-            projectId,
-            userId,
-            providerInstance: input.content.providerInstance,
-            state: 'pending',
-            reason: 'provisioning_pending',
-            providerPrincipalFactId: fact.providerPrincipalFactId,
-            snapshottedFactRevision: fact.revision,
-            providerPrincipal: fact.providerPrincipal,
-            bindingRevision: null,
-            lastObservationId: null,
-            effectiveAt: at,
-            revision: 1,
-            createdAt: at,
-            updatedAt: at
-          }
-          await tx.upsertProjectContentReadiness(readiness, null)
+      for (const scope of ['text_tasks', 'file_tasks'] as const) {
+        const authority: StoredTaskAuthority = {
+          taskAuthorityId: newId('tau'),
+          projectId,
+          userId: actor.userId,
+          scope,
+          state: 'suspended',
+          authorityEpoch: 1,
+          reason: 'project_paused',
+          effectiveAt: at,
+          revision: 1,
+          createdAt: at,
+          updatedAt: at
         }
-        for (const scope of ['text_tasks', 'file_tasks'] as const) {
-          const authority: StoredTaskAuthority = {
-            taskAuthorityId: newId('tau'),
-            projectId,
-            userId,
-            scope,
-            state: 'suspended',
-            authorityEpoch: 1,
-            reason: 'project_paused',
-            effectiveAt: at,
-            revision: 1,
-            createdAt: at,
-            updatedAt: at
-          }
-          await tx.upsertTaskAuthority(authority, null)
-        }
+        await tx.upsertTaskAuthority(authority, null)
       }
 
-      let provisioningIntent: StoredProjectContentProvisioningIntent | null = null
-      if (input.content.mode === 'required') {
-        const desiredMembers = input.content.members.map((member) => {
-          const fact = facts.get(member.providerPrincipalFactId)!
-          return {
-            userId: member.userId,
-            providerPrincipalFactId: fact.providerPrincipalFactId,
-            snapshottedFactRevision: fact.revision,
-            principal: fact.providerPrincipal
-          }
-        })
-        const provisioningIntentId = newId('pci')
-        const intentFacts = {
-          provisioningIntentId,
-          projectId,
-          provisioningRevision: 1,
-          kind: 'initial_provisioning' as const,
-          createdByOwnerUserId: actor.userId,
-          contentOwnerUserId: input.content.contentOwnerUserId,
-          providerInstance: input.content.providerInstance,
-          desiredMembers,
-          containerDisplayName: input.content.containerDisplayName,
-          currentRootLocator: null,
-          currentBindingRevision: null
-        }
-        provisioningIntent = {
-          ...intentFacts,
-          state: 'pending',
-          intentDigest: stableDigest(intentFacts),
-          revision: 1,
-          createdAt: at,
-          updatedAt: at
-        }
-        await tx.insertProjectContentProvisioningIntent(provisioningIntent)
-        await tx.upsertProjectContentSpaceBinding({
-          projectContentBindingId: newId('pcb'),
-          projectId,
-          contentOwnerUserId: actor.userId,
-          providerInstance: input.content.providerInstance,
-          rootLocator: null,
-          rootLocatorDigest: null,
-          provisioningIntentId,
-          provisioningRevision: provisioningIntent.provisioningRevision,
-          attestationId: null,
-          attestationDigest: null,
-          status: 'provisioning',
-          statusReason: 'provisioning_incomplete',
-          activatedAt: null,
-          degradedAt: null,
-          closedAt: null,
-          revision: 1,
-          createdAt: at,
-          updatedAt: at
-        }, null)
-      }
+      const provisioningIntent: StoredProjectContentProvisioningIntent | null = null
 
       const message = await this.appendInbox(
         tx,
@@ -2246,12 +2156,19 @@ export class CollaborationService {
       expectRevision(project.executionAuthorityEpoch, input.expectedExecutionAuthorityEpoch)
       if (['completed', 'cancelled'].includes(project.status)) fail('invalid_state_transition', 'A terminal Project cannot transition again.')
       if (input.status === project.status) fail('invalid_state_transition', 'The Project is already in the requested state.')
+      if (project.status === 'draft' && input.status !== 'cancelled') {
+        fail('invalid_state_transition', 'A draft Project leaves draft only through first Plan confirmation.')
+      }
 
       const binding = await tx.getProjectContentSpaceBindingForUpdate(project.projectId)
       if (input.status === 'active') {
         const plan = await tx.getCurrentProjectPlan(project.projectId)
         if (plan?.state !== 'confirmed') {
           fail('invalid_state_transition', 'A Project requires its confirmed current plan before activation.')
+        }
+        const memberships = await tx.listProjectMembers(project.projectId)
+        if (memberships.some(({ state }) => state === 'invited')) {
+          fail('invalid_state_transition', 'A Project cannot activate before every invited User accepts the confirmed Plan.')
         }
         if (project.contentMode === 'required' && binding?.status !== 'active') {
           fail('invalid_state_transition', 'A content-required Project requires an active Content binding before activation.')
@@ -2530,6 +2447,9 @@ export class CollaborationService {
       if (project.status === 'completed' || project.status === 'cancelled') {
         fail('invalid_state_transition', 'A terminal Project cannot add a member.')
       }
+      if (project.status === 'draft') {
+        fail('invalid_state_transition', 'Initial Project members are established by first Plan confirmation.')
+      }
       const user = required(await tx.getUserForUpdate(input.userId), 'Project member User')
       if (user.status !== 'active') fail('credential_revoked', 'The new Project member User is not active.')
       if (await tx.getProjectMemberForUpdate(project.projectId, input.userId)) {
@@ -2561,11 +2481,10 @@ export class CollaborationService {
         fail('validation_failed', 'A content-free Project cannot snapshot a Provider principal fact.')
       }
 
-      const membershipPending = project.contentMode === 'required'
       const membership: StoredProjectMember = {
         projectMembershipId: newId('pmb'), projectId: project.projectId, userId: input.userId,
-        state: membershipPending ? 'pending_membership' : 'active',
-        authorityEpoch: 1, activatedAt: membershipPending ? null : at,
+        state: 'invited',
+        authorityEpoch: 1, activatedAt: null,
         removalRequestedAt: null, removalRequestedByUserId: null, removedAt: null,
         revision: 1, createdAt: at, updatedAt: at
       }
@@ -2602,9 +2521,7 @@ export class CollaborationService {
         taskAuthorities.push(authority)
       }
 
-      const provisioningIntent = project.contentMode === 'required'
-        ? await createMembershipChangeIntent(tx, project, actor.userId, at, true)
-        : null
+      const provisioningIntent = null
       const updatedProject: StoredProject = { ...project, revision: project.revision + 1, updatedAt: at }
       await tx.updateProject(updatedProject, project.revision)
       const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
@@ -2626,6 +2543,129 @@ export class CollaborationService {
       membership: response.membership as StoredProjectMember,
       taskAuthorities: response.taskAuthorities as StoredTaskAuthority[],
       contentReadiness: response.contentReadiness as StoredProjectContentReadiness | null,
+      provisioningIntent: response.provisioningIntent as StoredProjectContentProvisioningIntent | null
+    }))
+  }
+
+  async acceptProjectMembership(
+    actor: UserActor,
+    input: CloudCommand<'project.membership.accept'>
+  ): Promise<Readonly<{
+    project: StoredProject
+    membership: StoredProjectMember
+    taskAuthorities: StoredTaskAuthority[]
+    provisioningIntent: StoredProjectContentProvisioningIntent | null
+  }>> {
+    return this.commit(actor, 'project.membership.accept', input.idempotencyKey, input, async (tx, at) => {
+      const project = required(await tx.getProjectForUpdate(input.projectId), 'Project')
+      expectRevision(project.revision, input.expectedProjectRevision)
+      if (project.status === 'completed' || project.status === 'cancelled') {
+        fail('invalid_state_transition', 'A terminal Project invitation cannot be accepted.')
+      }
+      const candidate = (await tx.listProjectMembers(project.projectId))
+        .find(({ projectMembershipId }) => projectMembershipId === input.projectMembershipId)
+      const membership = required(candidate ?? null, 'Project Membership invitation')
+      const locked = required(
+        await tx.getProjectMemberForUpdate(project.projectId, membership.userId),
+        'Project Membership invitation'
+      )
+      expectRevision(locked.revision, input.expectedMembershipRevision)
+      if (locked.userId !== actor.userId) {
+        fail('permission_denied', 'Only the exact invited OIDC User may accept this Project invitation.')
+      }
+      if (locked.state !== 'invited') {
+        fail('invalid_state_transition', 'Only an invited Project Membership may be accepted.')
+      }
+      const plan = required(await tx.getProjectPlan(input.projectPlanId), 'Confirmed Project plan')
+      expectRevision(plan.revision, input.expectedPlanRevision)
+      if (
+        plan.projectId !== project.projectId ||
+        plan.state !== 'confirmed' ||
+        plan.planDigest !== input.planDigest ||
+        (await tx.getCurrentProjectPlan(project.projectId))?.projectPlanId !== plan.projectPlanId
+      ) {
+        fail('revision_conflict', 'Project invitation acceptance requires the exact current confirmed Plan.')
+      }
+
+      const accepted: StoredProjectMember = {
+        ...locked,
+        state: project.contentMode === 'required' ? 'pending_membership' : 'active',
+        activatedAt: project.contentMode === 'required' ? null : at,
+        authorityEpoch: locked.authorityEpoch + 1,
+        revision: locked.revision + 1,
+        updatedAt: at
+      }
+      await tx.updateProjectMember(accepted, locked.revision)
+      const currentIntent = project.contentMode === 'required'
+        ? required(
+            await tx.getLatestProjectContentProvisioningIntent(project.projectId),
+            'Project Content provisioning intent'
+          )
+        : null
+      const provisioningIntent = currentIntent !== null && !currentIntent.desiredMembers.some(
+        ({ userId }) => userId === accepted.userId
+      )
+        ? await createMembershipChangeIntent(tx, project, project.ownerUserId, at, true)
+        : null
+      const binding = project.contentMode === 'required'
+        ? await tx.getProjectContentSpaceBindingForUpdate(project.projectId)
+        : null
+      const readiness = project.contentMode === 'required'
+        ? await tx.getProjectContentReadinessForUpdate(project.projectId, accepted.userId)
+        : null
+      const taskAuthorities: StoredTaskAuthority[] = []
+      for (const scope of ['text_tasks', 'file_tasks'] as const) {
+        const authority = required(
+          await tx.getTaskAuthorityForUpdate(project.projectId, accepted.userId, scope),
+          'Project Task authority'
+        )
+        const derived = deriveTaskAuthorityTransition({
+          projectStatus: project.status,
+          contentMode: project.contentMode,
+          membership: accepted,
+          scope,
+          readiness,
+          binding
+        })
+        const updatedAuthority: StoredTaskAuthority = {
+          ...authority,
+          ...derived,
+          authorityEpoch: authority.authorityEpoch + 1,
+          effectiveAt: at,
+          revision: authority.revision + 1,
+          updatedAt: at
+        }
+        await tx.upsertTaskAuthority(updatedAuthority, authority.revision)
+        taskAuthorities.push(updatedAuthority)
+      }
+      const updatedProject: StoredProject = {
+        ...project,
+        revision: project.revision + 1,
+        updatedAt: at
+      }
+      await tx.updateProject(updatedProject, project.revision)
+      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+      for (const recipient of [
+        { kind: 'user', id: project.ownerUserId } as InboxRecipient,
+        { kind: 'agent', id: project.coordinatorAgentId } as InboxRecipient
+      ]) {
+        const message = await this.appendInbox(tx, recipient, 'project.membership.changed', {
+          protocolVersion: '1.0', type: 'project.membership.changed', projectId: project.projectId,
+          projectMembershipId: accepted.projectMembershipId, userId: accepted.userId,
+          state: accepted.state, revision: accepted.revision, authorityEpoch: accepted.authorityEpoch
+        }, at)
+        notifications.push({ recipient: message.recipient, sequence: message.sequence })
+      }
+      return {
+        response: { project: updatedProject, membership: accepted, taskAuthorities, provisioningIntent },
+        resourceKind: 'project_membership',
+        resourceId: accepted.projectMembershipId,
+        notifications
+      }
+    }).then((response) => ({
+      project: response.project as StoredProject,
+      membership: response.membership as StoredProjectMember,
+      taskAuthorities: response.taskAuthorities as StoredTaskAuthority[],
       provisioningIntent: response.provisioningIntent as StoredProjectContentProvisioningIntent | null
     }))
   }
@@ -2653,9 +2693,11 @@ export class CollaborationService {
       if (coordinator.ownerUserId === locked.userId) {
         fail('invalid_state_transition', 'Transfer Coordinator authority before removing its owning User.')
       }
-      if (locked.state !== 'active') fail('invalid_state_transition', 'Only an active Project Membership may be removed.')
+      if (!['invited', 'pending_membership', 'active'].includes(locked.state)) {
+        fail('invalid_state_transition', 'Only a current Project invitation or Membership may be removed.')
+      }
 
-      const removalPending = project.contentMode === 'required'
+      const removalPending = project.contentMode === 'required' && locked.state !== 'invited'
       const updatedMembership: StoredProjectMember = {
         ...locked,
         state: removalPending ? 'membership_removal_pending' : 'removed',
@@ -2793,6 +2835,9 @@ export class CollaborationService {
         await tx.getProjectContentProvisioningIntentForUpdate(attested.provisioningIntentId),
         'Project Content provisioning intent'
       )
+      if ((await tx.listProjectMembers(project.projectId)).some(({ state }) => state === 'invited')) {
+        fail('invalid_state_transition', 'Team provisioning cannot be attested before every Project invitation is accepted.')
+      }
       if (
         intent.projectId !== project.projectId ||
         intent.contentOwnerUserId !== actor.userId ||
@@ -3313,6 +3358,12 @@ export class CollaborationService {
           await tx.getProjectContentProvisioningIntentForUpdate(input.provisioningIntentId!),
           'Project Content provisioning intent'
         )
+        if (
+          input.operation !== 'remove_member' &&
+          (await tx.listProjectMembers(project.projectId)).some(({ state }) => state === 'invited')
+        ) {
+          fail('invalid_state_transition', 'Team provisioning cannot start before every Project invitation is accepted.')
+        }
         if (intent.projectId !== project.projectId || intent.provisioningRevision !== input.provisioningRevision) {
           fail('revision_conflict', 'The external operation does not target the exact provisioning intent revision.')
         }
@@ -4022,7 +4073,7 @@ export class CollaborationService {
       const currentPlan = required(await tx.getCurrentProjectPlan(project.projectId), 'Current Project Plan')
       if (
         plan.projectId !== project.projectId || currentPlan.projectPlanId !== plan.projectPlanId ||
-        plan.state !== 'confirmed' || plan.revision !== input.confirmedPlanRevision
+        plan.state !== 'confirmed' || plan.planRevision !== input.confirmedPlanRevision
       ) {
         fail('revision_conflict', 'The final summary must cite the exact current confirmed Project Plan revision.')
       }
@@ -4067,7 +4118,7 @@ export class CollaborationService {
       }
       const finalSummary: StoredProjectFinalSummary = {
         projectId: project.projectId, projectRecordId: record.projectRecordId,
-        projectPlanId: plan.projectPlanId, confirmedPlanRevision: plan.revision,
+        projectPlanId: plan.projectPlanId, confirmedPlanRevision: plan.planRevision,
         acceptedResultSubmissionIds: acceptedSubmissionIds, summary: input.summary,
         createdByUserId: actor.userId, createdByCoordinatorAgentId: coordinator.agentId,
         coordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
@@ -4164,6 +4215,7 @@ export class CollaborationService {
         createdAt: at,
         updatedAt: at
       }
+      toProjectPlan(plan)
       await tx.insertProjectPlan(plan)
       await tx.updateProject({ ...project, revision: project.revision + 1, updatedAt: at }, project.revision)
       const message = await this.appendInbox(tx, { kind: 'user', id: actor.userId }, 'project.plan.awaiting_confirmation', {
@@ -4196,6 +4248,14 @@ export class CollaborationService {
       if (plan.state !== 'awaiting_confirmation') {
         fail('invalid_state_transition', 'Only the current awaiting-confirmation plan may be confirmed.')
       }
+      if (project.status === 'draft') {
+        if (input.initialTeam === null) {
+          fail('validation_failed', 'The first confirmed Plan requires one exact initial Team/content configuration.')
+        }
+        await configureInitialProjectTeam(tx, project, plan, input.initialTeam, actor.userId, at)
+      } else if (input.initialTeam !== null) {
+        fail('invalid_state_transition', 'Only a draft Project may establish its initial Team/content configuration.')
+      }
       const confirmed: StoredProjectPlan = {
         ...plan,
         state: 'confirmed',
@@ -4205,13 +4265,43 @@ export class CollaborationService {
         updatedAt: at
       }
       await tx.updateProjectPlan(confirmed, plan.revision)
-      await tx.updateProject({ ...project, revision: project.revision + 1, updatedAt: at }, project.revision)
-      const message = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId }, 'project.plan.confirmed', {
+      await tx.updateProject({
+        ...project,
+        ...(input.initialTeam === null ? {} : {
+          contentMode: input.initialTeam.mode,
+          contentOwnerUserId: input.initialTeam.mode === 'required' ? actor.userId : null,
+          status: 'paused' as const
+        }),
+        revision: project.revision + 1,
+        updatedAt: at
+      }, project.revision)
+      const planConfirmedPayload = agentInboxPayloadSchema.parse({
         protocolVersion: '1.0', type: 'project.plan.confirmed', projectId: project.projectId,
         projectPlanId: confirmed.projectPlanId, planDigest: confirmed.planDigest, revision: confirmed.revision
-      }, at)
+      })
+      const message = await this.appendInbox(
+        tx,
+        { kind: 'agent', id: project.coordinatorAgentId },
+        planConfirmedPayload.type,
+        planConfirmedPayload,
+        at
+      )
+      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = [
+        { recipient: message.recipient, sequence: message.sequence }
+      ]
+      for (const membership of await tx.listProjectMembers(project.projectId)) {
+        if (membership.state !== 'invited') continue
+        const invitation = await this.appendInbox(tx, { kind: 'user', id: membership.userId },
+          'project.membership.changed', {
+            protocolVersion: '1.0', type: 'project.membership.changed', projectId: project.projectId,
+            projectMembershipId: membership.projectMembershipId, userId: membership.userId,
+            state: membership.state, revision: membership.revision,
+            authorityEpoch: membership.authorityEpoch
+          }, at)
+        notifications.push({ recipient: invitation.recipient, sequence: invitation.sequence })
+      }
       return { response: entityResponse('project.plan.confirmed', confirmed), resourceKind: 'project_plan',
-        resourceId: confirmed.projectPlanId, notifications: [{ recipient: message.recipient, sequence: message.sequence }] }
+        resourceId: confirmed.projectPlanId, notifications }
     }).then(responseEntity<StoredProjectPlan>)
   }
 
@@ -4238,9 +4328,11 @@ export class CollaborationService {
       }
       const item = plan.tasks.find(({ planItemId }) => planItemId === input.planItemId)
       if (!item) fail('not_found', 'The plan item was not found in this confirmed plan revision.')
-      const taskId = taskIdForPlanItem(plan.projectPlanId, item.planItemId)
+      const taskId = canonicalTaskIdForPlanItem(plan.projectPlanId, item.planItemId)
       if (await tx.getTask(taskId)) fail('identity_conflict', 'This confirmed plan item already has its canonical Task.')
-      const dependencyTaskIds = item.dependencyPlanItemIds.map((planItemId) => taskIdForPlanItem(plan.projectPlanId, planItemId))
+      const dependencyTaskIds = item.dependencyPlanItemIds.map((planItemId) => (
+        canonicalTaskIdForPlanItem(plan.projectPlanId, planItemId)
+      ))
       for (const dependencyTaskId of dependencyTaskIds) {
         const dependency = required(await tx.getTask(dependencyTaskId), 'Dependency Task')
         if (dependency.projectId !== project.projectId || dependency.status !== 'completed') {
@@ -4252,11 +4344,16 @@ export class CollaborationService {
       if (totalTasks >= project.budget.maxTasks || roundTasks >= project.budget.maxTasksPerRound) {
         fail('budget_exhausted', 'The Project Task budget is exhausted.')
       }
+      const fileIntent = await bindPlanFileDeclarationToCurrentProjectRoot(
+        tx,
+        project,
+        item.fileIntent
+      )
       const eligibility = await requireEligibleWorkerUser({
         tx,
         project,
-        workerUserId: input.workerUserId,
-        fileIntent: item.fileIntent,
+        workerUserId: item.workerUserId,
+        fileIntent,
         requiredCapabilityTags: item.requiredCapabilityTags,
         at
       })
@@ -4265,7 +4362,7 @@ export class CollaborationService {
         executionId: null,
         taskId,
         projectId: project.projectId,
-        workerUserId: input.workerUserId,
+        workerUserId: item.workerUserId,
         offeredByCoordinatorAgentId: actor.agentId,
         state: 'pending',
         offeredAt: at,
@@ -4284,7 +4381,7 @@ export class CollaborationService {
         completionCriteria: item.completionCriteria,
         dependencyTaskIds,
         requiredCapabilityTags: item.requiredCapabilityTags,
-        fileIntent: item.fileIntent,
+        fileIntent,
         currentExecutionId: null,
         currentExecutionState: null,
         status: 'offered',
@@ -4921,11 +5018,18 @@ export class CollaborationService {
       await tx.updateTaskExecution(updatedExecution, execution.revision)
       await tx.updateTask(updatedTask, task.revision)
       if (execution.fileIntent !== null) await tx.invalidateCloudResourceRefs(task.taskId, execution.executionId, at)
-      const message = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId }, 'task.result.submitted', {
+      const resultSubmittedPayload = agentInboxPayloadSchema.parse({
         protocolVersion: '1.0', type: 'task.result.submitted', projectId: project.projectId,
         taskId: task.taskId, executionId: execution.executionId,
         resultSubmissionId: submission.resultSubmissionId, revision: submission.revision
-      }, at)
+      })
+      const message = await this.appendInbox(
+        tx,
+        { kind: 'agent', id: project.coordinatorAgentId },
+        resultSubmittedPayload.type,
+        resultSubmittedPayload,
+        at
+      )
       return { response: { protocolVersion: '1.0', type: 'task.result.submitted',
         task: updatedTask, execution: updatedExecution, submission }, resourceKind: 'task_result_submission',
         resourceId: submission.resultSubmissionId,
@@ -4977,6 +5081,7 @@ export class CollaborationService {
       let updatedExecution: StoredTaskExecution
       let nextOffer: StoredTaskOffer | null = null
       let acceptedProjectRecordId: string | null = null
+      let acceptedProjectRecordRevision: number | null = null
       let nextTaskOfferId: string | null = null
       let nextRecipientAgentIds: readonly string[] = []
       if (input.decision === 'accept') {
@@ -4992,6 +5097,7 @@ export class CollaborationService {
         }
         await tx.insertProjectRecord(record)
         acceptedProjectRecordId = record.projectRecordId
+        acceptedProjectRecordRevision = record.revision
         updatedExecution = {
           ...execution,
           state: 'completed',
@@ -5070,6 +5176,28 @@ export class CollaborationService {
         revision: updatedTask.revision, status: updatedTask.status
       }, at)
       notifications.push({ recipient: reviewMessage.recipient, sequence: reviewMessage.sequence })
+      if (acceptedProjectRecordId !== null) {
+        if (acceptedProjectRecordRevision === null) {
+          throw new Error('Accepted ProjectRecord revision was not retained for its durable notification.')
+        }
+        const continuationMessage = await this.appendInbox(
+          tx,
+          { kind: 'agent', id: project.coordinatorAgentId },
+          'project_record.submitted',
+          {
+            protocolVersion: '1.0',
+            type: 'project_record.submitted',
+            projectId: project.projectId,
+            projectRecordId: acceptedProjectRecordId,
+            revision: acceptedProjectRecordRevision
+          },
+          at
+        )
+        notifications.push({
+          recipient: continuationMessage.recipient,
+          sequence: continuationMessage.sequence
+        })
+      }
       if (nextOffer !== null) {
         for (const agentId of nextRecipientAgentIds) {
           const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offered', {
@@ -5627,7 +5755,11 @@ export class CollaborationService {
     work: (tx: CollaborationTransaction, at: string) => Promise<CommandResult<Record<string, unknown>>>
   ): Promise<Record<string, unknown>> {
     assertText(idempotencyKey, 'idempotencyKey', 8, 300)
-    const requestDigest = stableDigest(request)
+    const requestDigest = stableDigest(
+      request && typeof request === 'object' && !Array.isArray(request)
+        ? idempotencyComparableCommandProjection(request as Record<string, unknown>)
+        : request
+    )
     const at = this.timestamp()
     let notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
     let response: Record<string, unknown>
@@ -6422,6 +6554,181 @@ function sameProviderInstanceReference(
   return left.providerInstanceRef === right.providerInstanceRef
 }
 
+async function configureInitialProjectTeam(
+  tx: CollaborationTransaction,
+  project: StoredProject,
+  plan: StoredProjectPlan,
+  team: ProjectInitialTeam,
+  ownerUserId: string,
+  at: string
+): Promise<void> {
+  if (!projectInitialTeamIncludesAuthenticatedOwner(team, ownerUserId)) {
+    fail('permission_denied', 'The initial Project Team must include the authenticated OIDC Owner.')
+  }
+  if (team.mode === 'required' && team.contentOwnerUserId !== ownerUserId) {
+    fail('permission_denied', 'The initial Project Content Owner is the authenticated OIDC Owner.')
+  }
+  const existingMemberships = await tx.listProjectMembers(project.projectId)
+  if (
+    existingMemberships.length !== 1 ||
+    existingMemberships[0]?.userId !== ownerUserId ||
+    existingMemberships[0]?.state !== 'active'
+  ) {
+    fail('invalid_state_transition', 'A draft Project must retain only its active Owner Membership before Plan confirmation.')
+  }
+  const fileDeclarations = plan.tasks.flatMap(({ fileIntent }) => (
+    fileIntent === null ? [] : [fileIntent]
+  ))
+  if (team.mode === 'none' && fileDeclarations.length > 0) {
+    fail('validation_failed', 'A content-free initial Team cannot confirm a Plan with file Tasks.')
+  }
+
+  const memberUserIds = team.members.map(({ userId }) => userId)
+  const assignedWorkerUserIds = plan.tasks.map(({ workerUserId }) => workerUserId)
+  const expectedMemberUserIds = new Set([ownerUserId, ...assignedWorkerUserIds])
+  if (
+    memberUserIds.length !== expectedMemberUserIds.size ||
+    memberUserIds.some((userId) => !expectedMemberUserIds.has(userId))
+  ) {
+    fail('validation_failed', 'The initial Team must exactly match the Owner and confirmed Plan Worker User assignments.')
+  }
+  for (const userId of [...memberUserIds].sort()) {
+    const user = required(await tx.getUserForUpdate(userId), 'Initial Project member')
+    if (user.status !== 'active') fail('credential_revoked', 'Every initial Project member must be active.')
+  }
+
+  const facts = new Map<string, StoredProviderDirectoryPrincipalFact>()
+  if (team.mode === 'required') {
+    for (const requested of [...team.members].sort((left, right) => (
+      left.providerPrincipalFactId.localeCompare(right.providerPrincipalFactId)
+    ))) {
+      const fact = required(
+        await tx.getProviderDirectoryPrincipalFactForUpdate(requested.providerPrincipalFactId),
+        'Provider directory principal fact'
+      )
+      if (
+        fact.userId !== requested.userId ||
+        fact.readiness !== 'ready' ||
+        !sameProviderInstanceReference(fact.providerPrincipal.providerInstance, team.providerInstance)
+      ) {
+        fail('permission_denied', 'Every content member requires its exact ready same-instance Provider principal fact.')
+      }
+      expectRevision(fact.revision, requested.expectedFactRevision)
+      facts.set(fact.providerPrincipalFactId, fact)
+    }
+  }
+
+  for (const userId of [...memberUserIds].sort()) {
+    const membership = userId === ownerUserId
+      ? existingMemberships[0]!
+      : {
+          projectMembershipId: newId('pmb'),
+          projectId: project.projectId,
+          userId,
+          state: 'invited' as const,
+          authorityEpoch: 1,
+          activatedAt: null,
+          removalRequestedAt: null,
+          removalRequestedByUserId: null,
+          removedAt: null,
+          revision: 1,
+          createdAt: at,
+          updatedAt: at
+        }
+    if (userId !== ownerUserId) await tx.insertProjectMember(membership)
+    if (team.mode === 'required') {
+      const requested = team.members.find((candidate) => candidate.userId === userId)!
+      const fact = facts.get(requested.providerPrincipalFactId)!
+      await tx.upsertProjectContentReadiness({
+        projectId: project.projectId,
+        userId,
+        providerInstance: team.providerInstance,
+        state: 'pending',
+        reason: 'provisioning_pending',
+        providerPrincipalFactId: fact.providerPrincipalFactId,
+        snapshottedFactRevision: fact.revision,
+        providerPrincipal: fact.providerPrincipal,
+        bindingRevision: null,
+        lastObservationId: null,
+        effectiveAt: at,
+        revision: 1,
+        createdAt: at,
+        updatedAt: at
+      }, null)
+    }
+    if (userId === ownerUserId) continue
+    for (const scope of ['text_tasks', 'file_tasks'] as const) {
+      await tx.upsertTaskAuthority({
+        taskAuthorityId: newId('tau'),
+        projectId: project.projectId,
+        userId,
+        scope,
+        state: 'suspended',
+        authorityEpoch: 1,
+        reason: 'invitation_pending',
+        effectiveAt: at,
+        revision: 1,
+        createdAt: at,
+        updatedAt: at
+      }, null)
+    }
+  }
+
+  if (team.mode === 'none') return
+  const desiredMembers = team.members.map((member) => {
+    const fact = facts.get(member.providerPrincipalFactId)!
+    return {
+      userId: member.userId,
+      providerPrincipalFactId: fact.providerPrincipalFactId,
+      snapshottedFactRevision: fact.revision,
+      principal: fact.providerPrincipal
+    }
+  })
+  const provisioningIntentId = newId('pci')
+  const intentFacts = {
+    provisioningIntentId,
+    projectId: project.projectId,
+    provisioningRevision: 1,
+    kind: 'initial_provisioning' as const,
+    createdByOwnerUserId: ownerUserId,
+    contentOwnerUserId: ownerUserId,
+    providerInstance: team.providerInstance,
+    desiredMembers,
+    containerDisplayName: team.containerDisplayName,
+    currentRootLocator: null,
+    currentBindingRevision: null
+  }
+  const provisioningIntent: StoredProjectContentProvisioningIntent = {
+    ...intentFacts,
+    state: 'pending',
+    intentDigest: stableDigest(intentFacts),
+    revision: 1,
+    createdAt: at,
+    updatedAt: at
+  }
+  await tx.insertProjectContentProvisioningIntent(provisioningIntent)
+  await tx.upsertProjectContentSpaceBinding({
+    projectContentBindingId: newId('pcb'),
+    projectId: project.projectId,
+    contentOwnerUserId: ownerUserId,
+    providerInstance: team.providerInstance,
+    rootLocator: null,
+    rootLocatorDigest: null,
+    provisioningIntentId,
+    provisioningRevision: provisioningIntent.provisioningRevision,
+    attestationId: null,
+    attestationDigest: null,
+    status: 'provisioning',
+    statusReason: 'provisioning_incomplete',
+    activatedAt: null,
+    degradedAt: null,
+    closedAt: null,
+    revision: 1,
+    createdAt: at,
+    updatedAt: at
+  }, null)
+}
+
 function deriveTaskAuthorityTransition(input: Readonly<{
   projectStatus: StoredProject['status']
   contentMode: StoredProject['contentMode']
@@ -6433,6 +6740,7 @@ function deriveTaskAuthorityTransition(input: Readonly<{
   if (input.projectStatus === 'completed' || input.projectStatus === 'cancelled') {
     return { state: 'fenced', reason: 'project_terminal' }
   }
+  if (input.membership.state === 'invited') return { state: 'suspended', reason: 'invitation_pending' }
   if (input.projectStatus !== 'active') return { state: 'suspended', reason: 'project_paused' }
   if (input.membership.state === 'pending_membership') return { state: 'suspended', reason: 'membership_pending' }
   if (input.membership.state === 'membership_removal_pending') {
@@ -6490,10 +6798,6 @@ async function requireActiveCoordinatorAgent(
     fail('permission_denied', 'The current Coordinator Agent authority is no longer active on this Device.')
   }
   return coordinator
-}
-
-function taskIdForPlanItem(projectPlanId: string, planItemId: string): string {
-  return `tsk_${stableDigest({ projectPlanId, planItemId }).slice(0, 32)}`
 }
 
 async function requireEligibleWorkerUser(input: Readonly<{
@@ -6576,6 +6880,22 @@ async function requireEligibleWorkerUser(input: Readonly<{
     fail('permission_denied', 'The selected Worker User has no online eligible Runtime for this Task.')
   }
   return { authority, binding, recipientAgentIds }
+}
+
+async function bindPlanFileDeclarationToCurrentProjectRoot(
+  tx: CollaborationTransaction,
+  project: StoredProject,
+  declaration: TaskFileDeclaration | null
+): Promise<TaskFileIntent | null> {
+  if (declaration === null) return null
+  if (project.contentMode !== 'required') {
+    fail('permission_denied', 'A content-free Project cannot create a file Task.')
+  }
+  const binding = required(
+    await tx.getProjectContentSpaceBindingForUpdate(project.projectId),
+    'Project Content binding'
+  )
+  return bindTaskFileDeclaration(declaration, binding.revision)
 }
 
 async function requireEligibleAssignee(input: Readonly<{

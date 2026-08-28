@@ -7,6 +7,7 @@ import {
   defineDomainMainInternalServiceDescriptor,
   defineDomainMainSystemCapabilityGrant,
   domainMainFiniteCapabilityBatchPlanSchema,
+  domainMainOrdinarySessionIdentitySchema,
   domainMainRuntimeLifecycleContractSchema,
   domainWorkbenchRightPanelPlacementSchema,
   isDomainArtifactConsumer,
@@ -28,6 +29,24 @@ import {
 } from './host.js'
 
 describe('domain host contracts', () => {
+  it('accepts only a bounded generic ordinary Runtime Session identity', () => {
+    assert.deepEqual(domainMainOrdinarySessionIdentitySchema.parse({
+      runtimeId: ' runtime-local ',
+      threadId: ' thread-local '
+    }), {
+      runtimeId: 'runtime-local',
+      threadId: 'thread-local'
+    })
+    assert.throws(() => domainMainOrdinarySessionIdentitySchema.parse({
+      runtimeId: 'runtime-local',
+      threadId: 'thread-local',
+      projectId: 'prj_NotHostProvenance'
+    }))
+    assert.throws(() => domainMainOrdinarySessionIdentitySchema.parse({
+      runtimeId: 'runtime-local'
+    }))
+  })
+
   it('defines strict non-callable internal service descriptors', () => {
     assert.deepEqual(defineDomainMainInternalServiceDescriptor({
       location: 'main.internal-service-descriptor',

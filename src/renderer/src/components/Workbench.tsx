@@ -145,6 +145,7 @@ import {
   subscribeSessionRightPanelRekeys
 } from '../lib/session-right-panel-lifecycle'
 import { installedRendererContributions } from '../domain-modules/installed-renderer-contributions'
+import { buildWorkbenchNavigationSectionRenderContext } from '../domain-modules/workbench-navigation-context'
 import {
   DOMAIN_WORKBENCH_OPEN_BOTTOM_PANEL_EVENT,
   DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT,
@@ -726,6 +727,8 @@ export function Workbench(): ReactElement {
   const sddDraftOperationStatus = activeSddSession?.operationStatus ?? 'idle'
   const stageInsetClass = 'ds-stage-inset'
   const installedRightPanels = installedRendererContributions.rightPanels.list()
+  const installedNavigationSections =
+    installedRendererContributions.navigationSections.list()
   const installedToolbarActions = installedRendererContributions.toolbarActions.list()
   const keyboardShortcuts = useKeyboardShortcutSettings()
   const keyboardShortcutBindings = useMemo(
@@ -2871,6 +2874,29 @@ export function Workbench(): ReactElement {
     )
   }
 
+  const navigationSectionContext = rightPanelOwnerId
+    ? buildWorkbenchNavigationSectionRenderContext({
+        active: !leftSidebarCollapsed,
+        className: 'w-full',
+        session: {
+          id: rightPanelOwnerId,
+          ...(activeThread?.title ? { title: activeThread.title } : {}),
+          ...(activeThread?.runtimeId ? { runtimeId: activeThread.runtimeId } : {}),
+          ...(activeWorkspaceReferenceRoot
+            ? { workspaceRoot: activeWorkspaceReferenceRoot }
+            : {})
+        },
+        threads: codeThreads,
+        selectSession: openThread
+      })
+    : null
+  const sidebarNavigationSections = navigationSectionContext
+    ? installedNavigationSections.map(({ id, contribution }) => ({
+        id,
+        content: contribution.render(navigationSectionContext)
+      }))
+    : []
+
   return (
     <div
       ref={shellRef}
@@ -2908,6 +2934,7 @@ export function Workbench(): ReactElement {
         <>
           <div className="min-h-0 shrink-0" style={{ width: leftSidebarWidth }}>
             <Sidebar
+              navigationSections={sidebarNavigationSections}
               threads={codeThreads}
               activeThreadId={activeThreadId}
               activeView={sidebarView}

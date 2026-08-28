@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/collaboration-provider-zulip",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -24,7 +24,7 @@
     "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@sciforge/collaboration-contracts": "4.0.0",
+    "@sciforge/collaboration-contracts": "4.1.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

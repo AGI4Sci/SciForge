@@ -34,6 +34,10 @@ describe('Sidebar navigation continuity', () => {
     (activeView) => {
       const html = renderToStaticMarkup(
         createElement(Sidebar, {
+          navigationSections: [{
+            id: 'fixture.cloud-projects',
+            content: createElement('section', null, 'fixtureCloudProjects')
+          }],
           threads: [],
           activeThreadId: null,
           activeView,
@@ -61,7 +65,11 @@ describe('Sidebar navigation continuity', () => {
       expect(html).toContain('plugins')
       expect(html).toContain('schedule')
       expect(html).not.toContain('workflow')
-      expect(html).toContain('sidebarProjects')
+      expect(html).toContain('fixtureCloudProjects')
+      expect(html).toContain('sidebarLocalWorkspaces')
+      expect(html.indexOf('fixtureCloudProjects')).toBeLessThan(
+        html.indexOf('sidebarLocalWorkspaces')
+      )
       expect(html).not.toContain('workflowSidebarHint')
     }
   )

@@ -182,10 +182,10 @@ async function createActiveTextProject(rig, { owner, members, coordinator, tasks
     type: 'project.create',
     requestId: `req_project_${key}`,
     idempotencyKey: `idem_project_${key}`,
+    createIntentId: `pct_${stableDigest(`project-create\u0000${key}`).slice(0, 24)}`,
     displayName: `Project ${key}`,
     goal: `Canonical collaboration goal ${key}`,
-    budget: { maxTasks: 20, maxTasksPerRound: 20, maxTaskRetries: 1, maxCoordinationRounds: 5 },
-    content: { mode: 'none', members: [owner, ...members].map(({ userId }) => ({ userId })) }
+    budget: { maxTasks: 20, maxTasksPerRound: 20, maxTaskRetries: 1, maxCoordinationRounds: 5 }
   })
   const project = created.project
   const planFacts = {
@@ -221,23 +221,48 @@ async function createActiveTextProject(rig, { owner, members, coordinator, tasks
     expectedProjectRevision: project.revision + 1,
     expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
     expectedPlanRevision: submitted.revision,
-    planDigest: submitted.planDigest
+    planDigest: submitted.planDigest,
+    initialTeam: {
+      mode: 'none',
+      members: [owner, ...members].map(({ userId }) => ({ userId }))
+    }
   })
+  for (const member of members) {
+    const membership = await rig.repository.getProjectMember(project.projectId, member.userId)
+    assert.ok(membership)
+    const currentProject = await rig.repository.getProject(project.projectId)
+    assert.ok(currentProject)
+    await rig.service.acceptProjectMembership(member.actor, {
+      protocolVersion: '1.0',
+      type: 'project.membership.accept',
+      requestId: `req_membership_accept_${key}_${member.userId}`,
+      idempotencyKey: `idem_membership_accept_${key}_${member.userId}`,
+      projectId: project.projectId,
+      projectMembershipId: membership.projectMembershipId,
+      expectedProjectRevision: currentProject.revision,
+      expectedMembershipRevision: membership.revision,
+      projectPlanId: confirmed.projectPlanId,
+      expectedPlanRevision: confirmed.revision,
+      planDigest: confirmed.planDigest
+    })
+  }
+  const readyProject = await rig.repository.getProject(project.projectId)
+  assert.ok(readyProject)
   const active = await rig.service.transitionProject(owner.actor, {
     protocolVersion: '1.0',
     type: 'project.transition',
     requestId: `req_project_activate_${key}`,
     idempotencyKey: `idem_project_activate_${key}`,
     projectId: project.projectId,
-    expectedRevision: project.revision + 2,
-    expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
-    expectedExecutionAuthorityEpoch: project.executionAuthorityEpoch,
+    expectedRevision: readyProject.revision,
+    expectedCoordinatorAuthorityEpoch: readyProject.coordinatorAuthorityEpoch,
+    expectedExecutionAuthorityEpoch: readyProject.executionAuthorityEpoch,
     status: 'active'
   })
   return { created, project: active, plan: confirmed }
 }
 
-async function createOffer(rig, { coordinator, project, plan, assignee, planItemId, key }) {
+async function createOffer(rig, { coordinator, project, plan, planItemId, key }) {
   return rig.service.createTaskOffer(coordinator.actor, {
     protocolVersion: '1.0',
     type: 'task.offer.create',
@@ -250,7 +275,6 @@ async function createOffer(rig, { coordinator, project, plan, assignee, planItem
     projectPlanId: plan.projectPlanId,
     expectedPlanRevision: plan.revision,
     planItemId,
-    workerUserId: assignee.agent.ownerUserId,
     offerExpiresAt: new Date(rig.clock.now().getTime() + 60_000).toISOString()
   })
 }
@@ -436,16 +460,16 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
   const agentB = await ensureAgent(rig, b, 'B')
   const agentC = await ensureAgent(rig, c, 'C')
   const availabilityA2 = await publishAvailability(rig, agentA2, 'ledger_a2')
-  const availabilityB = await publishAvailability(rig, agentB, 'ledger_b')
-  const availabilityC = await publishAvailability(rig, agentC, 'ledger_c')
+  await publishAvailability(rig, agentB, 'ledger_b')
+  await publishAvailability(rig, agentC, 'ledger_c')
   const tasks = [
-    { planItemId: 'item_worker_b', title: 'Worker B 任务', objective: 'Worker B 执行',
+    { workerUserId: b.userId, planItemId: 'item_worker_b', title: 'Worker B 任务', objective: 'Worker B 执行',
       completionCriteria: ['返回 bounded summary'], dependencyPlanItemIds: [],
       requiredCapabilityTags: ['research.execute'], fileIntent: null },
-    { planItemId: 'item_worker_c', title: 'Worker C 任务', objective: 'Worker C 并行执行',
+    { workerUserId: c.userId, planItemId: 'item_worker_c', title: 'Worker C 任务', objective: 'Worker C 并行执行',
       completionCriteria: ['返回 bounded summary'], dependencyPlanItemIds: [],
       requiredCapabilityTags: ['research.execute'], fileIntent: null },
-    { planItemId: 'item_after_handoff', title: '移交后任务', objective: '新 Coordinator 创建',
+    { workerUserId: b.userId, planItemId: 'item_after_handoff', title: '移交后任务', objective: '新 Coordinator 创建',
       completionCriteria: ['由新 Coordinator 分发'], dependencyPlanItemIds: [],
       requiredCapabilityTags: ['research.execute'], fileIntent: null }
   ]
@@ -453,8 +477,8 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
     owner: a, members: [b, c], coordinator: agentA, tasks, key: 'ledger'
   })
   let project = active.project
-  const offerBInput = { coordinator: agentA, project, plan: active.plan, assignee: agentB,
-    availability: availabilityB, planItemId: 'item_worker_b', key: 'ledger_b' }
+  const offerBInput = { coordinator: agentA, project, plan: active.plan,
+    planItemId: 'item_worker_b', key: 'ledger_b' }
   const offeredB = await createOffer(rig, offerBInput)
   const offeredBReplay = await createOffer(rig, offerBInput)
   assert.deepEqual(offeredBReplay, offeredB)
@@ -491,7 +515,7 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
 
   project = await rig.repository.getProject(project.projectId)
   const offeredC = await createOffer(rig, { coordinator: agentA, project, plan: active.plan,
-    assignee: agentC, availability: availabilityC, planItemId: 'item_worker_c', key: 'ledger_c' })
+    planItemId: 'item_worker_c', key: 'ledger_c' })
   assert.notEqual(offeredB.offer.workerUserId, offeredC.offer.workerUserId)
   const taskInboxBeforeRestart = await rig.service.pullInbox(agentC.actor, { afterSequence: 0, limit: 20 })
   assert.ok(taskInboxBeforeRestart.messages.some((message) => message.payload.taskId === offeredC.task.taskId))
@@ -528,9 +552,8 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
     expectedCoordinatorAvailabilityRevision: availabilityA2.revision,
     idempotencyKey: 'idem_handoff_a_to_a2'
   })
-  const currentAvailabilityB = await rig.repository.getWorkerAvailability(agentB.agent.agentId)
   await expectCode('permission_denied', () => createOffer(rig, { coordinator: agentA, project: handedOff,
-    plan: active.plan, assignee: agentB, availability: currentAvailabilityB,
+    plan: active.plan,
     planItemId: 'item_after_handoff', key: 'old_coordinator' }))
   const pausedAfterHandoff = await restarted.transitionProject(a.actor, {
     protocolVersion: '1.0', type: 'project.transition', requestId: 'req_handoff_pause',
@@ -559,7 +582,8 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
     idempotencyKey: 'idem_handoff_plan_confirm', projectId: pausedAfterHandoff.projectId,
     projectPlanId: submittedHandoffPlan.projectPlanId, expectedProjectRevision: pausedAfterHandoff.revision + 1,
     expectedCoordinatorAuthorityEpoch: pausedAfterHandoff.coordinatorAuthorityEpoch,
-    expectedPlanRevision: submittedHandoffPlan.revision, planDigest: submittedHandoffPlan.planDigest
+    expectedPlanRevision: submittedHandoffPlan.revision, planDigest: submittedHandoffPlan.planDigest,
+    initialTeam: null
   })
   const confirmedHandoffProject = await rig.repository.getProject(handedOff.projectId)
   const resumedAfterHandoff = await restarted.transitionProject(a.actor, {
@@ -571,7 +595,7 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
     status: 'active'
   })
   const newCoordinatorOffer = await createOffer(rig, { coordinator: agentA2, project: resumedAfterHandoff,
-    plan: confirmedHandoffPlan, assignee: agentB, availability: currentAvailabilityB,
+    plan: confirmedHandoffPlan,
     planItemId: 'item_after_handoff', key: 'new_coordinator' })
   assert.equal(newCoordinatorOffer.offer.workerUserId, agentB.agent.ownerUserId)
 })
@@ -582,19 +606,19 @@ test('8.4 canonical service bounds payloads and blocks sensitive Project Record 
   const agentA = await ensureAgent(rig, a, 'A')
   assert.throws(() => projectCreateCommandSchema.parse({
     protocolVersion: '1.0', type: 'project.create', requestId: 'req_oversized_project',
+    createIntentId: 'pct_OversizedProject001',
     displayName: '超限 Project',
     goal: 'x'.repeat(32_001),
     budget: { maxTasks: 2, maxTasksPerRound: 2, maxTaskRetries: 1, maxCoordinationRounds: 1 },
-    content: { mode: 'none', members: [{ userId: a.userId }] },
     idempotencyKey: 'idem_oversized_project'
   }))
 
   const { project } = await rig.service.createProject(agentA.actor, {
     protocolVersion: '1.0', type: 'project.create', requestId: 'req_security_project',
+    createIntentId: 'pct_SecurityProject0001',
     displayName: '安全记录 Project',
     goal: '安全记录测试',
     budget: { maxTasks: 2, maxTasksPerRound: 2, maxTaskRetries: 1, maxCoordinationRounds: 1 },
-    content: { mode: 'none', members: [{ userId: a.userId }] },
     idempotencyKey: 'idem_security_project'
   })
   const sensitiveSummary = `${['api', 'key'].join('_')}=${['runtime', 'only', 'material'].join('-')}`
@@ -680,13 +704,14 @@ test('8.3 and 10.2 canonical human routes bind provider input and verified targe
   assert.deepEqual(personalMessages.map((message) => message.payload.humanEndpointId), [a.endpointId])
   assert.ok(personalMessages.every((message) => message.payload.projectionId === projection.projectionId))
 
-  const availabilityB = await publishAvailability(rig, agentB, 'human_b')
+  await publishAvailability(rig, agentB, 'human_b')
   const active = await createActiveTextProject(rig, {
     owner: a,
     members: [b],
     coordinator: agentA,
     key: 'human_routing',
     tasks: [{
+      workerUserId: b.userId,
       planItemId: 'item_human_needed',
       title: 'HumanNeeded 任务',
       objective: 'B 需要真人决定',
@@ -739,7 +764,7 @@ test('8.3 and 10.2 canonical human routes bind provider input and verified targe
 
   project = await rig.repository.getProject(project.projectId)
   const offeredB = await createOffer(rig, { coordinator: agentA, project, plan: active.plan,
-    assignee: agentB, availability: availabilityB, planItemId: 'item_human_needed', key: 'human_b' })
+    planItemId: 'item_human_needed', key: 'human_b' })
   const runningB = await acceptAndStart(rig, agentB, offeredB, 'human_b')
   const needed = await rig.service.createHumanNeeded(agentB.actor, {
     protocolVersion: '1.0', type: 'human.needed.create', requestId: 'req_human_needed_b',

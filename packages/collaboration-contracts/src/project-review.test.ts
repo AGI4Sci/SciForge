@@ -30,6 +30,7 @@ describe('Project plan, result review and final summary', () => {
       planRevision: 1,
       sourceInputLocators: [],
       tasks: [{
+        workerUserId: TEST_IDS.secondUserId,
         planItemId: 'item_review0001',
         title: 'Review architecture',
         objective: 'Produce the architecture review.',
@@ -66,6 +67,76 @@ describe('Project plan, result review and final summary', () => {
       state: 'superseded',
       supersededAt: '2026-08-15T08:02:00.000Z'
     }).success).toBe(true)
+  })
+
+  it('keeps file Plans logical and rejects a pre-bound Content revision', () => {
+    const fileTask = {
+      workerUserId: TEST_IDS.secondUserId,
+      planItemId: 'item_file_review1',
+      title: 'Review one file',
+      objective: 'Read one portable input and create one new output.',
+      completionCriteria: ['One new output is reviewable.'],
+      dependencyPlanItemIds: [],
+      requiredCapabilityTags: ['content.read', 'content.write'],
+      fileIntent: {
+        schemaVersion: 1,
+        inputs: [],
+        output: {
+          kind: 'content-space.output-new',
+          target: 'project-binding-root',
+          mode: 'upload-new',
+          fileName: 'review.md',
+          mediaType: 'text/markdown',
+          maxBytes: 65_536
+        }
+      }
+    }
+    expect(projectPlanSchema.shape.tasks.element.safeParse(fileTask).success).toBe(true)
+    expect(projectPlanSchema.shape.tasks.element.safeParse({
+      ...fileTask,
+      fileIntent: { ...fileTask.fileIntent, bindingRevision: 1 }
+    }).success).toBe(false)
+  })
+
+  it('rejects a cyclic Task dependency graph before Cloud submit', () => {
+    const task = {
+      workerUserId: TEST_IDS.secondUserId,
+      title: 'Review one dependency',
+      objective: 'Produce one independently reviewable result.',
+      completionCriteria: ['One result is reviewable.'],
+      requiredCapabilityTags: ['runtime.text'],
+      fileIntent: null
+    }
+    expect(projectPlanSchema.safeParse({
+      ...metadata,
+      type: 'project_plan',
+      projectPlanId: TEST_IDS.projectPlanId,
+      projectId: TEST_IDS.projectId,
+      state: 'awaiting_confirmation',
+      planRevision: 1,
+      sourceInputLocators: [],
+      tasks: [{
+        ...task,
+        planItemId: 'item_cycle_a',
+        dependencyPlanItemIds: ['item_cycle_b']
+      }, {
+        ...task,
+        planItemId: 'item_cycle_b',
+        dependencyPlanItemIds: ['item_cycle_a']
+      }],
+      rationale: 'This cyclic graph must never enter Cloud state.',
+      runtimeProvenance: {
+        runtimeId: 'runtime-local',
+        modelId: null,
+        generatedByCoordinatorAgentId: TEST_IDS.agentId,
+        generatedAt: TEST_TIMESTAMP
+      },
+      planDigest: TEST_HASH,
+      submittedAt: TEST_TIMESTAMP,
+      confirmedByUserId: null,
+      confirmedAt: null,
+      supersededAt: null
+    }).success).toBe(false)
   })
 
   it('uses immutable result submission and explicit accept/request-revision decisions', () => {
