@@ -105,20 +105,21 @@ export class ProjectDagHandoffOutbox {
         if (errorCode(error) !== 'ENOENT') throw error
         parsed = { version: OUTBOX_VERSION, records: [] }
       }
-      const legacyVersion = legacyOutboxVersion(parsed)
-      if (legacyVersion !== null) {
-        // Older records have no Host-minted workspace binding. They cannot be
-        // replayed safely, but must not prevent Project DAG from starting.
+      const quarantineFileLabel = outboxQuarantineFileLabel(parsed)
+      if (quarantineFileLabel !== null) {
+        // Records from another schema version cannot be replayed safely by
+        // this runtime. Preserve the exact bytes, but do not let an upgrade or
+        // downgrade of the Desktop prevent Project DAG from starting.
         await rename(
           this.path,
-          `${this.path}.legacy-v${legacyVersion}.${Date.now()}.` +
+          `${this.path}.${quarantineFileLabel}.${Date.now()}.` +
             `${randomBytes(6).toString('hex')}.json`
         )
         parsed = { version: OUTBOX_VERSION, records: [] }
       }
       const value = parseOutbox(parsed)
       this.#records = new Map(value.records.map((record) => [record.id, record]))
-      if (legacyVersion !== null) await this.#persist()
+      if (quarantineFileLabel !== null) await this.#persist()
       this.#loaded = true
     })
   }
@@ -413,9 +414,19 @@ function parseOutbox(value: unknown): PersistedOutbox {
   return { version: OUTBOX_VERSION, records }
 }
 
-function legacyOutboxVersion(value: unknown): 1 | 2 | null {
-  if (!isRecord(value) || (value.version !== 1 && value.version !== 2)) return null
-  return value.version
+function outboxQuarantineFileLabel(value: unknown): string | null {
+  if (!isRecord(value)) return null
+  if (value.version === 1 || value.version === 2) {
+    return `legacy-v${value.version}`
+  }
+  if (
+    typeof value.version === 'number' &&
+    Number.isSafeInteger(value.version) &&
+    value.version > OUTBOX_VERSION
+  ) {
+    return `unreplayable-v${value.version}`
+  }
+  return null
 }
 
 function parseRecord(value: unknown): ProjectDagHandoffRecord {

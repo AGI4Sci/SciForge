@@ -368,6 +368,34 @@ test('quarantines malformed legacy roots before applying the v3 schema', async (
   }
 })
 
+test('quarantines a newer outbox version instead of blocking Desktop startup', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'project-handoff-newer-version-'))
+  try {
+    const outbox = new ProjectDagHandoffOutbox(userDataDir)
+    await mkdir(dirname(outbox.path), { recursive: true })
+    const newerOutbox = `${JSON.stringify({
+      version: 4,
+      records: [{ futureSchemaRecord: true }]
+    })}\n`
+    await writeFile(outbox.path, newerOutbox, 'utf8')
+
+    await outbox.load()
+
+    assert.deepEqual(outbox.all(), [])
+    assert.deepEqual(JSON.parse(await readFile(outbox.path, 'utf8')), {
+      version: 3,
+      records: []
+    })
+    const [backup] = (await readdir(dirname(outbox.path))).filter((name) => (
+      name.startsWith('turn-handoff-outbox.json.unreplayable-v4.')
+    ))
+    assert.ok(backup)
+    assert.equal(await readFile(join(dirname(outbox.path), backup), 'utf8'), newerOutbox)
+  } finally {
+    await rm(userDataDir, { recursive: true })
+  }
+})
+
 test('pending record remains actionable after crash-style reload', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'project-handoff-recovery-'))
   try {
