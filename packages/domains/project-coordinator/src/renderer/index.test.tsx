@@ -2317,8 +2317,9 @@ function decisionProjectFixture(
       expiresAt: '2026-08-26T01:08:00.000Z'
     }] : [],
     records: state === 'completion' ? [{
-      kind: 'decision' as const,
-      projectId: base.project.projectId
+      kind: 'observation' as const,
+      projectId: base.project.projectId,
+      sourceResultSubmissionId: submission.resultSubmissionId
     }] : []
   } as unknown as ProjectCoordinatorProject
 }

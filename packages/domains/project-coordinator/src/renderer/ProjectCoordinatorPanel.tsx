@@ -2875,11 +2875,18 @@ export function projectCoordinatorCompletionInput(
     project.project.status !== 'active' ||
     project.finalSummary !== null ||
     project.plan?.plan.state !== 'confirmed' ||
-    !project.records.some(({ kind }) => kind === 'decision') ||
     project.tasks.length === 0
   ) return null
   const acceptedResultSubmissionIds = acceptedCurrentResultIds(project)
-  if (acceptedResultSubmissionIds === null) return null
+  if (
+    acceptedResultSubmissionIds === null ||
+    acceptedResultSubmissionIds.some((resultSubmissionId) => (
+      !project.records.some((record) => (
+        record.kind === 'observation' &&
+        record.sourceResultSubmissionId === resultSubmissionId
+      ))
+    ))
+  ) return null
   return {
     projectId: project.project.projectId,
     expectedProjectRevision: project.project.revision,
