@@ -1156,6 +1156,20 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
         await options.continuation.reconcileProject(submitted.projectId)
         return
       }
+      if (message.payload.type === 'project_record.submitted') {
+        const submitted = message.payload
+        const workspace = await options.workspace.readWorkspace({ projectId: submitted.projectId })
+        const project = requireReadyProject(workspace, submitted.projectId)
+        if (message.recipientAgentId !== project.project.coordinatorAgentId) return
+        const record = project.records.find(({ projectRecordId }) => (
+          projectRecordId === submitted.projectRecordId
+        ))
+        if (!record || record.revision < submitted.revision) {
+          throw new Error('ProjectRecord notification does not match a current accepted Cloud fact.')
+        }
+        await options.continuation.reconcileProject(submitted.projectId)
+        return
+      }
       if (message.payload.type === 'coordinator.transferred') {
         const transfer = message.payload
         if (

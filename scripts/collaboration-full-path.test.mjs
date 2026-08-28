@@ -587,6 +587,16 @@ test('Cloud Plan assignment runs, reviews, records, and uniquely continues its d
     acceptedResultReviewInput(workspace.projects[0], rootTask.task.taskId),
     'idem_full_path_root_review'
   )
+  const coordinatorInbox = await service.pullInbox(coordinator, {
+    afterSequence: 0,
+    limit: 50
+  })
+  const observationWake = coordinatorInbox.messages.find((message) => (
+    message.payload.type === 'project_record.submitted' &&
+    message.payload.projectId === active.projectId
+  ))
+  assert.ok(observationWake)
+  await actions.handleInbox(toInboxMessage(observationWake))
 
   await waitUntil(async () => (
     (await repository.listTaskOffersByProject(active.projectId, null, 10)).length === 2

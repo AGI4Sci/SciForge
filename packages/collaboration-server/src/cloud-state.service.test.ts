@@ -4609,6 +4609,22 @@ describe('vNext Cloud application service', () => {
       sourceResultSubmissionId: result.submission.resultSubmissionId,
       sourceHumanAnswerId: undefined
     })
+    const coordinatorReviewInbox = await service.pullInbox(coordinator, {
+      afterSequence: 0,
+      limit: 100
+    })
+    expect(coordinatorReviewInbox.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        recipient: { kind: 'agent', id: coordinator.agentId },
+        messageType: 'project_record.submitted',
+        payload: expect.objectContaining({
+          type: 'project_record.submitted',
+          projectId: activeProject.projectId,
+          projectRecordId: observation!.projectRecordId,
+          revision: observation!.revision
+        })
+      })
+    ]))
     const projectAfterReview = (await repository.getProject(activeProject.projectId))!
     const coordinatorRequestCommand = {
       protocolVersion: '1.0', type: 'human.needed.create', requestId: 'req_human_needed_001',

@@ -81,6 +81,67 @@ test('Coordinator consumes the canonical project.started Inbox notification from
   assert.equal(continuations, 1)
 })
 
+test('accepted observation Inbox durably wakes the same Cloud-facts continuation', async () => {
+  const observation = projectRecordSchema.parse({
+    schemaVersion: 1,
+    type: 'project_record',
+    projectRecordId: TEST_IDS.projectRecordId,
+    projectId: TEST_IDS.projectId,
+    kind: 'observation',
+    status: 'accepted',
+    body: 'The accepted Worker result is ready for dependent continuation.',
+    authorUserId: projectFixture.ownerUserId,
+    authorAgentId: projectFixture.coordinatorAgentId,
+    sourceTaskId: TEST_IDS.taskId,
+    sourceResultSubmissionId: TEST_IDS.resultSubmissionId,
+    sourceHumanAnswerId: null,
+    sourceRevision: 1,
+    acceptedByUserId: projectFixture.ownerUserId,
+    acceptedByAgentId: projectFixture.coordinatorAgentId,
+    acceptedAt: TEST_TIMESTAMP,
+    revision: 1,
+    createdAt: TEST_TIMESTAMP,
+    updatedAt: TEST_TIMESTAMP
+  })
+  const base = workspaceFixture()
+  const workspace = {
+    ...base,
+    projects: [{ ...base.projects[0]!, records: [observation] }]
+  }
+  let continuations = 0
+  const port = createProjectCoordinatorActionPort({
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => workspace
+    }),
+    coordinatorCloudCommands: {
+      execute: async () => { throw new Error('An observation wake must not write before reconcile.') },
+      subscribe: () => () => undefined
+    },
+    transport: unusedTransport(),
+    state: coordinatorState(),
+    continuation: {
+      reconcileProject: async () => {
+        continuations += 1
+        return workspace
+      }
+    }
+  })
+
+  await port.handleInbox(agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    recipientAgentId: projectFixture.coordinatorAgentId,
+    payload: {
+      protocolVersion: '1.0',
+      type: 'project_record.submitted',
+      projectId: projectFixture.projectId,
+      projectRecordId: observation.projectRecordId,
+      revision: observation.revision
+    }
+  }))
+
+  assert.equal(continuations, 1)
+})
+
 test('Coordinator creates Project-scoped HumanNeeded for one explicit Project member User', async () => {
   const workspace = workspaceFixture()
   const coordinatorCommands: RestRequest[] = []

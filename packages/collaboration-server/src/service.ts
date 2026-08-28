@@ -5081,6 +5081,7 @@ export class CollaborationService {
       let updatedExecution: StoredTaskExecution
       let nextOffer: StoredTaskOffer | null = null
       let acceptedProjectRecordId: string | null = null
+      let acceptedProjectRecordRevision: number | null = null
       let nextTaskOfferId: string | null = null
       let nextRecipientAgentIds: readonly string[] = []
       if (input.decision === 'accept') {
@@ -5096,6 +5097,7 @@ export class CollaborationService {
         }
         await tx.insertProjectRecord(record)
         acceptedProjectRecordId = record.projectRecordId
+        acceptedProjectRecordRevision = record.revision
         updatedExecution = {
           ...execution,
           state: 'completed',
@@ -5174,6 +5176,28 @@ export class CollaborationService {
         revision: updatedTask.revision, status: updatedTask.status
       }, at)
       notifications.push({ recipient: reviewMessage.recipient, sequence: reviewMessage.sequence })
+      if (acceptedProjectRecordId !== null) {
+        if (acceptedProjectRecordRevision === null) {
+          throw new Error('Accepted ProjectRecord revision was not retained for its durable notification.')
+        }
+        const continuationMessage = await this.appendInbox(
+          tx,
+          { kind: 'agent', id: project.coordinatorAgentId },
+          'project_record.submitted',
+          {
+            protocolVersion: '1.0',
+            type: 'project_record.submitted',
+            projectId: project.projectId,
+            projectRecordId: acceptedProjectRecordId,
+            revision: acceptedProjectRecordRevision
+          },
+          at
+        )
+        notifications.push({
+          recipient: continuationMessage.recipient,
+          sequence: continuationMessage.sequence
+        })
+      }
       if (nextOffer !== null) {
         for (const agentId of nextRecipientAgentIds) {
           const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offered', {
