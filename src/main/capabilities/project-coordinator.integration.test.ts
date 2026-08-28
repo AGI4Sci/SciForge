@@ -24,6 +24,7 @@ import {
 } from './registry'
 
 const created: ProjectCoordinatorProjectCreateResult = {
+  createIntentId: 'pct_HostCreateIntent0001',
   createdProjectId: TEST_IDS.projectId,
   workspace: {
     connection: {
@@ -65,6 +66,7 @@ const created: ProjectCoordinatorProjectCreateResult = {
 describe('Project Coordinator Host capability integration', () => {
   it('returns a successful global Project create without claiming a Broker resource revision', async () => {
     const createProject = vi.fn(async () => created)
+    const completeProjectCreate = vi.fn(async () => undefined)
     const definitions = createProjectCoordinatorCapabilityFactory<CapabilityDefinition>({
       defineCapability: ({ audiences, tags, producedResourceKinds, ...input }) => defineCapability({
         ...input,
@@ -75,7 +77,8 @@ describe('Project Coordinator Host capability integration', () => {
       ports: {
         workspace: {
           readWorkspace: async () => created.workspace,
-          createProject
+          createProject,
+          completeProjectCreate
         }
       } as never,
       sessions: {} as never
@@ -102,6 +105,7 @@ describe('Project Coordinator Host capability integration', () => {
       actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
       invocationId,
       input: {
+        createIntentId: created.createIntentId,
         displayName: 'Meeting',
         goal: 'Run the meeting.',
         budget: {
@@ -117,6 +121,10 @@ describe('Project Coordinator Host capability integration', () => {
       replayed: false
     })
     expect(createProject).toHaveBeenCalledTimes(1)
+    expect(completeProjectCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ createIntentId: created.createIntentId }),
+      created
+    )
   })
 
   it('exposes the explicit Project capability allowlist through sciforge_discover', async () => {
