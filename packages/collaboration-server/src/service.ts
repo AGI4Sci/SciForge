@@ -4073,7 +4073,7 @@ export class CollaborationService {
       const currentPlan = required(await tx.getCurrentProjectPlan(project.projectId), 'Current Project Plan')
       if (
         plan.projectId !== project.projectId || currentPlan.projectPlanId !== plan.projectPlanId ||
-        plan.state !== 'confirmed' || plan.revision !== input.confirmedPlanRevision
+        plan.state !== 'confirmed' || plan.planRevision !== input.confirmedPlanRevision
       ) {
         fail('revision_conflict', 'The final summary must cite the exact current confirmed Project Plan revision.')
       }
@@ -4118,7 +4118,7 @@ export class CollaborationService {
       }
       const finalSummary: StoredProjectFinalSummary = {
         projectId: project.projectId, projectRecordId: record.projectRecordId,
-        projectPlanId: plan.projectPlanId, confirmedPlanRevision: plan.revision,
+        projectPlanId: plan.projectPlanId, confirmedPlanRevision: plan.planRevision,
         acceptedResultSubmissionIds: acceptedSubmissionIds, summary: input.summary,
         createdByUserId: actor.userId, createdByCoordinatorAgentId: coordinator.agentId,
         coordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,

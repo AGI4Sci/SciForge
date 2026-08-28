@@ -4721,10 +4721,11 @@ describe('vNext Cloud application service', () => {
       idempotencyKey: 'idem_final_summary_001', projectId: activeProject.projectId,
       expectedProjectRevision: decision.project.revision, expectedCoordinatorAuthorityEpoch: 1,
       expectedExecutionAuthorityEpoch: 1, projectPlanId: confirmedPlan.projectPlanId,
-      confirmedPlanRevision: confirmedPlan.revision,
+      confirmedPlanRevision: confirmedPlan.planRevision,
       acceptedResultSubmissionIds: [result.submission.resultSubmissionId],
       summary: 'The meeting completed with a confirmed plan, Human answer, and accepted Worker result.'
     } satisfies Extract<CloudStateCommand, { type: 'project.final_summary.submit' }>
+    expect(confirmedPlan.revision).not.toBe(confirmedPlan.planRevision)
     await expect(service.submitProjectFinalSummary(workerAgent, {
       ...finalSummaryCommand,
       idempotencyKey: 'idem_final_summary_worker_bypass'
@@ -4732,6 +4733,7 @@ describe('vNext Cloud application service', () => {
     const final = await service.submitProjectFinalSummary(coordinator, finalSummaryCommand)
     expect(final).toMatchObject({ project: { status: 'completed', executionAuthorityEpoch: 2 },
       finalSummary: { createdByUserId: owner.userId,
+        confirmedPlanRevision: confirmedPlan.planRevision,
         acceptedResultSubmissionIds: [result.submission.resultSubmissionId] } })
     expect(final.record).toMatchObject({
       kind: 'summary',

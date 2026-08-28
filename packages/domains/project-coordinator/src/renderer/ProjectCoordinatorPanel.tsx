@@ -2893,7 +2893,7 @@ export function projectCoordinatorCompletionInput(
     expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
     expectedExecutionAuthorityEpoch: project.project.executionAuthorityEpoch,
     projectPlanId: project.plan.plan.projectPlanId,
-    confirmedPlanRevision: project.plan.plan.revision,
+    confirmedPlanRevision: project.plan.plan.planRevision,
     acceptedResultSubmissionIds,
     summary: summary || project.project.goal
   }

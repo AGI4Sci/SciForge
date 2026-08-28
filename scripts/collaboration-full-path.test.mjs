@@ -22,7 +22,16 @@ import {
 } from '../packages/domains/collaboration/src/main.ts'
 import { DurableCloudOutbox } from '../packages/domains/collaboration/src/main/outbox.ts'
 import { CollaborationTaskAdapter } from '../packages/domains/collaboration/src/main/task-adapter.ts'
-import { createProjectCoordinatorCloudWorkspacePort } from '../packages/domains/project-coordinator/src/ports.ts'
+import {
+  createProjectCoordinatorActionPort,
+  createProjectCoordinatorCloudWorkspacePort
+} from '../packages/domains/project-coordinator/src/ports.ts'
+import {
+  createProjectCoordinatorContinuationPort
+} from '../packages/domains/project-coordinator/src/continuation.ts'
+import {
+  ProjectCoordinatorStateStore
+} from '../packages/domains/project-coordinator/src/state.ts'
 import {
   FakeAgentExecutionHost,
   FakeAgentThreadsHost,
@@ -38,7 +47,7 @@ import {
 
 async function waitUntil(predicate, label) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (predicate()) return
+    if (await predicate()) return
     await new Promise((resolve) => setImmediate(resolve))
   }
   assert.fail(`timed out waiting for ${label}`)
@@ -238,7 +247,7 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
   assert.equal(agentExecution.requests.length, 1)
 })
 
-test('confirmed Cloud assignment reaches Worker Inbox, durable claim, one Execution, and Project Worker projection', async (t) => {
+test('Cloud Plan assignment runs, reviews, records, and uniquely continues its dependent Task', async (t) => {
   const clock = new FakeClock()
   const repository = new FakeCollaborationRepository()
   const service = new CollaborationService({ repository, now: clock.now })
@@ -298,6 +307,15 @@ test('confirmed Cloud assignment reaches Worker Inbox, durable claim, one Execut
     objective: 'Return one reviewable bounded result.',
     completionCriteria: ['Cloud receives one TaskResult'],
     dependencyPlanItemIds: [],
+    requiredCapabilityTags: capabilities,
+    fileIntent: null
+  }, {
+    workerUserId: worker.userId,
+    planItemId: 'item_full_path_dependent',
+    title: 'Summarize accepted work',
+    objective: 'Use the accepted root result to produce the final bounded summary.',
+    completionCriteria: ['Cloud receives one dependent TaskResult'],
+    dependencyPlanItemIds: ['item_full_path_worker'],
     requiredCapabilityTags: capabilities,
     fileIntent: null
   }]
@@ -372,22 +390,6 @@ test('confirmed Cloud assignment reaches Worker Inbox, durable claim, one Execut
     expectedExecutionAuthorityEpoch: beforeActivation.executionAuthorityEpoch,
     status: 'active'
   })
-  const offered = await service.createTaskOffer(coordinator, {
-    protocolVersion: '1.0',
-    type: 'task.offer.create',
-    requestId: 'req_full_path_assignment_offer',
-    idempotencyKey: 'idem_full_path_assignment_offer',
-    projectId: active.projectId,
-    expectedProjectRevision: active.revision,
-    expectedCoordinatorAuthorityEpoch: active.coordinatorAuthorityEpoch,
-    expectedExecutionAuthorityEpoch: active.executionAuthorityEpoch,
-    projectPlanId: confirmed.projectPlanId,
-    expectedPlanRevision: confirmed.revision,
-    planItemId: tasks[0].planItemId,
-    offerExpiresAt: new Date(clock.now().getTime() + 60_000).toISOString()
-  })
-  assert.equal(offered.offer.workerUserId, worker.userId)
-  assert.equal(offered.offer.executionId, null)
 
   const ownerToken = 'header.assignment-owner.signature'
   const authentication = new AuthenticationService(repository, clock.now, {
@@ -407,6 +409,74 @@ test('confirmed Cloud assignment reaches Worker Inbox, durable claim, one Execut
   const address = server.address()
   assert.ok(address && typeof address === 'object')
   const baseUrl = `http://127.0.0.1:${address.port}`
+  const ownerTransport = {
+    status: () => ({
+      state: 'ready',
+      baseUrl,
+      userId: owner.userId,
+      deviceId: owner.deviceId
+    }),
+    execute: async ({ payload }) => {
+      const response = await postCloudCommand(baseUrl, ownerToken, payload, true)
+      return { contractVersion: 1, status: 200, body: response }
+    }
+  }
+  const workspacePort = createProjectCoordinatorCloudWorkspacePort({
+    transport: ownerTransport
+  })
+  const ownerStore = new CollaborationLocalStore(new FakeCollaborationStateBackend())
+  await ownerStore.open()
+  await ownerStore.transact((draft) => {
+    draft.agents.push(toAgent(ownerRegistration.registered.agent))
+  })
+  const ownerOutbox = new DurableCloudOutbox({
+    store: ownerStore,
+    agentCloudRuntime: {
+      authorityStatus: async (agentId) => ({
+        state: 'ready',
+        agentId,
+        userId: owner.userId,
+        deviceId: owner.deviceId,
+        generation: ownerRegistration.registered.agent.credentialGeneration,
+        runtimeId: 'codex',
+        capabilityTags: capabilities
+      }),
+      execute: async ({ request }) => postCloudCommand(
+        baseUrl,
+        ownerRegistration.credential,
+        request
+      )
+    },
+    localAgentId: () => coordinator.agentId,
+    now: clock.now
+  })
+  const coordinatorCloudCommands = {
+    execute: (request) => ownerOutbox.enqueueAndWait('coordinator.command', request),
+    subscribe: () => () => undefined
+  }
+  const continuation = createProjectCoordinatorContinuationPort({
+    workspace: workspacePort,
+    coordinatorCloudCommands,
+    now: clock.now
+  })
+  const backgroundContinuationFailures = []
+  const actions = createProjectCoordinatorActionPort({
+    workspace: workspacePort,
+    coordinatorCloudCommands,
+    transport: ownerTransport,
+    state: new ProjectCoordinatorStateStore(memoryPackageSettings()),
+    continuation,
+    onBackgroundContinuationFailure: (_projectId, error) => {
+      backgroundContinuationFailures.push(error)
+    }
+  })
+  await continuation.reconcileProject(active.projectId)
+  const rootOffers = await repository.listTaskOffersByProject(active.projectId, null, 10)
+  assert.equal(rootOffers.length, 1)
+  const offered = { offer: rootOffers[0] }
+  assert.equal(offered.offer.workerUserId, worker.userId)
+  assert.equal(offered.offer.executionId, null)
+
   const executeWorkerCommand = (request) => postCloudCommand(
     baseUrl,
     workerRegistration.credential,
@@ -436,6 +506,7 @@ test('confirmed Cloud assignment reaches Worker Inbox, durable claim, one Execut
     localAgentId: () => workerAgent.agentId,
     now: clock.now
   })
+  let runtimeSessionOrdinal = 0
   const adapter = new CollaborationTaskAdapter({
     store,
     connection: { executeAsAgent: executeWorkerCommand },
@@ -446,19 +517,22 @@ test('confirmed Cloud assignment reaches Worker Inbox, durable claim, one Execut
         runtimeId: 'codex',
         capabilityTags: capabilities
       }),
-      prepareSession: async () => ({
-        runtimeId: 'codex',
-        threadId: 'thread-full-path-worker'
-      }),
-      run: async () => ({
-        runtimeId: 'codex',
-        threadId: 'thread-full-path-worker',
-        turnId: 'turn-full-path-worker',
+      prepareSession: async () => {
+        runtimeSessionOrdinal += 1
+        return {
+          runtimeId: 'codex',
+          threadId: `thread-full-path-worker-${runtimeSessionOrdinal}`
+        }
+      },
+      run: async ({ runtimeId, threadId, metadata }) => ({
+        runtimeId,
+        threadId,
+        turnId: `turn-${metadata.executionId}`,
         state: 'completed',
         text: JSON.stringify({
           schemaVersion: 1,
           outcome: 'completed',
-          summary: 'Worker completed the Cloud-assigned Task.'
+          summary: `Worker completed ${metadata.taskId}.`
         })
       })
     },
@@ -501,28 +575,167 @@ test('confirmed Cloud assignment reaches Worker Inbox, durable claim, one Execut
   await adapter.waitForIdle()
   assert.equal((await repository.listTaskExecutionsByProject(active.projectId, null, 10)).length, 1)
 
-  const ownerTransport = {
-    status: () => ({
-      state: 'ready',
-      baseUrl,
-      userId: owner.userId,
-      deviceId: owner.deviceId
-    }),
-    execute: async ({ payload }) => {
-      const response = await postCloudCommand(baseUrl, ownerToken, payload, true)
-      return { contractVersion: 1, status: 200, body: response }
-    }
-  }
-  const workspace = await createProjectCoordinatorCloudWorkspacePort({
-    transport: ownerTransport
-  }).readWorkspace({ projectId: active.projectId })
+  let workspace = await workspacePort.readWorkspace({ projectId: active.projectId })
   assert.equal(workspace.projects[0].plan.plan.tasks[0].workerUserId, worker.userId)
   assert.equal(workspace.projects[0].workerGroups.length, 1)
   assert.equal(workspace.projects[0].workerGroups[0].userId, worker.userId)
+  const rootTask = workspace.projects[0].tasks.find(({ task }) => (
+    task.taskId === offered.offer.taskId
+  ))
+  assert.ok(rootTask)
+  await actions.reviewResult(
+    acceptedResultReviewInput(workspace.projects[0], rootTask.task.taskId),
+    'idem_full_path_root_review'
+  )
+
+  await waitUntil(async () => (
+    (await repository.listTaskOffersByProject(active.projectId, null, 10)).length === 2
+  ), 'dependent Task offer after accepted root result')
+  assert.deepEqual(backgroundContinuationFailures, [])
+  const continuedOffers = await repository.listTaskOffersByProject(active.projectId, null, 10)
+  const dependentOffer = continuedOffers.find(({ taskOfferId }) => (
+    taskOfferId !== offered.offer.taskOfferId
+  ))
+  assert.ok(dependentOffer)
+  const continuedInbox = await service.pullInbox(workerAgent, { afterSequence: 0, limit: 50 })
+  const dependentMessage = continuedInbox.messages.find((message) => (
+    message.payload.type === 'task.offered' &&
+    message.payload.taskOfferId === dependentOffer.taskOfferId
+  ))
+  assert.ok(dependentMessage)
+  await adapter.handleInbox(toInboxMessage(dependentMessage))
+  await adapter.waitForIdle()
+  assert.equal(
+    store.snapshot().pendingTaskOffers.find(({ taskOfferId }) => (
+      taskOfferId === dependentOffer.taskOfferId
+    ))?.state,
+    'awaiting-manual'
+  )
+  await adapter.decideOffer(dependentOffer.taskOfferId, { decision: 'accept' })
+  await adapter.waitForIdle()
+  await outbox.waitForIdle()
+
+  const completedExecutions = await repository.listTaskExecutionsByProject(
+    active.projectId,
+    null,
+    10
+  )
+  assert.equal(completedExecutions.length, 2)
+  assert.equal(new Set(completedExecutions.map(({ executionId }) => executionId)).size, 2)
+  assert.equal(store.snapshot().taskRuns.length, 2)
+  assert.ok(store.snapshot().taskRuns.every(({ state }) => state === 'completed'))
+
+  workspace = await workspacePort.readWorkspace({ projectId: active.projectId })
+  const dependentTask = workspace.projects[0].tasks.find(({ task }) => (
+    task.taskId === dependentOffer.taskId
+  ))
+  assert.ok(dependentTask)
+  await actions.reviewResult(
+    acceptedResultReviewInput(workspace.projects[0], dependentTask.task.taskId),
+    'idem_full_path_dependent_review'
+  )
+  await continuation.reconcileProject(active.projectId)
+
+  workspace = await workspacePort.readWorkspace({ projectId: active.projectId })
+  const project = workspace.projects[0]
+  assert.equal(project.tasks.length, 2)
+  assert.ok(project.tasks.every(({ task }) => task.status === 'completed'))
+  assert.equal((await repository.listTaskOffersByProject(active.projectId, null, 10)).length, 2)
+  const acceptedResultSubmissionIds = project.reviews
+    .filter(({ decision }) => decision?.decision === 'accept')
+    .map(({ submission }) => submission.resultSubmissionId)
+  assert.equal(acceptedResultSubmissionIds.length, 2)
+  const completionInput = {
+    projectId: project.project.projectId,
+    expectedProjectRevision: project.project.revision,
+    expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
+    expectedExecutionAuthorityEpoch: project.project.executionAuthorityEpoch,
+    projectPlanId: project.plan.plan.projectPlanId,
+    confirmedPlanRevision: project.plan.plan.planRevision,
+    acceptedResultSubmissionIds,
+    summary: 'Owner accepted both results and completed the bounded Project.'
+  }
+  const completed = await actions.completeProject(
+    completionInput,
+    'idem_full_path_project_complete'
+  )
+  const completedProject = completed.projects[0]
+  assert.equal(completedProject.project.status, 'completed')
+  assert.ok(completedProject.finalSummary)
+  assert.deepEqual(
+    completedProject.records.map(({ kind }) => kind).sort(),
+    ['observation', 'observation', 'summary']
+  )
+  assert.equal(runtimeSessionOrdinal, 2)
+  const coordinatorCommands = ownerStore.snapshot().outbox
+    .filter(({ kind }) => kind === 'coordinator.command')
+  assert.ok(coordinatorCommands.every(({ state }) => state === 'delivered'))
+  assert.deepEqual(
+    coordinatorCommands.map(({ body }) => body.type),
+    [
+      'task.offer.create',
+      'task.result.review',
+      'task.offer.create',
+      'task.result.review',
+      'project.final_summary.submit'
+    ]
+  )
 
   adapter.stop()
   outbox.stop()
+  ownerOutbox.stop()
 })
+
+function acceptedResultReviewInput(project, taskId) {
+  const task = project.tasks.find((candidate) => candidate.task.taskId === taskId)
+  assert.ok(task)
+  const execution = task.executions.find(({ executionId }) => (
+    executionId === task.task.currentExecutionId
+  ))
+  assert.ok(execution)
+  const review = project.reviews.find(({ submission, decision }) => (
+    submission.taskId === taskId &&
+    submission.executionId === execution.executionId &&
+    decision === null
+  ))
+  assert.ok(review)
+  return {
+    projectId: project.project.projectId,
+    taskId,
+    executionId: execution.executionId,
+    resultSubmissionId: review.submission.resultSubmissionId,
+    expectedProjectRevision: project.project.revision,
+    expectedTaskRevision: task.task.revision,
+    expectedExecutionRevision: execution.revision,
+    expectedResultRevision: review.submission.revision,
+    expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
+    decision: 'accept',
+    instruction: null,
+    nextWorkerUserId: null,
+    nextOfferExpiresAt: null,
+    nextFileIntent: null
+  }
+}
+
+function memoryPackageSettings() {
+  let revision = 0
+  let value = null
+  return {
+    read: async () => ({ revision, value }),
+    write: async (next, expectedRevision) => {
+      assert.equal(expectedRevision, revision)
+      value = next
+      revision += 1
+      return { revision, value }
+    },
+    clear: async (expectedRevision) => {
+      assert.equal(expectedRevision, revision)
+      value = null
+      revision += 1
+      return { revision, value }
+    }
+  }
+}
 
 async function registerAgent(service, identity, capabilities, key) {
   const bootstrap = createAgentCredentialBootstrap()

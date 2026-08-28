@@ -858,7 +858,7 @@ test('renderer decision HCI invokes only the four governed canonical actions', a
     expectedCoordinatorAuthorityEpoch: 1,
     expectedExecutionAuthorityEpoch: 1,
     projectPlanId: 'pln_MeetingPlan001',
-    confirmedPlanRevision: 2,
+    confirmedPlanRevision: 1,
     acceptedResultSubmissionIds: ['rsu_MeetingResult01'],
     summary: 'Resolved the work, recorded the decision, and assigned the next step.'
   })
@@ -1648,7 +1648,7 @@ test('decision HCI derives exact review and completion CAS facts from the visibl
     expectedCoordinatorAuthorityEpoch: 1,
     expectedExecutionAuthorityEpoch: 1,
     projectPlanId: 'pln_MeetingPlan001',
-    confirmedPlanRevision: 2,
+    confirmedPlanRevision: 1,
     acceptedResultSubmissionIds: ['rsu_MeetingResult01'],
     summary: 'Final bounded summary.'
   })
