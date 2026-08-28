@@ -60,7 +60,10 @@ import type {
   ProjectCoordinatorResultReviewInput,
   ProjectCoordinatorWorkspace
 } from '../contract.js'
-import { projectCoordinatorPlanningTaskReadiness } from '../plan-readiness.js'
+import {
+  projectCoordinatorPlanningRuntimeReadiness,
+  projectCoordinatorPlanningTaskReadiness
+} from '../plan-readiness.js'
 import {
   ProjectCoordinatorPlanDraftGenerationClientError,
   type ProjectCoordinatorRendererClient
@@ -1621,9 +1624,6 @@ function ProjectOverview({
   const asOf = new Date(nowMilliseconds).toISOString()
   const presence = projectCoordinatorWorkerPresenceSummary(project, asOf)
   const agents = project.workerGroups.flatMap(({ agents }) => agents)
-  const readyUsers = project.workerGroups.filter((group) => group.agents.some((agent) => (
-    projectCoordinatorAgentOperationalState(agent, asOf).state === 'ready'
-  ))).length
   const coordinator = agents.find(({ projectAvailability }) => (
     projectAvailability.agentId === record.coordinatorAgentId
   ))
@@ -1681,7 +1681,7 @@ function ProjectOverview({
         <div>
           <UserRoundCheck aria-hidden="true" />
           <span>
-            <strong>{readyUsers}/{presence.visibleUsers}</strong>
+            <strong>{presence.readyUsers}/{presence.visibleUsers}</strong>
             {t('projectCoordinatorWorkerUsersReadyShort')}
           </span>
         </div>
@@ -1924,7 +1924,9 @@ export type ProjectCoordinatorWorkerPresenceSummary = Readonly<{
 /**
  * Summarises the exact Cloud worker projection without inventing a second presence source.
  * A User is online when at least one of their visible Agents is online, so multiple Devices
- * owned by the same Human never inflate the online member count.
+ * owned by the same Human never inflate the online member count. Planning readiness uses the
+ * same package-owned draft/paused/active predicate as the Plan Worker selector; execution-only
+ * operational state remains separate and cannot hide prospective planning candidates.
  */
 export function projectCoordinatorWorkerPresenceSummary(
   project: ProjectCoordinatorProject,
@@ -1933,19 +1935,34 @@ export function projectCoordinatorWorkerPresenceSummary(
   let onlineUsers = 0
   let readyUsers = 0
   for (const group of project.workerGroups) {
-    const operationalStates = group.agents.map((agent) => (
-      projectCoordinatorAgentOperationalState(
-        agent,
-        observedAt ?? agent.projectAvailability.availability.observedAt
-      )
+    const states = group.agents.map((agent) => projectCoordinatorWorkerPlanningState(
+      project,
+      agent,
+      observedAt
     ))
-    if (operationalStates.some(({ online }) => online)) onlineUsers += 1
-    if (operationalStates.some(({ state }) => state === 'ready')) readyUsers += 1
+    if (states.some(({ operational }) => operational.online)) onlineUsers += 1
+    if (states.some(({ planning }) => planning.eligible)) readyUsers += 1
   }
   return Object.freeze({
     onlineUsers,
     readyUsers,
     visibleUsers: project.workerGroups.length
+  })
+}
+
+function projectCoordinatorWorkerPlanningState(
+  project: ProjectCoordinatorProject,
+  agent: ProjectCoordinatorWorkerAgent,
+  observedAt?: string
+) {
+  const asOf = observedAt ?? agent.projectAvailability.availability.observedAt
+  return Object.freeze({
+    operational: projectCoordinatorAgentOperationalState(agent, asOf),
+    planning: projectCoordinatorPlanningRuntimeReadiness(
+      project,
+      agent.projectAvailability,
+      asOf
+    )
   })
 }
 
@@ -2366,14 +2383,13 @@ export function WorkersSection({
 
           <div className="project-coordinator-member-list">
             {project.workerGroups.map((group) => {
-              const operationalStates = group.agents.map((agent) => (
-                projectCoordinatorAgentOperationalState(
-                  agent,
-                  asOf ?? agent.projectAvailability.availability.observedAt
-                )
+              const states = group.agents.map((agent) => projectCoordinatorWorkerPlanningState(
+                project,
+                agent,
+                asOf
               ))
-              const groupOnline = operationalStates.some(({ online }) => online)
-              const groupReady = operationalStates.some(({ state }) => state === 'ready')
+              const groupOnline = states.some(({ operational }) => operational.online)
+              const groupReady = states.some(({ planning }) => planning.eligible)
               const membership = group.agents.find(({ projectAvailability }) => (
                 projectAvailability.membership !== null
               ))?.projectAvailability.membership

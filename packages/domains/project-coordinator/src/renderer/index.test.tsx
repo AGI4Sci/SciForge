@@ -1348,6 +1348,37 @@ test('a paused Project keeps a Worker option enabled for project_paused prospect
   assert.match(markup, /value="usr_ProjectMember01" data-planning-eligible="true"/u)
 })
 
+test('paused planning counts the same selectable Worker User shown by the Plan option', () => {
+  const project = planningProjectFixture('paused')
+  const observedAt = '2026-08-25T01:08:00.000Z'
+
+  assert.deepEqual(projectCoordinatorWorkerPresenceSummary(project, observedAt), {
+    onlineUsers: 1,
+    readyUsers: 1,
+    visibleUsers: 1
+  })
+
+  const markup = renderToStaticMarkup(createElement(WorkersSection, {
+    project,
+    observedAt
+  }))
+  assert.match(markup, /data-project-online-users="1"/u)
+  assert.match(markup, /data-project-ready-users="1"/u)
+})
+
+test('draft planning counts a Runtime-ready User before Membership and TaskAuthority exist', () => {
+  const project = planningProjectFixture('draft')
+
+  assert.deepEqual(projectCoordinatorWorkerPresenceSummary(
+    project,
+    '2026-08-25T01:08:00.000Z'
+  ), {
+    onlineUsers: 1,
+    readyUsers: 1,
+    visibleUsers: 1
+  })
+})
+
 test('file Plan editing can clear the logical declaration and confirmation requires Team content', () => {
   const draftProject = planningProjectFixture('draft')
   const logicalFileTask = {
