@@ -264,6 +264,8 @@ function assertExpectedWriteResponse(
   }
   const expected = kind === 'coordinator.command'
     ? isExpectedCoordinatorResponse(request, response)
+    : kind === 'task.offer-decision' && request.type === 'task.offer.accept'
+      ? isExpectedTaskOfferClaimResponse(request, response)
     : request.type === 'capability.approval.create'
       ? response.type === 'capability.approval.created'
       : request.type === 'capability.approval.result' || request.type === 'capability.approval.withdraw'
@@ -283,34 +285,29 @@ function isExpectedCoordinatorResponse(
         response.entity.type === 'project_plan' &&
         response.entity.projectId === request.projectId
     case 'task.offer.create':
-      return isExactTaskOfferCollection(response, {
+      return isUserTaskOfferCollection(response, {
         outcome: 'created',
         projectId: request.projectId,
-        assigneeAgentId: request.assigneeAgentId,
+        workerUserId: request.workerUserId,
         offerExpiresAt: request.offerExpiresAt,
         taskRevision: 1,
-        executionRevision: 1,
         offerRevision: 1
       })
     case 'task.offer.withdraw':
-      return isExactTaskOfferCollection(response, {
+      return isUserTaskOfferCollection(response, {
         outcome: 'withdrawn',
         taskId: request.taskId,
-        executionId: request.executionId,
         taskOfferId: request.taskOfferId,
         taskRevision: request.expectedTaskRevision + 1,
-        executionRevision: request.expectedExecutionRevision + 1,
         offerRevision: request.expectedOfferRevision + 1
       })
     case 'task.offer.reassign':
-      return isExactTaskOfferCollection(response, {
+      return isUserTaskOfferCollection(response, {
         outcome: 'reassigned',
         taskId: request.taskId,
-        assigneeAgentId: request.assigneeAgentId,
+        workerUserId: request.workerUserId,
         offerExpiresAt: request.offerExpiresAt,
-        previousExecutionId: request.previousExecutionId,
         taskRevision: request.expectedTaskRevision + 1,
-        executionRevision: 1,
         offerRevision: 1
       })
     default:
@@ -318,80 +315,89 @@ function isExpectedCoordinatorResponse(
   }
 }
 
-function isExactTaskOfferCollection(
+function isUserTaskOfferCollection(
   response: Exclude<RestResponse, { type: 'rest.error' }>,
   expected: Readonly<{
     outcome: 'created' | 'withdrawn' | 'reassigned'
     projectId?: string
     taskId?: string
-    executionId?: string
     taskOfferId?: string
-    assigneeAgentId?: string
+    workerUserId?: string
     offerExpiresAt?: string
-    previousExecutionId?: string
     taskRevision?: number
-    executionRevision?: number
     offerRevision?: number
   }>
 ): boolean {
   if (
     response.type !== 'rest.collection' ||
     response.nextCursor !== undefined ||
-    response.items.length !== 3
+    response.items.length !== 2
   ) return false
-  const [task, execution, offer] = response.items
+  const [task, offer] = response.items
   if (
     task?.type !== 'task' ||
-    execution?.type !== 'task_execution' ||
     offer?.type !== 'task_offer'
   ) return false
   const identitiesMatch = (
     (expected.projectId === undefined || task.projectId === expected.projectId) &&
     (expected.taskId === undefined || task.taskId === expected.taskId) &&
-    (expected.executionId === undefined || execution.executionId === expected.executionId) &&
     (expected.taskOfferId === undefined || offer.taskOfferId === expected.taskOfferId) &&
-    (expected.assigneeAgentId === undefined || execution.assigneeAgentId === expected.assigneeAgentId) &&
+    (expected.workerUserId === undefined || offer.workerUserId === expected.workerUserId) &&
     (expected.offerExpiresAt === undefined || offer.expiresAt === expected.offerExpiresAt) &&
     (expected.taskRevision === undefined || task.revision === expected.taskRevision) &&
-    (expected.executionRevision === undefined || execution.revision === expected.executionRevision) &&
     (expected.offerRevision === undefined || offer.revision === expected.offerRevision) &&
-    task.projectId === execution.projectId &&
     task.projectId === offer.projectId &&
-    task.taskId === execution.taskId &&
     task.taskId === offer.taskId &&
-    task.currentExecutionId === execution.executionId &&
-    execution.executionId === offer.executionId &&
-    execution.assigneeUserId === offer.assigneeUserId &&
-    execution.assigneeAgentId === offer.assigneeAgentId &&
-    execution.assigneeDeviceId === offer.assigneeDeviceId &&
-    task.executionCount === execution.attempt
+    task.currentExecutionId === null &&
+    task.currentExecutionState === null &&
+    offer.executionId === null
   )
   if (!identitiesMatch) return false
   switch (expected.outcome) {
     case 'created':
       return task.status === 'offered' &&
-        task.currentExecutionState === 'offered' &&
-        execution.state === 'offered' &&
-        execution.fence.status === 'open' &&
-        execution.fence.assignmentTaskRevision === task.revision &&
+        task.executionCount === 0 &&
         offer.state === 'pending'
     case 'withdrawn':
       return task.status === 'revision_requested' &&
-        task.currentExecutionState === 'cancelled' &&
-        execution.state === 'cancelled' &&
-        execution.fence.status === 'fenced' &&
-        execution.fence.reason === 'offer_withdrawn' &&
         offer.state === 'withdrawn'
     case 'reassigned':
-      return expected.previousExecutionId !== undefined &&
-        execution.executionId !== expected.previousExecutionId &&
-        task.status === 'offered' &&
-        task.currentExecutionState === 'offered' &&
-        execution.state === 'offered' &&
-        execution.fence.status === 'open' &&
-        execution.fence.assignmentTaskRevision === task.revision &&
+      return task.status === 'offered' &&
         offer.state === 'pending'
   }
+}
+
+function isExpectedTaskOfferClaimResponse(
+  request: Extract<RestRequest, { type: 'task.offer.accept' }>,
+  response: Exclude<RestResponse, { type: 'rest.error' }>
+): boolean {
+  if (
+    response.requestId !== request.requestId ||
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length !== 3
+  ) return false
+  const [task, execution, offer] = response.items
+  return task?.type === 'task' &&
+    execution?.type === 'task_execution' &&
+    offer?.type === 'task_offer' &&
+    task.taskId === request.taskId &&
+    task.revision === request.expectedTaskRevision + 1 &&
+    task.status === 'in_progress' &&
+    task.currentExecutionId === execution.executionId &&
+    task.currentExecutionState === 'accepted' &&
+    execution.taskId === task.taskId &&
+    execution.projectId === task.projectId &&
+    execution.state === 'accepted' &&
+    execution.revision === 1 &&
+    execution.attempt === task.executionCount &&
+    offer.taskOfferId === request.taskOfferId &&
+    offer.taskId === task.taskId &&
+    offer.projectId === task.projectId &&
+    offer.executionId === execution.executionId &&
+    offer.workerUserId === execution.assigneeUserId &&
+    offer.state === 'accepted' &&
+    offer.revision === request.expectedOfferRevision + 1
 }
 
 function requireOutbox(

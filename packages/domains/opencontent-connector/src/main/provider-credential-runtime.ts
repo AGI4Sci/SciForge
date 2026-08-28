@@ -401,7 +401,6 @@ async function invokeCredentialStore<T>(operation: () => Promise<T>): Promise<T>
       }
       if (
         error.code === 'principal_unavailable' ||
-        error.code === 'principal_device_mismatch' ||
         error.code === 'credential_binding_mismatch'
       ) throw bindingMismatch()
     }

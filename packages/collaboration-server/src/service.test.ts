@@ -30,12 +30,12 @@ async function onboard(
     endpointId: String(verified.humanEndpointId) }
 }
 
-async function registerAgent(service: CollaborationService, user: UserActor, label: string) {
+async function ensureAgent(service: CollaborationService, user: UserActor, label: string) {
   const bootstrap = createAgentCredentialBootstrap()
-  const result = await service.registerAgent(user, { deviceId: `dev_${user.userId.slice(4)}`,
-    displayName: `${label} desktop`, nodeType: 'desktop', capabilities: ['research.execute'],
+  const result = await service.ensureAgent(user, { deviceId: `dev_${user.userId.slice(4)}`,
+    capabilities: ['research.execute'],
     credentialBootstrapPublicKey: bootstrap.publicKey,
-    idempotencyKey: `idem_agent_register_${label}` })
+    idempotencyKey: `idem_agent_ensure_${label}` })
   if (!result.sealedCredential) throw new Error('Expected one-time sealed Agent credential')
   return { ...result, openedCredential: bootstrap.open(result.sealedCredential) }
 }
@@ -135,7 +135,7 @@ describe('CollaborationService canonical transactions', () => {
     const service = new CollaborationService({ repository, now })
     const authentication = new AuthenticationService(repository, now)
     const owner = await onboard(repository, service, authentication, 'unmanaged-owner', 'unmanaged-provider-user')
-    const agent = await registerAgent(service, owner.user, 'unmanagedagent')
+    const agent = await ensureAgent(service, owner.user, 'unmanagedagent')
 
     await expect(service.createProjection(owner.user, {
       agentId: agent.agent.agentId,
@@ -153,7 +153,7 @@ describe('CollaborationService canonical transactions', () => {
     const service = new CollaborationService({ repository, now })
     const authentication = new AuthenticationService(repository, now)
     const owner = await onboard(repository, service, authentication, 'restore-owner', 'restore-provider-user')
-    const agent = await registerAgent(service, owner.user, 'restoreagent')
+    const agent = await ensureAgent(service, owner.user, 'restoreagent')
     await activateManagedContainer(repository, owner, 'private-channel')
     const locator = {
       type: 'provider_locator' as const,
@@ -208,7 +208,7 @@ describe('CollaborationService canonical transactions', () => {
     const authentication = new AuthenticationService(repository, now)
     const owner = await onboard(repository, service, authentication, 'transfer-owner', 'transfer-provider-user')
     const target = await onboard(repository, service, authentication, 'transfer-target', 'target-provider-user')
-    const agent = await registerAgent(service, owner.user, 'transferagent')
+    const agent = await ensureAgent(service, owner.user, 'transferagent')
     await activateManagedContainer(repository, owner, 'transfer-channel')
     const projection = await service.createProjection(owner.user, {
       agentId: agent.agent.agentId, humanEndpointId: owner.endpointId,
@@ -304,7 +304,7 @@ describe('CollaborationService canonical transactions', () => {
       revision: 4,
       updatedAt: at.toISOString()
     })
-    const agent = await registerAgent(service, owner.user, 'managedagent')
+    const agent = await ensureAgent(service, owner.user, 'managedagent')
     await expect(service.createProjection(owner.user, {
       agentId: agent.agent.agentId,
       humanEndpointId: owner.endpointId,
@@ -486,7 +486,7 @@ describe('CollaborationService canonical transactions', () => {
     expect(replayed).not.toHaveProperty('challengeCode')
   })
 
-  it('isolates Agent registration idempotency from every stable intent field', async () => {
+  it('isolates Agent ensure idempotency and synchronizes runtime capabilities', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
     const authentication = new AuthenticationService(repository, now)
@@ -495,40 +495,76 @@ describe('CollaborationService canonical transactions', () => {
     const bootstrap = createAgentCredentialBootstrap()
     const baseline = {
       deviceId: alice.deviceId,
-      displayName: 'Desktop',
-      nodeType: 'desktop',
       capabilities: ['agent.execute', 'workspace.read'],
       credentialBootstrapPublicKey: bootstrap.publicKey,
-      idempotencyKey: 'idem_agent_register_matrix_baseline'
+      idempotencyKey: 'idem_agent_ensure_matrix_baseline'
     }
 
-    const registered = await service.registerAgent(alice.user, baseline)
-    expect(bootstrap.open(registered.sealedCredential!)).toMatch(/^agent\./u)
+    const ensured = await service.ensureAgent(alice.user, baseline)
+    expect(bootstrap.open(ensured.sealedCredential!)).toMatch(/^agent\./u)
 
-    const replayed = await service.registerAgent(alice.user, baseline)
-    expect(replayed).toMatchObject({ agent: { agentId: registered.agent.agentId }, replayed: true })
+    const replayed = await service.ensureAgent(alice.user, baseline)
+    expect(replayed).toMatchObject({ agent: { agentId: ensured.agent.agentId }, replayed: true })
     expect(replayed).not.toHaveProperty('sealedCredential')
     expect(repository.state.agents.size).toBe(1)
 
-    await expect(service.registerAgent(alice.user, {
+    await expect(service.ensureAgent(alice.user, {
       ...baseline,
-      displayName: 'Different body with reused key'
+      capabilities: ['agent.execute']
     })).rejects.toMatchObject({ code: 'idempotency_conflict' })
 
-    const changedIntents = [
-      { ...baseline, displayName: 'Desktop Two', idempotencyKey: 'idem_agent_register_matrix_display' },
-      { ...baseline, nodeType: 'server', idempotencyKey: 'idem_agent_register_matrix_node' },
-      { ...baseline, capabilities: ['agent.execute'], idempotencyKey: 'idem_agent_register_matrix_capability' }
-    ]
-    for (const intent of changedIntents) {
-      await expect(service.registerAgent(alice.user, intent)).rejects.toMatchObject({ code: 'identity_conflict' })
-    }
+    const refreshed = await service.ensureAgent(alice.user, {
+      ...baseline,
+      capabilities: ['agent.execute'],
+      credentialBootstrapPublicKey: createAgentCredentialBootstrap().publicKey,
+      idempotencyKey: 'idem_agent_ensure_matrix_capability'
+    })
+    expect(refreshed).toMatchObject({
+      agent: {
+        agentId: ensured.agent.agentId,
+        capabilities: ['agent.execute'],
+        revision: 2
+      }
+    })
+    expect(refreshed).not.toHaveProperty('sealedCredential')
     expect(repository.state.agents.size).toBe(1)
 
-    await expect(service.registerAgent(bob.user, {
+    await expect(service.ensureAgent(bob.user, {
       ...baseline,
-      idempotencyKey: 'idem_agent_register_matrix_owner'
+      idempotencyKey: 'idem_agent_ensure_matrix_owner'
     })).rejects.toMatchObject({ code: 'permission_denied' })
+    expect(repository.state.agents.size).toBe(1)
+  })
+
+  it('ensures exactly one device-named Agent when the same Desktop starts repeatedly', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const identity = await seedOidcUserDevice(repository, 'Lab MacBook', at)
+    const firstBootstrap = createAgentCredentialBootstrap()
+
+    const first = await service.ensureAgent(identity.user, {
+      deviceId: identity.deviceId,
+      capabilities: ['agent-runtime.codex'],
+      credentialBootstrapPublicKey: firstBootstrap.publicKey,
+      idempotencyKey: 'idem_agent_ensure_first_start'
+    })
+    expect(firstBootstrap.open(first.sealedCredential!)).toMatch(/^agent\./u)
+
+    const secondBootstrap = createAgentCredentialBootstrap()
+    const second = await service.ensureAgent(identity.user, {
+      deviceId: identity.deviceId,
+      capabilities: ['agent-runtime.codex'],
+      credentialBootstrapPublicKey: secondBootstrap.publicKey,
+      idempotencyKey: 'idem_agent_ensure_second_start'
+    })
+
+    expect(second.agent).toMatchObject({
+      agentId: first.agent.agentId,
+      deviceId: identity.deviceId,
+      displayName: 'Lab MacBook Device',
+      nodeType: 'desktop'
+    })
+    expect(second).not.toHaveProperty('sealedCredential')
     expect(repository.state.agents.size).toBe(1)
   })
 

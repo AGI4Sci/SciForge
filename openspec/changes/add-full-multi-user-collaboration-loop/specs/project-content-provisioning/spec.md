@@ -10,7 +10,7 @@
 
 #### Scenario: Worker 未发布 Provider identity
 
-- **WHEN** Coordinator 将该 User 加入 Project 或选择其 Agent 执行文件 Task
+- **WHEN** Coordinator 将该 User 加入 Project 或选择该 User 接收文件 Task Offer
 - **THEN** Cloud SHALL 将其 content readiness 标记为 missing/pending
 - **AND** SHALL NOT 允许其 Agent 接受文件 Task，直到精确引用被验证和 provisioned。
 
@@ -22,7 +22,7 @@
 
 ### Requirement: Cloud 创建 Project 和持久 provisioning intent
 
-创建需要文件协作的 Project 时，Cloud SHALL 从当前 OIDC actor 派生 `ownerUserId`，要求 `coordinatorAgentId` 属于该 Owner，并派生 `contentOwnerUserId = ownerUserId`；调用方 SHALL NOT 指定其他初始 content owner。Cloud SHALL 原子保存 Project、显式 Membership、唯一 Coordinator、Owner 的 exact ready content fact、每个 desired member 的 exact ready fact ID/revision snapshot、provisioning revision、durable intent，以及同 revision 的 `provisioning` binding。Project lifecycle SHALL 进入 `paused`，Project Content Binding lifecycle SHALL 独立进入 `provisioning`，不得编码为 `provisioning/paused` 复合状态。该初始 binding 的 root 和 attestation SHALL 都为 null，以明确表示外部 Provider 目录尚不存在；只有最终 Device-signed attestation 才 SHALL 在同一 binding 上写入精确 portable root 并转为 `active`。所有 fact SHALL 归属各自 exact User 且固定同一 Provider Instance；stale、degraded、cross-User 或 cross-Provider fact SHALL 使整个 transaction fail closed。在 Device-signed provisioning attestation 被验证和绑定前，Cloud SHALL NOT 激活文件 Task authority。
+创建需要文件协作的 Project 时，Cloud SHALL 从当前认证 Device Agent 派生 `ownerUserId`、`coordinatorAgentId` 与 Device，并派生 `contentOwnerUserId = ownerUserId`；调用方 SHALL NOT 指定 Coordinator、Agent revision 或其他初始 content owner。Cloud SHALL 原子保存 Project、显式 Membership、唯一 Coordinator、Owner 的 exact ready content fact、每个 desired member 的 exact ready fact ID/revision snapshot、provisioning revision、durable intent，以及同 revision 的 `provisioning` binding。Project lifecycle SHALL 进入 `paused`，Project Content Binding lifecycle SHALL 独立进入 `provisioning`，不得编码为 `provisioning/paused` 复合状态。该初始 binding 的 root 和 attestation SHALL 都为 null，以明确表示外部 Provider 目录尚不存在；只有最终 Device-signed attestation 才 SHALL 在同一 binding 上写入精确 portable root 并转为 `active`。所有 fact SHALL 归属各自 exact User 且固定同一 Provider Instance；stale、degraded、cross-User 或 cross-Provider fact SHALL 使整个 transaction fail closed。在 Device-signed provisioning attestation 被验证和绑定前，Cloud SHALL NOT 激活文件 Task authority。
 
 #### Scenario: Project 创建成功但外部 Provider 尚未写入
 
@@ -72,7 +72,7 @@ Owner Desktop SHALL 把当前 OIDC User、ACTIVE Device、公钥/签名、当前
 
 ### Requirement: 动态增加 Worker 先完成成员 provisioning
 
-Coordinator 选择一个尚非 Project Member 的 Worker Agent 时，Cloud SHALL 先加入其 Owner User、要求其 Provider principal readiness、递增 provisioning revision 并生成精确 add-member intent。新 Member SHALL 保持 `pending_membership`，其 Agent SHALL 不可接受文件 Task，直到 Owner Desktop 对 Provider 成员写入、写后核验和新 attestation 全部成功。Task 完成、Worker 从候选集合移除或 Agent 离线 SHALL NOT 自动移除 Project/Provider Member。
+Coordinator 选择一个尚非 Project Member 的 Worker User 时，Cloud SHALL 先加入该 User、要求其 Provider principal readiness、递增 provisioning revision 并生成精确 add-member intent。新 Member SHALL 保持 `pending_membership`，该 User 的任何 Agent SHALL 不可领取文件 Task，直到 Owner Desktop 对 Provider 成员写入、写后核验和新 attestation 全部成功。Task 完成、Worker 从候选集合移除或 Agent 离线 SHALL NOT 自动移除 Project/Provider Member。
 
 #### Scenario: 动态 Worker 已是 Cloud Member 但 Provider 添加失败
 

@@ -96,13 +96,13 @@ SciForge Desktop 统一登录确认两件事：当前登录的是哪个 SciForge
 
 当前手机端使用官方 Zulip App，不需要安装单独的 SciForge 手机应用。
 
-## 4. 注册这台 SciForge
+## 4. 准备这台 SciForge
 
-1. 在“Agent 显示名称”填写容易识别的设备名称。
-2. 点击 **注册这台 SciForge**。
-3. 如果你有多台 Agent，明确选择主要 Agent。
+1. 在本机配置并启动可用的 Agent Runtime。
+2. 确认当前 OIDC User 与 ACTIVE Device 已就绪。
+3. Identity 会自动为当前 Device ensure 或复用唯一 Agent，无需注册或选择主要 Agent。
 
-完成后，手机消息才有明确的 Desktop Agent 可以执行。
+个人 Session 会固定到建立投影时的当前 Device Agent；Project Task 则只选择 Worker User，由其某台合格 Device claim。
 
 ## 5. 准备私人受管 Channel
 
@@ -148,8 +148,8 @@ SciForge Desktop 统一登录确认两件事：当前登录的是哪个 SciForge
 常见分工是：
 
 - Coordinator 维护计划、创建或改派 Task，并验收结果
-- Assignee Agent 处理分配给自己的 Task
-- 用户在需要时接受、拒绝或要求修改
+- Coordinator 选择 Worker User；Cloud 向该 User 的合格 Device Agent 广播 Offer
+- 首个 claim 的 Device 执行 Task；本机忽略不产生 User 全局拒绝
 
 ## 完成标志
 

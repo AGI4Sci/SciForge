@@ -1,6 +1,5 @@
 import type {
   AgentCloudAuthorityStatus,
-  AgentCloudRegisterInput,
   AgentCloudRevokeInput,
   AgentCloudRotateInput,
   AgentCloudRuntime
@@ -14,7 +13,7 @@ import type {
 
 export function createTestAgentCloudRuntime(input: Readonly<{
   authorityStatus?: (agentId: string) => Promise<AgentCloudAuthorityStatus>
-  registerAgent?: (value: AgentCloudRegisterInput) => Promise<AgentNode>
+  ensureAgent?: () => Promise<AgentNode>
   rotateAgent?: (value: AgentCloudRotateInput) => Promise<AgentNode>
   revokeAgent?: (value: AgentCloudRevokeInput) => Promise<AgentNode>
   fenceAgent?: (agentId: string) => Promise<void>
@@ -30,7 +29,7 @@ export function createTestAgentCloudRuntime(input: Readonly<{
       state: 'agent_required',
       agentId
     })),
-    registerAgent: input.registerAgent ?? unavailable,
+    ensureAgent: input.ensureAgent ?? unavailable,
     rotateAgent: input.rotateAgent ?? unavailable,
     revokeAgent: input.revokeAgent ?? unavailable,
     fenceAgent: input.fenceAgent ?? unavailable,

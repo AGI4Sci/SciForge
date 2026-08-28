@@ -18,22 +18,25 @@ import {
   humanNeededSchema,
   type Project,
   type AgentInboxMessage,
-  type ProjectAgentLabelFact,
   type ProjectCoordinationCollection,
   type ProjectContentReadiness,
   type ProjectFinalSummary,
   type ProjectMembership,
   type ProjectPlan,
+  type ProjectPlanTask,
   type ProjectRecord,
-  type ProjectUserLabelFact,
   type ProjectWorkerAvailabilityView,
   type ProviderDirectoryPrincipalFact,
   type RestResponse,
+  type Task,
   type TaskAuthority,
   type TaskExecution,
+  type TaskOffer,
   type TaskResultSubmission,
   type TaskReviewDecision,
-  type WorkerAvailabilityProjection
+  type WorkerAvailabilityProjection,
+  type WorkerDirectoryAgentLabel,
+  type WorkerDirectoryUserLabel
 } from '@sciforge/collaboration-contracts'
 import type {
   CoordinatorCloudCommandService
@@ -86,6 +89,11 @@ import { ProjectCoordinatorStateStore } from './state.js'
 import type { ProjectCoordinatorProvisioningPort } from './provisioning.js'
 import type { ProjectCoordinatorRecoveryPort } from './recovery.js'
 import type { ProjectCoordinatorArtifactReviewPort } from './artifact-review.js'
+
+const PROJECT_COORDINATOR_PROJECT_FACT_COLLECTIONS = PROJECT_COORDINATION_COLLECTIONS.filter(
+  (collection) => collection !== 'agent_label_facts' &&
+    collection !== 'worker_availability'
+)
 
 export type ProjectCoordinatorWorkspacePort = Readonly<{
   readWorkspace(input: ProjectCoordinatorWorkspaceReadInput): Promise<ProjectCoordinatorWorkspace>
@@ -168,6 +176,7 @@ export function defineProjectCoordinatorWorkspacePort(
 
 export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
   transport: AuthenticatedCloudTransport
+  coordinatorCloudCommands?: CoordinatorCloudCommandService
   readPlanAssignments?: (
     plan: ProjectPlan
   ) => Promise<readonly ProjectCoordinatorPlanAssignment[]>
@@ -188,21 +197,22 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
     const observedAt = now().toISOString()
     if (status.state === 'identity_required') {
       return projectCoordinatorWorkspaceSchema.parse({
-        connection: { state: 'identity_required' }, observedAt, projects: []
+        connection: { state: 'identity_required' }, observedAt, availableWorkerUsers: [], projects: []
       })
     }
     if (status.state === 'device_required') {
       return projectCoordinatorWorkspaceSchema.parse({
-        connection: { state: 'device_required', reason: status.reason }, observedAt, projects: []
+        connection: { state: 'device_required', reason: status.reason }, observedAt, availableWorkerUsers: [], projects: []
       })
     }
     if (status.state === 'unavailable') {
       return projectCoordinatorWorkspaceSchema.parse({
-        connection: { state: 'cloud_unavailable', reason: status.reason }, observedAt, projects: []
+        connection: { state: 'cloud_unavailable', reason: status.reason }, observedAt, availableWorkerUsers: [], projects: []
       })
     }
 
     const listed = await listAllProjects(options.transport, requestId)
+    const workerDirectory = await readAllWorkerDirectory(options.transport, requestId)
     const focusedProject = input.projectId
       ? listed.projects.find(({ projectId }) => projectId === input.projectId)
       : listed.projects.length === 1
@@ -214,7 +224,8 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
     const projects = await Promise.all(listed.projects.map(async (project) => {
       let view = projectCoordinatorProjectView(
         project,
-        project.projectId === focusedProject?.projectId ? facts : undefined
+        project.projectId === focusedProject?.projectId ? facts : undefined,
+        project.projectId === focusedProject?.projectId ? workerDirectory : undefined
       )
       const transferFeedback = await options.readCoordinatorTransferFeedback?.(project.projectId)
       if (
@@ -238,8 +249,9 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
     }))
     return projectCoordinatorWorkspaceSchema.parse({
       connection: { state: 'ready', userId: status.userId, deviceId: status.deviceId },
-      observedAt: facts?.observedAt ?? listed.observedAt,
+      observedAt: facts?.observedAt ?? workerDirectory.observedAt ?? listed.observedAt,
       ...(focusedProject ? { focusedProjectId: focusedProject.projectId } : {}),
+      availableWorkerUsers: availableWorkerUsers(workerDirectory),
       projects
     })
   }
@@ -248,7 +260,14 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
     readWorkspace,
     createProject: async (rawInput, idempotencyKey) => {
       const input = projectCoordinatorProjectCreateInputSchema.parse(rawInput)
-      const response = await executeUserCloud(options.transport, {
+      const identity = options.transport.status()
+      if (identity.state !== 'ready') {
+        throw new Error('Project creation requires an authenticated User and Device.')
+      }
+      if (!options.coordinatorCloudCommands) {
+        throw new Error('Project creation requires the current Device Agent command service.')
+      }
+      const response = await options.coordinatorCloudCommands.execute({
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         requestId: requestId(),
         type: 'project.create',
@@ -257,6 +276,9 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
       })
       if (response.type !== 'rest.project_created') {
         throw new Error(`Project create returned ${response.type}.`)
+      }
+      if (response.project.ownerUserId !== identity.userId) {
+        throw new Error('Project create did not preserve the current Agent owner authority.')
       }
       return projectCoordinatorProjectCreateResultSchema.parse({
         createdProjectId: response.project.projectId,
@@ -270,6 +292,96 @@ const generatedPlanContentSchema = z.object({
   tasks: z.array(projectPlanTaskSchema).min(1).max(1_000),
   rationale: projectCoordinatorPlanDraftSchema.unwrap().shape.rationale
 }).strict().readonly()
+
+function isOnlineEligibleRuntime(
+  projectAvailability: ProjectWorkerAvailabilityView,
+  observedAt: string
+): boolean {
+  const { availability } = projectAvailability
+  return projectAvailability.membership?.state === 'active' &&
+    availability.agentActive &&
+    availability.deviceActive &&
+    availability.connectionStatus === 'online' &&
+    availability.runtimeReadiness === 'ready' &&
+    availability.acceptsNewOffers &&
+    availability.expiresAt > observedAt
+}
+
+function workerRuntimeCanAcceptTask(
+  project: ProjectCoordinatorProject,
+  projectAvailability: ProjectWorkerAvailabilityView,
+  task: ProjectPlanTask,
+  observedAt: string
+): boolean {
+  if (!isOnlineEligibleRuntime(projectAvailability, observedAt)) return false
+  const scope = task.fileIntent === null ? 'text_tasks' : 'file_tasks'
+  if (!projectAvailability.taskAuthorities.some((authority) => (
+    authority.scope === scope && authority.state === 'eligible'
+  ))) return false
+  if (task.requiredCapabilityTags.some((tag) => (
+    !projectAvailability.availability.runtimeCapabilityTags.includes(tag)
+  ))) return false
+  if (task.fileIntent === null) return true
+  const binding = project.provisioning.binding
+  const readiness = projectAvailability.contentReadiness
+  const principal = projectAvailability.providerPrincipalFact
+  return project.project.contentMode === 'required' &&
+    binding?.status === 'active' &&
+    binding.rootLocator !== null &&
+    binding.rootLocatorDigest !== null &&
+    binding.revision === task.fileIntent.bindingRevision &&
+    readiness?.state === 'ready' &&
+    readiness.bindingRevision === binding.revision &&
+    readiness.providerPrincipalFactId !== null &&
+    readiness.snapshottedFactRevision !== null &&
+    projectAvailability.providerPrincipalSnapshotStatus === 'match' &&
+    principal?.readiness === 'ready'
+}
+
+function workerGroupCanAcceptTask(
+  project: ProjectCoordinatorProject,
+  group: ProjectCoordinatorProject['workerGroups'][number],
+  task: ProjectPlanTask,
+  observedAt: string
+): boolean {
+  return group.agents.some(({ projectAvailability }) => (
+    workerRuntimeCanAcceptTask(project, projectAvailability, task, observedAt)
+  ))
+}
+
+function assertTasksHaveEligibleWorker(
+  project: ProjectCoordinatorProject,
+  tasks: readonly ProjectPlanTask[],
+  observedAt: string
+): void {
+  for (const task of tasks) {
+    if (project.workerGroups.some((group) => (
+      workerGroupCanAcceptTask(project, group, task, observedAt)
+    ))) continue
+    throw new Error(`Plan item ${task.planItemId} has no online eligible Runtime with one complete capability profile.`)
+  }
+}
+
+function assertAssignmentsHaveEligibleRuntime(
+  project: ProjectCoordinatorProject,
+  tasks: readonly ProjectPlanTask[],
+  assignments: readonly ProjectCoordinatorPlanAssignment[],
+  observedAt: string
+): void {
+  const tasksById = new Map(tasks.map((task) => [task.planItemId, task]))
+  const groupsByUserId = new Map(project.workerGroups.map((group) => [group.userId, group]))
+  for (const assignment of assignments) {
+    if (assignment.workerUserId === null) continue
+    const task = tasksById.get(assignment.planItemId)
+    const group = groupsByUserId.get(assignment.workerUserId)
+    if (!task || !group) {
+      throw new Error('A Plan assignment must select an active Project member User.')
+    }
+    if (!workerGroupCanAcceptTask(project, group, task, observedAt)) {
+      throw new Error(`Plan item ${task.planItemId} requires one online eligible Runtime owned by the selected Worker User.`)
+    }
+  }
+}
 
 export function createProjectCoordinatorPlanPort(options: Readonly<{
   settings: DomainMainPackageSettingsHost
@@ -293,22 +405,37 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
     }
     const project = workspace.projects.find((candidate) => candidate.project.projectId === projectId)
     if (!project) throw new Error('The exact Project is not visible to the current OIDC User.')
-    return project
+    return { project, observedAt: workspace.observedAt }
   }
 
   return Object.freeze({
     generateDraft: async (rawInput) => {
       const input = projectCoordinatorPlanDraftGenerateInputSchema.parse(rawInput)
-      const project = await readProject(input.projectId)
+      const { project, observedAt } = await readProject(input.projectId)
       const agentExecution = options.getAgentExecution()
       if (!agentExecution) throw new Error('The local Agent Runtime is unavailable.')
-      const candidates = project.workerGroups.flatMap((group) => group.agents.map((agent) => ({
-        userId: group.userId,
-        agentId: agent.projectAvailability.agentId,
-        displayName: agent.displayName,
-        runtimeCapabilityTags: agent.projectAvailability.availability.runtimeCapabilityTags,
-        acceptsNewOffers: agent.projectAvailability.availability.acceptsNewOffers
-      })))
+      const candidates = project.workerGroups
+        .map((group) => {
+          const eligibleAgents = group.agents.filter(({ projectAvailability }) => (
+            isOnlineEligibleRuntime(projectAvailability, observedAt)
+          ))
+          const profiles = new Map(eligibleAgents.map(({ projectAvailability }) => {
+            const profile = {
+              eligibleTaskScopes: projectAvailability.taskAuthorities
+                .filter(({ state }) => state === 'eligible')
+                .map(({ scope }) => scope)
+                .sort(),
+              capabilityTags: [...projectAvailability.availability.runtimeCapabilityTags].sort()
+            }
+            return [JSON.stringify(profile), profile] as const
+          }))
+          return {
+            userId: group.userId,
+            displayName: group.displayName,
+            runtimeProfiles: [...profiles.values()]
+          }
+        })
+        .filter(({ runtimeProfiles }) => runtimeProfiles.length > 0)
       const generated = await agentExecution.run({
         clientDirectiveId: `project-plan:${project.project.projectId}:${project.project.revision}`,
         prompt: [
@@ -316,7 +443,8 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
           `Goal: ${project.project.goal}`,
           `Owner instruction: ${input.instruction}`,
           `Budget: ${JSON.stringify(project.project.budget)}`,
-          `Exact Worker candidates: ${JSON.stringify(candidates)}`,
+          `Worker User candidates: ${JSON.stringify(candidates)}`,
+          'Each Task must match one runtimeProfiles entry: fileIntent null requires text_tasks, a fileIntent requires file_tasks, and requiredCapabilityTags must be a subset of that same entry capabilityTags. Never combine fields across Runtime profiles.',
           'Return only strict JSON with {tasks,rationale}. Each task must use a stable item_* ID and canonical Project Plan Task fields.'
         ].join('\n'),
         ...(input.modelId ? { model: input.modelId } : {}),
@@ -333,6 +461,7 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
         throw new Error('Local Plan Runtime returned non-JSON output.', { cause })
       }
       const content = generatedPlanContentSchema.parse(decoded)
+      assertTasksHaveEligibleWorker(project, content.tasks, observedAt)
       const timestamp = now().toISOString()
       const next = projectCoordinatorPlanDraftSchema.parse({
         draftId: draftId(),
@@ -352,7 +481,7 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
         },
         assignments: content.tasks.map(({ planItemId }) => ({
           planItemId,
-          selectedAgentId: null,
+          workerUserId: null,
           recommendationReason: null
         })),
         createdAt: timestamp,
@@ -371,15 +500,13 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       if (current.draftRevision !== input.expectedDraftRevision) {
         throw new Error('Plan draft revision conflict.')
       }
-      const project = await readProject(input.projectId)
-      const visibleAgentIds = new Set(project.workerGroups.flatMap((group) => (
-        group.agents.map(({ projectAvailability }) => projectAvailability.agentId)
-      )))
-      if (input.assignments.some(({ selectedAgentId }) => (
-        selectedAgentId !== null && !visibleAgentIds.has(selectedAgentId)
-      ))) {
-        throw new Error('A Plan assignment must select an exact visible Agent.')
-      }
+      const { project, observedAt } = await readProject(input.projectId)
+      assertAssignmentsHaveEligibleRuntime(
+        project,
+        input.tasks,
+        input.assignments,
+        observedAt
+      )
       const next = projectCoordinatorPlanDraftSchema.parse({
         ...current,
         draftRevision: current.draftRevision + 1,
@@ -397,9 +524,16 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       if (draft.draftRevision !== input.expectedDraftRevision) {
         throw new Error('Plan draft revision conflict.')
       }
-      if (draft.assignments.some(({ selectedAgentId }) => selectedAgentId === null)) {
-        throw new Error('Every Plan item requires an exact Worker Agent before submit.')
+      if (draft.assignments.some(({ workerUserId }) => workerUserId === null)) {
+        throw new Error('Every Plan item requires a Worker User before submit.')
       }
+      const { project, observedAt } = await readProject(input.projectId)
+      assertAssignmentsHaveEligibleRuntime(
+        project,
+        draft.tasks,
+        draft.assignments,
+        observedAt
+      )
       if (!options.coordinatorCloudCommands) {
         throw new Error('Coordinator Agent Cloud command mediation is unavailable.')
       }
@@ -494,9 +628,138 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       if (requireReadyProject(parsed, input.projectId).project.status !== 'active') {
         throw new Error('Project activation was not observed in fresh Cloud facts.')
       }
-      return parsed
+      if (!options.coordinatorCloudCommands) {
+        throw new Error('Coordinator Agent Cloud command mediation is unavailable.')
+      }
+      return dispatchInitialPlanOffers({
+        workspace: options.workspace,
+        coordinatorCloudCommands: options.coordinatorCloudCommands,
+        state,
+        requestId,
+        now
+      }, confirmedPlan, idempotencyKey, parsed)
     }
   })
+}
+
+async function dispatchInitialPlanOffers(options: Readonly<{
+  workspace: ProjectCoordinatorWorkspacePort
+  coordinatorCloudCommands: CoordinatorCloudCommandService
+  state: ProjectCoordinatorStateStore
+  requestId(): `req_${string}`
+  now(): Date
+}>, confirmedPlan: ProjectPlan, idempotencyKey: string,
+initialWorkspace: ProjectCoordinatorWorkspace): Promise<ProjectCoordinatorWorkspace> {
+  const initialProject = requireReadyProject(initialWorkspace, confirmedPlan.projectId)
+  if (initialProject.project.status !== 'active') {
+    throw new Error('Initial Task offers require an active Project.')
+  }
+  const rootItems = confirmedPlan.tasks.filter(({ dependencyPlanItemIds }) => (
+    dependencyPlanItemIds.length === 0
+  ))
+  if (rootItems.length === 0) {
+    throw new Error('A confirmed Plan must expose at least one dependency-free initial Task.')
+  }
+  const assignments = await options.state.readPlanAssignments(
+    confirmedPlan.projectPlanId,
+    confirmedPlan.planDigest
+  )
+  const assignmentByItem = new Map(assignments.map((assignment) => (
+    [assignment.planItemId, assignment] as const
+  )))
+  if (
+    assignments.length !== confirmedPlan.tasks.length ||
+    confirmedPlan.tasks.some(({ planItemId }) => !assignmentByItem.has(planItemId))
+  ) {
+    throw new Error('Confirmed Plan Task dispatch requires its durable Worker User assignments.')
+  }
+
+  let workspace = initialWorkspace
+  const offeredTaskIds = new Set<string>()
+
+  for (const item of rootItems) {
+    workspace = await options.workspace.readWorkspace({ projectId: confirmedPlan.projectId })
+    const project = requireReadyProject(workspace, confirmedPlan.projectId)
+    if (
+      project.project.status !== 'active' ||
+      project.plan?.plan.projectPlanId !== confirmedPlan.projectPlanId ||
+      project.plan.plan.planDigest !== confirmedPlan.planDigest ||
+      project.plan.plan.state !== 'confirmed'
+    ) {
+      throw new Error('Initial Task dispatch lost the exact active Project and confirmed Plan.')
+    }
+    const assignment = assignmentByItem.get(item.planItemId)
+    if (!assignment?.workerUserId) {
+      throw new Error('Every initial Plan item requires a Worker User assignment.')
+    }
+    const offerExpiresAt = new Date(options.now().getTime() + 15 * 60_000).toISOString()
+    const response = await options.coordinatorCloudCommands.execute({
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      requestId: options.requestId(),
+      type: 'task.offer.create',
+      idempotencyKey: scopedIdempotencyKey(
+        idempotencyKey,
+        `offer-${stableDigest({
+          projectPlanId: confirmedPlan.projectPlanId,
+          planItemId: item.planItemId
+        }).slice(0, 24)}`
+      ),
+      projectId: project.project.projectId,
+      expectedProjectRevision: project.project.revision,
+      expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: project.project.executionAuthorityEpoch,
+      projectPlanId: confirmedPlan.projectPlanId,
+      expectedPlanRevision: project.plan.plan.revision,
+      planItemId: item.planItemId,
+      workerUserId: assignment.workerUserId,
+      offerExpiresAt
+    })
+    if (response.type === 'rest.error') {
+      throw new Error(`Initial Task offer failed: ${response.error.code}: ${response.error.message}`)
+    }
+    if (response.type !== 'rest.collection') {
+      throw new Error(`Initial Task offer returned ${response.type}.`)
+    }
+    const tasks = response.items.filter((entity): entity is Task => entity.type === 'task')
+    const offers = response.items.filter((entity): entity is TaskOffer => entity.type === 'task_offer')
+    const task = tasks[0]
+    const offer = offers[0]
+    if (
+      response.items.length !== 2 ||
+      tasks.length !== 1 ||
+      offers.length !== 1 ||
+      !task || !offer ||
+      task.projectId !== project.project.projectId ||
+      task.createdByCoordinatorAgentId !== project.project.coordinatorAgentId ||
+      task.title !== item.title ||
+      task.objective !== item.objective ||
+      stableDigest(task.completionCriteria) !== stableDigest(item.completionCriteria) ||
+      task.dependencyTaskIds.length !== 0 ||
+      stableDigest(task.requiredCapabilityTags) !== stableDigest(item.requiredCapabilityTags) ||
+      stableDigest(task.fileIntent) !== stableDigest(item.fileIntent) ||
+      task.currentExecutionId !== null ||
+      task.currentExecutionState !== null ||
+      task.status !== 'offered' ||
+      offer.projectId !== task.projectId ||
+      offer.taskId !== task.taskId ||
+      offer.executionId !== null ||
+      offer.workerUserId !== assignment.workerUserId ||
+      offer.state !== 'pending' ||
+      offer.expiresAt !== offerExpiresAt
+    ) {
+      throw new Error('Initial Task offer did not return the selected Worker User assignment.')
+    }
+    offeredTaskIds.add(task.taskId)
+  }
+
+  workspace = await options.workspace.readWorkspace({ projectId: confirmedPlan.projectId })
+  const observed = requireReadyProject(workspace, confirmedPlan.projectId)
+  if ([...offeredTaskIds].some((taskId) => (
+    !observed.tasks.some(({ task }) => task.taskId === taskId)
+  ))) {
+    throw new Error('Initial Task offers were not observed in fresh Cloud facts.')
+  }
+  return workspace
 }
 
 export function createProjectCoordinatorActionPort(options: Readonly<{
@@ -587,6 +850,7 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
         type: 'human.needed.create',
         idempotencyKey,
         projectId: input.projectId,
+        targetUserId: input.targetUserId,
         context: {
           scope: 'coordinator_project',
           expectedProjectRevision: input.expectedProjectRevision,
@@ -606,6 +870,7 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
       const needed = humanNeededSchema.parse(response.entity)
       if (
         needed.projectId !== input.projectId ||
+        needed.targetUserId !== input.targetUserId ||
         needed.context.scope !== 'coordinator_project' ||
         needed.context.coordinatorAuthorityEpoch !== input.expectedCoordinatorAuthorityEpoch
       ) {
@@ -711,6 +976,18 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
     },
     handleInbox: async (rawMessage) => {
       const message = agentInboxMessageSchema.parse(rawMessage)
+      if (message.payload.type === 'project.started') {
+        const started = message.payload
+        const workspace = await options.workspace.readWorkspace({ projectId: started.projectId })
+        const project = requireReadyProject(workspace, started.projectId)
+        if (
+          message.recipientAgentId !== project.project.coordinatorAgentId ||
+          project.project.revision < started.revision
+        ) {
+          throw new Error('Project start notification does not match current Cloud authority.')
+        }
+        return
+      }
       if (message.payload.type === 'coordinator.transferred') {
         const transfer = message.payload
         if (
@@ -757,9 +1034,14 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
       }
       const workspace = await options.workspace.readWorkspace({ projectId: answer.projectId })
       const project = requireReadyProject(workspace, answer.projectId)
+      const answerMembership = project.provisioning.memberships.find(({ userId }) => (
+        userId === answer.answeredByUserId
+      ))
+      const answerMember = project.memberUsers.find(({ userId }) => userId === answer.answeredByUserId)
       if (
         message.recipientAgentId !== project.project.coordinatorAgentId ||
-        answer.answeredByUserId !== project.project.ownerUserId ||
+        answerMembership?.state !== 'active' ||
+        answerMember?.status !== 'active' ||
         answer.context.coordinatorAuthorityEpoch !== project.project.coordinatorAuthorityEpoch
       ) {
         throw new Error('HumanAnswer does not match the current Project Coordinator authority.')
@@ -866,6 +1148,52 @@ async function listAllProjects(
   return Object.freeze({ projects, observedAt })
 }
 
+type WorkerDirectorySnapshot = Readonly<{
+  observedAt: string
+  availability: readonly WorkerAvailabilityProjection[]
+  userLabels: readonly WorkerDirectoryUserLabel[]
+  agentLabels: readonly WorkerDirectoryAgentLabel[]
+}>
+
+async function readAllWorkerDirectory(
+  transport: AuthenticatedCloudTransport,
+  requestId: () => `req_${string}`
+): Promise<WorkerDirectorySnapshot> {
+  const availability: WorkerAvailabilityProjection[] = []
+  const userLabels = new Map<string, WorkerDirectoryUserLabel>()
+  const agentLabels = new Map<string, WorkerDirectoryAgentLabel>()
+  let afterAgentId: string | undefined
+  let observedAt = new Date(0).toISOString()
+  let pageCount = 0
+  do {
+    const response = await executeUserCloud(transport, {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      requestId: requestId(),
+      type: 'worker.availability.list',
+      ...(afterAgentId ? { afterAgentId } : {}),
+      limit: 500
+    })
+    if (response.type !== 'rest.worker_availability_page') {
+      throw new Error(`Worker directory returned ${response.type}.`)
+    }
+    availability.push(...response.items)
+    for (const label of response.userLabels) userLabels.set(label.userId, label)
+    for (const label of response.agentLabels) agentLabels.set(label.agentId, label)
+    observedAt = response.observedAt
+    afterAgentId = response.nextAgentId
+    pageCount += 1
+    if (pageCount > 1_000 || availability.length > 500_000) {
+      throw new Error('Worker directory exceeds the Desktop workspace limit.')
+    }
+  } while (afterAgentId)
+  return Object.freeze({
+    observedAt,
+    availability: Object.freeze(availability),
+    userLabels: Object.freeze([...userLabels.values()]),
+    agentLabels: Object.freeze([...agentLabels.values()])
+  })
+}
+
 type ProjectFactSnapshot = Readonly<{
   observedAt: string
   pages: ReadonlyMap<ProjectCoordinationCollection, readonly unknown[]>
@@ -882,7 +1210,7 @@ async function readAllProjectFacts(
     collection: ProjectCoordinationCollection
     cursor?: string
     limit: number
-  }>> = PROJECT_COORDINATION_COLLECTIONS.map((collection) => ({
+  }>> = PROJECT_COORDINATOR_PROJECT_FACT_COLLECTIONS.map((collection) => ({
     collection,
     limit: PROJECT_COORDINATION_MAX_PAGE_SIZE
   }))
@@ -915,7 +1243,8 @@ async function readAllProjectFacts(
 
 function projectCoordinatorProjectView(
   project: Project,
-  snapshot?: ProjectFactSnapshot
+  snapshot?: ProjectFactSnapshot,
+  workerDirectory?: WorkerDirectorySnapshot
 ): ProjectCoordinatorProject {
   const plans = factItems<ProjectPlan>(snapshot, 'plans')
   const currentPlans = plans.filter(({ state }) => state !== 'superseded')
@@ -924,6 +1253,7 @@ function projectCoordinatorProjectView(
   }
   const plan = currentPlans[0]
   const executions = factItems<TaskExecution>(snapshot, 'executions')
+  const offers = factItems<TaskOffer>(snapshot, 'offers')
   const submissions = factItems<TaskResultSubmission>(snapshot, 'result_submissions')
   const decisions = factItems<TaskReviewDecision>(snapshot, 'review_decisions')
   const intents = factItems<ProjectCoordinatorProject['provisioning']['intent']>(
@@ -942,12 +1272,14 @@ function projectCoordinatorProjectView(
     project,
     coordinatorTransferFeedback: null,
     plan: plan ? { plan, assignments: [] } : null,
-    workerGroups: projectWorkerGroups(project, snapshot),
+    memberUsers: factItems(snapshot, 'user_label_facts'),
+    workerGroups: projectWorkerGroups(project, snapshot, workerDirectory),
     tasks: factItems<ProjectCoordinatorProject['tasks'][number]['task']>(snapshot, 'tasks')
       .map((task) => ({
         task,
         executions: executions.filter((execution) => execution.taskId === task.taskId)
       })),
+    offers,
     reviews: submissions.map((submission) => ({
       submission,
       decision: decisions.find(({ resultSubmissionId }) => (
@@ -973,11 +1305,12 @@ function projectCoordinatorProjectView(
 
 function projectWorkerGroups(
   project: Project,
-  snapshot: ProjectFactSnapshot | undefined
+  snapshot: ProjectFactSnapshot | undefined,
+  workerDirectory: WorkerDirectorySnapshot | undefined
 ): ProjectCoordinatorProject['workerGroups'] {
-  const userLabels = factItems<ProjectUserLabelFact>(snapshot, 'user_label_facts')
-  const agentLabels = factItems<ProjectAgentLabelFact>(snapshot, 'agent_label_facts')
-  const availability = factItems<WorkerAvailabilityProjection>(snapshot, 'worker_availability')
+  const userLabels = workerDirectory?.userLabels ?? []
+  const agentLabels = workerDirectory?.agentLabels ?? []
+  const availability = workerDirectory?.availability ?? []
   const memberships = factItems<ProjectMembership>(snapshot, 'memberships')
   const authorities = factItems<TaskAuthority>(snapshot, 'task_authorities')
   const readiness = factItems<ProjectContentReadiness>(snapshot, 'content_readiness')
@@ -1044,6 +1377,28 @@ function projectWorkerGroups(
         return { displayName: label.displayName, projectAvailability: availabilityView }
       })
     }
+  })
+}
+
+function availableWorkerUsers(
+  workerDirectory: WorkerDirectorySnapshot
+): ProjectCoordinatorWorkspace['availableWorkerUsers'] {
+  const userIds = new Set<string>()
+  for (const availability of workerDirectory.availability) {
+    const agentLabel = workerDirectory.agentLabels.find(({ agentId }) => (
+      agentId === availability.agentId
+    ))
+    if (!agentLabel ||
+        agentLabel.ownerUserId !== availability.userId ||
+        agentLabel.deviceId !== availability.deviceId) {
+      throw new Error(`Worker availability ${availability.agentId} lacks its exact Cloud Agent label.`)
+    }
+    userIds.add(availability.userId)
+  }
+  return [...userIds].map((userId) => {
+    const userLabel = workerDirectory.userLabels.find((label) => label.userId === userId)
+    if (!userLabel) throw new Error(`Worker User ${userId} lacks its exact Cloud label.`)
+    return { userId, displayName: userLabel.displayName }
   })
 }
 

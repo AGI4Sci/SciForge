@@ -133,15 +133,13 @@ async function activatePersonalContainer(rig, owner, containerId) {
   })
 }
 
-async function registerAgent(rig, participant, slot) {
+async function ensureAgent(rig, participant, slot) {
   const bootstrap = createAgentCredentialBootstrap()
-  const registered = await rig.service.registerAgent(participant.actor, {
+  const registered = await rig.service.ensureAgent(participant.actor, {
     deviceId: participant.deviceId,
-    displayName: `SciForge ${slot}`,
-    nodeType: 'desktop',
     capabilities: ['agent-runtime', 'research.execute'],
     credentialBootstrapPublicKey: bootstrap.publicKey,
-    idempotencyKey: `register-agent-${slot}`
+    idempotencyKey: `idem_ensure-agent-${slot}`
   })
   const credential = bootstrap.open(registered.sealedCredential)
   return {
@@ -179,15 +177,13 @@ async function publishAvailability(rig, registered, key) {
 }
 
 async function createActiveTextProject(rig, { owner, members, coordinator, tasks, key }) {
-  const created = await rig.service.createProject(owner.actor, {
+  const created = await rig.service.createProject(coordinator.actor, {
     protocolVersion: '1.0',
     type: 'project.create',
     requestId: `req_project_${key}`,
     idempotencyKey: `idem_project_${key}`,
     displayName: `Project ${key}`,
     goal: `Canonical collaboration goal ${key}`,
-    coordinatorAgentId: coordinator.agent.agentId,
-    expectedCoordinatorAgentRevision: coordinator.agent.revision,
     budget: { maxTasks: 20, maxTasksPerRound: 20, maxTaskRetries: 1, maxCoordinationRounds: 5 },
     content: { mode: 'none', members: [owner, ...members].map(({ userId }) => ({ userId })) }
   })
@@ -241,7 +237,7 @@ async function createActiveTextProject(rig, { owner, members, coordinator, tasks
   return { created, project: active, plan: confirmed }
 }
 
-async function createOffer(rig, { coordinator, project, plan, assignee, availability, planItemId, key }) {
+async function createOffer(rig, { coordinator, project, plan, assignee, planItemId, key }) {
   return rig.service.createTaskOffer(coordinator.actor, {
     protocolVersion: '1.0',
     type: 'task.offer.create',
@@ -254,8 +250,7 @@ async function createOffer(rig, { coordinator, project, plan, assignee, availabi
     projectPlanId: plan.projectPlanId,
     expectedPlanRevision: plan.revision,
     planItemId,
-    assigneeAgentId: assignee.agent.agentId,
-    expectedAvailabilityRevision: availability.revision,
+    workerUserId: assignee.agent.ownerUserId,
     offerExpiresAt: new Date(rig.clock.now().getTime() + 60_000).toISOString()
   })
 }
@@ -268,9 +263,7 @@ async function acceptAndStart(rig, worker, offered, key) {
     idempotencyKey: `idem_offer_accept_${key}`,
     taskOfferId: offered.offer.taskOfferId,
     taskId: offered.task.taskId,
-    executionId: offered.execution.executionId,
     expectedTaskRevision: offered.task.revision,
-    expectedExecutionRevision: offered.execution.revision,
     expectedOfferRevision: offered.offer.revision
   })
   return rig.service.startTaskExecution(worker.actor, {
@@ -332,23 +325,19 @@ test('2.5 canonical service rejects identity theft/replay, keeps stable identity
     assurance: 'strong'
   }))
 
-  const agentA = await registerAgent(rig, a, 'A')
-  await expectCode('permission_denied', () => rig.service.registerAgent(b.actor, {
+  const agentA = await ensureAgent(rig, a, 'A')
+  await expectCode('permission_denied', () => rig.service.ensureAgent(b.actor, {
     deviceId: a.deviceId,
-    displayName: '不得接管',
-    nodeType: 'desktop',
     capabilities: ['agent-runtime', 'research.execute'],
     credentialBootstrapPublicKey: createAgentCredentialBootstrap().publicKey,
     idempotencyKey: 'agent-theft-attempt'
   }))
 
-  const registrationReplay = await rig.service.registerAgent(a.actor, {
+  const registrationReplay = await rig.service.ensureAgent(a.actor, {
     deviceId: a.deviceId,
-    displayName: 'SciForge A',
-    nodeType: 'desktop',
     capabilities: ['agent-runtime', 'research.execute'],
     credentialBootstrapPublicKey: agentA.bootstrapPublicKey,
-    idempotencyKey: 'register-agent-A'
+    idempotencyKey: 'idem_ensure-agent-A'
   })
   assert.equal(registrationReplay.agent.agentId, agentA.agent.agentId)
   assert.equal(registrationReplay.sealedCredential, undefined)
@@ -408,8 +397,8 @@ test('2.6 canonical receipts, repository rows, audit and replay responses never 
   const rig = createServiceRig()
   const a = await bindUser(rig, 'A')
   const b = await bindUser(rig, 'B')
-  const agentA = await registerAgent(rig, a, 'A')
-  const agentB = await registerAgent(rig, b, 'B')
+  const agentA = await ensureAgent(rig, a, 'A')
+  const agentB = await ensureAgent(rig, b, 'B')
   const rotationBootstrap = createAgentCredentialBootstrap()
   const rotated = await rig.service.rotateAgentCredential(a.actor, {
     agentId: agentA.agent.agentId,
@@ -442,10 +431,10 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
   const a = await bindUser(rig, 'A')
   const b = await bindUser(rig, 'B')
   const c = await bindUser(rig, 'C')
-  const agentA = await registerAgent(rig, a, 'A')
-  const agentA2 = await registerAgent(rig, await addActiveDevice(rig, a, 'A2'), 'A2')
-  const agentB = await registerAgent(rig, b, 'B')
-  const agentC = await registerAgent(rig, c, 'C')
+  const agentA = await ensureAgent(rig, a, 'A')
+  const agentA2 = await ensureAgent(rig, await addActiveDevice(rig, a, 'A2'), 'A2')
+  const agentB = await ensureAgent(rig, b, 'B')
+  const agentC = await ensureAgent(rig, c, 'C')
   const availabilityA2 = await publishAvailability(rig, agentA2, 'ledger_a2')
   const availabilityB = await publishAvailability(rig, agentB, 'ledger_b')
   const availabilityC = await publishAvailability(rig, agentC, 'ledger_c')
@@ -479,6 +468,7 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
   await rig.service.createHumanNeeded(agentB.actor, {
     protocolVersion: '1.0', type: 'human.needed.create', requestId: 'req_human_needed_ledger_b',
     projectId: project.projectId,
+    targetUserId: b.userId,
     context: {
       scope: 'worker_execution',
       taskId: runningB.task.taskId,
@@ -486,23 +476,23 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
       expectedTaskRevision: runningB.task.revision,
       expectedExecutionRevision: runningB.execution.revision
     },
-    requiredAssurance: 'verified', prompt: 'Worker B 需要 Project Owner 的明确输入', confirmableAction: null,
+    requiredAssurance: 'verified', prompt: 'Worker B 需要其 User 的明确输入', confirmableAction: null,
     expiresAt: new Date(rig.clock.now().getTime() + 60_000).toISOString(),
     idempotencyKey: 'idem_human_needed_ledger_b'
   })
   const waitingB = await rig.repository.getTask(runningB.task.taskId)
   assert.equal(waitingB.status, 'needs_human')
-  const humanInbox = await rig.service.pullInbox(a.actor, { afterSequence: 0, limit: 20 })
+  const humanInbox = await rig.service.pullInbox(b.actor, { afterSequence: 0, limit: 20 })
   assert.ok(humanInbox.messages.some((message) => (
-    message.messageType === 'human.needed' && message.payload.request?.targetUserId === a.userId
+    message.messageType === 'human.needed' && message.payload.request?.targetUserId === b.userId
   )))
-  const bInbox = await rig.service.pullInbox(b.actor, { afterSequence: 0, limit: 20 })
-  assert.ok(!bInbox.messages.some((message) => message.messageType === 'human.needed'))
+  const ownerInbox = await rig.service.pullInbox(a.actor, { afterSequence: 0, limit: 20 })
+  assert.ok(!ownerInbox.messages.some((message) => message.messageType === 'human.needed'))
 
   project = await rig.repository.getProject(project.projectId)
   const offeredC = await createOffer(rig, { coordinator: agentA, project, plan: active.plan,
     assignee: agentC, availability: availabilityC, planItemId: 'item_worker_c', key: 'ledger_c' })
-  assert.notEqual(offeredB.execution.assigneeAgentId, offeredC.execution.assigneeAgentId)
+  assert.notEqual(offeredB.offer.workerUserId, offeredC.offer.workerUserId)
   const taskInboxBeforeRestart = await rig.service.pullInbox(agentC.actor, { afterSequence: 0, limit: 20 })
   assert.ok(taskInboxBeforeRestart.messages.some((message) => message.payload.taskId === offeredC.task.taskId))
 
@@ -583,30 +573,26 @@ test('8.3 and 10.2 canonical Project ledger enforces assignee/coordinator, idemp
   const newCoordinatorOffer = await createOffer(rig, { coordinator: agentA2, project: resumedAfterHandoff,
     plan: confirmedHandoffPlan, assignee: agentB, availability: currentAvailabilityB,
     planItemId: 'item_after_handoff', key: 'new_coordinator' })
-  assert.equal(newCoordinatorOffer.execution.assigneeAgentId, agentB.agent.agentId)
+  assert.equal(newCoordinatorOffer.offer.workerUserId, agentB.agent.ownerUserId)
 })
 
 test('8.4 canonical service bounds payloads and blocks sensitive Project Record material', async () => {
   const rig = createServiceRig()
   const a = await bindUser(rig, 'A')
-  const agentA = await registerAgent(rig, a, 'A')
+  const agentA = await ensureAgent(rig, a, 'A')
   assert.throws(() => projectCreateCommandSchema.parse({
     protocolVersion: '1.0', type: 'project.create', requestId: 'req_oversized_project',
     displayName: '超限 Project',
     goal: 'x'.repeat(32_001),
-    coordinatorAgentId: agentA.agent.agentId,
-    expectedCoordinatorAgentRevision: agentA.agent.revision,
     budget: { maxTasks: 2, maxTasksPerRound: 2, maxTaskRetries: 1, maxCoordinationRounds: 1 },
     content: { mode: 'none', members: [{ userId: a.userId }] },
     idempotencyKey: 'idem_oversized_project'
   }))
 
-  const { project } = await rig.service.createProject(a.actor, {
+  const { project } = await rig.service.createProject(agentA.actor, {
     protocolVersion: '1.0', type: 'project.create', requestId: 'req_security_project',
     displayName: '安全记录 Project',
     goal: '安全记录测试',
-    coordinatorAgentId: agentA.agent.agentId,
-    expectedCoordinatorAgentRevision: agentA.agent.revision,
     budget: { maxTasks: 2, maxTasksPerRound: 2, maxTaskRetries: 1, maxCoordinationRounds: 1 },
     content: { mode: 'none', members: [{ userId: a.userId }] },
     idempotencyKey: 'idem_security_project'
@@ -626,14 +612,14 @@ test('8.4 canonical service bounds payloads and blocks sensitive Project Record 
   }))
 })
 
-test('8.3 and 10.2 canonical human routes bind provider input and verified Owner endpoint answers', async () => {
+test('8.3 and 10.2 canonical human routes bind provider input and verified target User endpoint answers', async () => {
   const rig = createServiceRig()
   const a = await bindUser(rig, 'A')
   const b = await bindUser(rig, 'B')
   const c = await bindUser(rig, 'C')
-  const agentA = await registerAgent(rig, a, 'A')
-  const agentB = await registerAgent(rig, b, 'B')
-  const agentC = await registerAgent(rig, c, 'C')
+  const agentA = await ensureAgent(rig, a, 'A')
+  const agentB = await ensureAgent(rig, b, 'B')
+  const agentC = await ensureAgent(rig, c, 'C')
   const endpointA = await endpointActor(rig, a)
   const endpointB = await endpointActor(rig, b)
   const endpointC = await endpointActor(rig, c)
@@ -758,6 +744,7 @@ test('8.3 and 10.2 canonical human routes bind provider input and verified Owner
   const needed = await rig.service.createHumanNeeded(agentB.actor, {
     protocolVersion: '1.0', type: 'human.needed.create', requestId: 'req_human_needed_b',
     projectId: project.projectId,
+    targetUserId: b.userId,
     context: {
       scope: 'worker_execution',
       taskId: runningB.task.taskId,
@@ -766,51 +753,49 @@ test('8.3 and 10.2 canonical human routes bind provider input and verified Owner
       expectedExecutionRevision: runningB.execution.revision
     },
     requiredAssurance: 'verified',
-    prompt: '只由 Project Owner A 回答',
+    prompt: '只由目标 Project 成员 B 回答',
     confirmableAction: null,
     expiresAt: new Date(rig.clock.now().getTime() + 60_000).toISOString(),
     idempotencyKey: 'idem_human_needed_b'
   })
-  const inboxA = await rig.service.pullInbox(a.actor, { afterSequence: 0, limit: 20 })
-  assert.ok(inboxA.messages.some((message) => message.payload.request?.targetUserId === a.userId))
   const inboxB = await rig.service.pullInbox(b.actor, { afterSequence: 0, limit: 20 })
-  assert.ok(!inboxB.messages.some((message) => message.messageType === 'human.needed'))
-  await expectCode('permission_denied', () => rig.service.answerHumanNeeded(b.actor, {
+  assert.ok(inboxB.messages.some((message) => message.payload.request?.targetUserId === b.userId))
+  await expectCode('permission_denied', () => rig.service.answerHumanNeeded(a.actor, {
     protocolVersion: '1.0', type: 'human.answer', requestId: 'req_proxy_human_answer_b',
     humanRequestId: needed.humanRequestId,
     requestRevision: needed.revision,
-    answer: 'B 不得代答',
-    idempotencyKey: 'proxy-human-answer-B'
+    answer: 'A 不得代答',
+    idempotencyKey: 'proxy-human-answer-A'
   }))
-  await expectCode('permission_denied', () => rig.service.answerHumanNeeded(endpointB, {
+  await expectCode('permission_denied', () => rig.service.answerHumanNeeded(endpointA, {
     protocolVersion: '1.0', type: 'human.answer', requestId: 'req_wrong_endpoint_human_answer_b',
     humanRequestId: needed.humanRequestId,
     requestRevision: needed.revision,
-    answer: 'B 的 Endpoint 也不得代答',
+    answer: 'A 的 Endpoint 也不得代答',
     sourceLocator: projectLocator,
     idempotencyKey: 'wrong-endpoint-human-answer-B'
   }))
-  const answerA = await rig.service.answerHumanNeeded(endpointA, {
-    protocolVersion: '1.0', type: 'human.answer', requestId: 'req_human_answer_a',
+  const answerB = await rig.service.answerHumanNeeded(endpointB, {
+    protocolVersion: '1.0', type: 'human.answer', requestId: 'req_human_answer_b',
     humanRequestId: needed.humanRequestId,
     requestRevision: needed.revision,
-    answer: 'A 的 verified Human Endpoint 唯一回答',
+    answer: 'B 的 verified Human Endpoint 唯一回答',
     sourceLocator: projectLocator,
-    idempotencyKey: 'human-answer-A'
+    idempotencyKey: 'human-answer-B'
   })
-  assert.equal(answerA.answeredByUserId, a.userId)
-  assert.deepEqual(answerA.answeredFrom, {
+  assert.equal(answerB.answeredByUserId, b.userId)
+  assert.deepEqual(answerB.answeredFrom, {
     type: 'human_endpoint',
-    humanEndpointId: a.endpointId
+    humanEndpointId: b.endpointId
   })
-  assert.equal((await rig.service.answerHumanNeeded(endpointA, {
-    protocolVersion: '1.0', type: 'human.answer', requestId: 'req_human_answer_a',
+  assert.equal((await rig.service.answerHumanNeeded(endpointB, {
+    protocolVersion: '1.0', type: 'human.answer', requestId: 'req_human_answer_b',
     humanRequestId: needed.humanRequestId,
     requestRevision: needed.revision,
-    answer: 'A 的 verified Human Endpoint 唯一回答',
+    answer: 'B 的 verified Human Endpoint 唯一回答',
     sourceLocator: projectLocator,
-    idempotencyKey: 'human-answer-A'
-  })).humanAnswerId, answerA.humanAnswerId)
+    idempotencyKey: 'human-answer-B'
+  })).humanAnswerId, answerB.humanAnswerId)
 
   await expectCode('permission_denied', () => rig.service.publishProjectionMessage(agentB.actor, {
     projectionId: projection.projectionId,

@@ -460,6 +460,7 @@ function workspaceFixture(input: Readonly<{
     connection: { state: 'ready', userId: ownerUserId, deviceId: 'dev_Device0000001' },
     observedAt: now,
     focusedProjectId: projectId,
+    availableWorkerUsers: [],
     projects: [{
       project: {
         schemaVersion: 1,
@@ -484,8 +485,10 @@ function workspaceFixture(input: Readonly<{
         updatedAt: now
       },
       plan: null,
+      memberUsers: [],
       workerGroups: [],
       tasks: [],
+      offers: [],
       reviews: [],
       pendingHumanNeeded: [],
       records: [],

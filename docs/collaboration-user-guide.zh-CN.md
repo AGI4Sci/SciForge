@@ -39,11 +39,12 @@
 | --- | --- | --- |
 | User | 稳定的人类身份；Project 成员、Agent 所有者和真人问题都引用它 | 云端协作服务 |
 | 手机端点 | 已验证的个人 Zulip 账号；它代表用户发消息，但不是本机管理员 | 云端绑定 + Zulip 身份 |
-| Agent | 一台明确属于某名用户的 SciForge；每台机器有独立、可撤销的设备身份 | 云端目录 + 本机 secret store |
+| Agent | 一台明确属于某名用户、运行在某台 Device 上的执行身份 | 云端目录 + Identity 私有 secret store |
 | 个人 Session | 一台固定 Agent 上的固定 runtime/thread；可投影到一个手机 Topic | 本地 AgentRuntime thread |
 
-Project 是多人共享的目标和任务账本。Project Topic 只把带真实发送者身份的输入交给唯一
-Coordinator，不是任何成员的私人 Session，也不会广播唤醒全部 Agent。
+Project 是多人共享的目标和任务账本。Project Topic 只把带真实发送者身份的输入交给该 Project
+唯一的 Coordinator，不是任何成员的私人 Session。Coordinator 派发 Task 时选择 Worker User；
+Cloud 才会把同一 Task Offer 通知给该 User 当前可用的所有 Device Agent。
 
 ## 2. 首次准备
 
@@ -98,16 +99,16 @@ Channel 只隔离普通未授权用户，不是端到端加密。Channel 内所�
 权限的项目必须使用不同私人 Channel。详细管理员流程见
 [每用户私人 Zulip Channel 运维说明](./operations/zulip-private-channel-provisioning.zh-CN.md)。
 
-## 4. 注册并选择主要 Agent
+## 4. 确认当前 Device Agent
 
 手机端点验证后：
 
-1. 点击“注册这台 SciForge”，输入便于识别的设备名称。
-2. 确认参与者卡片中的 Agent owner 是自己。
-3. 如果拥有多台 Agent，点击“设为主要 Agent”明确选择默认机器。
+1. 确认当前 Desktop Device 已处于 active，且本机 Agent Runtime 可用。
+2. Identity 会自动 ensure 一个以该 Device 名称显示的 Agent；确认参与者卡片中的 Agent owner 是自己。
+3. 多台 Device 会各自拥有独立 Agent，不需要也不存在“主要 Agent”选择。
 
-主要 Agent 离线时，消息会保持有界等待或返回明确离线状态。系统不会选择最近在线机器，也不会
-把工作交给其他用户的 Agent。
+个人 Session 始终由当前 Device Agent 运行。Task Offer 则发给被选择的 Worker User；该 User 任一
+eligible Device 都可以回复，第一台原子认领成功的 Device 才成为这次 Task Execution 的执行者。
 
 ## 5. 把现有 Session 绑定到手机 Topic
 
@@ -153,9 +154,10 @@ token、原始工具日志、敏感命令参数、编辑、删除、reaction 或
 
 ## 7. Project 与 Task
 
-- Project 成员是 User；Coordinator 和 Task assignee 是 Agent，二者不可互换。
-- 每个 Project 同时只有一个 active Coordinator。只有它能维护正式计划、创建或改派 Task、接受结果。
-- Worker 只处理明确分配给自己的 Task，可提交结果、观察或子任务建议，不能直接改写全局计划。
+- Project 成员和 Task Offer 目标都是 User；Agent 是 Device 上的执行身份，二者不可互换。
+- 创建 Project 的 User，其当前 Device Agent 自动成为该 Project 的 Coordinator；这不是账号级永久角色。每个 Project 同时只有一个 active Coordinator，只有它能维护正式计划、创建或改派 Task、接受结果。
+- Coordinator 只选择 Worker User。Cloud 向该 User 的 eligible Device Agent 广播同一 Offer，第一台成功认领的 Agent 才成为精确 Task Execution assignee。
+- 某台 Device 点击“忽略”只影响本机，不会代表该 User 全局拒绝；其他 Device 仍可认领。Worker execution 可提交结果、观察或子任务建议，不能直接改写全局计划。
 - Coordinator 转交必须由有权用户显式完成；旧 Coordinator 随后写入会被拒绝。
 - Project Topic 中每条输入都保留 senderUserId，并进入 Project 队列；它不会进入成员的私人 Session。
 

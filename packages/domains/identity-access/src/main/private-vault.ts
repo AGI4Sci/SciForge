@@ -70,35 +70,26 @@ export function createPlatformIdentityPrivateVault(options: Readonly<{
       ...(options.nativeBinding ? { binding: options.nativeBinding } : {})
     })
   }
-  if (!options.packageSecrets) {
+  if ((platform !== 'win32' && platform !== 'linux') || !options.packageSecrets) {
     throw new IdentityPrivateVaultError(
       'secure_storage_unavailable',
       'Identity requires the Host package-scoped secret store on this platform.'
     )
   }
-  return createPackageIdentityPrivateVault(options.packageSecrets)
-}
-
-function createPackageIdentityPrivateVault(
-  secrets: DomainMainPackageSecretStoreHost
-): IdentityPrivateVault {
-  const vault: IdentityPrivateVault = {
-    read: (ref) => secrets.read(packageSecretKey(ref)),
+  const installationId = installationIdSchema.parse(options.installationId)
+  const secrets = options.packageSecrets
+  const packageKey = (ref: IdentityPrivateSecretRef): string => (
+    `identity.${vaultKey(installationId, ref)}`
+  )
+  return Object.freeze<IdentityPrivateVault>({
+    read: (ref) => secrets.read(packageKey(ref)),
     write: async (ref, value) => {
       assertSecretValue(value)
-      await secrets.write(packageSecretKey(ref), value)
+      await secrets.write(packageKey(ref), value)
     },
-    has: (ref) => secrets.has(packageSecretKey(ref)),
-    remove: (ref) => secrets.remove(packageSecretKey(ref))
-  }
-  return Object.freeze(vault)
-}
-
-function packageSecretKey(rawRef: IdentityPrivateSecretRef): string {
-  const ref = parseRef(rawRef)
-  if (ref.kind === 'oidc-session') return 'oidc.session'
-  if (ref.kind === 'device-key') return 'device.key'
-  return `agent.credential.${ref.agentId}`
+    has: (ref) => secrets.has(packageKey(ref)),
+    remove: (ref) => secrets.remove(packageKey(ref))
+  })
 }
 
 function assertSecretValue(value: string): void {

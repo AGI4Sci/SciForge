@@ -73,13 +73,11 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
   const provider = new FakeHumanProvider()
   const participant = await bindParticipant(service, repository, clock)
   const bootstrap = createAgentCredentialBootstrap()
-  const registered = await service.registerAgent(participant.userActor, {
+  const registered = await service.ensureAgent(participant.userActor, {
     deviceId: participant.deviceId,
-    displayName: '全链路 Agent',
-    nodeType: 'desktop',
     capabilities: ['agent-runtime'],
     credentialBootstrapPublicKey: bootstrap.publicKey,
-    idempotencyKey: 'full-path-register-agent'
+    idempotencyKey: 'idem_full-path-ensure-agent'
   })
   const issuedCredential = bootstrap.open(registered.sealedCredential)
   assert.match(issuedCredential, /^agent\.[A-Za-z0-9_-]+$/u)

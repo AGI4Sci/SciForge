@@ -43,6 +43,8 @@ import {
   toExternalOperationRecoveryJournalEntry,
   toVisibleRecoveryAction,
   toProjectFinalSummary,
+  toWorkerDirectoryAgentLabel,
+  toWorkerDirectoryUserLabel,
   toWorkerAvailability,
   toCloudResourceRef,
   toProjectEndpointBinding,
@@ -244,11 +246,14 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
       humanEndpointId: command.humanEndpointId, status: command.status, expectedRevision: command.expectedRevision,
       idempotencyKey: command.idempotencyKey })))
     case 'endpoint.transfer': return entityResponse(command, toEndpoint(await service.transferEndpoint(requiredUser(actor), command)))
-    case 'agent.register': {
+    case 'agent.ensure': {
       const user = requiredUser(actor)
-      const result = await service.registerAgent(user, command)
-      if (!result.sealedCredential) throw new CollaborationServiceError('idempotency_conflict', 'The one-time sealed Agent credential was already returned.')
-      return response(command, { type: 'agent.registered', agent: toAgent(result.agent), sealedCredential: result.sealedCredential })
+      const result = await service.ensureAgent(user, command)
+      return response(command, {
+        type: 'agent.ensured',
+        agent: toAgent(result.agent),
+        ...(result.sealedCredential ? { sealedCredential: result.sealedCredential } : {})
+      })
     }
     case 'agent.heartbeat': {
       const device = requiredAgent(actor, command.agentId)
@@ -299,10 +304,6 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     case 'managed_container.archive': {
       return entityResponse(command, toManagedContainer(await service.archiveManagedContainer(requiredUser(actor), command)))
     }
-    case 'participant.update_primary': return entityResponse(command, toParticipant(await service.selectPrimary(requiredUser(actor), {
-      primaryHumanEndpointId: command.primaryHumanEndpointId,
-      primaryAgentId: command.primaryAgentId, expectedRevision: command.expectedRevision,
-      idempotencyKey: command.idempotencyKey })))
     case 'projection.create': {
       const user = requiredUser(actor)
       if (user.userId !== command.ownerUserId) throw new CollaborationServiceError('permission_denied', 'Cannot create another user projection.')
@@ -355,7 +356,7 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
         finalSummary: view.finalSummary === null ? null : toProjectFinalSummary(view.finalSummary) })
     }
     case 'project.create': {
-      const created = await service.createProject(requiredUser(actor), command)
+      const created = await service.createProject(requiredAgent(actor), command)
       return response(command, { type: 'rest.project_created', project: toProject(created.project),
         memberships: created.memberships.map(toProjectMembership),
         provisioningIntent: created.provisioningIntent === null
@@ -385,8 +386,10 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
           items: page.projectItems.map((item) => toProjectWorkerAvailabilityView({ projectId: command.projectId!, ...item })),
           ...(page.nextAgentId ? { nextAgentId: page.nextAgentId } : {}) })
       }
-      return response(command, { type: 'rest.worker_availability_page',
+      return response(command, { type: 'rest.worker_availability_page', observedAt: page.observedAt,
         items: page.items.map(toWorkerAvailability),
+        userLabels: page.users.map(toWorkerDirectoryUserLabel),
+        agentLabels: page.agents.map(toWorkerDirectoryAgentLabel),
         ...(page.nextAgentId ? { nextAgentId: page.nextAgentId } : {}) })
     }
     case 'project.membership.add': {
@@ -477,23 +480,19 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     )
     case 'task.offer.create': {
       const result = await service.createTaskOffer(requiredAgent(actor), command)
-      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
+      return collectionResponse(command, [toTask(result.task), toTaskOffer(result.offer)])
     }
     case 'task.offer.accept': {
       const result = await service.acceptTaskOffer(requiredAgent(actor), command)
       return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
     }
-    case 'task.offer.reject': {
-      const result = await service.rejectTaskOffer(requiredAgent(actor), command)
-      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
-    }
     case 'task.offer.withdraw': {
       const result = await service.withdrawTaskOffer(requiredAgent(actor), command)
-      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
+      return collectionResponse(command, [toTask(result.task), toTaskOffer(result.offer)])
     }
     case 'task.offer.reassign': {
       const result = await service.reassignTaskOffer(requiredAgent(actor), command)
-      return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
+      return collectionResponse(command, [toTask(result.task), toTaskOffer(result.offer)])
     }
     case 'task.execution.start': {
       const result = await service.startTaskExecution(requiredAgent(actor), command)

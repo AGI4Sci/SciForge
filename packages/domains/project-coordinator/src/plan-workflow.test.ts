@@ -5,7 +5,14 @@ import type { CoordinatorCloudCommandService } from '@sciforge/domain-collaborat
 import type { AuthenticatedCloudTransport } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import type { DomainMainAgentExecutionHost } from '@sciforge/domain-sdk/agent-execution'
 import type { DomainMainPackageSettingsHost } from '@sciforge/domain-sdk/package-storage'
-import type { ProjectPlan } from '@sciforge/collaboration-contracts'
+import {
+  restResponseSchema,
+  taskExecutionSchema,
+  taskOfferSchema,
+  taskSchema,
+  type ProjectPlan,
+  type RestResponse
+} from '@sciforge/collaboration-contracts'
 
 import {
   createProjectCoordinatorPlanPort,
@@ -13,9 +20,24 @@ import {
 } from './ports.js'
 import { ProjectCoordinatorStateStore } from './state.js'
 
-test('local Coordinator Runtime creates an editable durable Plan draft with exact Agent assignment', async () => {
+test('local Coordinator Runtime creates an editable durable Plan draft with Worker User assignment', async () => {
   const settings = inMemorySettings()
   const prompts: string[] = []
+  const workspace = workspaceFixture()
+  const firstAgent = workspace.projects[0]!.workerGroups[0]!.agents[0]!
+  workspace.projects[0]!.workerGroups[0]!.agents.push({
+    displayName: 'Worker Desktop B',
+    projectAvailability: {
+      ...firstAgent.projectAvailability,
+      agentId: 'agt_WorkerAgent002',
+      availability: {
+        ...firstAgent.projectAvailability.availability,
+        agentId: 'agt_WorkerAgent002',
+        deviceId: 'dev_WorkerDevice02',
+        runtimeCapabilityTags: ['document.write']
+      }
+    }
+  })
   const agentExecution: DomainMainAgentExecutionHost = {
     run: async (request) => {
       prompts.push(request.prompt)
@@ -34,7 +56,7 @@ test('local Coordinator Runtime creates an editable durable Plan draft with exac
             requiredCapabilityTags: ['meeting.review'],
             fileIntent: null
           }],
-          rationale: 'One ready Worker Agent can synthesize the meeting.'
+          rationale: 'One ready Worker User can synthesize the meeting.'
         })
       }
     }
@@ -42,7 +64,7 @@ test('local Coordinator Runtime creates an editable durable Plan draft with exac
   const options = {
     settings,
     workspace: defineProjectCoordinatorWorkspacePort({
-      readWorkspace: async () => workspaceFixture()
+      readWorkspace: async () => workspace
     }),
     getAgentExecution: () => agentExecution,
     now: () => new Date('2026-08-25T01:06:00.000Z')
@@ -57,8 +79,9 @@ test('local Coordinator Runtime creates an editable durable Plan draft with exac
   })
   assert.equal(generated.draftRevision, 1)
   assert.equal(generated.runtimeProvenance.generatedByCoordinatorAgentId, 'agt_Coordinator01')
-  assert.equal(generated.assignments[0]?.selectedAgentId, null)
-  assert.match(prompts[0] ?? '', /Created meeting.*meeting\.review/su)
+  assert.equal(generated.assignments[0]?.workerUserId, null)
+  assert.match(prompts[0] ?? '', /Created meeting.*runtimeProfiles.*eligibleTaskScopes.*text_tasks.*capabilityTags.*meeting\.review.*document\.write/su)
+  assert.doesNotMatch(prompts[0] ?? '', /runtimeCapabilityTags/u)
 
   const edited = await port.editDraft({
     projectId: generated.projectId,
@@ -68,12 +91,24 @@ test('local Coordinator Runtime creates an editable durable Plan draft with exac
     rationale: generated.rationale,
     assignments: [{
       planItemId: 'item_meeting_summary',
-      selectedAgentId: 'agt_WorkerAgent001',
-      recommendationReason: 'Owner selected the exact ready Desktop Agent.'
+      workerUserId: 'usr_Worker000001',
+      recommendationReason: 'Owner selected the User with an eligible ready Runtime.'
     }]
   })
   assert.equal(edited.draftRevision, 2)
-  assert.equal(edited.assignments[0]?.selectedAgentId, 'agt_WorkerAgent001')
+  assert.equal(edited.assignments[0]?.workerUserId, 'usr_Worker000001')
+
+  await assert.rejects(() => port.editDraft({
+    projectId: edited.projectId,
+    draftId: edited.draftId,
+    expectedDraftRevision: edited.draftRevision,
+    tasks: edited.tasks.map((task) => ({
+      ...task,
+      requiredCapabilityTags: ['meeting.review', 'document.write']
+    })),
+    rationale: edited.rationale,
+    assignments: edited.assignments
+  }), /one online eligible Runtime/u)
 
   const reloaded = createProjectCoordinatorPlanPort(options)
   assert.deepEqual(await reloaded.readDraft({ projectId: generated.projectId }), edited)
@@ -85,31 +120,40 @@ test('local Coordinator Runtime creates an editable durable Plan draft with exac
     rationale: edited.rationale,
     assignments: [{
       planItemId: 'item_meeting_summary',
-      selectedAgentId: 'agt_NotAProjectAgent',
+      workerUserId: 'usr_NotAProjectUser',
       recommendationReason: 'An invented candidate must be rejected.'
     }]
-  }), /exact visible Agent/u)
+  }), /active Project member/u)
 })
 
 test('immutable Plan submit uses Coordinator Agent authority before Owner confirmation and activation', async () => {
   const settings = inMemorySettings()
   let phase: 'draft' | 'submitted' | 'confirmed' | 'active' = 'draft'
   let submittedPlan: ProjectPlan | undefined
+  let offeredBundle: Extract<RestResponse, { type: 'rest.collection' }> | undefined
   const coordinatorCommands: unknown[] = []
   const userCommands: unknown[] = []
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
     execute: async (command) => {
       coordinatorCommands.push(command)
-      assert.equal(command.type, 'project.plan.submit')
-      if (command.type !== 'project.plan.submit') throw new Error('Unexpected command.')
-      submittedPlan = submittedPlanFixture(command)
-      phase = 'submitted'
-      return {
-        protocolVersion: '1.0',
-        type: 'rest.entity',
-        requestId: command.requestId,
-        entity: submittedPlan
+      if (command.type === 'project.plan.submit') {
+        submittedPlan = submittedPlanFixture(command)
+        phase = 'submitted'
+        return {
+          protocolVersion: '1.0',
+          type: 'rest.entity',
+          requestId: command.requestId,
+          entity: submittedPlan
+        }
       }
+      assert.equal(command.type, 'task.offer.create')
+      if (command.type !== 'task.offer.create') throw new Error('Unexpected command.')
+      assert.equal(phase, 'active')
+      assert.equal(command.expectedProjectRevision, 4)
+      assert.equal(command.expectedPlanRevision, 2)
+      assert.equal(command.workerUserId, 'usr_Worker000001')
+      offeredBundle = taskOfferResponse(command)
+      return offeredBundle
     },
     subscribe: () => () => undefined
   }
@@ -166,7 +210,7 @@ test('immutable Plan submit uses Coordinator Agent authority before Owner confir
   const port = createProjectCoordinatorPlanPort({
     settings,
     workspace: defineProjectCoordinatorWorkspacePort({
-      readWorkspace: async () => workflowWorkspace(phase, submittedPlan)
+      readWorkspace: async () => workflowWorkspace(phase, submittedPlan, offeredBundle)
     }),
     getAgentExecution: () => planAgentExecution(),
     coordinatorCloudCommands,
@@ -188,8 +232,8 @@ test('immutable Plan submit uses Coordinator Agent authority before Owner confir
     rationale: draft.rationale,
     assignments: [{
       planItemId: 'item_meeting_summary',
-      selectedAgentId: 'agt_WorkerAgent001',
-      recommendationReason: 'Owner selected the ready meeting reviewer.'
+      workerUserId: 'usr_Worker000001',
+      recommendationReason: 'Owner selected the User with a ready meeting-review Runtime.'
     }]
   })
 
@@ -232,9 +276,14 @@ test('immutable Plan submit uses Coordinator Agent authority before Owner confir
     planDigest: submitted.plan.planDigest
   }, 'idem_PlanConfirmTracer01')
   assert.equal(activated.projects[0]?.project.status, 'active')
+  assert.equal(activated.projects[0]?.tasks.length, 2)
   assert.deepEqual((userCommands as Array<{ type: string }>).map(({ type }) => type), [
     'project.plan.confirm',
     'project.transition'
+  ])
+  assert.deepEqual((coordinatorCommands as Array<{ type: string }>).map(({ type }) => type), [
+    'project.plan.submit',
+    'task.offer.create'
   ])
 })
 
@@ -269,6 +318,7 @@ function workspaceFixture() {
     },
     observedAt: updatedAt,
     focusedProjectId: 'prj_ProjectCreated01',
+    availableWorkerUsers: [],
     projects: [{
       project: {
         schemaVersion: 1 as const,
@@ -293,6 +343,7 @@ function workspaceFixture() {
         }
       },
       plan: null,
+      memberUsers: [],
       workerGroups: [{
         userId: 'usr_Worker000001',
         displayName: 'Worker User',
@@ -306,8 +357,37 @@ function workspaceFixture() {
             agentId: 'agt_WorkerAgent001',
             revision: 7,
             availability,
-            membership: null,
-            taskAuthorities: [],
+            membership: {
+              schemaVersion: 1 as const,
+              type: 'project_membership' as const,
+              projectMembershipId: 'pmb_WorkerMember001',
+              projectId: 'prj_ProjectCreated01',
+              userId: 'usr_Worker000001',
+              state: 'active' as const,
+              authorityEpoch: 1,
+              activatedAt: createdAt,
+              removalRequestedAt: null,
+              removalRequestedByUserId: null,
+              removedAt: null,
+              revision: 1,
+              createdAt,
+              updatedAt
+            },
+            taskAuthorities: [{
+              schemaVersion: 1 as const,
+              type: 'task_authority' as const,
+              taskAuthorityId: 'tau_WorkerText001',
+              projectId: 'prj_ProjectCreated01',
+              userId: 'usr_Worker000001',
+              scope: 'text_tasks' as const,
+              state: 'eligible' as const,
+              authorityEpoch: 1,
+              reason: null,
+              effectiveAt: createdAt,
+              revision: 1,
+              createdAt,
+              updatedAt
+            }],
             providerPrincipalFact: null,
             providerPrincipalSnapshotStatus: 'not_applicable' as const,
             contentReadiness: null,
@@ -316,6 +396,7 @@ function workspaceFixture() {
         }]
       }],
       tasks: [],
+      offers: [],
       reviews: [],
       pendingHumanNeeded: [],
       records: [],
@@ -338,10 +419,21 @@ function workspaceFixture() {
 
 function workflowWorkspace(
   phase: 'draft' | 'submitted' | 'confirmed' | 'active',
-  plan: ProjectPlan | undefined
+  plan: ProjectPlan | undefined,
+  offeredBundle?: Extract<RestResponse, { type: 'rest.collection' }>
 ) {
   const base = workspaceFixture()
-  const projectRevision = phase === 'draft' ? 1 : phase === 'submitted' ? 2 : phase === 'confirmed' ? 3 : 4
+  const projectRevision = phase === 'draft'
+    ? 1
+    : phase === 'submitted'
+      ? 2
+      : phase === 'confirmed'
+        ? 3
+        : offeredBundle
+          ? 5
+          : 4
+  const offeredTask = offeredBundle?.items.find((item) => item.type === 'task')
+  const offeredOffer = offeredBundle?.items.find((item) => item.type === 'task_offer')
   return {
     ...base,
     projects: [{
@@ -351,9 +443,157 @@ function workflowWorkspace(
         revision: projectRevision,
         status: phase === 'active' ? 'active' as const : 'paused' as const
       },
-      plan: plan ? { plan, assignments: [] } : null
+      plan: plan ? {
+        plan,
+        assignments: [{
+          planItemId: 'item_meeting_summary',
+          workerUserId: 'usr_Worker000001',
+          recommendationReason: 'Owner selected the User with a ready meeting-review Runtime.'
+        }]
+      } : null,
+      workerGroups: base.projects[0]!.workerGroups.map((group) => ({
+        ...group,
+        agents: group.agents.map((agent) => ({
+          ...agent,
+          projectAvailability: {
+            ...agent.projectAvailability,
+            revision: phase === 'active' ? 11 : agent.projectAvailability.revision,
+            availability: {
+              ...agent.projectAvailability.availability,
+              revision: phase === 'active' ? 11 : agent.projectAvailability.availability.revision
+            }
+          }
+        }))
+      })),
+      tasks: [
+        ...(phase === 'active' ? [previousPlanTaskView()] : []),
+        ...(offeredTask
+          ? [{ task: offeredTask, executions: [] }]
+          : [])
+      ],
+      offers: offeredOffer ? [offeredOffer] : []
     }]
   }
+}
+
+function previousPlanTaskView() {
+  const at = '2026-08-24T23:00:00.000Z'
+  const taskId = 'tsk_PreviousPlanTask01'
+  const executionId = 'exe_PreviousPlanTask01'
+  return {
+    task: taskSchema.parse({
+      schemaVersion: 1,
+      type: 'task',
+      taskId,
+      projectId: 'prj_ProjectCreated01',
+      createdByCoordinatorAgentId: 'agt_Coordinator01',
+      title: 'Retained task from an earlier Plan',
+      objective: 'Remain visible as immutable Project history.',
+      completionCriteria: ['The historical Task remains distinct from the new Plan.'],
+      dependencyTaskIds: [],
+      requiredCapabilityTags: ['meeting.review'],
+      fileIntent: null,
+      currentExecutionId: executionId,
+      currentExecutionState: 'running',
+      status: 'in_progress',
+      executionCount: 1,
+      maxRetries: 2,
+      completedAt: null,
+      revision: 1,
+      createdAt: at,
+      updatedAt: at
+    }),
+    executions: [taskExecutionSchema.parse({
+      schemaVersion: 1,
+      type: 'task_execution',
+      projectId: 'prj_ProjectCreated01',
+      taskId,
+      executionId,
+      attempt: 1,
+      offeredByCoordinatorAgentId: 'agt_Coordinator01',
+      assigneeUserId: 'usr_Worker000001',
+      assigneeAgentId: 'agt_WorkerAgent001',
+      assigneeDeviceId: 'dev_WorkerDevice01',
+      state: 'running',
+      stateRevision: 2,
+      fence: {
+        schemaVersion: 1,
+        executionId,
+        assigneeUserId: 'usr_Worker000001',
+        assigneeAgentId: 'agt_WorkerAgent001',
+        assigneeDeviceId: 'dev_WorkerDevice01',
+        assignmentTaskRevision: 1,
+        projectExecutionAuthorityEpoch: 1,
+        userTaskAuthorityEpoch: 1,
+        bindingRevision: null,
+        status: 'open',
+        reason: null,
+        fencedAt: null
+      },
+      fileIntent: null,
+      currentResultSubmissionId: null,
+      offeredAt: at,
+      acceptedAt: at,
+      startedAt: at,
+      terminalAt: null,
+      revision: 1,
+      createdAt: at,
+      updatedAt: at
+    })]
+  }
+}
+
+function taskOfferResponse(command: Extract<
+  Parameters<CoordinatorCloudCommandService['execute']>[0],
+  { type: 'task.offer.create' }
+>): Extract<RestResponse, { type: 'rest.collection' }> {
+  const at = '2026-08-25T01:06:00.000Z'
+  const taskId = 'tsk_MeetingSummary01'
+  const task = taskSchema.parse({
+    schemaVersion: 1,
+    type: 'task',
+    taskId,
+    projectId: command.projectId,
+    createdByCoordinatorAgentId: 'agt_Coordinator01',
+    title: 'Summarize decisions',
+    objective: 'Produce a bounded meeting decision summary.',
+    completionCriteria: ['Owner can review one concise summary.'],
+    dependencyTaskIds: [],
+    requiredCapabilityTags: ['meeting.review'],
+    fileIntent: null,
+    currentExecutionId: null,
+    currentExecutionState: null,
+    status: 'offered',
+    executionCount: 0,
+    maxRetries: 2,
+    completedAt: null,
+    revision: 1,
+    createdAt: at,
+    updatedAt: at
+  })
+  const offer = taskOfferSchema.parse({
+    schemaVersion: 1,
+    type: 'task_offer',
+    taskOfferId: 'ofr_MeetingSummary01',
+    projectId: command.projectId,
+    taskId,
+    executionId: null,
+    workerUserId: command.workerUserId,
+    offeredByCoordinatorAgentId: 'agt_Coordinator01',
+    state: 'pending',
+    offeredAt: at,
+    expiresAt: command.offerExpiresAt,
+    respondedAt: null,
+    revision: 1,
+    createdAt: at,
+    updatedAt: at
+  })
+  return restResponseSchema.parse({
+    protocolVersion: '1.0',
+    type: 'rest.collection',
+    requestId: command.requestId,
+    items: [task, offer]
+  }) as Extract<RestResponse, { type: 'rest.collection' }>
 }
 
 function planAgentExecution(): DomainMainAgentExecutionHost {
@@ -373,7 +613,7 @@ function planAgentExecution(): DomainMainAgentExecutionHost {
           requiredCapabilityTags: ['meeting.review'],
           fileIntent: null
         }],
-        rationale: 'One ready Worker Agent can synthesize the meeting.'
+        rationale: 'One ready Worker User can synthesize the meeting.'
       })
     })
   }

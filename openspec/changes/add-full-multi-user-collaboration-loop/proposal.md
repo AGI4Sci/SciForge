@@ -5,8 +5,8 @@ SciForge 已分别具备 OIDC/Device 身份、云端 Project/Task、OpenContent 
 ## What Changes
 
 - 以 Keycloak OIDC JIT User、当前 ACTIVE Desktop Device 和其本地 Runtime 为唯一 Agent 建立链；pairing 只绑定通信端点，任何协作包都不得接触 OIDC Token。
-- 让每个 Project 保持一个始终由 Project Owner 所有的精确 Coordinator Agent，并允许 Owner 通过 Coordinator HCI 按 User 分组查看云端 Worker Availability Projection、选择精确 Worker Agent、动态增员、派发、拒绝后改派、复审，以及在自己的多个 Agent 间显式转交 Coordinator。
-- 将手动/自动接单保留为每台 Agent Device 的本地持久策略；Cloud 只保存 Task offer/accept/reject、execution fence、revision、幂等、Inbox、Project Record 与恢复事实。
+- 让每个 Project 保持一个始终由 Project Owner 所有的精确 Coordinator Agent，并允许 Owner 通过 Coordinator HCI 查看云端 Worker User Directory、为 Task 选择 Worker User、动态增员、派发、超时/撤回后改派、复审，以及在自己的多个 Agent 间显式转交 Coordinator。Cloud 向目标 User 的所有合格运行时广播 User-level Task Offer，并在首个原子领取时才绑定精确 Worker Device/Agent Execution。
+- 将手动/自动接单保留为每台 Agent Device 的本地持久策略；单台 Device 忽略 Offer 只是本地决定，Cloud 只保存 User-level Task Offer、原子 claim、execution fence、revision、幂等、Inbox、Project Record 与恢复事实，不保存 User 级 reject。
 - 新增 Project Owner 驱动的内容 provisioning saga：Run-0 初始 content owner 固定为 Project Owner；Cloud 保存 intent，Owner Desktop 通过 Content Space 创建一个共享目录、精确维护 Provider 成员、写后核验，并提交由当前 Device 签名的无秘密 provisioning attestation 后激活 Project。未来更换 content owner 必须由新 content owner Desktop 执行独立 saga，不属于本次验收。
 - 建立唯一的真实文件任务通道：portable reference 在 Worker 本机重新授权；download 在打开本地目标前执行 Provider `DownloadCheck`，upload 使用 Provider 的真实写入授权；元数据仅验证 locator/ancestry，不充当 ACL 事实源。
 - 删除 Content Space 静态 verification profile 与授权包门禁，改由当前 Principal、Broker audience/authority、pinned Provider 的 live Binding Attestation 和真实 Provider ACL 在每次调用时授权；OpenContent Provider 在没有 `opencontent-base` Agent 技能包时仍可正常使用，私有技能 ZIP 只通过通用本地校验/安装器作为可选增强进入标准 Workspace skill root。
@@ -20,7 +20,7 @@ SciForge 已分别具备 OIDC/Device 身份、云端 Project/Task、OpenContent 
 ### New Capabilities
 
 - `connected-desktop-agent`: OIDC User、ACTIVE Device、本地 Runtime 与每 Device 一个 active Agent 的安全建立、撤销和 token-free Cloud transport。
-- `project-agent-coordination`: 单 Coordinator Agent、精确 Worker Agent 选择、availability projection、本地接单策略、Task execution fencing、真人升级、复审、改派和 Coordinator 转交。
+- `project-agent-coordination`: 单 Coordinator Agent、Worker User 选择、User-level Offer 广播、原子 Device/Agent claim、availability projection、本地接单策略、Task execution fencing、真人升级、复审、改派和 Coordinator 转交。
 - `project-content-provisioning`: Cloud intent 与 Owner Desktop Content Space 外部写组成的可恢复 saga、Provider principal readiness、Device-signed attestation、成员增删，以及 Project Membership、Provider Observation、Content Readiness、Task Authority 四项独立事实。
 - `project-content-execution`: Project 文件意图、portable reference、本机 Provider reauthorization、operation-time ACL、Workspace transfer、完整性、结果提交和 `outcome_unknown` 恢复。
 - `multi-user-meeting-acceptance`: A 测试环境蓝绿 candidate/cutover、源码应用多设备角色脚本、真实 Runtime/OpenContent 闭环、恢复矩阵和脱敏验证回执。

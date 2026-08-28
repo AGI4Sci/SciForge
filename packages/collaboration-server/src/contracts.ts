@@ -17,6 +17,8 @@ import {
   projectContentReadinessSchema,
   projectWorkerAvailabilityViewSchema,
   providerDirectoryPrincipalFactSchema,
+  workerDirectoryAgentLabelSchema,
+  workerDirectoryUserLabelSchema,
   workerAvailabilityProjectionSchema,
   projectPlanSchema,
   taskExecutionSchema,
@@ -47,6 +49,8 @@ import {
   type ProjectContentReadiness,
   type ProjectWorkerAvailabilityView,
   type ProviderDirectoryPrincipalFact,
+  type WorkerDirectoryAgentLabel,
+  type WorkerDirectoryUserLabel,
   type WorkerAvailabilityProjection,
   type ProjectPlan,
   type TaskExecution,
@@ -191,7 +195,9 @@ export function toTask(task: StoredTask): Task {
   return taskSchema.parse({ schemaVersion: 1, type: 'task', taskId: task.taskId, projectId: task.projectId,
     createdByCoordinatorAgentId: task.createdByCoordinatorAgentId,
     title: task.title, objective: task.objective, completionCriteria: task.completionCriteria,
-    dependencyTaskIds: task.dependencyTaskIds, fileIntent: task.fileIntent,
+    dependencyTaskIds: task.dependencyTaskIds,
+    requiredCapabilityTags: task.requiredCapabilityTags,
+    fileIntent: task.fileIntent,
     currentExecutionId: task.currentExecutionId,
     currentExecutionState: task.currentExecutionState,
     status: task.status,
@@ -329,6 +335,27 @@ export function toWorkerAvailability(
     schemaVersion: 1,
     type: 'worker_availability_projection',
     ...availability
+  })
+}
+
+export function toWorkerDirectoryUserLabel(user: StoredUser): WorkerDirectoryUserLabel {
+  return workerDirectoryUserLabelSchema.parse({
+    userId: user.userId,
+    displayName: user.displayName,
+    status: user.status,
+    revision: user.revision
+  })
+}
+
+export function toWorkerDirectoryAgentLabel(agent: StoredAgent): WorkerDirectoryAgentLabel {
+  return workerDirectoryAgentLabelSchema.parse({
+    agentId: agent.agentId,
+    ownerUserId: agent.ownerUserId,
+    deviceId: agent.deviceId,
+    displayName: agent.displayName,
+    nodeType: agent.nodeType,
+    lifecycleStatus: agent.status === 'revoked' ? 'revoked' : 'active',
+    revision: agent.revision
   })
 }
 

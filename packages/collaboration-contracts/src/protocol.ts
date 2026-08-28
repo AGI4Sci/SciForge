@@ -73,6 +73,8 @@ import {
 import {
   projectWorkerAvailabilityViewSchema,
   projectMembershipSchema,
+  workerDirectoryAgentLabelSchema,
+  workerDirectoryUserLabelSchema,
   workerAvailabilityProjectionSchema
 } from './project-coordination.js'
 import {
@@ -211,13 +213,35 @@ export const taskOfferedPayloadSchema = z.object({
   type: z.literal('task.offered'),
   projectId: projectIdSchema,
   taskId: taskIdSchema,
-  executionId: executionIdSchema,
   taskOfferId: taskOfferIdSchema,
+  workerUserId: userIdSchema,
   currentTaskRevision: revisionSchema,
-  currentExecutionRevision: revisionSchema,
   offerRevision: revisionSchema
 }).strict()
 export type TaskOfferedPayload = z.infer<typeof taskOfferedPayloadSchema>
+
+export const taskOfferClaimedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('task.offer.claimed'),
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  taskOfferId: taskOfferIdSchema,
+  executionId: executionIdSchema,
+  claimedByAgentId: agentIdSchema,
+  offerRevision: revisionSchema
+}).strict()
+export type TaskOfferClaimedPayload = z.infer<typeof taskOfferClaimedPayloadSchema>
+
+export const taskOfferClosedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('task.offer.closed'),
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  taskOfferId: taskOfferIdSchema,
+  outcome: z.enum(['withdrawn', 'timed_out']),
+  offerRevision: revisionSchema
+}).strict()
+export type TaskOfferClosedPayload = z.infer<typeof taskOfferClosedPayloadSchema>
 
 export const projectionUpdatedPayloadSchema = z.object({
   ...agentInboxEnvelopeShape,
@@ -286,6 +310,8 @@ export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
   }).strict(),
   personalMessageReceivedPayloadSchema,
   taskOfferedPayloadSchema,
+  taskOfferClaimedPayloadSchema,
+  taskOfferClosedPayloadSchema,
   taskRecoveryOutputLinkedPayloadSchema,
   taskRecoveryAbandonedPayloadSchema,
   projectionUpdatedPayloadSchema,
@@ -561,6 +587,7 @@ export const humanNeededCreateCommandSchema = z.object({
   ...writeCommandShape,
   type: z.literal('human.needed.create'),
   projectId: projectIdSchema,
+  targetUserId: userIdSchema,
   context: humanNeededCreateContextSchema,
   requiredAssurance: assuranceLevelSchema,
   prompt: nonEmptyTextSchema,
@@ -604,7 +631,7 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...protocolEnvelopeShape, type: z.literal('endpoint.challenge.get'), challengeId: challengeIdSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('endpoint.transition'), humanEndpointId: humanEndpointIdSchema, expectedRevision: revisionSchema, status: z.enum(['active', 'suspended', 'revoked']) }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('endpoint.transfer'), humanEndpointId: humanEndpointIdSchema, targetUserId: userIdSchema, expectedRevision: revisionSchema }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('agent.register'), deviceId: deviceIdSchema, displayName: z.string().trim().min(1).max(200), nodeType: z.enum(['desktop', 'server']), capabilities: z.array(z.string().regex(/^[a-z][a-z0-9_.-]{0,127}$/u)).max(256), credentialBootstrapPublicKey: agentCredentialBootstrapPublicKeySchema }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('agent.ensure'), deviceId: deviceIdSchema, capabilities: z.array(z.string().regex(/^[a-z][a-z0-9_.-]{0,127}$/u)).max(256), credentialBootstrapPublicKey: agentCredentialBootstrapPublicKeySchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('agent.heartbeat'), agentId: agentIdSchema, expectedRevision: revisionSchema, connectionStatus: z.enum(['online', 'offline']), capabilities: z.array(z.string().regex(/^[a-z][a-z0-9_.-]{0,127}$/u)).max(256) }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('agent.rotate_credential'), agentId: agentIdSchema, expectedRevision: revisionSchema, credentialBootstrapPublicKey: agentCredentialBootstrapPublicKeySchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('agent.revoke'), agentId: agentIdSchema, expectedRevision: revisionSchema }).strict(),
@@ -617,7 +644,6 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...writeCommandShape, type: z.literal('managed_container.inspect'), managedContainerId: managedContainerIdSchema, expectedRevision: revisionSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('managed_container.reconcile'), managedContainerId: managedContainerIdSchema, expectedRevision: revisionSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('managed_container.archive'), managedContainerId: managedContainerIdSchema, expectedRevision: revisionSchema }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('participant.update_primary'), userId: userIdSchema, expectedRevision: revisionSchema, primaryHumanEndpointId: humanEndpointIdSchema.nullable(), primaryAgentId: agentIdSchema.nullable() }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('projection.create'), ownerUserId: userIdSchema, agentId: agentIdSchema, humanEndpointId: humanEndpointIdSchema, locator: providerLocatorSchema, displayName: z.string().trim().min(1).max(200), allowedSenderUserIds: z.array(userIdSchema).min(1).max(100) }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('projection.get'), projectionId: projectionIdSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('projection.list'), ownerUserId: userIdSchema }).strict(),
@@ -662,6 +688,70 @@ export const restEntitySchema = z.union([
 ])
 export type RestEntity = z.infer<typeof restEntitySchema>
 
+const restWorkerAvailabilityPageSchema = z.object({
+  protocolVersion: protocolVersionSchema,
+  type: z.literal('rest.worker_availability_page'),
+  requestId: requestIdSchema,
+  observedAt: timestampSchema,
+  items: z.array(workerAvailabilityProjectionSchema).max(500),
+  userLabels: z.array(workerDirectoryUserLabelSchema).max(500),
+  agentLabels: z.array(workerDirectoryAgentLabelSchema).max(500),
+  nextAgentId: agentIdSchema.optional()
+}).strict().superRefine((page, context) => {
+  const userIds = [...new Set(page.items.map(({ userId }) => userId))]
+  const agentIds = page.items.map(({ agentId }) => agentId)
+  if (new Set(agentIds).size !== agentIds.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['items'],
+      message: 'A global Worker directory page contains each Agent at most once.'
+    })
+  }
+  if (
+    page.userLabels.length !== userIds.length ||
+    page.userLabels.some(({ userId }) => !userIds.includes(userId))
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['userLabels'],
+      message: 'A global Worker directory page contains one safe label for every visible User.'
+    })
+  }
+  if (
+    page.agentLabels.length !== agentIds.length ||
+    page.agentLabels.some(({ agentId }) => !agentIds.includes(agentId))
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['agentLabels'],
+      message: 'A global Worker directory page contains one safe label for every visible Agent.'
+    })
+  }
+  for (const [index, availability] of page.items.entries()) {
+    const user = page.userLabels.find(({ userId }) => userId === availability.userId)
+    const agent = page.agentLabels.find(({ agentId }) => agentId === availability.agentId)
+    if (user?.status !== 'active') {
+      context.addIssue({
+        code: 'custom',
+        path: ['userLabels'],
+        message: `Worker availability item ${index} requires its active User label.`
+      })
+    }
+    if (
+      !agent ||
+      agent.ownerUserId !== availability.userId ||
+      agent.deviceId !== availability.deviceId ||
+      agent.lifecycleStatus !== 'active'
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['agentLabels'],
+        message: `Worker availability item ${index} requires its exact active Agent ownership label.`
+      })
+    }
+  }
+}).readonly()
+
 export const restResponseSchema = z.discriminatedUnion('type', [
   restProjectPageResponseSchema,
   restProjectCoordinationResponseSchema,
@@ -678,12 +768,18 @@ export const restResponseSchema = z.discriminatedUnion('type', [
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('participant.snapshot'), requestId: requestIdSchema, user: userPrincipalSchema, participant: participantProfileSchema, humanEndpoints: z.array(humanEndpointBindingSchema).max(100), agents: z.array(agentNodeSchema).max(100) }).strict(),
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('endpoint.catalog'), requestId: requestIdSchema, providers: z.array(humanEndpointProviderContractSchema).max(100) }).strict(),
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('endpoint.locator_page'), requestId: requestIdSchema, locators: z.array(providerLocatorSchema).max(500), nextCursor: z.string().min(1).max(2_048).optional() }).strict(),
-  z.object({ protocolVersion: protocolVersionSchema, type: z.literal('agent.registered'), requestId: requestIdSchema, agent: agentNodeSchema, sealedCredential: agentCredentialEnvelopeSchema }).strict(),
+  z.object({
+    protocolVersion: protocolVersionSchema,
+    type: z.literal('agent.ensured'),
+    requestId: requestIdSchema,
+    agent: agentNodeSchema,
+    sealedCredential: agentCredentialEnvelopeSchema.optional()
+  }).strict(),
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('agent.credential_rotated'), requestId: requestIdSchema, agent: agentNodeSchema, sealedCredential: agentCredentialEnvelopeSchema }).strict(),
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('rest.entity'), requestId: requestIdSchema, entity: restEntitySchema }).strict(),
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('rest.collection'), requestId: requestIdSchema, items: z.array(restEntitySchema).max(10_000), nextCursor: z.string().min(1).max(2_048).optional() }).strict(),
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('rest.inbox_page'), requestId: requestIdSchema, messages: z.array(inboxMessageSchema).max(1_000), nextSequence: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict(),
-  z.object({ protocolVersion: protocolVersionSchema, type: z.literal('rest.worker_availability_page'), requestId: requestIdSchema, items: z.array(workerAvailabilityProjectionSchema).max(500), nextAgentId: agentIdSchema.optional() }).strict(),
+  restWorkerAvailabilityPageSchema,
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('rest.project_worker_availability_page'), requestId: requestIdSchema, projectId: projectIdSchema, items: z.array(projectWorkerAvailabilityViewSchema).max(500), nextAgentId: agentIdSchema.optional() }).strict(),
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('rest.provider_directory_principal_page'), requestId: requestIdSchema, items: z.array(providerDirectoryPrincipalFactSchema).max(1_000), nextFactId: providerPrincipalFactIdSchema.optional() }).strict(),
   z.object({
@@ -705,7 +801,7 @@ export const restResponseSchema = z.discriminatedUnion('type', [
     }
     const memberUsers = response.memberships.map(({ userId }) => userId)
     if (new Set(memberUsers).size !== memberUsers.length || !memberUsers.includes(response.project.ownerUserId)) {
-      context.addIssue({ code: 'custom', path: ['memberships'], message: 'Created Memberships are unique and include the OIDC-derived Owner.' })
+      context.addIssue({ code: 'custom', path: ['memberships'], message: 'Created Memberships are unique and include the authenticated Agent owner User.' })
     }
     const requiresContent = response.project.contentMode === 'required'
     if (requiresContent !== (response.provisioningIntent !== null)) {

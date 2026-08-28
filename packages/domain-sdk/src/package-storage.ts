@@ -88,7 +88,6 @@ export type DomainMainProviderCredentialOperationOptions = Readonly<{
 
 export type DomainMainProviderCredentialErrorCode =
   | 'principal_unavailable'
-  | 'principal_device_mismatch'
   | 'credential_unavailable'
   | 'credential_binding_mismatch'
   | 'secure_storage_unavailable'

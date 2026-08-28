@@ -83,21 +83,21 @@ Desktop SHALL 使用受验证的 Access Token 调用 `/v1/me` 获取 canonical C
 - **THEN** 系统 SHALL 返回所有权冲突
 - **AND** 原 owner 和 Agent 状态 SHALL 保持不变。
 
-### Requirement: Participant 明确组合手机与 primary Agent
+### Requirement: Participant 明确组合手机端点与所有 Device Agent
 
-PoC SHALL 为每个 active 用户维护一个 `ParticipantProfile`，其中包含一个 primary human endpoint 和一个 primary Agent。缺少任一端点时 SHALL 显示 incomplete，系统 SHALL NOT 猜测或借用其他用户端点。
+PoC SHALL 为每个 active 用户维护一个 `ParticipantProfile`，组合其已验证 human endpoint 与所有归属该 User 的 Device Agent。Identity SHALL 在每个已认证 ACTIVE Device 的 Runtime ready 后自动 ensure 并复用该 Device 的 canonical Agent；系统 SHALL NOT 要求或保存用户选择的 primary Agent，也不得借用其他 User 的端点或 Agent。
 
-#### Scenario: 用户选择 primary Agent
+#### Scenario: 当前 Device 自动确保 Agent
 
-- **WHEN** 用户从自己拥有的 Agent 中选择 primary Agent
-- **THEN** 系统 SHALL 原子更新 Participant revision
-- **AND** 后续未指定 Agent 的个人创建请求 SHALL 使用新的 primary Agent。
+- **WHEN** 用户在一个新的 ACTIVE Device 上完成登录且 Runtime ready
+- **THEN** Identity SHALL 为该 Device 自动 ensure 或复用唯一 active Agent，并原子更新 Participant revision
+- **AND** renderer SHALL NOT 提供 Agent 注册或 primary 选择控件。
 
-#### Scenario: Primary Agent 离线
+#### Scenario: 固定 Session 的 Agent 离线
 
-- **WHEN** 手机请求需要执行但 primary Agent 离线
+- **WHEN** 手机请求绑定的个人 Session Agent 离线
 - **THEN** 系统 SHALL 保留 bounded pending 或明确返回离线状态
-- **AND** SHALL NOT 路由到最近在线或另一用户的 Agent。
+- **AND** SHALL NOT 路由到同一 User 最近在线的另一 Device 或另一 User 的 Agent。
 
 ### Requirement: 身份和授权保证级别分离
 

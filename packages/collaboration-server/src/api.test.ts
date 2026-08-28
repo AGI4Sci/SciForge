@@ -39,6 +39,98 @@ afterEach(async () => {
 })
 
 describe('production HTTP OIDC-only boundary', () => {
+  it('returns Cloud-global online Workers with safe User and exact Agent labels', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const viewer = await seedOidcUserDevice(repository, 'http-directory-viewer', now())
+    const worker = await seedOidcUserDevice(repository, 'http-directory-worker', now())
+    const workerNode = {
+      agentId: 'agt_HttpDirectoryWorker01',
+      deviceId: worker.deviceId,
+      ownerUserId: worker.userId,
+      displayName: 'Worker Desktop',
+      nodeType: 'desktop',
+      capabilities: ['research.execute'],
+      status: 'active' as const,
+      connectionStatus: 'offline' as const,
+      credentialGeneration: 1,
+      revision: 1,
+      updatedAt: now().toISOString()
+    }
+    await repository.insertAgent(workerNode)
+    const workerAgent = {
+      kind: 'agent_device' as const,
+      actorKey: `agent:${workerNode.agentId}:http-directory`,
+      userId: worker.userId,
+      agentId: workerNode.agentId,
+      deviceId: worker.deviceId,
+      credentialId: 'credential_http_directory',
+      credentialGeneration: workerNode.credentialGeneration,
+      assurance: 'device' as const
+    }
+    const heartbeat = await service.heartbeatAgent(workerAgent, {
+      expectedRevision: workerNode.revision,
+      connectionStatus: 'online',
+      capabilities: ['research.execute'],
+      idempotencyKey: 'idem_http_directory_heartbeat'
+    })
+    await service.publishWorkerAvailability(workerAgent, {
+      protocolVersion: '1.0',
+      requestId: 'req_HttpDirectoryPublish1',
+      type: 'worker.availability.publish',
+      idempotencyKey: 'idem_http_directory_publish',
+      agentId: workerAgent.agentId,
+      expectedAgentRevision: heartbeat.revision,
+      connectionStatus: 'online',
+      lastHeartbeatAt: heartbeat.lastSeenAt,
+      runtimeReadiness: 'ready',
+      runtimeCapabilityTags: ['research.execute'],
+      acceptsNewOffers: false,
+      activeTaskCount: 0,
+      observedAt: now().toISOString()
+    })
+
+    const token = 'header.directory.signature'
+    const authentication = new AuthenticationService(repository, now, {
+      isCandidate: (candidate) => candidate === token,
+      resolve: async () => viewer.user
+    })
+    const server = createCollaborationHttpServer({ service, authentication, readiness: async () => true })
+    servers.push(server)
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+
+    const response = await postCommand(baseUrl, {
+      protocolVersion: '1.0',
+      requestId: 'req_HttpDirectoryList01',
+      type: 'worker.availability.list',
+      limit: 100
+    }, token)
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      type: 'rest.worker_availability_page',
+      observedAt: now().toISOString(),
+      items: [{
+        userId: worker.userId,
+        agentId: workerAgent.agentId,
+        deviceId: worker.deviceId,
+        connectionStatus: 'online',
+        acceptsNewOffers: false
+      }],
+      userLabels: [{ userId: worker.userId, displayName: 'http-directory-worker' }],
+      agentLabels: [{
+        agentId: workerAgent.agentId,
+        ownerUserId: worker.userId,
+        deviceId: worker.deviceId,
+        displayName: 'Worker Desktop'
+      }]
+    })
+  })
+
   it('requires OIDC for catalog and endpoint binding while never returning a second User credential', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
@@ -354,13 +446,11 @@ describe('production HTTP OIDC-only boundary', () => {
     const identity = await seedOidcUserDevice(repository, 'http-worker-availability', now())
     const bootstrap = createAgentCredentialBootstrap()
     const capabilities = ['agent-runtime.codex', 'model-access.coding-plan']
-    const registered = await service.registerAgent(identity.user, {
+    const registered = await service.ensureAgent(identity.user, {
       deviceId: identity.deviceId,
-      displayName: 'HTTP Worker',
-      nodeType: 'desktop',
       capabilities,
       credentialBootstrapPublicKey: bootstrap.publicKey,
-      idempotencyKey: 'idem_http_worker_agent_register'
+      idempotencyKey: 'idem_http_worker_agent_ensure'
     })
     const agentCredential = bootstrap.open(registered.sealedCredential!)
     const server = createCollaborationHttpServer({
@@ -429,16 +519,18 @@ describe('production HTTP OIDC-only boundary', () => {
     })
   })
 
-  it('serves the canonical Provider directory and OIDC-derived atomic Project create responses', async () => {
+  it('serves the Provider directory while Project creation derives authority from the current Device Agent', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
     const identity = await seedOidcUserDevice(repository, 'http-cloud-owner', now())
-    const coordinator = await service.registerAgent(identity.user, {
-      deviceId: identity.deviceId, displayName: 'HTTP Coordinator', nodeType: 'desktop',
+    const coordinatorBootstrap = createAgentCredentialBootstrap()
+    const coordinator = await service.ensureAgent(identity.user, {
+      deviceId: identity.deviceId,
       capabilities: ['project.coordinate'],
-      credentialBootstrapPublicKey: createAgentCredentialBootstrap().publicKey,
+      credentialBootstrapPublicKey: coordinatorBootstrap.publicKey,
       idempotencyKey: 'idem_http_cloud_coordinator'
     })
+    const coordinatorCredential = coordinatorBootstrap.open(coordinator.sealedCredential)
     const token = 'header.cloud.signature'
     const authentication = new AuthenticationService(repository, now, {
       isCandidate: (candidate) => candidate === token,
@@ -476,14 +568,21 @@ describe('production HTTP OIDC-only boundary', () => {
     expect(page.status).toBe(200)
     await expect(page.json()).resolves.toMatchObject({ type: 'rest.provider_directory_principal_page',
       items: [{ userId: identity.userId }] })
-    const project = await postCommand(baseUrl, {
+    const projectCommand = {
       protocolVersion: '1.0', requestId: 'req_HttpProjectCreate1', type: 'project.create',
       idempotencyKey: 'idem_http_project_create_01', displayName: 'HTTP meeting',
-      goal: 'Verify the canonical atomic response.', coordinatorAgentId: coordinator.agent.agentId,
-      expectedCoordinatorAgentRevision: coordinator.agent.revision,
+      goal: 'Verify the canonical atomic response.',
       budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 1, maxCoordinationRounds: 2 },
       content: { mode: 'none', members: [{ userId: identity.userId }] }
+    } as const
+    const oidcCreate = await postCommand(baseUrl, {
+      ...projectCommand,
+      requestId: 'req_HttpProjectCreateOidc',
+      idempotencyKey: 'idem_http_project_create_oidc'
     }, token)
+    expect(oidcCreate.status).toBe(403)
+
+    const project = await postCommand(baseUrl, projectCommand, coordinatorCredential)
     expect(project.status).toBe(200)
     const projectBody = await project.json() as { project: { projectId: string } }
     expect(projectBody).toMatchObject({ type: 'rest.project_created',
@@ -524,7 +623,7 @@ describe('production HTTP OIDC-only boundary', () => {
       resultSubmissionId: 'rsu_Result000001', expectedProjectRevision: 1,
       expectedTaskRevision: 1, expectedExecutionRevision: 1, expectedResultRevision: 1,
       expectedCoordinatorAuthorityEpoch: 1, decision: 'accept', instruction: null,
-      nextAssigneeAgentId: null, expectedNextAssigneeAvailabilityRevision: null,
+      nextWorkerUserId: null,
       nextOfferExpiresAt: null, nextFileIntent: null
     }, {
       protocolVersion: '1.0', requestId: 'req_HttpSummary00001',

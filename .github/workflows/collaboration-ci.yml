@@ -168,6 +168,47 @@ jobs:
       - name: Verify server package contents
         run: npm pack --workspace @sciforge/collaboration-server --dry-run
 
+  desktop-agent-platform-contract:
+    name: Desktop Agent (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Linux
+            os: ubuntu-latest
+          - platform: macOS
+            os: macos-latest
+          - platform: Windows
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify Identity private vault and Host encryption policy
+        run: |
+          npm --workspace @sciforge/domain-identity-access test
+          npx vitest run src/main/domain-package-storage.test.ts
+
+      - name: Build the Desktop application
+        env:
+          NODE_OPTIONS: "--max-old-space-size=6144"
+        run: npm run build
+
+      - name: Verify Windows provider and package tooling
+        if: matrix.platform == 'Windows'
+        run: |
+          npm --workspace @sciforge/collaboration-provider-zulip test
+          node --test ./scripts/domain-packages.test.mjs
+          npm run smoke:domain-packages:tarball
+
   keycloak-macos-bash32:
     runs-on: macos-latest
     steps:

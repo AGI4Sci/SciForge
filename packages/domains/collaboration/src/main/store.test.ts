@@ -15,7 +15,7 @@ import {
 
 test('restart recovery only rewinds safely replayable local and outbox work', async () => {
   const state: CollaborationLocalState = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 4,
     lastInboxSequence: 8,
     user: userPrincipalFixture,
@@ -33,6 +33,7 @@ test('restart recovery only rewinds safely replayable local and outbox work', as
     projects: [],
     tasks: [],
     taskRuns: [],
+    pendingTaskOffers: [],
     workerAcceptancePolicies: [],
     queue: [{
       queueItemId: 'lqi_Queue00000001',
@@ -73,6 +74,14 @@ test('restart recovery only rewinds safely replayable local and outbox work', as
   assert.equal(recovered.queue[0]?.state, 'reconciling')
   assert.equal(recovered.outbox[0]?.state, 'reconciling')
   assert.equal(recovered.revision, 5)
+})
+
+test('obsolete local Collaboration state fails with an explicit recovery boundary', async () => {
+  const store = new CollaborationLocalStore(new MemoryBackend({ schemaVersion: 1 }))
+  await assert.rejects(
+    store.open(),
+    /not schema version 2; clear the obsolete local Collaboration state and reconnect to Cloud/u
+  )
 })
 
 class MemoryBackend implements CollaborationStateBackend {

@@ -108,7 +108,7 @@ describe('Project plan, result review and final summary', () => {
       decision: 'accept',
       instruction: null,
       acceptedProjectRecordId: TEST_IDS.projectRecordId,
-      nextExecutionId: null,
+      nextTaskOfferId: null,
       decidedAt: TEST_LATER_TIMESTAMP
     }).success).toBe(true)
 
@@ -126,7 +126,7 @@ describe('Project plan, result review and final summary', () => {
       decision: 'request_revision',
       instruction: 'Add failure-mode analysis.',
       acceptedProjectRecordId: null,
-      nextExecutionId: 'exe_RevisionExec01',
+      nextTaskOfferId: 'ofr_RevisionOffer01',
       decidedAt: TEST_LATER_TIMESTAMP
     }).success).toBe(true)
   })
@@ -170,7 +170,7 @@ describe('Project plan, result review and final summary', () => {
     expect(projectFinalSummarySubmitCommandSchema.safeParse({ ...command, integrityVerified: true }).success).toBe(false)
   })
 
-  it('binds a Coordinator decision to one exact Owner HumanAnswer revision', () => {
+  it('binds a Coordinator decision to one exact target User HumanAnswer revision', () => {
     const command = {
       protocolVersion: '1.0',
       requestId: TEST_IDS.requestId,

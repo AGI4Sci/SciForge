@@ -17,7 +17,6 @@ import {
   CircleDashed,
   ClipboardCheck,
   Cloud,
-  Clock3,
   FileCheck2,
   FolderOpen,
   FileText,
@@ -28,13 +27,11 @@ import {
   Radio,
   RefreshCw,
   Settings2,
-  ShieldAlert,
   SquareKanban,
+  UserRound,
   UserRoundCheck,
   UsersRound,
   Warehouse,
-  Wifi,
-  WifiOff,
   Workflow,
   Zap,
   X
@@ -450,9 +447,7 @@ export function ProjectCoordinatorPanel({
   const [busyAction, setBusyAction] = useState<string>()
   const [createDisplayName, setCreateDisplayName] = useState('')
   const [createGoal, setCreateGoal] = useState('')
-  const [createCoordinatorAgentId, setCreateCoordinatorAgentId] = useState('')
-  const [createCoordinatorRevision, setCreateCoordinatorRevision] = useState('1')
-  const [createWorkerUserIds, setCreateWorkerUserIds] = useState('')
+  const [createWorkerUserIds, setCreateWorkerUserIds] = useState<readonly string[]>([])
   const [activeView, setActiveView] = useState<string>('overview')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [newProjectRequest, setNewProjectRequest] = useState(0)
@@ -597,13 +592,17 @@ export function ProjectCoordinatorPanel({
   const createProject = useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (workspace?.connection.state !== 'ready') return
-    const workerUserIds = createWorkerUserIds.split(',').map((value) => value.trim()).filter(Boolean)
-    const memberUserIds = [...new Set([workspace.connection.userId, ...workerUserIds])]
+    const creatorUserId = workspace.connection.userId
+    const visibleWorkerUserIds = new Set(workspace.availableWorkerUsers.map(({ userId }) => userId))
+    const memberUserIds = [
+      creatorUserId,
+      ...createWorkerUserIds.filter((userId) => (
+        userId !== creatorUserId && visibleWorkerUserIds.has(userId)
+      ))
+    ]
     void runAction('project-create', () => client.createProject({
       displayName: createDisplayName,
       goal: createGoal,
-      coordinatorAgentId: createCoordinatorAgentId,
-      expectedCoordinatorAgentRevision: Number(createCoordinatorRevision),
       budget: {
         maxTasks: 32,
         maxTasksPerRound: 8,
@@ -621,19 +620,22 @@ export function ProjectCoordinatorPanel({
       setDraft(await client.readPlanDraft({ projectId: selected.selectedProjectId }))
       setCreateDisplayName('')
       setCreateGoal('')
-      setCreateCoordinatorAgentId('')
-      setCreateWorkerUserIds('')
+      setCreateWorkerUserIds([])
     })
   }, [
     client,
-    createCoordinatorAgentId,
-    createCoordinatorRevision,
     createDisplayName,
     createGoal,
     createWorkerUserIds,
     runAction,
     workspace
   ])
+
+  const toggleCreateWorkerUser = useCallback((userId: string, selected: boolean) => {
+    setCreateWorkerUserIds((current) => selected
+      ? [...new Set([...current, userId])]
+      : current.filter((candidate) => candidate !== userId))
+  }, [])
 
   const generateDraft = useCallback(() => {
     if (!project) return
@@ -961,17 +963,15 @@ export function ProjectCoordinatorPanel({
                     defaultExpanded={workspace.projects.length === 0}
                     requestOpen={newProjectRequest}
                     busy={busyAction === 'project-create'}
-                    coordinatorAgentId={createCoordinatorAgentId}
-                    coordinatorRevision={createCoordinatorRevision}
+                    creatorUserId={workspace.connection.userId}
                     displayName={createDisplayName}
                     goal={createGoal}
-                    workerUserIds={createWorkerUserIds}
-                    onCoordinatorAgentId={setCreateCoordinatorAgentId}
-                    onCoordinatorRevision={setCreateCoordinatorRevision}
+                    selectedWorkerUserIds={createWorkerUserIds}
+                    workerUsers={workspace.availableWorkerUsers}
                     onDisplayName={setCreateDisplayName}
                     onGoal={setCreateGoal}
                     onSubmit={createProject}
-                    onWorkerUserIds={setCreateWorkerUserIds}
+                    onWorkerUserToggle={toggleCreateWorkerUser}
                   />
                 ) : null}
                 <ProjectCoordinatorPlanSection
@@ -1013,8 +1013,9 @@ export function ProjectCoordinatorPanel({
             {activeView === 'reviews' ? (
               <ProjectCoordinatorDecisionSection
                 project={project}
-                canAnswer={workspace?.connection.state === 'ready' &&
-                  workspace.connection.userId === project?.project.ownerUserId}
+                currentUserId={workspace?.connection.state === 'ready'
+                  ? workspace.connection.userId
+                  : null}
                 busy={Boolean(busyAction && !busyAction.startsWith('plan-'))}
                 onCreateHumanNeeded={createHumanNeeded}
                 onAnswerHumanNeeded={answerHumanNeeded}
@@ -1321,39 +1322,36 @@ function CollaborationSettingsDrawer({
   )
 }
 
-function ProjectCreateForm({
+export function ProjectCreateForm({
   defaultExpanded = false,
   requestOpen = 0,
   busy,
-  coordinatorAgentId,
-  coordinatorRevision,
+  creatorUserId,
   displayName,
   goal,
-  workerUserIds,
-  onCoordinatorAgentId,
-  onCoordinatorRevision,
+  selectedWorkerUserIds,
+  workerUsers,
   onDisplayName,
   onGoal,
   onSubmit,
-  onWorkerUserIds
+  onWorkerUserToggle
 }: Readonly<{
   defaultExpanded?: boolean
   requestOpen?: number
   busy: boolean
-  coordinatorAgentId: string
-  coordinatorRevision: string
+  creatorUserId: string
   displayName: string
   goal: string
-  workerUserIds: string
-  onCoordinatorAgentId(value: string): void
-  onCoordinatorRevision(value: string): void
+  selectedWorkerUserIds: readonly string[]
+  workerUsers: ProjectCoordinatorWorkspace['availableWorkerUsers']
   onDisplayName(value: string): void
   onGoal(value: string): void
   onSubmit(event: FormEvent<HTMLFormElement>): void
-  onWorkerUserIds(value: string): void
+  onWorkerUserToggle(userId: string, selected: boolean): void
 }>): ReactElement {
   const { t } = useTranslation('common')
   const [expanded, setExpanded] = useState(defaultExpanded)
+  const candidates = workerUsers.filter(({ userId }) => userId !== creatorUserId)
   useEffect(() => {
     if (defaultExpanded) setExpanded(true)
   }, [defaultExpanded])
@@ -1397,42 +1395,37 @@ function ProjectCreateForm({
             placeholder={t('projectCoordinatorProjectGoalPlaceholder')}
           />
         </label>
-        <fieldset>
-          <legend>{t('projectCoordinatorCoordinatorIdentity')}</legend>
-          <p>{t('projectCoordinatorCoordinatorIdentityHint')}</p>
-          <div className="project-coordinator-create-agent-grid">
-            <label>
-              <span>{t('projectCoordinatorCoordinatorAgentId')}</span>
+        <div className="project-coordinator-create-role">
+          <UserRoundCheck aria-hidden="true" />
+          <span>
+            <strong>{t('projectCoordinatorCreatorRole')}</strong>
+            <small>{t('projectCoordinatorCreatorRoleHint')}</small>
+          </span>
+        </div>
+        <fieldset className="project-coordinator-create-workers">
+          <legend>{t('projectCoordinatorWorkerMembers')}</legend>
+          <p>{t('projectCoordinatorWorkerMembersHint')}</p>
+          {candidates.length === 0 ? (
+            <p className="project-coordinator-create-workers-empty">
+              {t('projectCoordinatorNoOnlineWorkerUsers')}
+            </p>
+          ) : candidates.map((group) => (
+            <label className="project-coordinator-create-worker" key={group.userId}>
               <input
-                required
-                value={coordinatorAgentId}
-                onChange={(event) => onCoordinatorAgentId(event.currentTarget.value)}
-                placeholder="agt_…"
-                className="project-coordinator-mono-input"
+                type="checkbox"
+                checked={selectedWorkerUserIds.includes(group.userId)}
+                onChange={(event) => onWorkerUserToggle(group.userId, event.currentTarget.checked)}
               />
+              <span className="project-coordinator-create-worker-avatar" aria-hidden="true">
+                <UserRound />
+              </span>
+              <span className="project-coordinator-create-worker-copy">
+                <strong>{group.displayName}</strong>
+                <small>{t('projectCoordinatorWorkerUserStatus')}</small>
+              </span>
             </label>
-            <label>
-              <span>{t('projectCoordinatorAgentRevision')}</span>
-              <input
-                required
-                min={1}
-                type="number"
-                value={coordinatorRevision}
-                onChange={(event) => onCoordinatorRevision(event.currentTarget.value)}
-              />
-            </label>
-          </div>
+          ))}
         </fieldset>
-        <label>
-          <span>{t('projectCoordinatorWorkerUserIds')}</span>
-          <input
-            value={workerUserIds}
-            onChange={(event) => onWorkerUserIds(event.currentTarget.value)}
-            placeholder="usr_… , usr_…"
-            className="project-coordinator-mono-input"
-          />
-          <small>{t('projectCoordinatorWorkerUserIdsHint')}</small>
-        </label>
         <button disabled={busy} type="submit" className="project-coordinator-primary-button">
           {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Zap aria-hidden="true" />}
           {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorCreateProject')}
@@ -1494,9 +1487,9 @@ function ProjectOverview({
   const asOf = new Date(nowMilliseconds).toISOString()
   const presence = projectCoordinatorWorkerPresenceSummary(project, asOf)
   const agents = project.workerGroups.flatMap(({ agents }) => agents)
-  const readyAgents = agents.filter((agent) => (
+  const readyUsers = project.workerGroups.filter((group) => group.agents.some((agent) => (
     projectCoordinatorAgentOperationalState(agent, asOf).state === 'ready'
-  )).length
+  ))).length
   const coordinator = agents.find(({ projectAvailability }) => (
     projectAvailability.agentId === record.coordinatorAgentId
   ))
@@ -1552,10 +1545,10 @@ function ProjectOverview({
           </span>
         </div>
         <div>
-          <Bot aria-hidden="true" />
+          <UserRoundCheck aria-hidden="true" />
           <span>
-            <strong>{readyAgents}/{presence.visibleAgents}</strong>
-            {t('projectCoordinatorAgentsReadyShort')}
+            <strong>{readyUsers}/{presence.visibleUsers}</strong>
+            {t('projectCoordinatorWorkerUsersReadyShort')}
           </span>
         </div>
         <div>
@@ -1790,9 +1783,8 @@ export function projectCoordinatorTransferCandidates(
 
 export type ProjectCoordinatorWorkerPresenceSummary = Readonly<{
   onlineUsers: number
+  readyUsers: number
   visibleUsers: number
-  onlineAgents: number
-  visibleAgents: number
 }>
 
 /**
@@ -1805,24 +1797,21 @@ export function projectCoordinatorWorkerPresenceSummary(
   observedAt?: string
 ): ProjectCoordinatorWorkerPresenceSummary {
   let onlineUsers = 0
-  let onlineAgents = 0
-  let visibleAgents = 0
+  let readyUsers = 0
   for (const group of project.workerGroups) {
-    const groupOnlineAgents = group.agents.filter((agent) => (
+    const operationalStates = group.agents.map((agent) => (
       projectCoordinatorAgentOperationalState(
         agent,
         observedAt ?? agent.projectAvailability.availability.observedAt
-      ).online
-    )).length
-    onlineAgents += groupOnlineAgents
-    visibleAgents += group.agents.length
-    if (groupOnlineAgents > 0) onlineUsers += 1
+      )
+    ))
+    if (operationalStates.some(({ online }) => online)) onlineUsers += 1
+    if (operationalStates.some(({ state }) => state === 'ready')) readyUsers += 1
   }
   return Object.freeze({
     onlineUsers,
-    visibleUsers: project.workerGroups.length,
-    onlineAgents,
-    visibleAgents
+    readyUsers,
+    visibleUsers: project.workerGroups.length
   })
 }
 
@@ -1954,7 +1943,7 @@ export function ProjectCoordinatorPlanSection({
   onConfirmActivate(): void
 }>): ReactElement {
   const { t } = useTranslation('common')
-  const visibleAgents = project?.workerGroups.flatMap((group) => group.agents) ?? []
+  const visibleWorkerGroups = project?.workerGroups ?? []
   const awaitingConfirmation = project?.plan?.plan.state === 'awaiting_confirmation'
   return (
     <Section id="plan" title={t('projectCoordinatorPlan')} icon={<ListChecks className="h-4 w-4" />}>
@@ -1988,14 +1977,14 @@ export function ProjectCoordinatorPlanSection({
                   )
                 })),
                 assignments: draft.assignments.map((assignment) => {
-                  const selectedAgentId = String(
-                    values.get(`plan-item-agent-${assignment.planItemId}`) ?? ''
+                  const workerUserId = String(
+                    values.get(`plan-item-user-${assignment.planItemId}`) ?? ''
                   )
                   return {
                     ...assignment,
-                    selectedAgentId: selectedAgentId || null,
-                    recommendationReason: selectedAgentId
-                      ? t('projectCoordinatorOwnerSelectedExactAgent')
+                    workerUserId: workerUserId || null,
+                    recommendationReason: workerUserId
+                      ? t('projectCoordinatorOwnerSelectedWorkerUser')
                       : null
                   }
                 })
@@ -2023,19 +2012,27 @@ export function ProjectCoordinatorPlanSection({
                 <textarea required name={`plan-item-criteria-${item.planItemId}`} defaultValue={item.completionCriteria.join('\n')} aria-label={t('projectCoordinatorCompletionCriteria')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
                 <input required name={`plan-item-capabilities-${item.planItemId}`} defaultValue={item.requiredCapabilityTags.join(', ')} aria-label={t('projectCoordinatorCapabilityTags')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
                 <select
-                  name={`plan-item-agent-${item.planItemId}`}
+                  name={`plan-item-user-${item.planItemId}`}
                   className="mt-1 w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
-                  defaultValue={assignment?.selectedAgentId ?? ''}
+                  defaultValue={assignment?.workerUserId ?? ''}
                   disabled={busy}
                 >
-                  <option value="">{t('projectCoordinatorChooseExactAgent')}</option>
-                  {visibleAgents.map((agent) => (
-                    <option key={agent.projectAvailability.agentId} value={agent.projectAvailability.agentId}>
-                      {agent.displayName} · {t(agentStateMessageKey(
-                        projectCoordinatorAgentOperationalState(agent).state
-                      ))} · {agent.projectAvailability.availability.runtimeCapabilityTags?.join(', ') || '—'} · {shortIdentifier(agent.projectAvailability.agentId)}
-                    </option>
-                  ))}
+                  <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
+                  {visibleWorkerGroups.map((group) => {
+                    const online = group.agents.some((agent) => {
+                      const operational = projectCoordinatorAgentOperationalState(agent)
+                      return operational.state !== 'blocked' && operational.state !== 'offline'
+                    })
+                    return (
+                      <option
+                        key={group.userId}
+                        value={group.userId}
+                        disabled={!online}
+                      >
+                        {group.displayName}
+                      </option>
+                    )
+                  })}
                 </select>
               </fieldset>
               )
@@ -2046,7 +2043,7 @@ export function ProjectCoordinatorPlanSection({
           </form>
           <button
             type="button"
-            disabled={busy || draft.assignments.some(({ selectedAgentId }) => selectedAgentId === null)}
+            disabled={busy || draft.assignments.some(({ workerUserId }) => workerUserId === null)}
             onClick={onSubmitDraft}
             className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50"
           >
@@ -2071,9 +2068,12 @@ export function ProjectCoordinatorPlanSection({
             <div key={item.planItemId} className="rounded border border-ds-border p-2">
               <div className="font-medium">{item.title}</div>
               <p className="mt-1 text-[11px] text-ds-muted">{item.objective}</p>
-              {assignment?.selectedAgentId ? (
-                <div className="mt-1 break-all text-[10px] font-mono text-ds-faint">
-                  {t('projectCoordinatorExactAgent')}: {assignment.selectedAgentId}
+              {assignment?.workerUserId ? (
+                <div className="mt-1 text-[10px] text-ds-faint">
+                  {t('projectCoordinatorWorkerUser')}: {
+                    visibleWorkerGroups.find(({ userId }) => userId === assignment.workerUserId)?.displayName ??
+                    assignment.workerUserId
+                  }
                 </div>
               ) : null}
             </div>
@@ -2092,16 +2092,10 @@ export function WorkersSection({
   project?: ProjectCoordinatorProject
   observedAt?: string
 }>): ReactElement {
-  const { i18n, t } = useTranslation('common')
+  const { t } = useTranslation('common')
   const asOf = observedAt ?? project?.workerGroups[0]?.agents[0]
     ?.projectAvailability.availability.observedAt
   const presence = project ? projectCoordinatorWorkerPresenceSummary(project, asOf) : undefined
-  const readyAgents = project?.workerGroups.flatMap(({ agents }) => agents).filter((agent) => (
-    projectCoordinatorAgentOperationalState(
-      agent,
-      asOf ?? agent.projectAvailability.availability.observedAt
-    ).state === 'ready'
-  )).length ?? 0
   return (
     <Section id="workers" title={t('projectCoordinatorWorkers')} icon={<UsersRound className="h-4 w-4" />}>
       {!project?.workerGroups.length ? (
@@ -2112,9 +2106,7 @@ export function WorkersSection({
             className="project-coordinator-presence-summary"
             data-project-online-users={presence?.onlineUsers}
             data-project-visible-users={presence?.visibleUsers}
-            data-project-online-agents={presence?.onlineAgents}
-            data-project-visible-agents={presence?.visibleAgents}
-            data-project-ready-agents={readyAgents}
+            data-project-ready-users={presence?.readyUsers}
           >
             <div className="project-coordinator-presence-primary">
               <span className="project-coordinator-presence-pulse" aria-hidden="true" />
@@ -2129,37 +2121,23 @@ export function WorkersSection({
               </span>
             </div>
             <div className="project-coordinator-presence-numbers">
-              <span className="sr-only">
-                {t('projectCoordinatorOnlineAgents', {
-                  online: presence?.onlineAgents,
-                  total: presence?.visibleAgents
-                })}
-              </span>
               <span>
-                <strong>{presence?.onlineAgents}/{presence?.visibleAgents}</strong>
-                {t('projectCoordinatorOnlineAgentsShort')}
-              </span>
-              <span>
-                <strong>{readyAgents}/{presence?.visibleAgents}</strong>
-                {t('projectCoordinatorReadyAgentsShort')}
+                <strong>{presence?.readyUsers}/{presence?.visibleUsers}</strong>
+                {t('projectCoordinatorWorkerUsersReadyShort')}
               </span>
             </div>
           </div>
 
           <div className="project-coordinator-member-list">
             {project.workerGroups.map((group) => {
-              const agentStates = group.agents.map((agent) => ({
-                agent,
-                operational: projectCoordinatorAgentOperationalState(
+              const operationalStates = group.agents.map((agent) => (
+                projectCoordinatorAgentOperationalState(
                   agent,
                   asOf ?? agent.projectAvailability.availability.observedAt
                 )
-              })).sort((left, right) => (
-                Number(right.agent.projectAvailability.agentId === project.project.coordinatorAgentId) -
-                Number(left.agent.projectAvailability.agentId === project.project.coordinatorAgentId) ||
-                operationalStateRank(left.operational.state) - operationalStateRank(right.operational.state)
               ))
-              const groupOnline = agentStates.some(({ operational }) => operational.online)
+              const groupOnline = operationalStates.some(({ online }) => online)
+              const groupReady = operationalStates.some(({ state }) => state === 'ready')
               const membership = group.agents.find(({ projectAvailability }) => (
                 projectAvailability.membership !== null
               ))?.projectAvailability.membership
@@ -2168,6 +2146,7 @@ export function WorkersSection({
                   key={group.userId}
                   className="project-coordinator-member"
                   data-member-online={groupOnline ? 'true' : 'false'}
+                  data-member-ready={groupReady ? 'true' : 'false'}
                 >
                   <header>
                     <span className="project-coordinator-member-avatar" data-online={groupOnline ? 'true' : 'false'}>
@@ -2178,130 +2157,9 @@ export function WorkersSection({
                       <code title={group.userId}>{shortIdentifier(group.userId)}</code>
                     </span>
                     <Status value={membership?.state ?? 'not_member'} />
+                    <Status value={groupReady ? 'ready' : groupOnline ? 'online' : 'offline'} />
                   </header>
 
-                  <div className="project-coordinator-agent-list">
-                    {agentStates.map(({ agent, operational }) => {
-                      const availability = agent.projectAvailability.availability
-                      const isCoordinator = agent.projectAvailability.agentId ===
-                        project.project.coordinatorAgentId
-                      const heartbeat = availability.lastHeartbeatAt
-                      return (
-                        <div
-                          key={agent.projectAvailability.agentId}
-                          className="project-coordinator-agent"
-                          data-agent-state={operational.state}
-                          data-agent-online={operational.online ? 'true' : 'false'}
-                          data-runtime-ready={operational.runtimeReady ? 'true' : 'false'}
-                          data-accepts-offers={operational.acceptsNewOffers ? 'true' : 'false'}
-                          data-text-authority={operational.textAuthority ? 'true' : 'false'}
-                          data-file-authority={operational.fileAuthority ? 'true' : 'false'}
-                          data-content-ready={operational.contentReady === null
-                            ? 'not-applicable'
-                            : operational.contentReady ? 'true' : 'false'}
-                        >
-                          <div className="project-coordinator-agent-heading">
-                            <span className="project-coordinator-agent-icon" aria-hidden="true">
-                              <Bot />
-                              <span data-online={operational.online ? 'true' : 'false'} />
-                            </span>
-                            <span>
-                              <strong>{agent.displayName}</strong>
-                              <small>
-                                {heartbeat
-                                  ? t('projectCoordinatorHeartbeatRelative', {
-                                      time: formatRelativeTime(
-                                        heartbeat,
-                                        Date.parse(asOf ?? availability.observedAt),
-                                        i18n.resolvedLanguage
-                                      )
-                                    })
-                                  : t('projectCoordinatorNoHeartbeat')}
-                              </small>
-                            </span>
-                            {isCoordinator ? (
-                              <span className="project-coordinator-role-badge">
-                                <Zap aria-hidden="true" />
-                                {t('projectCoordinatorCoordinatorShort')}
-                              </span>
-                            ) : null}
-                            <Status value={operational.state} />
-                          </div>
-
-                          <div className="project-coordinator-agent-facts">
-                            <AgentFact
-                              icon={operational.online ? <Wifi /> : <WifiOff />}
-                              label={t('projectCoordinatorPresence')}
-                              value={t(operational.online
-                                ? 'projectCoordinatorOnline'
-                                : 'projectCoordinatorOffline')}
-                              state={operational.online ? 'positive' : 'muted'}
-                            />
-                            <AgentFact
-                              icon={<Activity />}
-                              label={t('projectCoordinatorRuntime')}
-                              value={t(operational.runtimeReady
-                                ? 'projectCoordinatorReady'
-                                : 'projectCoordinatorUnavailable')}
-                              state={operational.runtimeReady ? 'positive' : 'warning'}
-                            />
-                            <AgentFact
-                              icon={<Zap />}
-                              label={t('projectCoordinatorOfferIntake')}
-                              value={t(operational.acceptsNewOffers
-                                ? 'projectCoordinatorOpen'
-                                : 'projectCoordinatorPaused')}
-                              state={operational.acceptsNewOffers ? 'positive' : 'warning'}
-                            />
-                            <AgentFact
-                              icon={<Clock3 />}
-                              label={t('projectCoordinatorLoad')}
-                              value={String(availability.activeTaskCount)}
-                              state={availability.activeTaskCount === 0 ? 'neutral' : 'active'}
-                            />
-                          </div>
-
-                          <div className="project-coordinator-authority-chips" aria-label={t('projectCoordinatorTaskAuthority')}>
-                            <span data-eligible={operational.textAuthority ? 'true' : 'false'}>
-                              <ShieldAlert aria-hidden="true" />
-                              {t('projectCoordinatorTextTasks')}
-                            </span>
-                            <span data-eligible={operational.fileAuthority ? 'true' : 'false'}>
-                              <FileText aria-hidden="true" />
-                              {t('projectCoordinatorFileTasks')}
-                            </span>
-                            <span data-eligible={operational.contentReady === false ? 'false' : 'true'}>
-                              <Warehouse aria-hidden="true" />
-                              {operational.contentReady === null
-                                ? t('projectCoordinatorContentNotRequired')
-                                : t(operational.contentReady
-                                    ? 'projectCoordinatorContentReady'
-                                    : 'projectCoordinatorContentBlocked')}
-                            </span>
-                          </div>
-
-                          <div className="project-coordinator-capabilities">
-                            <span>{t('projectCoordinatorCapabilities')}</span>
-                            {availability.runtimeCapabilityTags.length > 0
-                              ? availability.runtimeCapabilityTags.map((tag) => <code key={tag}>{tag}</code>)
-                              : <small>{t('projectCoordinatorNoCapabilities')}</small>}
-                          </div>
-
-                          <details className="project-coordinator-agent-identifiers">
-                            <summary>{t('projectCoordinatorExactIdentity')}</summary>
-                            <dl>
-                              <dt>Agent</dt>
-                              <dd>{agent.projectAvailability.agentId}</dd>
-                              <dt>Device</dt>
-                              <dd>{availability.deviceId}</dd>
-                              <dt>{t('projectCoordinatorRevision')}</dt>
-                              <dd>{agent.projectAvailability.revision}</dd>
-                            </dl>
-                          </details>
-                        </div>
-                      )
-                    })}
-                  </div>
                 </article>
               )
             })}
@@ -2309,26 +2167,6 @@ export function WorkersSection({
         </div>
       )}
     </Section>
-  )
-}
-
-function AgentFact({
-  icon,
-  label,
-  value,
-  state
-}: Readonly<{
-  icon: ReactNode
-  label: string
-  value: string
-  state: 'positive' | 'warning' | 'muted' | 'neutral' | 'active'
-}>): ReactElement {
-  return (
-    <span className="project-coordinator-agent-fact" data-fact-state={state}>
-      <span aria-hidden="true">{icon}</span>
-      <small>{label}</small>
-      <strong>{value}</strong>
-    </span>
   )
 }
 
@@ -2456,7 +2294,7 @@ function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProjec
 
 export function ProjectCoordinatorDecisionSection({
   project,
-  canAnswer,
+  currentUserId,
   busy,
   onCreateHumanNeeded,
   onAnswerHumanNeeded,
@@ -2465,7 +2303,7 @@ export function ProjectCoordinatorDecisionSection({
   onComplete
 }: Readonly<{
   project?: ProjectCoordinatorProject
-  canAnswer: boolean
+  currentUserId: string | null
   busy: boolean
   onCreateHumanNeeded(input: ProjectCoordinatorHumanNeededCreateInput): void
   onAnswerHumanNeeded(input: ProjectCoordinatorHumanAnswerInput): void
@@ -2476,17 +2314,24 @@ export function ProjectCoordinatorDecisionSection({
   const { t } = useTranslation('common')
   const pendingReviews = project?.reviews.filter(({ decision }) => decision === null) ?? []
   const acceptedCurrentResults = project ? acceptedCurrentResultIds(project) : null
-  const mayAskOwner = project?.project.status === 'active' &&
+  const targetUsers = project?.memberUsers.filter((user) => (
+    user.status === 'active' && project.provisioning.memberships.some((membership) => (
+      membership.userId === user.userId && membership.state === 'active'
+    ))
+  )) ?? []
+  const mayAskMember = project?.project.status === 'active' &&
     acceptedCurrentResults !== null &&
     !project.records.some(({ kind }) => kind === 'decision') &&
-    project.pendingHumanNeeded.length === 0
+    project.pendingHumanNeeded.length === 0 &&
+    targetUsers.length > 0
   const completionInput = project ? projectCoordinatorCompletionInput(project, '') : null
   return (
     <Section id="reviews" title={t('projectCoordinatorReviews')} icon={<ClipboardCheck className="h-4 w-4" />}>
       {!project ? <Empty /> : (
         <div className="space-y-2 text-xs">
-          {project.pendingHumanNeeded.map((request) => (
-            <form
+          {project.pendingHumanNeeded.map((request) => {
+            const canAnswer = request.targetUserId === currentUserId
+            return <form
               key={request.humanRequestId}
               className="space-y-2 rounded border border-amber-500/40 p-2"
               data-default-visible-card="human-needed"
@@ -2515,7 +2360,7 @@ export function ProjectCoordinatorDecisionSection({
                 <button type="submit" disabled={!canAnswer || busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorSubmitHumanAnswer')}</button>
               )}
             </form>
-          ))}
+          })}
           {pendingReviews.map((review) => (
             <form
               key={review.submission.resultSubmissionId}
@@ -2525,14 +2370,14 @@ export function ProjectCoordinatorDecisionSection({
                 event.preventDefault()
                 const values = new FormData(event.currentTarget)
                 const decision = String(values.get('decision') ?? '')
-                const selectedAgentId = String(values.get('next-agent') ?? '')
+                const workerUserId = String(values.get('next-user') ?? '')
                 const input = projectCoordinatorResultReviewInput(
                   project,
                   review.submission.resultSubmissionId,
                   decision === 'accept' ? 'accept' : 'request_revision',
                   {
                     instruction: String(values.get('instruction') ?? ''),
-                    nextAssigneeAgentId: selectedAgentId,
+                    nextWorkerUserId: workerUserId,
                     nextOfferExpiresAt: String(values.get('offer-expires-at') ?? ''),
                     nextOutputFileName: String(values.get('next-output-file-name') ?? '')
                   }
@@ -2575,13 +2420,11 @@ export function ProjectCoordinatorDecisionSection({
                 </div>
               ) : null}
               <textarea name="instruction" aria-label={t('projectCoordinatorRevisionInstruction')} placeholder={t('projectCoordinatorRevisionInstruction')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
-              <select name="next-agent" defaultValue="" aria-label={t('projectCoordinatorNextAgent')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs">
-                <option value="">{t('projectCoordinatorChooseExactAgent')}</option>
-                {project.workerGroups.flatMap(({ agents }) => agents).map((agent) => (
-                  <option key={agent.projectAvailability.agentId} value={agent.projectAvailability.agentId}>
-                    {agent.displayName} · {t(agentStateMessageKey(
-                      projectCoordinatorAgentOperationalState(agent).state
-                    ))} · {agent.projectAvailability.availability.runtimeCapabilityTags?.join(', ') || '—'} · {shortIdentifier(agent.projectAvailability.agentId)}
+              <select name="next-user" defaultValue="" aria-label={t('projectCoordinatorNextWorkerUser')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs">
+                <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
+                {project.workerGroups.map((group) => (
+                  <option key={group.userId} value={group.userId}>
+                    {group.displayName}
                   </option>
                 ))}
               </select>
@@ -2602,7 +2445,7 @@ export function ProjectCoordinatorDecisionSection({
               </div>
             </form>
           ))}
-          {mayAskOwner ? (
+          {mayAskMember ? (
             <form
               className="space-y-2 rounded border border-ds-border p-2"
               data-default-visible-card="human-needed-create"
@@ -2611,6 +2454,7 @@ export function ProjectCoordinatorDecisionSection({
                 const values = new FormData(event.currentTarget)
                 onCreateHumanNeeded({
                   projectId: project.project.projectId,
+                  targetUserId: String(values.get('target-user') ?? ''),
                   expectedProjectRevision: project.project.revision,
                   expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
                   requiredAssurance: 'verified',
@@ -2619,9 +2463,15 @@ export function ProjectCoordinatorDecisionSection({
                 })
               }}
             >
+              <select required name="target-user" defaultValue="" aria-label={t('projectCoordinatorHumanTargetUser')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs">
+                <option value="">{t('projectCoordinatorChooseHumanTargetUser')}</option>
+                {targetUsers.map((user) => (
+                  <option key={user.userId} value={user.userId}>{user.displayName}</option>
+                ))}
+              </select>
               <textarea required name="prompt" aria-label={t('projectCoordinatorHumanPrompt')} placeholder={t('projectCoordinatorHumanPrompt')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
               <input required name="expires-at" aria-label={t('projectCoordinatorHumanExpiresAt')} placeholder="2026-08-26T01:08:00.000Z" className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
-              <button type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorAskOwner')}</button>
+              <button type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorAskMember')}</button>
             </form>
           ) : null}
           {completionInput ? (
@@ -2646,7 +2496,7 @@ export function ProjectCoordinatorDecisionSection({
             </div>
           ) : null}
           {project.pendingHumanNeeded.length === 0 && pendingReviews.length === 0 &&
-            !mayAskOwner && !completionInput && !project.finalSummary ? (
+            !mayAskMember && !completionInput && !project.finalSummary ? (
               <Empty message={t('projectCoordinatorNoReviews')} />
             ) : null}
         </div>
@@ -2661,7 +2511,7 @@ export function projectCoordinatorResultReviewInput(
   decision: 'accept' | 'request_revision',
   revision: Readonly<{
     instruction: string
-    nextAssigneeAgentId: string
+    nextWorkerUserId: string
     nextOfferExpiresAt: string
     nextOutputFileName: string
   }>
@@ -2675,11 +2525,7 @@ export function projectCoordinatorResultReviewInput(
     executionId === review.submission.executionId
   ))
   if (!task || !execution) return null
-  const nextAgent = project.workerGroups.flatMap(({ agents }) => agents).find(
-    ({ projectAvailability }) => (
-      projectAvailability.agentId === revision.nextAssigneeAgentId
-    )
-  )
+  const nextWorker = project.workerGroups.find(({ userId }) => userId === revision.nextWorkerUserId)
   const parsedOutputName = task.task.fileIntent
     ? taskFileDestinationNameSchema.safeParse(revision.nextOutputFileName)
     : null
@@ -2710,18 +2556,15 @@ export function projectCoordinatorResultReviewInput(
     ...base,
     decision,
     instruction: null,
-    nextAssigneeAgentId: null,
-    expectedNextAssigneeAvailabilityRevision: null,
+    nextWorkerUserId: null,
     nextOfferExpiresAt: null,
     nextFileIntent: null
-  } : revision.instruction.trim() && nextAgent && revision.nextOfferExpiresAt &&
+  } : revision.instruction.trim() && nextWorker && revision.nextOfferExpiresAt &&
       nextFileIntent !== undefined ? {
         ...base,
         decision,
         instruction: revision.instruction,
-        nextAssigneeAgentId: revision.nextAssigneeAgentId,
-        expectedNextAssigneeAvailabilityRevision:
-          nextAgent.projectAvailability.availability.revision,
+        nextWorkerUserId: revision.nextWorkerUserId,
         nextOfferExpiresAt: revision.nextOfferExpiresAt,
         nextFileIntent
       } : null
@@ -2967,7 +2810,7 @@ export function ProjectCoordinatorProvisioningSection({
                     onRetryRecoverySuccessor({
                       projectId: project!.project.projectId,
                       recoveryActionId: abandonedRecoveryAction.recoveryActionId,
-                      assigneeAgentId: String(values.get('successor-agent') ?? ''),
+                      workerUserId: String(values.get('successor-user') ?? ''),
                       nextOutputFileName: String(
                         values.get('next-output-file-name') ?? ''
                       ),
@@ -2977,20 +2820,18 @@ export function ProjectCoordinatorProvisioningSection({
                 >
                   <select
                     required
-                    name="successor-agent"
+                    name="successor-user"
                     defaultValue=""
-                    aria-label={t('projectCoordinatorNextAgent')}
+                    aria-label={t('projectCoordinatorNextWorkerUser')}
                     className="w-full rounded border border-ds-border bg-ds-surface px-2 py-1 text-[10px]"
                   >
-                    <option value="">{t('projectCoordinatorChooseExactAgent')}</option>
-                    {project!.workerGroups.flatMap(({ agents }) => agents).map((agent) => (
+                    <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
+                    {project!.workerGroups.map((group) => (
                       <option
-                        key={agent.projectAvailability.agentId}
-                        value={agent.projectAvailability.agentId}
+                        key={group.userId}
+                        value={group.userId}
                       >
-                        {agent.displayName} · {t(agentStateMessageKey(
-                          projectCoordinatorAgentOperationalState(agent).state
-                        ))} · {agent.projectAvailability.availability.runtimeCapabilityTags?.join(', ') || '—'} · {shortIdentifier(agent.projectAvailability.agentId)}
+                        {group.displayName}
                       </option>
                     ))}
                   </select>
@@ -3284,17 +3125,6 @@ function focusCoordinatorSection(sectionId: string): void {
     block: 'start'
   })
   target.focus({ preventScroll: true })
-}
-
-function operationalStateRank(
-  state: ProjectCoordinatorAgentOperationalState['state']
-): number {
-  switch (state) {
-    case 'ready': return 0
-    case 'busy': return 1
-    case 'blocked': return 2
-    case 'offline': return 3
-  }
 }
 
 function statusTone(value: string): 'positive' | 'active' | 'warning' | 'danger' | 'muted' {

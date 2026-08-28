@@ -418,8 +418,8 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
         version: '1.0.0',
-        title: 'Ask the Project Owner',
-        description: 'Creates one Project-scoped HumanNeeded through the current Coordinator Agent.',
+        title: 'Ask a Project member User',
+        description: 'Creates one Project-scoped HumanNeeded for an explicit active member User through the current Coordinator Agent.',
         audiences: ['ui'],
         scope: 'global',
         effect: 'external-write',
@@ -439,13 +439,13 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
         version: '1.0.0',
         title: 'Answer Project HumanNeeded',
-        description: 'Submits the current Project Owner answer through the OIDC User path.',
+        description: 'Submits the exact target Project member User answer through the OIDC User path.',
         audiences: ['ui'],
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
         concurrency: { revision: 'none', idempotency: 'required' },
-        tags: ['project', 'owner', 'human-answer'],
+        tags: ['project', 'human', 'human-answer'],
         inputSchema: projectCoordinatorHumanAnswerInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
         handler: async (raw, context) => ({
@@ -574,6 +574,7 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
   const state = new ProjectCoordinatorStateStore(host.packageSettings)
   const workspace = createProjectCoordinatorCloudWorkspacePort({
     transport,
+    coordinatorCloudCommands,
     readPlanAssignments: (plan) => state.readPlanAssignments(
       plan.projectPlanId,
       plan.planDigest

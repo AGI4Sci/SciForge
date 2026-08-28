@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 
 import {
@@ -140,6 +139,17 @@ test('configuration and endpoint challenge use only OIDC User transport', async 
     authenticatedCloudTransport: userTransport(BASE_URL, async (request) => {
       requests.push(request)
       if (request.type === 'endpoint.catalog.get') return endpointCatalogResponse(request.requestId)
+      if (request.type === 'participant.get') {
+        return {
+          protocolVersion: '1.0',
+          type: 'participant.snapshot',
+          requestId: request.requestId,
+          user: userPrincipalFixture,
+          participant: participantProfileFixture,
+          humanEndpoints: [humanEndpointBindingFixture],
+          agents: [agentNodeFixture]
+        }
+      }
       if (request.type === 'endpoint.challenge.get') {
         return {
           protocolVersion: '1.0',
@@ -161,6 +171,7 @@ test('configuration and endpoint challenge use only OIDC User transport', async 
       }
     }),
     agentCloudRuntime: createTestAgentCloudRuntime({
+      ensureAgent: async () => agentNodeFixture,
       execute: async () => { throw new Error('Agent runtime must not execute User commands.') }
     }),
     inboxHandler: { handle: async () => undefined }
@@ -181,12 +192,13 @@ test('configuration and endpoint challenge use only OIDC User transport', async 
   })
   assert.deepEqual(requests.map(({ type }) => type), [
     'endpoint.catalog.get',
+    'participant.get',
     'endpoint.challenge.create',
     'endpoint.challenge.get'
   ])
 })
 
-test('registration delegates bootstrap and authority storage to Identity then refreshes participant', async () => {
+test('activation automatically ensures the current Device Agent then connects it', async () => {
   const initialParticipant = {
     ...participantProfileFixture,
     primaryAgentId: null,
@@ -202,13 +214,13 @@ test('registration delegates bootstrap and authority storage to Identity then re
   }
   const store = await localStore([], initialParticipant)
   const userRequests: string[] = []
-  const registerInputs: unknown[] = []
+  let ensureCalls = 0
   const agentRequests: string[] = []
   const heartbeatStatuses: string[] = []
   const agentRuntime = createTestAgentCloudRuntime({
     authorityStatus: readyAuthority,
-    registerAgent: async (input) => {
-      registerInputs.push(input)
+    ensureAgent: async () => {
+      ensureCalls += 1
       return agentNodeFixture
     },
     execute: async (agentId, request) => {
@@ -240,6 +252,14 @@ test('registration delegates bootstrap and authority storage to Identity then re
     authenticatedCloudTransport: userTransport(BASE_URL, async (request) => {
       userRequests.push(request.type)
       if (request.type === 'endpoint.catalog.get') return endpointCatalogResponse(request.requestId)
+      if (request.type === 'endpoint.locator.list') {
+        return {
+          protocolVersion: '1.0',
+          type: 'endpoint.locator_page',
+          requestId: request.requestId,
+          locators: []
+        }
+      }
       assert.equal(request.type, 'participant.get')
       return {
         protocolVersion: '1.0',
@@ -255,102 +275,21 @@ test('registration delegates bootstrap and authority storage to Identity then re
     inboxHandler: { handle: async () => undefined },
     afterHeartbeat: async (status) => { heartbeatStatuses.push(status) }
   })
-  await connection.configure(BASE_URL)
+  await connection.activate()
 
-  const agent = await connection.registerAgent({
-    displayName: 'Desktop',
-    nodeType: 'desktop'
-  })
-
-  assert.equal(agent.agentId, TEST_IDS.agentId)
   assert.equal(store.snapshot().participant?.revision, 2)
-  assert.deepEqual(userRequests, ['endpoint.catalog.get', 'participant.get'])
+  assert.equal(ensureCalls, 1)
+  assert.deepEqual(userRequests, [
+    'endpoint.catalog.get',
+    'participant.get',
+    'endpoint.locator.list'
+  ])
   assert.deepEqual(agentRequests, ['agent.heartbeat'])
   assert.deepEqual(heartbeatStatuses, ['online'])
   assert.deepEqual(store.snapshot().agents[0]?.capabilities, [
     'agent-runtime.codex',
     'model-access.api'
   ])
-  assert.deepEqual(registerInputs, [{
-    displayName: 'Desktop',
-    nodeType: 'desktop',
-    idempotencyKey: `idem_agent.register.${createHash('sha256')
-      .update(JSON.stringify({
-        deviceId: TEST_IDS.deviceId,
-        ownerUserId: TEST_IDS.userId,
-        displayName: 'Desktop',
-        nodeType: 'desktop'
-      }))
-      .digest('hex')
-      .slice(0, 48)}`
-  }])
-  await connection.dispose()
-})
-
-test('registration conflict rotates through the bounded Identity lifecycle method', async () => {
-  const rotatedAgent = {
-    ...agentNodeFixture,
-    credentialVersion: 2,
-    revision: 2,
-    updatedAt: TEST_LATER_TIMESTAMP
-  }
-  const store = await localStore([agentNodeFixture])
-  let participantReads = 0
-  const lifecycleCalls: string[] = []
-  const agentRuntime = createTestAgentCloudRuntime({
-    authorityStatus: readyAuthority,
-    registerAgent: async () => {
-      lifecycleCalls.push('register')
-      throw new AgentCloudRuntimeError(
-        'conflict',
-        'registration was already consumed',
-        'idempotency_conflict'
-      )
-    },
-    rotateAgent: async (input) => {
-      lifecycleCalls.push('rotate')
-      assert.equal(input.agentId, TEST_IDS.agentId)
-      assert.equal(input.expectedRevision, 1)
-      return rotatedAgent
-    },
-    execute: async (_agentId, request) => ({
-      protocolVersion: '1.0',
-      type: 'rest.entity',
-      requestId: request.requestId,
-      entity: { ...rotatedAgent, connectionStatus: 'online', revision: 3 }
-    })
-  })
-  const connection = new CollaborationConnection({
-    store,
-    settings: new CollaborationSettingsService(settingsHost()),
-    outbox: lifecycleOutbox(),
-    authenticatedCloudTransport: userTransport(BASE_URL, async (request) => {
-      if (request.type === 'endpoint.catalog.get') return endpointCatalogResponse(request.requestId)
-      assert.equal(request.type, 'participant.get')
-      participantReads += 1
-      return {
-        protocolVersion: '1.0',
-        type: 'participant.snapshot',
-        requestId: request.requestId,
-        user: userPrincipalFixture,
-        participant: participantProfileFixture,
-        humanEndpoints: [humanEndpointBindingFixture],
-        agents: [participantReads === 1 ? agentNodeFixture : rotatedAgent]
-      }
-    }),
-    agentCloudRuntime: agentRuntime,
-    inboxHandler: { handle: async () => undefined }
-  })
-  await connection.configure(BASE_URL)
-
-  const result = await connection.registerAgent({
-    displayName: 'Desktop',
-    nodeType: 'desktop'
-  })
-
-  assert.equal(result.credentialVersion, 2)
-  assert.deepEqual(lifecycleCalls, ['register', 'rotate'])
-  assert.equal(participantReads, 2)
   await connection.dispose()
 })
 
@@ -400,6 +339,7 @@ test('restart activation repairs participant and locators before connecting Agen
     }),
     agentCloudRuntime: createTestAgentCloudRuntime({
       authorityStatus: readyAuthority,
+      ensureAgent: async () => agentNodeFixture,
       execute: async (_agentId, request) => {
         agentRequests.push(request.type)
         return {
@@ -657,7 +597,7 @@ async function localStore(
   participant = participantProfileFixture
 ): Promise<CollaborationLocalStore> {
   const store = new CollaborationLocalStore(new MemoryBackend({
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 1,
     lastInboxSequence: 0,
     user: userPrincipalFixture,

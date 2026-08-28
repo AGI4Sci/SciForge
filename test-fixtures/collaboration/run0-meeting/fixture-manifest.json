@@ -1,5 +1,5 @@
 {
-  "version": "sciforge.run0-meeting-fixture/1",
+  "version": "sciforge.run0-meeting-fixture/2",
   "projectDisplayName": "多用户协作设计评审会",
   "users": [
     {
@@ -16,7 +16,7 @@
     },
     {
       "fixtureLabel": "U3",
-      "behavior": "reject_worker"
+      "behavior": "local_dismiss_worker"
     },
     {
       "fixtureLabel": "U4",
@@ -38,7 +38,7 @@
     "manual_accept",
     "automatic_accept_after_preflight",
     "human_needed_owner_answer",
-    "reject_and_exact_agent_reassign",
+    "local_dismiss_then_user_reassign",
     "review_accept",
     "review_request_revision",
     "project_complete"

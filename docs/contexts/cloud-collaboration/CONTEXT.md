@@ -1,6 +1,6 @@
 # Cloud Collaboration
 
-> Current-state audit: 2026-08-24. The implemented baseline is OIDC/Device-backed; the `add-full-multi-user-collaboration-loop` change freezes the remaining Project content, execution and true-device collaboration language below.
+> Current-state audit: 2026-08-27. The implemented baseline is OIDC/Device-backed and uses User-targeted Task Offers with atomic Device Agent claims.
 
 Cloud Collaboration is the SciForge bounded context for coordinating multiple users and their Agent Hosts through shared Projects. It owns collaborative state while preserving each node's authority over local Workspaces and resources.
 
@@ -55,23 +55,31 @@ The shared provider directory selected by a Project Content Space Binding for or
 _Avoid_: Project database, Team root by implication, Workspace, Shared Document
 
 **Coordinator Agent**:
-The one Project-Owner-owned Agent currently authorized to write a Collaboration Project's plan, create Tasks, confirm formal conclusions, and complete the Project. Transfer may select only another exact Agent owned by the same Project Owner.
+The one Project-Owner-owned Agent currently authorized to write one Collaboration Project's plan, create Tasks, confirm formal conclusions, and complete that Project. Project creation uses the creator's current Device Agent automatically; the role applies only to that Project. Transfer may select only another exact Agent owned by the same Project Owner.
 _Avoid_: Project Owner, Coordinator product, cloud model runtime
 
+**Worker User**:
+The SciForge User selected by a Coordinator to receive one Task Offer. The User is the assignment choice; current Agent/Device availability is only eligibility and delivery evidence.
+_Avoid_: Worker account type, preselected Agent, Project-wide role
+
+**Task Offer**:
+One durable invitation addressed to a Worker User. Before claim it has no Task Execution or assignee Device/Agent, and Cloud notifies every currently eligible Runtime owned by that User. Coordinator withdrawal, expiry, or one successful claim closes the shared Offer.
+_Avoid_: Task Execution, per-Device copy, broadcast execution, reusable lease
+
 **Worker Agent**:
-The exact Agent selected as a Task assignee and authorized only for the current Task execution. Worker is a Task relationship, not a SciForge account or permanent Agent type.
-_Avoid_: Project Member User, Worker account, available Device
+The exact Agent/Device Runtime that wins a User-level Task Offer claim and becomes the actor of the resulting Task Execution. Worker is an execution relationship, not a SciForge account, permanent Agent type, or Coordinator selection.
+_Avoid_: Worker User, preselected Device, primary Agent
 
 **Worker Availability Projection**:
-A time-stamped Cloud view of an Agent/Device's active and online state, heartbeat, Runtime capabilities, offer intake, active Task count, Provider identity readiness, and current Project content readiness. It helps a Coordinator choose an Agent but does not force acceptance or guarantee future availability.
-_Avoid_: scheduler authority, auto-accept policy, Provider ACL, User role
+A time-stamped Cloud view of an Agent/Device's active and online state, heartbeat, Runtime capabilities, offer intake, active Task count, Provider identity readiness, and current Project content readiness. It determines whether a Worker User has an eligible Runtime and which runtimes receive the User's Offer; it does not select the winning Agent or guarantee future availability.
+_Avoid_: assignment target, scheduler authority, auto-accept policy, Provider ACL
 
 **Local Task Acceptance Policy**:
-The durable `manual` or `automatic` offer-handling preference of one Agent Device. Cloud observes only explicit accept or reject facts and never stores this policy as a Task field.
-_Avoid_: Cloud acceptancePolicy, Project setting, cross-device preference
+The durable `manual` or `automatic` offer-handling preference of one Agent Device. Accept attempts an atomic Cloud claim; dismiss affects only that Device's local view and is not a shared rejection. Cloud never stores this policy as a Task field.
+_Avoid_: global reject, Cloud acceptancePolicy, Project setting, cross-device preference
 
 **Task Execution**:
-One immutable assignment attempt identified by an `executionId` and fenced by the current Task revision and assignee Agent. Reassignment creates a new execution; an older execution remains audit evidence but has no write authority.
+One immutable assignment attempt created only when an eligible Device Agent atomically claims a User-level Task Offer. It records the exact User, Device and Agent, is identified by an `executionId`, and is fenced by the current Task revision. Reassignment first creates another User-level Offer; an older execution remains audit evidence but has no write authority.
 _Avoid_: retry counter, Agent thread, Task identity, reusable lease
 
 **Task Authority**:
@@ -83,7 +91,7 @@ A strict non-secret Task description of Project input references, output constra
 _Avoid_: file credential, Workspace mount, Provider request, portable authority
 
 **HumanNeeded**:
-A durable execution question addressed to one exact SciForge User; Run-0 addresses it to the Project Owner. It is answered by an authenticated Human, not by a Reviewer system role or another Agent.
+A durable execution question addressed to one exact active Project-member SciForge User. A Worker execution addresses its owning Worker User by default; a Coordinator question selects the target member explicitly. It is answered only by that target User's authenticated Human identity, not by a Reviewer system role or another Agent.
 _Avoid_: tool approval, broadcast chat, Reviewer role
 
 **Project Record**:

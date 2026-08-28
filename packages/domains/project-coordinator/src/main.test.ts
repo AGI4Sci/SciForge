@@ -36,6 +36,7 @@ test('workspace read remains a strict non-writing coordination capability', asyn
         readWorkspace: async () => ({
           connection: { state: 'identity_required' },
           observedAt: '2026-08-24T09:00:00.000Z',
+          availableWorkerUsers: [],
           projects: []
         }),
         createProject: async () => { throw new Error('unused') }
@@ -67,6 +68,7 @@ test('workspace read remains a strict non-writing coordination capability', asyn
     output: {
       connection: { state: 'identity_required' },
       observedAt: '2026-08-24T09:00:00.000Z',
+      availableWorkerUsers: [],
       projects: []
     }
   })
@@ -229,6 +231,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
       },
       observedAt: '2026-08-25T01:05:00.000Z',
       focusedProjectId: 'prj_ProjectCreated01',
+      availableWorkerUsers: [],
       projects: []
     }
   }
@@ -239,6 +242,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
       readWorkspace: async () => ({
         connection: { state: 'identity_required' as const },
         observedAt: '2026-08-25T01:05:00.000Z',
+        availableWorkerUsers: [],
         projects: []
       }),
       createProject: async () => created
@@ -304,8 +308,6 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
   assert.deepEqual(await create.handler({
     displayName: 'Meeting',
     goal: 'Run the meeting.',
-    coordinatorAgentId: 'agt_Coordinator01',
-    expectedCoordinatorAgentRevision: 1,
     budget: {
       maxTasks: 4,
       maxTasksPerRound: 4,

@@ -21,7 +21,7 @@ const openFence = {
   fencedAt: null
 }
 
-const offeredExecution = {
+const acceptedExecution = {
   schemaVersion: 1 as const,
   type: 'task_execution' as const,
   projectId: TEST_IDS.projectId,
@@ -32,13 +32,13 @@ const offeredExecution = {
   assigneeUserId: TEST_IDS.secondUserId,
   assigneeAgentId: TEST_IDS.secondAgentId,
   assigneeDeviceId: 'dev_WorkerDevice01',
-  state: 'offered' as const,
+  state: 'accepted' as const,
   stateRevision: 1,
   fence: openFence,
   fileIntent: null,
   currentResultSubmissionId: null,
   offeredAt: TEST_TIMESTAMP,
-  acceptedAt: null,
+  acceptedAt: TEST_TIMESTAMP,
   startedAt: null,
   terminalAt: null,
   revision: 1,
@@ -47,13 +47,13 @@ const offeredExecution = {
 }
 
 describe('Task execution attempts and fences', () => {
-  it('permits an offered execution to be cancelled or Device-revoked without inventing acceptance', () => {
+  it('preserves claim acceptance when an execution is cancelled or Device-revoked', () => {
     for (const [state, reason] of [
       ['cancelled', 'execution_cancelled'],
       ['revoked', 'device_revoked']
     ] as const) {
       expect(taskExecutionSchema.safeParse({
-        ...offeredExecution,
+        ...acceptedExecution,
         state,
         stateRevision: 2,
         fence: {
@@ -71,7 +71,7 @@ describe('Task execution attempts and fences', () => {
 
   it('retains the immutable result submission after review acceptance', () => {
     const completed = {
-      ...offeredExecution,
+      ...acceptedExecution,
       state: 'completed' as const,
       stateRevision: 5,
       fence: {
@@ -96,7 +96,7 @@ describe('Task execution attempts and fences', () => {
 
   it('rejects a live execution whose write fence is already closed', () => {
     expect(taskExecutionSchema.safeParse({
-      ...offeredExecution,
+      ...acceptedExecution,
       state: 'running',
       acceptedAt: TEST_TIMESTAMP,
       startedAt: TEST_TIMESTAMP,
@@ -111,7 +111,7 @@ describe('Task execution attempts and fences', () => {
 
   it('preflights current Project, User, Device and Agent authority without fencing on ordinary entity revisions', () => {
     const runningExecution = taskExecutionSchema.parse({
-      ...offeredExecution,
+      ...acceptedExecution,
       state: 'running',
       stateRevision: 3,
       acceptedAt: TEST_TIMESTAMP,
@@ -217,9 +217,7 @@ describe('Coordinator authority epoch', () => {
       idempotencyKey: 'idem_offer_withdraw_001',
       taskOfferId: TEST_IDS.taskOfferId,
       taskId: TEST_IDS.taskId,
-      executionId: TEST_IDS.executionId,
       expectedTaskRevision: 2,
-      expectedExecutionRevision: 1,
       expectedOfferRevision: 1,
       expectedCoordinatorAuthorityEpoch: 4,
       reason: 'Coordinator selected a replacement.'
@@ -249,29 +247,28 @@ describe('Coordinator authority epoch', () => {
     }).success).toBe(true)
   })
 
-  it('requires exact availability for reassignment and revision offers', () => {
+  it('targets a Worker User for reassignment and revision offers', () => {
     const reassign = {
       protocolVersion: '1.0',
       type: 'task.offer.reassign',
       requestId: TEST_IDS.requestId,
       idempotencyKey: 'idem_offer_reassign_001',
       taskId: TEST_IDS.taskId,
-      previousExecutionId: TEST_IDS.executionId,
+      previousTaskOfferId: TEST_IDS.taskOfferId,
+      expectedPreviousOfferRevision: 2,
       expectedProjectRevision: 8,
       expectedTaskRevision: 3,
-      expectedExecutionRevision: 2,
       expectedCoordinatorAuthorityEpoch: 4,
       expectedExecutionAuthorityEpoch: 2,
-      assigneeAgentId: TEST_IDS.secondAgentId,
-      expectedAvailabilityRevision: 9,
+      workerUserId: TEST_IDS.secondUserId,
       offerExpiresAt: TEST_LATER_TIMESTAMP,
       nextFileIntent: null
     }
     expect(restRequestSchema.safeParse(reassign).success).toBe(true)
     const { nextFileIntent: _nextFileIntent, ...withoutNextFileIntent } = reassign
     expect(restRequestSchema.safeParse(withoutNextFileIntent).success).toBe(false)
-    const { expectedAvailabilityRevision: _availability, ...withoutAvailability } = reassign
-    expect(restRequestSchema.safeParse(withoutAvailability).success).toBe(false)
+    const { workerUserId: _workerUserId, ...withoutWorkerUser } = reassign
+    expect(restRequestSchema.safeParse(withoutWorkerUser).success).toBe(false)
     const { expectedProjectRevision: _projectRevision, ...withoutProjectRevision } = reassign
     expect(restRequestSchema.safeParse(withoutProjectRevision).success).toBe(false)
     const { expectedExecutionAuthorityEpoch: _executionEpoch, ...withoutExecutionEpoch } = reassign
@@ -294,15 +291,14 @@ describe('Coordinator authority epoch', () => {
       expectedCoordinatorAuthorityEpoch: 4,
       decision: 'request_revision',
       instruction: 'Address the missing evidence.',
-      nextAssigneeAgentId: TEST_IDS.secondAgentId,
-      expectedNextAssigneeAvailabilityRevision: 9,
+      nextWorkerUserId: TEST_IDS.secondUserId,
       nextOfferExpiresAt: TEST_LATER_TIMESTAMP,
       nextFileIntent: null
     }
     expect(restRequestSchema.safeParse(review).success).toBe(true)
     expect(restRequestSchema.safeParse({
       ...review,
-      expectedNextAssigneeAvailabilityRevision: null
+      nextWorkerUserId: null
     }).success).toBe(false)
   })
 
@@ -313,6 +309,7 @@ describe('Coordinator authority epoch', () => {
       requestId: TEST_IDS.requestId,
       idempotencyKey: 'idem_human_needed_0001',
       projectId: TEST_IDS.projectId,
+      targetUserId: TEST_IDS.secondUserId,
       context: {
         scope: 'worker_execution',
         taskId: TEST_IDS.taskId,
@@ -325,6 +322,10 @@ describe('Coordinator authority epoch', () => {
       expiresAt: TEST_LATER_TIMESTAMP
     }
     expect(restRequestSchema.safeParse(humanNeeded).success).toBe(true)
+    expect(restRequestSchema.safeParse({
+      ...humanNeeded,
+      targetUserId: undefined
+    }).success).toBe(false)
     expect(restRequestSchema.safeParse({
       ...humanNeeded,
       context: { ...humanNeeded.context, expectedExecutionRevision: undefined }

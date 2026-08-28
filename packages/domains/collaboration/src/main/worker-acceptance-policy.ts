@@ -6,7 +6,7 @@ import {
 
 /**
  * Local-only Worker admission policy. The Cloud never receives this value;
- * every offer still produces an explicit accepted/rejected Cloud fact.
+ * automatic mode claims an offer; manual dismissal remains a Device-local fact.
  */
 export class WorkerAcceptancePolicyService {
   constructor(

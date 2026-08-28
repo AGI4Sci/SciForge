@@ -49,58 +49,67 @@ describe('Identity private vault', () => {
     })
   })
 
-  it('uses the Host encrypted package store on Windows', async () => {
-    const values = new Map<string, string>()
-    const seen: string[] = []
-    const vault = createPlatformIdentityPrivateVault({
-      installationId: INSTALLATION_ID,
-      platform: 'win32',
-      packageSecrets: {
-        has: async (key) => values.has(key),
-        read: async (key) => values.get(key) ?? null,
-        write: async (key, value) => {
-          seen.push(key)
-          values.set(key, value)
-        },
-        remove: async (key) => { values.delete(key) }
-      }
-    })
+  it.each(['win32', 'linux'] as const)(
+    'uses the Host encrypted package store for %s without exposing a generic secret slot',
+    async (platform) => {
+      const values = new Map<string, string>()
+      const seen: string[] = []
+      const vault = createPlatformIdentityPrivateVault({
+        installationId: INSTALLATION_ID,
+        platform,
+        packageSecrets: {
+          has: async (key) => values.has(key),
+          read: async (key) => values.get(key) ?? null,
+          write: async (key, value) => {
+            seen.push(key)
+            values.set(key, value)
+          },
+          remove: async (key) => { values.delete(key) }
+        }
+      })
 
-    await vault.write({ kind: 'oidc-session' }, 'session-secret-material')
-    await vault.write({ kind: 'device-key' }, 'device-private-key-material')
-    await vault.write({ kind: 'agent-credential', agentId: AGENT_ID }, 'agent-machine-credential')
+      await vault.write({ kind: 'oidc-session' }, 'session-secret-material')
+      await vault.write({ kind: 'device-key' }, 'device-private-key-material')
+      await vault.write({ kind: 'agent-credential', agentId: AGENT_ID }, 'agent-machine-credential')
 
-    expect(seen).toEqual([
-      'oidc.session',
-      'device.key',
-      `agent.credential.${AGENT_ID}`
-    ])
-    expect(await vault.read({ kind: 'oidc-session' })).toBe('session-secret-material')
-    expect(await vault.has({ kind: 'device-key' })).toBe(true)
-    await vault.remove({ kind: 'device-key' })
-    expect(await vault.has({ kind: 'device-key' })).toBe(false)
-  })
+      expect(new Set(seen).size).toBe(3)
+      expect(seen).toSatisfy((keys: string[]) => keys.every((key) => (
+        /^identity\.[a-f0-9]{64}$/u.test(key) && key.length <= 128
+      )))
+      expect(await vault.read({ kind: 'agent-credential', agentId: AGENT_ID }))
+        .toBe('agent-machine-credential')
+      await vault.remove({ kind: 'agent-credential', agentId: AGENT_ID })
+      expect(await vault.has({ kind: 'agent-credential', agentId: AGENT_ID })).toBe(false)
+    }
+  )
 
-  it('keeps macOS on the native Keychain-backed vault', async () => {
-    const seen: string[] = []
+  it('keeps macOS on the device-only native Keychain binding', async () => {
+    const nativeValues = new Map<string, string>()
     const vault = createPlatformIdentityPrivateVault({
       installationId: INSTALLATION_ID,
       platform: 'darwin',
-      nativeBinding: memoryBinding(new Map(), seen)
+      nativeBinding: memoryBinding(nativeValues, []),
+      packageSecrets: {
+        has: async () => { throw new Error('unexpected Host secret-store access') },
+        read: async () => { throw new Error('unexpected Host secret-store access') },
+        write: async () => { throw new Error('unexpected Host secret-store access') },
+        remove: async () => { throw new Error('unexpected Host secret-store access') }
+      }
     })
 
-    await vault.write({ kind: 'oidc-session' }, 'session-secret-material')
-
-    expect(seen).toHaveLength(1)
-    expect(seen[0]).toMatch(/^[a-f0-9]{64}$/u)
+    await vault.write({ kind: 'device-key' }, 'device-private-key-material')
+    expect([...nativeValues.values()]).toEqual(['device-private-key-material'])
   })
 
-  it('fails closed on Windows when the Host secret store is absent', () => {
-    expect(() => createPlatformIdentityPrivateVault({
-      installationId: INSTALLATION_ID,
-      platform: 'win32'
-    })).toThrow(IdentityPrivateVaultError)
-  })
+  it.each(['win32', 'linux'] as const)(
+    'fails closed on %s without the Host encrypted package store',
+    (platform) => {
+      expect(() => createPlatformIdentityPrivateVault({
+        installationId: INSTALLATION_ID,
+        platform
+      })).toThrow(IdentityPrivateVaultError)
+    }
+  )
 
   it('does not load an unavailable native addon through a fallback', async () => {
     if (process.platform === 'darwin') return

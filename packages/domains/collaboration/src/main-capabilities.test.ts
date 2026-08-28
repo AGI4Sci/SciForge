@@ -96,16 +96,6 @@ test('global collaboration mutations satisfy the production broker contract with
       expiresAt: '2026-08-15T09:00:00.000Z',
       instruction: 'Send the command.'
     }),
-    registerAgent: async () => ({
-      agentId: TEST_IDS.agentId,
-      ownerUserId: TEST_IDS.userId,
-      displayName: 'Desktop',
-      nodeType: 'desktop',
-      status: 'offline',
-      capabilities: [],
-      primary: false
-    }),
-    selectPrimaryAgent: async () => participant,
     linkProjection: async () => projection,
     updateProjection: async () => projection,
     shareProjection: async () => projection,
@@ -134,14 +124,6 @@ test('global collaboration mutations satisfy the production broker contract with
         providerUserId: 'zulip-user-42'
       }
     },
-    [COLLABORATION_CAPABILITY_IDS.agentRegister]: {
-      displayName: 'Desktop',
-      nodeType: 'desktop'
-    },
-    [COLLABORATION_CAPABILITY_IDS.primaryAgentSelect]: {
-      agentId: TEST_IDS.agentId,
-      expectedParticipantRevision: 1
-    },
     [COLLABORATION_CAPABILITY_IDS.projectionLink]: {
       mode: 'existing',
       agentId: TEST_IDS.agentId,
@@ -167,9 +149,8 @@ test('global collaboration mutations satisfy the production broker contract with
       mode: 'automatic'
     },
     [COLLABORATION_CAPABILITY_IDS.taskOfferDecide]: {
-      executionId: TEST_IDS.executionId,
-      decision: 'reject',
-      reason: 'human_rejected'
+      taskOfferId: TEST_IDS.taskOfferId,
+      decision: 'dismiss'
     },
     [COLLABORATION_CAPABILITY_IDS.managedContainerInspect]: { action: 'refresh-status' },
     [COLLABORATION_CAPABILITY_IDS.managedContainerProvision]: {
@@ -181,7 +162,11 @@ test('global collaboration mutations satisfy the production broker contract with
   }
   const mutations = definitions.filter((definition) => definition.effect === 'external-write')
 
-  assert.equal(mutations.length, 12)
+  assert.equal(mutations.length, 10)
+  assert.equal(definitions.some(({ id }) => id === 'collaboration.agent.register'), false)
+  assert.equal(definitions.some(({ id }) => (
+    id === 'collaboration.participant.primary-agent.select'
+  )), false)
   for (const definition of mutations) {
     assert.equal(definition.scope, 'global')
     assert.equal(Object.hasOwn(inputs, definition.id), true, `missing input fixture for ${definition.id}`)
@@ -282,9 +267,7 @@ test('the Collaboration entry publishes one Coordinator command service backed b
     type: 'task.offer.withdraw' as const,
     taskOfferId: TEST_IDS.taskOfferId,
     taskId: TEST_IDS.taskId,
-    executionId: TEST_IDS.executionId,
     expectedTaskRevision: 1,
-    expectedExecutionRevision: 1,
     expectedOfferRevision: 1,
     expectedCoordinatorAuthorityEpoch: 1,
     reason: 'Coordinator changed the synthetic assignment.'

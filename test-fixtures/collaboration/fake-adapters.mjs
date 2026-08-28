@@ -964,7 +964,11 @@ export class FakeCollaborationRepository {
 
   async listAvailableWorkers(now) {
     return copy([...this.state.workerAvailability.values()].filter((item) => (
-      item.expiresAt > now && item.acceptsNewOffers
+      item.expiresAt > now &&
+      item.agentActive &&
+      item.deviceActive &&
+      item.connectionStatus === 'online' &&
+      item.runtimeReadiness === 'ready'
     )))
   }
 
@@ -1451,6 +1455,13 @@ export class FakeCollaborationRepository {
     return copy(this.#currentTaskExecutions((execution) => execution.projectId === projectId))
   }
 
+  async listPendingTaskOffersForProjectForUpdate(projectId, workerUserId) {
+    return copy([...this.state.taskOffers.values()]
+      .filter((offer) => offer.projectId === projectId && offer.state === 'pending' &&
+        (workerUserId === undefined || offer.workerUserId === workerUserId))
+      .sort((left, right) => left.taskOfferId.localeCompare(right.taskOfferId)))
+  }
+
   async insertTaskExecution(execution) {
     if (this.state.taskExecutions.has(execution.executionId)) {
       throw new Error('fake repository duplicate Task execution')
@@ -1485,11 +1496,10 @@ export class FakeCollaborationRepository {
   async listExpiredTaskOffers(now, limit) {
     return copy([...this.state.taskOffers.values()]
       .filter((offer) => {
-        const execution = this.state.taskExecutions.get(offer.executionId)
         const task = this.state.tasks.get(offer.taskId)
         return offer.state === 'pending' && offer.expiresAt <= now &&
-          execution?.state === 'offered' && execution.fence.status === 'open' &&
-          task?.currentExecutionId === execution.executionId
+          offer.executionId === null && task?.status === 'offered' &&
+          task.currentExecutionId === null
       })
       .sort((left, right) => left.expiresAt.localeCompare(right.expiresAt) ||
         left.taskOfferId.localeCompare(right.taskOfferId))
@@ -1517,8 +1527,8 @@ export class FakeCollaborationRepository {
 
   async updateTaskOffer(offer, expectedRevision) {
     assertImmutableFields(this.state.taskOffers.get(offer.taskOfferId), offer, [
-      'taskOfferId', 'executionId', 'taskId', 'projectId', 'assigneeUserId', 'assigneeAgentId',
-      'assigneeDeviceId', 'offeredAt', 'expiresAt', 'createdAt'
+      'taskOfferId', 'taskId', 'projectId', 'workerUserId', 'offeredByCoordinatorAgentId',
+      'offeredAt', 'expiresAt', 'createdAt'
     ], 'Task offer')
     revisionUpdate(this.state.taskOffers, offer.taskOfferId, offer, expectedRevision)
   }

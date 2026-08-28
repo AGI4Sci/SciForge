@@ -147,6 +147,7 @@ function workspaceFixture() {
     },
     observedAt: '2026-08-26T01:08:00.000Z',
     focusedProjectId: 'prj_ProjectCreated01',
+    availableWorkerUsers: [],
     projects: [{
       project: {
         projectId: 'prj_ProjectCreated01',

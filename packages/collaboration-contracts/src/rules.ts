@@ -29,9 +29,7 @@ export const TASK_TRANSITIONS = {
 } as const
 
 export const TASK_EXECUTION_TRANSITIONS = {
-  offered: ['accepted', 'rejected', 'cancelled', 'timed_out', 'revoked', 'superseded'],
   accepted: ['running', 'failed', 'cancelled', 'revoked', 'superseded'],
-  rejected: [],
   running: ['needs_human', 'result_submitted', 'manual_recovery_required', 'failed', 'cancelled', 'revoked', 'superseded'],
   needs_human: ['running', 'failed', 'cancelled', 'revoked', 'superseded'],
   result_submitted: ['completed', 'superseded'],
@@ -39,15 +37,13 @@ export const TASK_EXECUTION_TRANSITIONS = {
   completed: [],
   failed: [],
   cancelled: [],
-  timed_out: [],
   revoked: [],
   superseded: []
 } as const
 
 export const TASK_OFFER_TRANSITIONS = {
-  pending: ['accepted', 'rejected', 'withdrawn', 'timed_out'],
+  pending: ['accepted', 'withdrawn', 'timed_out'],
   accepted: [],
-  rejected: [],
   withdrawn: [],
   timed_out: []
 } as const

@@ -78,7 +78,6 @@ import {
 import {
   taskExecutionSchema,
   taskExecutionStateSchema,
-  taskOfferRejectionReasonSchema,
   taskOfferSchema
 } from './task-execution.js'
 import {
@@ -191,23 +190,22 @@ export const projectCreateContentSchema = z.discriminatedUnion('mode', [
 ])
 
 /**
- * The sole Project creation transaction. The authenticated OIDC actor is the
- * Owner; callers cannot nominate another Owner. Required content facts are
- * validated and snapshotted with Memberships and the provisioning intent.
+ * The sole Project creation transaction. The authenticated Agent machine
+ * identity supplies both the current Device Coordinator and its owning User;
+ * neither authority may be nominated by the caller. Required content facts
+ * are validated and snapshotted with Memberships and the provisioning intent.
  */
 export const projectCreateCommandSchema = z.object({
   ...writeCommandShape,
   type: z.literal('project.create'),
   displayName: displayNameSchema,
   goal: nonEmptyTextSchema,
-  coordinatorAgentId: agentIdSchema,
-  expectedCoordinatorAgentRevision: revisionSchema,
   budget: projectBudgetSchema,
   content: projectCreateContentSchema
 }).strict()
 export type ProjectCreateCommand = z.infer<typeof projectCreateCommandSchema>
 
-/** Service precondition because the authenticated OIDC Owner is intentionally not caller input. */
+/** Service precondition because the authenticated Agent Owner is intentionally not caller input. */
 export function projectCreateIncludesAuthenticatedOwner(
   command: ProjectCreateCommand,
   authenticatedOwnerUserId: string
@@ -457,13 +455,11 @@ const offerCommandShape = {
   ...writeCommandShape,
   taskOfferId: taskOfferIdSchema,
   taskId: taskIdSchema,
-  executionId: executionIdSchema,
   expectedTaskRevision: revisionSchema,
-  expectedExecutionRevision: revisionSchema,
   expectedOfferRevision: revisionSchema
 } as const
 
-/** The one canonical initial Task creation + exact Agent offer transaction. */
+/** The one canonical initial Task creation + Worker User broadcast transaction. */
 export const taskOfferCreateCommandSchema = z.object({
   ...writeCommandShape,
   type: z.literal('task.offer.create'),
@@ -474,8 +470,7 @@ export const taskOfferCreateCommandSchema = z.object({
   projectPlanId: projectPlanIdSchema,
   expectedPlanRevision: revisionSchema,
   planItemId: z.string().regex(/^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$/u),
-  assigneeAgentId: agentIdSchema,
-  expectedAvailabilityRevision: revisionSchema,
+  workerUserId: userIdSchema,
   offerExpiresAt: timestampSchema
 }).strict()
 export type TaskOfferCreateCommand = z.infer<typeof taskOfferCreateCommandSchema>
@@ -485,30 +480,12 @@ export const taskOfferAcceptCommandSchema = z.object({
   type: z.literal('task.offer.accept')
 }).strict()
 
-export const taskOfferRejectCommandSchema = z.object({
-  ...offerCommandShape,
-  type: z.literal('task.offer.reject'),
-  reason: taskOfferRejectionReasonSchema,
-  safeReasonDetail: z.string().trim().min(1).max(500).nullable()
-}).strict().superRefine((command, context) => {
-  if ((command.reason === 'other') !== (command.safeReasonDetail !== null)) {
-    context.addIssue({
-      code: 'custom',
-      path: ['safeReasonDetail'],
-      message: 'Only the other rejection reason requires a bounded safe detail.'
-    })
-  }
-})
-export type TaskOfferRejectCommand = z.infer<typeof taskOfferRejectCommandSchema>
-
 export const taskOfferWithdrawCommandSchema = z.object({
   ...writeCommandShape,
   type: z.literal('task.offer.withdraw'),
   taskOfferId: taskOfferIdSchema,
   taskId: taskIdSchema,
-  executionId: executionIdSchema,
   expectedTaskRevision: revisionSchema,
-  expectedExecutionRevision: revisionSchema,
   expectedOfferRevision: revisionSchema,
   expectedCoordinatorAuthorityEpoch: revisionSchema,
   reason: z.string().trim().min(1).max(500)
@@ -518,14 +495,13 @@ export const taskOfferReassignCommandSchema = z.object({
   ...writeCommandShape,
   type: z.literal('task.offer.reassign'),
   taskId: taskIdSchema,
-  previousExecutionId: executionIdSchema,
+  previousTaskOfferId: taskOfferIdSchema,
+  expectedPreviousOfferRevision: revisionSchema,
   expectedProjectRevision: revisionSchema,
   expectedTaskRevision: revisionSchema,
-  expectedExecutionRevision: revisionSchema,
   expectedCoordinatorAuthorityEpoch: revisionSchema,
   expectedExecutionAuthorityEpoch: revisionSchema,
-  assigneeAgentId: agentIdSchema,
-  expectedAvailabilityRevision: revisionSchema,
+  workerUserId: userIdSchema,
   offerExpiresAt: timestampSchema,
   nextFileIntent: taskFileIntentSchema.nullable()
 }).strict()
@@ -588,8 +564,7 @@ const taskResultReviewFactsShape = {
   expectedCoordinatorAuthorityEpoch: revisionSchema,
   decision: taskReviewDecisionKindSchema,
   instruction: nonEmptyTextSchema.nullable(),
-  nextAssigneeAgentId: agentIdSchema.nullable(),
-  expectedNextAssigneeAvailabilityRevision: revisionSchema.nullable(),
+  nextWorkerUserId: userIdSchema.nullable(),
   nextOfferExpiresAt: timestampSchema.nullable(),
   nextFileIntent: taskFileIntentSchema.nullable()
 } as const
@@ -601,8 +576,7 @@ function validateTaskResultReview(
   if (command.decision === 'accept') {
     if (
       command.instruction !== null ||
-      command.nextAssigneeAgentId !== null ||
-      command.expectedNextAssigneeAvailabilityRevision !== null ||
+      command.nextWorkerUserId !== null ||
       command.nextOfferExpiresAt !== null ||
       command.nextFileIntent !== null
     ) {
@@ -614,14 +588,13 @@ function validateTaskResultReview(
     }
   } else if (
     command.instruction === null ||
-    command.nextAssigneeAgentId === null ||
-    command.expectedNextAssigneeAvailabilityRevision === null ||
+    command.nextWorkerUserId === null ||
     command.nextOfferExpiresAt === null
   ) {
     context.addIssue({
       code: 'custom',
-      path: ['nextAssigneeAgentId'],
-      message: 'Request-revision requires bounded instruction, exact next Agent availability and offer expiry.'
+      path: ['nextWorkerUserId'],
+      message: 'Request-revision requires bounded instruction, a Worker User and offer expiry.'
     })
   }
 }
@@ -726,7 +699,6 @@ export const cloudStateCommandSchemas = [
   projectPlanConfirmCommandSchema,
   taskOfferCreateCommandSchema,
   taskOfferAcceptCommandSchema,
-  taskOfferRejectCommandSchema,
   taskOfferWithdrawCommandSchema,
   taskOfferReassignCommandSchema,
   taskExecutionStartCommandSchema,

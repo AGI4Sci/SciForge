@@ -30,8 +30,11 @@ import {
   projectPlanTaskSchema,
   projectRecordSchema,
   projectSchema,
+  projectUserLabelFactSchema,
   projectWorkerAvailabilityViewSchema,
+  workerAvailabilityProjectionSchema,
   taskExecutionSchema,
+  taskOfferSchema,
   taskFileDestinationNameSchema,
   taskResultOutputSchema,
   taskResultReviewFactsSchema,
@@ -97,14 +100,14 @@ export const projectCoordinatorConnectionSchema = z.discriminatedUnion('state', 
 /** UI-only assignment projection; the Plan and Agent facts remain canonical Cloud records. */
 export const projectCoordinatorPlanAssignmentSchema = z.object({
   planItemId: projectPlanTaskSchema.shape.planItemId,
-  selectedAgentId: agentIdSchema.nullable(),
+  workerUserId: userIdSchema.nullable(),
   recommendationReason: safeReasonSchema.nullable()
 }).strict().superRefine((assignment, context) => {
-  if ((assignment.selectedAgentId === null) !== (assignment.recommendationReason === null)) {
+  if ((assignment.workerUserId === null) !== (assignment.recommendationReason === null)) {
     context.addIssue({
       code: 'custom',
       path: ['recommendationReason'],
-      message: 'A selected exact Agent and its recommendation reason must be projected together.'
+      message: 'A selected Worker User and its recommendation reason must be projected together.'
     })
   }
 }).readonly()
@@ -253,7 +256,7 @@ export const projectCoordinatorContentRecoveryAbandonInputSchema = z.object({
 export const projectCoordinatorContentRecoveryRetrySuccessorInputSchema = z.object({
   projectId: projectIdSchema,
   recoveryActionId: visibleRecoveryActionSchema.shape.recoveryActionId,
-  assigneeAgentId: agentIdSchema,
+  workerUserId: userIdSchema,
   nextOutputFileName: taskFileDestinationNameSchema,
   offerExpiresAt: timestampSchema
 }).strict().readonly()
@@ -286,6 +289,7 @@ export const projectCoordinatorMembershipRemoveInputSchema = z.object({
 
 export const projectCoordinatorHumanNeededCreateInputSchema = z.object({
   projectId: humanNeededCreateCommandSchema.shape.projectId,
+  targetUserId: humanNeededCreateCommandSchema.shape.targetUserId,
   expectedProjectRevision: projectSchema.shape.revision,
   expectedCoordinatorAuthorityEpoch: projectSchema.shape.coordinatorAuthorityEpoch,
   requiredAssurance: humanNeededCreateCommandSchema.shape.requiredAssurance.exclude(['basic']),
@@ -406,7 +410,13 @@ export const projectCoordinatorWorkerAgentSchema = z.object({
   projectAvailability: projectWorkerAvailabilityViewSchema
 }).strict().readonly()
 
-/** User is the grouping key; availability and selection remain exact Agent facts. */
+/** Cloud-global online Worker directory; UI selection is only a User identity. */
+export const projectCoordinatorAvailableWorkerUserSchema = z.object({
+  userId: userIdSchema,
+  displayName: displayNameSchema
+}).strict().readonly()
+
+/** User is the selection key; nested Agent facts are internal dispatch-readiness evidence. */
 export const projectCoordinatorWorkerGroupSchema = z.object({
   userId: userIdSchema,
   displayName: displayNameSchema,
@@ -489,8 +499,10 @@ export const projectCoordinatorProjectSchema = z.object({
   project: projectSchema,
   coordinatorTransferFeedback: projectCoordinatorTransferFeedbackSchema.nullable().default(null),
   plan: projectCoordinatorPlanViewSchema.nullable(),
+  memberUsers: z.array(projectUserLabelFactSchema).max(1_000),
   workerGroups: z.array(projectCoordinatorWorkerGroupSchema).max(1_000),
   tasks: z.array(projectCoordinatorTaskViewSchema).max(10_000),
+  offers: z.array(taskOfferSchema).max(10_000),
   reviews: z.array(projectCoordinatorReviewViewSchema).max(10_000),
   pendingHumanNeeded: z.array(humanNeededSchema).max(10_000),
   records: z.array(projectRecordSchema).max(10_000),
@@ -514,6 +526,16 @@ export const projectCoordinatorProjectSchema = z.object({
   if (view.plan && view.plan.plan.projectId !== projectId) {
     context.addIssue({ code: 'custom', path: ['plan'], message: 'Plan must belong to this Project.' })
   }
+  const memberUserIds = view.memberUsers.map(({ userId }) => userId)
+  if (new Set(memberUserIds).size !== memberUserIds.length || view.memberUsers.some((member) => (
+    member.projectId !== projectId
+  ))) {
+    context.addIssue({
+      code: 'custom',
+      path: ['memberUsers'],
+      message: 'Project member User labels must be unique and belong to this Project.'
+    })
+  }
   const userIds = view.workerGroups.map(({ userId }) => userId)
   if (new Set(userIds).size !== userIds.length) {
     context.addIssue({ code: 'custom', path: ['workerGroups'], message: 'Worker groups must be unique by User.' })
@@ -528,13 +550,13 @@ export const projectCoordinatorProjectSchema = z.object({
       message: 'Each Agent must occur in exactly one User group.'
     })
   }
-  const candidateIds = new Set(agentIds)
+  const candidateUserIds = new Set(userIds)
   view.plan?.assignments.forEach((assignment, index) => {
-    if (assignment.selectedAgentId === null || candidateIds.has(assignment.selectedAgentId)) return
+    if (assignment.workerUserId === null || candidateUserIds.has(assignment.workerUserId)) return
     context.addIssue({
       code: 'custom',
-      path: ['plan', 'assignments', index, 'selectedAgentId'],
-      message: 'A selected Worker must reference an exact Agent in the User-grouped candidate projection.'
+      path: ['plan', 'assignments', index, 'workerUserId'],
+      message: 'A selected Worker must reference one User in the grouped candidate projection.'
     })
   })
   view.workerGroups.forEach((group, index) => {
@@ -551,16 +573,24 @@ export const projectCoordinatorProjectSchema = z.object({
     if (task.task.projectId === projectId) return
     context.addIssue({ code: 'custom', path: ['tasks', index], message: 'Task must belong to this Project.' })
   })
+  view.offers.forEach((offer, index) => {
+    if (offer.projectId === projectId && view.tasks.some(({ task }) => task.taskId === offer.taskId)) return
+    context.addIssue({
+      code: 'custom',
+      path: ['offers', index],
+      message: 'Every Task offer must belong to a visible Task in this Project.'
+    })
+  })
   view.reviews.forEach((review, index) => {
     if (review.submission.projectId === projectId) return
     context.addIssue({ code: 'custom', path: ['reviews', index], message: 'Review must belong to this Project.' })
   })
   view.pendingHumanNeeded.forEach((request, index) => {
-    if (request.projectId === projectId && request.targetUserId === view.project.ownerUserId) return
+    if (request.projectId === projectId && memberUserIds.includes(request.targetUserId)) return
     context.addIssue({
       code: 'custom',
       path: ['pendingHumanNeeded', index],
-      message: 'Pending HumanNeeded must belong to this Project Owner.'
+      message: 'Pending HumanNeeded must target one visible Project member User.'
     })
   })
   view.records.forEach((record, index) => {
@@ -665,6 +695,7 @@ export const projectCoordinatorWorkspaceSchema = z.object({
   connection: projectCoordinatorConnectionSchema,
   observedAt: timestampSchema,
   focusedProjectId: projectIdSchema.optional(),
+  availableWorkerUsers: z.array(projectCoordinatorAvailableWorkerUserSchema).max(1_000),
   projects: z.array(projectCoordinatorProjectSchema).max(1_000)
 }).strict().superRefine((workspace, context) => {
   if (workspace.connection.state !== 'ready' && workspace.projects.length > 0) {
@@ -672,6 +703,13 @@ export const projectCoordinatorWorkspaceSchema = z.object({
       code: 'custom',
       path: ['projects'],
       message: 'Unavailable coordination state cannot claim Project data.'
+    })
+  }
+  if (workspace.connection.state !== 'ready' && workspace.availableWorkerUsers.length > 0) {
+    context.addIssue({
+      code: 'custom',
+      path: ['availableWorkerUsers'],
+      message: 'Unavailable coordination state cannot claim Cloud Worker directory data.'
     })
   }
   if (workspace.connection.state !== 'ready' && workspace.focusedProjectId) {
@@ -694,6 +732,14 @@ export const projectCoordinatorWorkspaceSchema = z.object({
   const projectIds = workspace.projects.map(({ project }) => project.projectId)
   if (new Set(projectIds).size !== projectIds.length) {
     context.addIssue({ code: 'custom', path: ['projects'], message: 'Project IDs must be unique.' })
+  }
+  const workerUserIds = workspace.availableWorkerUsers.map(({ userId }) => userId)
+  if (new Set(workerUserIds).size !== workerUserIds.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['availableWorkerUsers'],
+      message: 'Available Worker groups must be unique by User.'
+    })
   }
 }).readonly()
 

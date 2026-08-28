@@ -9,6 +9,7 @@ import {
   domainPackageNpmInvocation,
   discoverMainBundlePackageNames,
   discoverDomainPackages,
+  generatedDomainPackageContentMatches,
   renderGeneratedDomainPackageFiles
 } from './domain-packages.mjs'
 
@@ -31,6 +32,17 @@ test('launches npm scripts without a Windows command-shell shim', () => {
     () => domainPackageNpmInvocation({ platform: 'win32', npmExecPath: '' }),
     /absolute npm_execpath/
   )
+})
+
+test('treats Git CRLF checkout conversion as the same generated composition', () => {
+  assert.equal(generatedDomainPackageContentMatches(
+    '// generated\r\nexport const value = 1\r\n',
+    '// generated\nexport const value = 1\n'
+  ), true)
+  assert.equal(generatedDomainPackageContentMatches(
+    '// generated\r\nexport const value = 2\r\n',
+    '// generated\nexport const value = 1\n'
+  ), false)
 })
 
 test('sorts packages by packageName and omits undeclared process imports', async (context) => {

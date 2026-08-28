@@ -226,11 +226,12 @@ export const taskFixture = taskSchema.parse({
   objective: '验证样本质量并总结异常。',
   completionCriteria: ['提交结果摘要', '标记异常样本'],
   dependencyTaskIds: [],
+  requiredCapabilityTags: ['analysis'],
   fileIntent: null,
-  currentExecutionId: TEST_IDS.executionId,
-  currentExecutionState: 'offered',
+  currentExecutionId: null,
+  currentExecutionState: null,
   status: 'offered',
-  executionCount: 1,
+  executionCount: 0,
   maxRetries: 2,
   completedAt: null,
   revision: 1,
@@ -400,9 +401,9 @@ export const INVALID_TEST_ONLY_CREDENTIAL_FIXTURE = Object.freeze({
 
 export const redactedCredentialFixture = redactCredentials(INVALID_TEST_ONLY_CREDENTIAL_FIXTURE)
 
-export const agentRegisteredResponseFixture = {
+export const agentEnsuredResponseFixture = {
   protocolVersion: '1.0' as const,
-  type: 'agent.registered' as const,
+  type: 'agent.ensured' as const,
   requestId: TEST_IDS.requestId,
   agent: agentNodeFixture,
   sealedCredential: {

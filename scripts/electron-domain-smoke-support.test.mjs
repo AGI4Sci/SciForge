@@ -165,8 +165,6 @@ test('domain smoke requires every Stage 2 collaboration capability exactly once'
     'collaboration.connection.connect',
     'collaboration.endpoint.challenge.start',
     'collaboration.endpoint.challenge.poll',
-    'collaboration.agent.register',
-    'collaboration.participant.primary-agent.select',
     'collaboration.projection.link',
     'collaboration.projection.update',
     'collaboration.projection.share',

@@ -2,9 +2,7 @@ import type {
   WorkspaceFileReadResult,
   WorkspacePdfRenameSuggestionResult
 } from '@shared/workspace-file'
-
-const MAX_PDF_TITLE_LENGTH = 180
-const WINDOWS_RESERVED_FILE_STEM = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu
+import { pdfTitleFileName } from '@shared/pdf-rename'
 
 function normalizePdfTitle(value: string): string {
   const withoutControlCharacters = [...value.normalize('NFKC')]
@@ -16,17 +14,8 @@ function normalizePdfTitle(value: string): string {
   return withoutControlCharacters.replace(/\s+/gu, ' ').replace(/\.pdf$/iu, '').trim()
 }
 
-export function pdfMetadataTitleFileName(title: string): string {
-  const cleaned = normalizePdfTitle(title)
-    .replace(/[\\/]+/gu, ' - ')
-    .replace(/[:*?"<>|]+/gu, ' - ')
-    .replace(/\s+-\s+(?:-\s+)+/gu, ' - ')
-    .replace(/\s+/gu, ' ')
-    .replace(/(?:\s+-)?[. ]+$/gu, '')
-    .trim()
-  const truncated = [...cleaned].slice(0, MAX_PDF_TITLE_LENGTH).join('').replace(/(?:\s+-)?[. ]+$/gu, '')
-  const portableStem = WINDOWS_RESERVED_FILE_STEM.test(truncated) ? `${truncated} paper` : truncated
-  return `${portableStem || 'paper'}.pdf`
+export function pdfMetadataTitleFileName(title: string, sourceText?: string): string {
+  return pdfTitleFileName(title, sourceText === undefined ? undefined : { sourceText })
 }
 
 function usableMetadataTitle(value: string, currentName: string): string | null {
@@ -66,7 +55,7 @@ export async function suggestPdfNameFromWorkspaceRead(
     return {
       ok: true,
       title,
-      suggestedName: pdfMetadataTitleFileName(title),
+      suggestedName: pdfMetadataTitleFileName(title, `${result.path}\n${currentName}\n${title}`),
       source: 'metadata'
     }
   } catch (error) {

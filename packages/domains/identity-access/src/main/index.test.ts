@@ -450,15 +450,23 @@ describe('Identity main contributions', () => {
     }
   })
 
-  it('fails closed outside macOS when the Host secret store is unavailable', () => {
-    if (process.platform === 'darwin') return
-    expect(() => createDomainMainEntry({
-      getUserDataDir: () => '/private/tmp/sciforge-identity-missing-secrets',
-      getDeviceId: () => 'device-1',
-      internalServices: memoryInternalServices(),
-      defineCapability: (definition) => definition
-    })).toThrow('Identity requires the Host package-scoped secret store')
-  })
+  it.each(['win32', 'linux'] as const)(
+    'fails closed on %s when the Host encrypted package store is unavailable',
+    (platform) => {
+      const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!
+      Object.defineProperty(process, 'platform', { ...descriptor, value: platform })
+      try {
+        expect(() => createDomainMainEntry({
+          getUserDataDir: () => '/private/tmp/sciforge-identity-missing-secrets',
+          getDeviceId: () => 'device-1',
+          internalServices: memoryInternalServices(),
+          defineCapability: (definition) => definition
+        })).toThrow('Identity requires the Host package-scoped secret store')
+      } finally {
+        Object.defineProperty(process, 'platform', descriptor)
+      }
+    }
+  )
 
   it('fails Cloud activation before construction when the Host application version is unavailable', async () => {
     const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-version-'))

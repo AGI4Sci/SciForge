@@ -1,6 +1,6 @@
 # SciForge Context Map
 
-> Current-state audit: 2026-08-24. This map distinguishes implemented authority, the frozen full-collaboration target, current provider-native capabilities, and deferred provider-neutral targets. It is not a catalog of every SciForge domain or integration package.
+> Current-state audit: 2026-08-27. This map distinguishes implemented authority, the frozen full-collaboration target, current provider-native capabilities, and deferred provider-neutral targets. It is not a catalog of every SciForge domain or integration package.
 
 ## Identity and Access
 
@@ -10,7 +10,7 @@ Glossary: `docs/contexts/identity-access/CONTEXT.md`
 
 ## Cloud Collaboration
 
-Owns canonical collaboration Users created only through OIDC JIT, Human Endpoint Bindings, Agent ownership and credential lifecycle/generation facts, presence and Worker availability, personal Session projections, multi-user Projects, Project Membership, the one current Project-Owner-owned Coordinator Agent, Tasks and fenced executions, Project Records, durable inboxes, receipts, Project Content provisioning intent, Provider membership observations, derived content readiness and Project Content Space Binding. It never owns or returns replayable Agent credential material. Pairing binds only a communication endpoint for an already authenticated User; it never creates an account or grants a Project role.
+Owns canonical collaboration Users created only through OIDC JIT, Human Endpoint Bindings, Agent ownership and credential lifecycle/generation facts, presence and Worker availability, personal Session projections, multi-user Projects, Project Membership, the one current Project-Owner-owned Coordinator Agent, User-targeted Task Offers, atomically claimed and fenced Task Executions, Project Records, durable inboxes, receipts, Project Content provisioning intent, Provider membership observations, derived content readiness and Project Content Space Binding. It never owns or returns replayable Agent credential material. Pairing binds only a communication endpoint for an already authenticated User; it never creates an account or grants a Project role.
 
 Two independently ownable domain packages implement this context in Desktop. `domain-collaboration` owns Runtime configuration, Agent/presence status projection, durable Inbox/outbox and local Worker execution, while consuming only Identity-owned token-free Agent operations; `domain-project-coordinator` owns plan, Worker selection, Task/review and provisioning/recovery HCI. Identity UI and Agent credential custody remain in `identity-access`, and both collaboration packages compose through standard manifests rather than a Host feature map.
 
@@ -42,7 +42,7 @@ Glossary: `docs/contexts/provider-integration/CONTEXT.md`
 
 - Identity and Access is authoritative for the current Human Principal, OIDC session and ACTIVE Device lease. Cloud Collaboration consumes its token-free authenticated transport and canonical User/Device facts; collaboration packages never receive OIDC Token material.
 - Cloud Collaboration creates or finds a canonical User only from a validated OIDC `issuer + subject` through JIT. Pairing, Agent registration, Provider enrollment, email, display name, Local Account and installation ID cannot create or reconcile that User.
-- A Desktop creates an Agent only after OIDC User and ACTIVE Device are established and a local Agent Runtime is configured. One Run-0 Desktop Device has at most one active Agent, while the same User may own distinct Agents on multiple Devices. Coordinator and Worker are Project/Task relationships, not account types; every current Coordinator Agent is owned by the Project Owner, while Worker Agents may be owned by any Project Member.
+- A Desktop creates an Agent only after OIDC User and ACTIVE Device are established and a local Agent Runtime is configured. One Run-0 Desktop Device has at most one active Agent, while the same User may own distinct Agents on multiple Devices. The creator's current Device Agent becomes Coordinator for the new Project only. A Coordinator selects a Worker User; Cloud broadcasts one User-level Offer to that User's eligible runtimes, and the first atomic claim creates the exact Worker Agent/Device Task Execution. Coordinator and Worker remain Project/Task relationships, not account types.
 - An External Account Binding associates a SciForge User with an external service account; the external provider remains authoritative for that external account and its provider-native permissions.
 - Shared Documents and Content Space remain sibling contexts. The current MDoc capability is provider-native Content Space behavior, while a future provider-neutral Shared Documents domain retains its own public contract, readiness, tests, and replacement path.
 - Content Space consumes only the ContentSpaceProvider catalog, including any declared provider-native document capability. The DocumentProvider catalog remains reserved for the deferred Shared Documents domain; an installed Provider that does not declare the Content Space capability neither receives it nor falls back to another Provider.

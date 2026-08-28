@@ -620,22 +620,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
           agent.lifecycleStatus === 'active')) {
       fail('EXISTING_BINDING_MISMATCH')
     }
-    let participant = snapshot.participant
-    if (participant.primaryHumanEndpointId !== endpointId || participant.primaryAgentId !== agentId) {
-      const selected = await collaborationCommand(common.oidcAccessToken, {
-        type: 'participant.update_primary',
-        userId: common.userId,
-        expectedRevision: participant.revision,
-        primaryHumanEndpointId: required(endpointId),
-        primaryAgentId: required(agentId),
-        idempotencyKey: idempotency('participant_primary')
-      })
-      if (selected.type !== 'rest.entity' || selected.entity.type !== 'participant_profile' || selected.entity.status !== 'active') {
-        fail('COLLABORATION_RESPONSE_INVALID')
-      }
-      participant = selected.entity
-    }
-    if (participant.status !== 'active') fail('EXISTING_BINDING_MISMATCH')
+    if (snapshot.participant.status !== 'active') fail('EXISTING_BINDING_MISMATCH')
     const endpoint = snapshot.humanEndpoints.find((item) => item.humanEndpointId === endpointId)
     const providerUserId = await verifyZulipAccount(common, endpoint)
     const agent = snapshot.agents.find((item) => item.agentId === agentId)
@@ -684,36 +669,26 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     }
     if (!verified || verified.userId !== common.userId) fail('PAIRING_TIMEOUT')
     const bootstrap = createAgentCredentialBootstrap()
-    const registered = await collaborationCommand(common.oidcAccessToken, {
-      type: 'agent.register',
+    const ensured = await collaborationCommand(common.oidcAccessToken, {
+      type: 'agent.ensure',
       deviceId: common.deviceId,
-      displayName: `验收 Agent ${slot}`,
-      nodeType: 'desktop',
       capabilities: ['collaboration.acceptance'],
       credentialBootstrapPublicKey: bootstrap.publicKey,
-      idempotencyKey: idempotency('agent_register')
+      idempotencyKey: idempotency('agent_ensure')
     })
-    if (registered.type !== 'agent.registered' || registered.agent.deviceId !== common.deviceId ||
-        registered.agent.ownerUserId !== common.userId ||
-        registered.sealedCredential.agentId !== registered.agent.agentId ||
-        registered.sealedCredential.deviceId !== common.deviceId) {
+    if (ensured.type !== 'agent.ensured' || ensured.agent.deviceId !== common.deviceId ||
+        ensured.agent.ownerUserId !== common.userId || !ensured.sealedCredential ||
+        ensured.sealedCredential.agentId !== ensured.agent.agentId ||
+        ensured.sealedCredential.deviceId !== common.deviceId) {
       fail('COLLABORATION_RESPONSE_INVALID')
     }
-    const agentCredential = bootstrap.open(registered.sealedCredential)
+    const agentCredential = bootstrap.open(ensured.sealedCredential)
     const snapshot = await collaborationCommand(common.oidcAccessToken, {
       type: 'participant.get',
       userId: common.userId
     })
     if (snapshot.type !== 'participant.snapshot') fail('COLLABORATION_RESPONSE_INVALID')
-    const selected = await collaborationCommand(common.oidcAccessToken, {
-      type: 'participant.update_primary',
-      userId: common.userId,
-      expectedRevision: snapshot.participant.revision,
-      primaryHumanEndpointId: verified.humanEndpointId,
-      primaryAgentId: registered.agent.agentId,
-      idempotencyKey: idempotency('participant_primary')
-    })
-    if (selected.type !== 'rest.entity' || selected.entity.type !== 'participant_profile' || selected.entity.status !== 'active') {
+    if (snapshot.participant.status !== 'active') {
       fail('COLLABORATION_RESPONSE_INVALID')
     }
     const endpoint = snapshot.humanEndpoints.find((item) => item.humanEndpointId === verified.humanEndpointId)
@@ -722,13 +697,13 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       ...common,
       agentCredential,
       providerUserId,
-      agentRevision: registered.agent.revision,
+      agentRevision: ensured.agent.revision,
       activeTaskCount: 0,
       public: Object.freeze({
         slot,
         userId: common.userId,
         endpointId: verified.humanEndpointId,
-        agentId: registered.agent.agentId
+        agentId: ensured.agent.agentId
       })
     }
   }
@@ -895,12 +870,10 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       const state = stateFor(member)
       return [state.public.userId, state]
     })).values()]
-    const created = await collaborationCommand(ownerState.oidcAccessToken, {
+    const created = await collaborationCommand(coordinatorState.agentCredential, {
       type: 'project.create',
       displayName: required(label),
       goal: `Zulip 六用户真实验收 ${runId}`,
-      coordinatorAgentId: coordinator.agentId,
-      expectedCoordinatorAgentRevision: coordinatorState.agentRevision,
       budget: { maxTasks: 20, maxTasksPerRound: 20, maxCoordinationRounds: 5, maxTaskRetries: 1 },
       content: { mode: 'none', members: memberStates.map(({ public: participant }) => ({ userId: participant.userId })) },
       idempotencyKey: idempotency('project_create')
@@ -1076,7 +1049,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     }
   }
 
-  async function createTaskWithAgent(agentState, projectState, assigneeState, label) {
+  async function createTaskWithWorkerUser(agentState, projectState, assigneeState, label) {
     return withProjectTaskLock(projectState, async () => {
       if (projectState.nextPlanItemIndex >= projectState.planItems.length) fail('PROJECT_TASK_BUDGET_EXHAUSTED')
       await heartbeat(assigneeState, true)
@@ -1091,17 +1064,14 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
         projectPlanId: projectState.plan.projectPlanId,
         expectedPlanRevision: projectState.plan.revision,
         planItemId: planItem.planItemId,
-        assigneeAgentId: assigneeState.public.agentId,
-        expectedAvailabilityRevision: assigneeState.availabilityRevision,
+        workerUserId: assigneeState.public.userId,
         offerExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
         idempotencyKey: idempotency('task_offer_create')
       })
       const task = collectionEntity(response, 'task')
-      const execution = collectionEntity(response, 'task_execution')
       const offer = collectionEntity(response, 'task_offer')
       projectState.nextPlanItemIndex += 1
-      assigneeState.activeTaskCount += 1
-      return Object.freeze({ ...task, acceptanceLabel: required(label), execution, offer })
+      return Object.freeze({ ...task, acceptanceLabel: required(label), offer })
     })
   }
 
@@ -1109,7 +1079,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     const projectState = projectStateFor(project)
     const coordinatorState = stateFor(coordinator)
     const assigneeState = stateFor(assignee)
-    const task = await createTaskWithAgent(coordinatorState, projectState, assigneeState, label)
+    const task = await createTaskWithWorkerUser(coordinatorState, projectState, assigneeState, label)
     safeReport(report, 'task.created')
     return Object.freeze(task)
   }
@@ -1117,16 +1087,16 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
   async function awaitTaskOffer({ participant, task }) {
     const state = stateFor(participant)
     const message = await waitForInbox(state, 'agent', (candidate) => (
-      candidate.payload.type === 'task.offer.created' &&
+      candidate.payload.type === 'task.offered' &&
       candidate.payload.taskId === task.taskId &&
-      candidate.payload.executionId === task.execution.executionId &&
-      candidate.payload.taskOfferId === task.offer.taskOfferId
+      candidate.payload.taskOfferId === task.offer.taskOfferId &&
+      candidate.payload.workerUserId === participant.userId
     ))
     if (message.recipientType !== 'agent' || message.recipientAgentId !== participant.agentId) {
       fail('TASK_ROUTE_MISMATCH')
     }
     safeReport(report, 'task.offer.received')
-    return Object.freeze({ task, execution: task.execution, offer: task.offer, sequence: message.sequence })
+    return Object.freeze({ task, offer: task.offer, sequence: message.sequence })
   }
 
   async function completeTask({ participant, offer, result }) {
@@ -1135,14 +1105,13 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       type: 'task.offer.accept',
       taskOfferId: offer.offer.taskOfferId,
       taskId: offer.task.taskId,
-      executionId: offer.execution.executionId,
       expectedTaskRevision: offer.task.revision,
-      expectedExecutionRevision: offer.execution.revision,
       expectedOfferRevision: offer.offer.revision,
       idempotencyKey: idempotency('task_offer_accept')
     })
     const acceptedTask = collectionEntity(acceptedResponse, 'task')
     const acceptedExecution = collectionEntity(acceptedResponse, 'task_execution')
+    state.activeTaskCount += 1
     const preflight = await collaborationCommand(state.agentCredential, {
       type: 'task.execution.preflight.get',
       taskId: acceptedTask.taskId,
@@ -1213,8 +1182,8 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       expectedExecutionRevision: result.execution.revision,
       expectedResultRevision: result.submission.revision,
       expectedCoordinatorAuthorityEpoch: currentProjectEntity.coordinatorAuthorityEpoch,
-      decision: 'accept', instruction: null, nextAssigneeAgentId: null,
-      expectedNextAssigneeAvailabilityRevision: null, nextOfferExpiresAt: null, nextFileIntent: null,
+      decision: 'accept', instruction: null, nextWorkerUserId: null,
+      nextOfferExpiresAt: null, nextFileIntent: null,
       idempotencyKey: idempotency('task_result_review')
     })
     const reviewedTask = collectionEntity(reviewedResponse, 'task')
@@ -1229,8 +1198,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     const requester = stateFor(participant)
     const targetState = stateFor(target)
     const projectState = projectStateFor(project)
-    if (targetState !== projectState.owner) fail('HUMAN_TARGET_REQUIRED')
-    const decisionTask = await createTaskWithAgent(
+    const decisionTask = await createTaskWithWorkerUser(
       projectState.coordinator,
       projectState,
       requester,
@@ -1239,12 +1207,13 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     const offer = await awaitTaskOffer({ participant, task: decisionTask })
     const acceptedResponse = await collaborationCommand(requester.agentCredential, {
       type: 'task.offer.accept', taskOfferId: offer.offer.taskOfferId,
-      taskId: offer.task.taskId, executionId: offer.execution.executionId,
-      expectedTaskRevision: offer.task.revision, expectedExecutionRevision: offer.execution.revision,
+      taskId: offer.task.taskId,
+      expectedTaskRevision: offer.task.revision,
       expectedOfferRevision: offer.offer.revision, idempotencyKey: idempotency('human_task_offer_accept')
     })
     const acceptedTask = collectionEntity(acceptedResponse, 'task')
     const acceptedExecution = collectionEntity(acceptedResponse, 'task_execution')
+    requester.activeTaskCount += 1
     const startedResponse = await collaborationCommand(requester.agentCredential, {
       type: 'task.execution.start', taskId: acceptedTask.taskId, executionId: acceptedExecution.executionId,
       expectedTaskRevision: acceptedTask.revision, expectedExecutionRevision: acceptedExecution.revision,
@@ -1255,10 +1224,14 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     const response = await collaborationCommand(requester.agentCredential, {
       type: 'human.needed.create',
       projectId: project.projectId,
-      taskId: runningTask.taskId,
-      executionId: runningExecution.executionId,
-      expectedTaskRevision: runningTask.revision,
-      expectedExecutionRevision: runningExecution.revision,
+      targetUserId: targetState.public.userId,
+      context: {
+        scope: 'worker_execution',
+        taskId: runningTask.taskId,
+        executionId: runningExecution.executionId,
+        expectedTaskRevision: runningTask.revision,
+        expectedExecutionRevision: runningExecution.revision
+      },
       requiredAssurance: 'verified',
       prompt: required(text),
       confirmableAction: null,
@@ -1276,7 +1249,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       execution: runningExecution,
       sourceTask: task,
       prompt: text,
-      notificationText: `${text}\n\n请由 Project Owner 在已登录 OIDC 的 SciForge Desktop 中回答。`,
+      notificationText: `${text}\n\n请由指定的 Project 成员 User 在已登录 OIDC 的 SciForge Desktop 中回答。`,
       answerMessage: null
     })
     safeReport(report, 'human.needed.created')
@@ -1451,7 +1424,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     const assigneeState = stateFor(assignee)
     const projectState = projectStateFor(project)
     try {
-      const task = await createTaskWithAgent(agentState, projectState, assigneeState, label)
+      const task = await createTaskWithWorkerUser(agentState, projectState, assigneeState, label)
       safeReport(report, 'task.created.by-agent')
       return Object.freeze(task)
     } catch (error) {

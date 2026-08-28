@@ -3,8 +3,6 @@ import type { z } from 'zod'
 
 import {
   COLLABORATION_CAPABILITY_IDS,
-  collaborationAgentRegisterInputSchema,
-  collaborationAgentRegisterResultSchema,
   collaborationConnectionConfigureInputSchema,
   collaborationConnectionConfigureResultSchema,
   collaborationConnectionConnectInputSchema,
@@ -17,8 +15,6 @@ import {
   collaborationManagedContainerInspectInputSchema,
   collaborationManagedContainerProvisionInputSchema,
   collaborationManagedContainerArchiveInputSchema,
-  collaborationPrimaryAgentSelectInputSchema,
-  collaborationPrimaryAgentSelectResultSchema,
   collaborationProjectionLinkInputSchema,
   collaborationProjectionLinkResultSchema,
   collaborationProjectionShareInputSchema,
@@ -35,13 +31,11 @@ import {
   collaborationTaskOfferDecisionResultSchema,
   collaborationWorkerAcceptanceUpdateInputSchema,
   collaborationWorkerAcceptanceUpdateResultSchema,
-  type CollaborationAgentRegisterInput,
   type CollaborationConnectionConfigureInput,
   type CollaborationConnectionConnectInput,
   type CollaborationEndpointChallengePollInput,
   type CollaborationEndpointChallengeStartInput,
   type CollaborationManagedContainerManageInput,
-  type CollaborationPrimaryAgentSelectInput,
   type CollaborationProjectionLinkInput,
   type CollaborationProjectionShareInput,
   type CollaborationProjectionUpdateInput,
@@ -52,12 +46,10 @@ import {
   type CollaborationWorkerAcceptanceUpdateInput
 } from '../contract.js'
 
-type AgentRegisterResult = z.infer<typeof collaborationAgentRegisterResultSchema>
 type ConnectionConfigureResult = z.infer<typeof collaborationConnectionConfigureResultSchema>
 type ConnectionConnectResult = z.infer<typeof collaborationConnectionConnectResultSchema>
 type EndpointChallengeStartResult = z.infer<typeof collaborationEndpointChallengeStartResultSchema>
 type EndpointChallengePollResult = z.infer<typeof collaborationEndpointChallengePollResultSchema>
-type PrimaryAgentSelectResult = z.infer<typeof collaborationPrimaryAgentSelectResultSchema>
 type ProjectionLinkResult = z.infer<typeof collaborationProjectionLinkResultSchema>
 type ProjectionUpdateResult = z.infer<typeof collaborationProjectionUpdateResultSchema>
 type ProjectionShareResult = z.infer<typeof collaborationProjectionShareResultSchema>
@@ -97,18 +89,6 @@ const contracts = Object.freeze({
     effect: 'read' as const,
     inputSchema: collaborationEndpointChallengePollInputSchema,
     outputSchema: collaborationEndpointChallengePollResultSchema
-  }),
-  agentRegister: Object.freeze({
-    actionId: COLLABORATION_CAPABILITY_IDS.agentRegister,
-    effect: 'external-write' as const,
-    inputSchema: collaborationAgentRegisterInputSchema,
-    outputSchema: collaborationAgentRegisterResultSchema
-  }),
-  primaryAgentSelect: Object.freeze({
-    actionId: COLLABORATION_CAPABILITY_IDS.primaryAgentSelect,
-    effect: 'external-write' as const,
-    inputSchema: collaborationPrimaryAgentSelectInputSchema,
-    outputSchema: collaborationPrimaryAgentSelectResultSchema
   }),
   projectionLink: Object.freeze({
     actionId: COLLABORATION_CAPABILITY_IDS.projectionLink,
@@ -180,8 +160,6 @@ export type CollaborationRendererClient = Readonly<{
   changeConnection(input: CollaborationConnectionConnectInput): Promise<ConnectionConnectResult>
   startEndpointChallenge(input: CollaborationEndpointChallengeStartInput): Promise<EndpointChallengeStartResult>
   pollEndpointChallenge(input: CollaborationEndpointChallengePollInput): Promise<EndpointChallengePollResult>
-  registerAgent(input: CollaborationAgentRegisterInput): Promise<AgentRegisterResult>
-  selectPrimaryAgent(input: CollaborationPrimaryAgentSelectInput): Promise<PrimaryAgentSelectResult>
   linkProjection(input: CollaborationProjectionLinkInput): Promise<ProjectionLinkResult>
   updateProjection(input: CollaborationProjectionUpdateInput): Promise<ProjectionUpdateResult>
   shareProjection(input: CollaborationProjectionShareInput): Promise<ProjectionShareResult>
@@ -217,12 +195,6 @@ export function createCollaborationRendererClient(
     pollEndpointChallenge: (input) => invoker.invoke(
       contracts.endpointChallengePoll,
       input
-    ),
-    registerAgent: (input) => invoker.invoke(contracts.agentRegister, input, CONFIRMED),
-    selectPrimaryAgent: (input) => invoker.invoke(
-      contracts.primaryAgentSelect,
-      input,
-      CONFIRMED
     ),
     linkProjection: (input) => invoker.invoke(contracts.projectionLink, input, CONFIRMED),
     updateProjection: (input) => invoker.invoke(contracts.projectionUpdate, input, CONFIRMED),

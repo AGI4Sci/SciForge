@@ -19,8 +19,6 @@ import {
 } from '@sciforge/domain-identity-access/agent-cloud-runtime'
 import {
   COLLABORATION_CAPABILITY_IDS,
-  collaborationAgentRegisterInputSchema,
-  collaborationAgentRegisterResultSchema,
   collaborationConnectionConfigureInputSchema,
   collaborationConnectionConfigureResultSchema,
   collaborationConnectionConnectInputSchema,
@@ -33,8 +31,6 @@ import {
   collaborationManagedContainerInspectInputSchema,
   collaborationManagedContainerProvisionInputSchema,
   collaborationManagedContainerArchiveInputSchema,
-  collaborationPrimaryAgentSelectInputSchema,
-  collaborationPrimaryAgentSelectResultSchema,
   collaborationProjectionLinkInputSchema,
   collaborationProjectionLinkResultSchema,
   collaborationProjectionShareInputSchema,
@@ -51,13 +47,11 @@ import {
   collaborationTaskOfferDecisionResultSchema,
   collaborationWorkerAcceptanceUpdateInputSchema,
   collaborationWorkerAcceptanceUpdateResultSchema,
-  type CollaborationAgentRegisterInput,
   type CollaborationConnectionConfigureInput,
   type CollaborationConnectionConnectInput,
   type CollaborationEndpointChallengePollInput,
   type CollaborationEndpointChallengeStartInput,
   type CollaborationManagedContainerManageInput,
-  type CollaborationPrimaryAgentSelectInput,
   type CollaborationProjectionLinkInput,
   type CollaborationProjectionShareInput,
   type CollaborationProjectionUpdateInput,
@@ -375,32 +369,6 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         })
       }),
       capability(
-        COLLABORATION_CAPABILITY_IDS.agentRegister,
-        'Register this Agent',
-        'Registers the active Identity Device as an Agent through Identity-owned private authority.',
-        'external-write',
-        collaborationAgentRegisterInputSchema,
-        collaborationAgentRegisterResultSchema,
-        async (raw) => ({
-          output: { agent: await options.getRuntime().registerAgent(
-            collaborationAgentRegisterInputSchema.parse(raw) as CollaborationAgentRegisterInput
-          ) }
-        })
-      ),
-      capability(
-        COLLABORATION_CAPABILITY_IDS.primaryAgentSelect,
-        'Select primary Agent',
-        'Selects an active Agent owned by the current user without guessing from presence.',
-        'external-write',
-        collaborationPrimaryAgentSelectInputSchema,
-        collaborationPrimaryAgentSelectResultSchema,
-        async (raw) => ({
-          output: { participant: await options.getRuntime().selectPrimaryAgent(
-            collaborationPrimaryAgentSelectInputSchema.parse(raw) as CollaborationPrimaryAgentSelectInput
-          ) }
-        })
-      ),
-      capability(
         COLLABORATION_CAPABILITY_IDS.projectionLink,
         'Link Session projection',
         'Creates a stable personal Topic projection for an explicit existing or new local Session.',
@@ -488,7 +456,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
       capability(
         COLLABORATION_CAPABILITY_IDS.taskOfferDecide,
         'Decide a Worker Task offer',
-        'Accepts or explicitly rejects one exact manual Worker execution offer.',
+        'Claims one User-targeted offer or dismisses it only on this exact local Agent Device.',
         'external-write',
         collaborationTaskOfferDecisionInputSchema,
         collaborationTaskOfferDecisionResultSchema,

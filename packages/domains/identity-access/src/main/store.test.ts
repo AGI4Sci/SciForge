@@ -444,25 +444,25 @@ describe('IdentityService', () => {
   })
 
   it.skipIf(process.platform === 'win32')(
-    'refuses reset without overwriting the original when POSIX backup permissions deny creation',
+    'refuses reset without overwriting the original when POSIX backup permissions fail',
     () => {
-    const root = temporaryRoot()
-    const store = IdentityStore.open(root)
-    const path = store.databasePath
-    store.close()
-    writeFileSync(path, 'corrupt identity database')
-    const service = new IdentityService(root, 'device-installation-1')
-    const directory = join(root, 'identity-access')
-    chmodSync(directory, 0o500)
-    try {
-      expect(() => service.backupAndReset(IDENTITY_RESET_CONFIRMATION))
-        .toThrowError(IdentityValidationError)
-      expect(readFileSync(path).toString()).toBe('corrupt identity database')
-      expect(service.inspect()).toMatchObject({ status: 'unavailable' })
-    } finally {
-      chmodSync(directory, 0o700)
-      service.close()
-    }
+      const root = temporaryRoot()
+      const store = IdentityStore.open(root)
+      const path = store.databasePath
+      store.close()
+      writeFileSync(path, 'corrupt identity database')
+      const service = new IdentityService(root, 'device-installation-1')
+      const directory = join(root, 'identity-access')
+      chmodSync(directory, 0o500)
+      try {
+        expect(() => service.backupAndReset(IDENTITY_RESET_CONFIRMATION))
+          .toThrowError(IdentityValidationError)
+        expect(readFileSync(path).toString()).toBe('corrupt identity database')
+        expect(service.inspect()).toMatchObject({ status: 'unavailable' })
+      } finally {
+        chmodSync(directory, 0o700)
+        service.close()
+      }
     }
   )
 })

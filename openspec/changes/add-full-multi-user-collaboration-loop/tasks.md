@@ -20,11 +20,11 @@
 
 - [x] 3.1 升级 collaboration contracts，增加 Worker availability、Project Membership/content readiness、content provisioning intent/attestation/binding、Task execution/file intent/review/recovery 的 strict versioned schemas。
 - [x] 3.2 保持 OIDC JIT 为唯一 User 创建路径并使 pairing 仅绑定 endpoint；删除匿名 pairing 与 first-pairing user creation。
-- [x] 3.3 实现每 Project 唯一且始终由 Project Owner 所有的 Coordinator Agent、动态 User/精确 Worker Agent 选择、Owner-owned Agent 间 Coordinator transfer 和权限 fencing。
-- [x] 3.4 实现 offer/accept/reject/timeout/revoke/reassign、每次新 executionId、expected revision/idempotency 和旧 execution 全写入 fencing。
+- [x] 3.3 实现每 Project 唯一且始终由 Project Owner 所有的 Coordinator Agent、动态 Worker User 选择、Owner-owned Agent 间 Coordinator transfer 和权限 fencing。
+- [x] 3.4 实现 User-level offer broadcast、首台合格 Device/Agent 原子 claim 后创建 execution、timeout/withdraw/reassign、expected revision/idempotency 和旧 execution 全写入 fencing；不保留 User 级 reject 路径。
 - [x] 3.5 实现 Project Membership lifecycle、Provider Membership Observation、derived Project Content Readiness、command-time Task Authority 四项独立事实及普通成员/Owner 失权降级规则。
 - [x] 3.6 实现 provisioning intent/attestation verification/binding saga、dynamic add、removal pending、closed/degraded lifecycle 和 durable recovery journal。
-- [x] 3.7 实现 Project plan、统一 `worker_execution | coordinator_project` HumanNeeded to Owner、HumanAnswer → Coordinator Inbox、result review accept/request-revision、Coordinator-only observation/decision/summary/final completion 与 visible recovery actions。
+- [x] 3.7 实现 Project plan、统一 `worker_execution | coordinator_project` HumanNeeded to explicit active Project member User、HumanAnswer → Coordinator Inbox、result review accept/request-revision、Coordinator-only observation/decision/summary/final completion 与 visible recovery actions。
 - [x] 3.8 添加 forward-only PostgreSQL migrations、从所有受支持旧 schema 的升级测试、transactional Inbox/receipt 和 restart recovery。
 - [x] 3.9 完成 REST/SDK/WSS contract、authorization matrix、rate/bounds/redaction、revision/idempotency 和运维恢复手册。
 
@@ -43,7 +43,7 @@
 ## 5. 本地 Collaboration Agent 执行
 
 - [x] 5.1 将 domain-collaboration 改为只消费 Identity-owned token-free User/Agent transport；Agent machine credential 仅由 Identity 私有原生安全存储持有，collaboration 只保留 presence/WSS 状态消费与 durable Inbox/outbox。
-- [x] 5.2 实现每 Agent Device 本地持久 `manual | automatic` 策略、统一 preflight、显式 accept/reject reason，确认 Cloud 无 acceptancePolicy。
+- [x] 5.2 实现每 Agent Device 本地持久 `manual | automatic` 策略、统一 preflight、显式 claim/local-dismiss，确认 Cloud 无 acceptancePolicy 且本地忽略不会拒绝整个 User Offer。
 - [x] 5.3 实现 Worker availability 发布、Runtime capability tags、active Task count、Provider identity/current Project readiness 与 heartbeat projection。
 - [x] 5.4 从 B donor 重写 Worker runner，使用 runtime-neutral AgentRuntime、当前 execution journal 和真实 Content Space system channel。
 - [x] 5.5 实现 accept 后重启恢复、WSS reconnect/inbox refill、duplicate offer/ACK 幂等、Device/membership/execution fencing 和迟到外部结果 journal。
@@ -52,8 +52,8 @@
 ## 6. Project Coordinator 模块与 HCI
 
 - [x] 6.1 新建独立 `@sciforge/domain-project-coordinator`，提供 main/renderer entrypoints、manifest/generated composition 和明确 public contracts。
-- [x] 6.2 从 B donor 重写 Project create/focus、Runtime plan、按 User 分组的 Worker availability、精确 Agent 选择和 Task dispatch UI。
-- [x] 6.3 实现 plan confirmation/edit、pending approval 默认可见、HumanNeeded Owner answer、accept/request-revision 和 Project completion UI。
+- [x] 6.2 从 B donor 重写 Project create/focus、Runtime plan、从 Cloud 在线事实聚合的 Worker User Directory、User 选择和 Task dispatch UI；Agent/Device 只作可派发证据，不作选择值。
+- [x] 6.3 实现 plan confirmation/edit、pending approval 默认可见、HumanNeeded target-User selection/answer、accept/request-revision 和 Project completion UI。
 - [x] 6.4 实现 Owner Desktop provisioning/reconcile orchestrator、Device-signed attestation、dynamic add/removal pending 和 Owner root loss recovery HCI。
 - [x] 6.5 实现 outcome_unknown exact observation/link-or-abandon 流程，禁止无 observation 的 mark-success。
 - [x] 6.6 实现 Coordinator transfer HCI 和旧 Coordinator fencing 反馈；与 identity/collaboration/content-space 只通过标准 contracts/contributions 组合。
@@ -74,7 +74,7 @@
   - 2026-08-27 第五次授权先由 exact-source guard 在 U0 启动前拒绝 detached 隔离 clone 并完成一次精确回滚；只修正 clone 的个人 Fork/branch 元数据后，第二个受控窗口通过 candidate 公网门禁和 source preflight，真实 U0 OIDC 重新认证成功、同一 Device/Agent 无重复且 Agent heartbeat 被 candidate 接受到 revision 46。真实 Connect 随后先发送遗留 revision-45 offline availability，Cloud 以 `revision_conflict` 拒绝并使当前 revision-46 online fact 留在本地 pending，UI 因而未达到 connected/Coordinator counts。已先停 U0，再精确恢复旧 Edge、candidate 隔离及 `restart=no`。通用修复 `f89b8180` 使 availability 按 Agent revision/observation supersede，并把服务端既有的 `worker_availability_projection` 加入严格 REST entity union；完整 Collaboration/类型/架构门禁和 clean production build 通过。脱敏回执见 `docs/operations/full-collaboration-stage4-a-host-cutover-attempt-5.md`；7.4 继续 unchecked，下一次公网选择需要新授权。
   - 2026-08-27 第六次授权通过旧 candidate 公网门禁、同一 U0 Identity 和 revision-47 Agent heartbeat；当前 online availability 已在 candidate DB 成功提交，但旧 `763cc5a5` Cloud 镜像随后因 bundled REST entity union 缺少 `worker_availability_projection` 而把成功写入误回为 `validation_failed`。已先停 U0，再恢复 exact old Edge、公网 `200/200/401`/issuer，并撤下候选 Edge 网络与 `restart=no`。仅个人 Fork commit `94f6d89b` 新增真实 HTTP heartbeat→availability 200 regression；基于该 exact commit 的全新隔离 Cloud image/app 已通过 bundle/image/no-op migration/v14 fingerprint/安全聚合/identity count/`200/200/401`/issuer/Caddy/compose 门禁，旧 candidate 与全部证据保留。脱敏回执与新的未授权切换包见 `docs/operations/full-collaboration-stage4-a-host-cutover-attempt-6.md`、`docs/operations/full-collaboration-stage4-a-host-cutover-plan-94f6d89b.md`；7.4 继续 unchecked，刷新 candidate 从未连接公网 Edge，另需一次显式授权。
   - 2026-08-27 第七次授权包含两个受控窗口：首个窗口在 candidate 公网门禁通过后由 exact-source guard 因默认 Node 23 不受支持而在 U0 启动前终止并精确回滚；改用 Node `22.22.1` 后，第二个窗口通过 exact source/public Cloud/OIDC/Identity 门禁，refreshed `94f6d89b` Cloud 接受同一 U0 Agent revision-48 heartbeat 并提交当前 online availability，证明第六次 response-schema 缺陷已关闭。真实 UI 的 Connect 随后因 U0 将通用 `codex` 命令解析到缺失 vendor binary 的 Homebrew npm 安装而在本地 Runtime handler 失败，未达到 connected、Project focus 或 Coordinator 人数。已先停 U0，再恢复 exact old Edge、公网 `200/200/401`/issuer、candidate 隔离及 `restart=no`；通过真实 Settings 将 U0 固定到已验证的 `/usr/local/bin/codex`，离线 Electron Runtime 显示 Running/Ready。完整脱敏回执见 `docs/operations/full-collaboration-stage4-a-host-cutover-attempt-7.md`；7.4 继续 unchecked，下一次公网选择仍需新授权。
-  - 2026-08-27 第八次授权通过 public/exact-source/Identity/Runtime/Agent/availability 门禁后，真实 U0 因保留 inbox 中裸 `project.created` 不符合严格事件 envelope 而失败；已先停 U0 并精确回滚。个人 Fork `444722d3` 将新写入与 v15 retained-row migration 统一为 `collaboration.state.changed -> project.created`，完整 PostgreSQL 17 regression 通过。脱敏回执见 `docs/operations/full-collaboration-stage4-a-host-cutover-attempt-8.md`。
+  - 2026-08-27 第八次授权通过 public/exact-source/Identity/Runtime/Agent/availability 门禁后，真实 U0 暴露了旧 Project 创建 Inbox 形态；当前生产写路径已收敛为 direct `project.started`，v15 只保留历史行规范化职责。脱敏回执见 `docs/operations/full-collaboration-stage4-a-host-cutover-attempt-8.md`。
   - 2026-08-27 第九次授权在公网前拦截并保留一份 stale-dist 候选，重建 exact `444722d3` v2 bundle/image 后完成 v15 migration（public-lineage fingerprint `c73f6bef...189d`）、安全聚合、隔离 `200/200/401/authentication_required`、Caddy/compose/approval/internal probe 全部门禁。公网 Edge 随后保持 exact revision/issuer；真实 U0 UI 显示 Collaboration `Connected`、Agent Online、既有 Project `prj_5594a84705a34532b0dd50c3d16911f9` 聚焦，以及 `1/1 members online`、`1/1 Agents online`。candidate 保持公网运行，旧栈与精确回滚资产全部保留，未操作 upstream。完整回执见 `docs/operations/full-collaboration-stage4-a-host-cutover-attempt-9.md`；7.4 完成。
 
 ## 8. 自动化、源码应用与真机验收
@@ -86,7 +86,7 @@
   - Stage 4 使用 arm64 Node `22.22.1`、FTS5-capable SQLite、arm64 Python `3.13` 和两个隔离的 loopback PostgreSQL 17 数据库完成最终回归：root Vitest `366/366` files、`3389/3389` tests 通过且 root aggregate 无 skip；全部 domain/package/tarball/internal-overlay/public-release 前置门禁、root typecheck 和全量 lint 也通过。Computer Use 4 项和 Scientific Plotting 2 项既有硬件/可选依赖 package-level skip 被单独保留，没有冒充真机证据或计入 root aggregate。
 - [ ] 8.4 正式安装包/发布 artifact 的 production-composition 验证。
   - 2026-08-26 用户明确暂缓 8.4：当前首要目标是从源码纵向完成并进行真实闭环测试，不追求 DMG、安装包或发布 artifact。8.4 保持 unchecked，且不作为当前 source-app live 闭环的前置；源码 composition 由 8.2 约束，真实 Cloud/设备路径由 7.4、8.6–8.8 约束。
-- [x] 8.5 准备 U0-U4 合成账号/议程/需求、三文件 Task、HumanNeeded、reject/reassign、review/revision 和 completion 验收脚本。
+- [x] 8.5 准备 U0-U4 合成账号/议程/需求、三文件 Task、HumanNeeded、Device-local dismiss 后 Coordinator withdraw/reassign、review/revision 和 completion 验收脚本。
 - [ ] 8.6 在至少三台机器/独立 VM 的五个独立 source-app profiles 上，以同一 exact commit 完成真实 OIDC、Device/Agent、OpenContent provisioning 与并发会议 happy path。
 - [ ] 8.7 完成 restart、WSS refill、duplicate、old execution fence、Device revoke、Coordinator transfer、Provider removal 和 outcome_unknown recovery matrix。
 - [ ] 8.8 从授权 Desktop 下载并人工核对最终产物，生成不含秘密的 verification receipt；逐文件 bytes/SHA-256 不作为本 PoC 门禁，candidate/cutover 或设备门禁未满足时精确标记 `awaiting_candidate`/`awaiting_real_devices`。

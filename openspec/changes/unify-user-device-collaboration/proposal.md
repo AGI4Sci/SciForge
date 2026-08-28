@@ -6,16 +6,16 @@ SciForge 需要同时支持两个场景：用户可以在手机上继续操作�
 
 这种缺口会造成危险的歧义：用户 A 在手机发出的消息可能由用户 B 的机器执行；同一个 Zulip topic 中的六个人可能被当成一个本地 Session 的共同操作者；手机身份也可能被误认为拥有本机工具审批权。仅记录 `senderId` 不能满足多人协作中的身份、路由和授权要求。
 
-本变更把“协作个体”定义为稳定的 `UserPrincipal`。手机是该用户的人类交互端点，SciForge 安装实例是该用户拥有的 Agent 节点。两者不是两个用户，也不互相冒充，而是用不同凭据、不同信任级别代表同一个 `userId`。Project 以用户为成员，以 Agent 为执行者；个人 Session 消息路由到该用户明确选择的 Agent，Project 群聊则路由到云端 Project 和显式 Coordinator，绝不根据当前在线机器或桌面焦点猜测执行目标。
+本变更把“协作个体”定义为稳定的 `UserPrincipal`。手机是该用户的人类交互端点，SciForge 安装实例是该用户拥有的 Agent 节点。两者不是两个用户，也不互相冒充，而是用不同凭据、不同信任级别代表同一个 `userId`。Project 以用户为成员；Coordinator 是创建 Project 的当前 Device Agent，且只在该 Project 内成立；Worker 派发指向 User，并在该 User 的设备领取后才确定执行 Agent。个人 Session 消息路由到投影已固定的 Agent/Session，Project 群聊则路由到云端 Project 和显式 Coordinator，绝不根据最近在线机器或桌面焦点猜测目标。
 
 ## 变更内容
 
 - 新增统一 `UserPrincipal`，作为 Project 成员、手机身份、Agent 所有权、真人问题和审计记录的唯一人类主体。
 - 新增 `HumanEndpointBinding`，把经过验证的 Zulip 用户等 IM 身份绑定到一个 `userId`；provider 显示名、邮箱、topic 和 stream 不作为内部身份。
-- 新增 `AgentNode` 所有权模型，每台 SciForge 使用稳定 `agentId` 注册，并明确记录 `ownerUserId`；PoC 中每个用户选择一个 primary Agent 作为手机默认执行端。
-- 新增 `ParticipantProfile`，把一个用户、其 primary 人类端点和 primary Agent 组合成一个逻辑协作个体，同时保留端点各自的凭据、在线状态和保证级别。
+- 新增 `AgentNode` 所有权模型；Identity 为每个已认证 ACTIVE Device 自动 ensure 并复用稳定 `agentId`，明确记录 `ownerUserId`，不提供手工注册或 primary Agent 选择。
+- 新增 `ParticipantProfile`，把一个用户、其已验证人类端点和所有 Device Agent 组合成一个逻辑协作个体，同时保留端点各自的凭据、在线状态和保证级别。
 - 区分两类远端会话：个人 Session topic 与一个用户所拥有 Agent 上的一个本地 thread 一一对应；Project topic 对应云端 Project 协作入口，由显式 Coordinator 处理，不直接冒充任何成员的私人 Session。
-- 建立稳定路由规则：个人消息按 `userId + projectionId` 路由；Project 消息按 `projectId + senderUserId` 鉴权后写入 Project 信箱；Task 按 `assigneeAgentId` 投递。
+- 建立稳定路由规则：个人消息按 `userId + projectionId` 路由；Project 消息按 `projectId + senderUserId` 鉴权后写入 Project 信箱；Task Offer 按 `workerUserId` 广播到该 User 的合格 Agent/Device，并在原子 claim 后绑定 Execution。
 - 让桌面与手机共享同一条个人 Session 逻辑消息流，使用 receipt、去重、每 Session 顺序队列和重启恢复保证幂等。
 - 让多个用户各自的 Agent 通过一个云端协作内核共享 Project、Task、Project Record 和持久信箱；云端不运行特殊 LLM Agent。
 - 明确身份与授权分离：手机和机器属于同一用户，不代表 Zulip 登录具备本机高风险能力的批准强度；远程批准必须由 capability policy 显式允许，否则保持桌面待审批。
@@ -46,6 +46,6 @@ SciForge 需要同时支持两个场景：用户可以在手机上继续操作�
 - 云端服务保存用户、端点绑定、Agent、个人 Session projection 的非敏感远端映射、Project、Task、Project Record、信箱和 receipt；不保存本地工作区、模型/API 凭据、完整私人对话或任意本地文件。
 - Provider service credential 保存在云端 secret manager；本地 SciForge 只保存本机 Agent 设备凭据、projection 到本地 thread 的映射、个人 Session、工作区、工具权限、运行状态和详细执行日志。
 - Zulip Server 仍是消息服务，不成为 Project、Task 或 Agent 上下文的事实源；云端 PostgreSQL 是协作状态的事实源，本地 AgentRuntime thread 是个人 Session 的事实源。
-- PoC 默认一名用户绑定一个主要手机 IM 身份和一个 primary SciForge Agent；数据模型允许后续增加辅助端点或节点，但所有路由仍必须显式选择目标，不使用“最近在线”猜测。
+- PoC 默认一名用户绑定一个主要手机 IM 身份，并允许多个自动确保的 SciForge Device Agent；个人 Session 固定到建立投影时的 Agent，Project Task 只选择 Worker User，所有路由都不使用“最近在线”猜测。
 - 第一阶段同步文本 user message、最终 assistant reply、结构化状态、HumanNeeded 和 HumanAnswer；不同步流式 token、编辑、删除、reaction、完整工具日志和任意附件。
 - 这是目标架构重写，不保留旧 workspace-channel binding、topic 派生 ID、topic 静默换 Session 或两套 provider runtime 的兼容路径。

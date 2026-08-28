@@ -290,6 +290,7 @@ export type StoredTask = {
   objective: string
   completionCriteria: string[]
   dependencyTaskIds: string[]
+  requiredCapabilityTags: string[]
   fileIntent: import('@sciforge/collaboration-contracts').TaskFileIntent | null
   currentExecutionId: string | null
   currentExecutionState: import('@sciforge/collaboration-contracts').TaskExecutionState | null
@@ -452,7 +453,7 @@ export type StoredTaskExecution = {
   fileIntent: import('@sciforge/collaboration-contracts').TaskExecutionFileIntent | null
   currentResultSubmissionId: string | null
   offeredAt: string
-  acceptedAt: string | null
+  acceptedAt: string
   startedAt: string | null
   terminalAt: string | null
   revision: number
@@ -462,28 +463,15 @@ export type StoredTaskExecution = {
 
 export type StoredTaskOffer = {
   taskOfferId: string
-  executionId: string
+  executionId: string | null
   taskId: string
   projectId: string
-  assigneeUserId: string
-  assigneeAgentId: string
-  assigneeDeviceId: string
-  state: 'pending' | 'accepted' | 'rejected' | 'withdrawn' | 'timed_out'
+  workerUserId: string
+  offeredByCoordinatorAgentId: string
+  state: 'pending' | 'accepted' | 'withdrawn' | 'timed_out'
   offeredAt: string
   expiresAt: string
   respondedAt: string | null
-  rejectionReason:
-    | 'runtime_not_ready'
-    | 'provider_not_ready'
-    | 'device_inactive'
-    | 'membership_not_active'
-    | 'content_not_ready'
-    | 'capacity_reached'
-    | 'unsupported_capability'
-    | 'human_rejected'
-    | 'other'
-    | null
-  safeReasonDetail: string | null
   revision: number
   createdAt: string
   updatedAt: string
@@ -542,7 +530,7 @@ export type StoredTaskResultReview = {
   decision: 'accept' | 'request_revision'
   instruction: string | null
   acceptedProjectRecordId: string | null
-  nextExecutionId: string | null
+  nextTaskOfferId: string | null
   decidedAt: string
   revision: number
   createdAt: string
