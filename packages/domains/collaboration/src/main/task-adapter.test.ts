@@ -8,6 +8,7 @@ import {
   taskOfferSchema,
   taskExecutionPreflightSchema,
   taskExecutionSchema,
+  taskResultSubmissionSchema,
   taskSchema,
   type RestRequest,
   type RestResponse,
@@ -1795,11 +1796,11 @@ class FakeWorkerCloud {
         }
         if (request.type === 'task.execution.start') {
           this.advance('running')
-          return entityResponse(request, this.execution)
+          return collectionResponse(request, [this.task, this.execution])
         }
         if (request.type === 'task.execution.fail') {
           this.advance('failed')
-          return entityResponse(request, this.execution)
+          return collectionResponse(request, [this.task, this.execution])
         }
         if (request.type === 'external_operation.prepare') {
           this.recoveryJournalOrdinal += 1
@@ -1880,10 +1881,8 @@ class FakeWorkerCloud {
         if (request.type === 'task.result.submit') {
           assert.equal(request.outputs.length, this.fileMode ? 1 : 0)
           assert.equal(request.recoveryJournalEntryIds.length, this.fileMode ? 2 : 0)
-          return entityResponse(request, {
-            type: 'task_result_submission',
-            resultSubmissionId: 'rsu_Result000001'
-          })
+          const submitted = this.submitResult(request)
+          return collectionResponse(request, [this.task, this.execution, submitted])
         }
         throw new Error(`Unexpected command ${request.type}.`)
       }
@@ -1992,6 +1991,53 @@ class FakeWorkerCloud {
       fileIntent: this.fileMode ? fileExecutionIntent(assignmentTaskRevision) : null
     })
     this.task = makeTask(state, taskRevision, this.fileMode)
+  }
+
+  private submitResult(request: Extract<RestRequest, { type: 'task.result.submit' }>) {
+    const resultSubmissionId = 'rsu_Result000001'
+    this.execution = taskExecutionSchema.parse({
+      ...this.execution,
+      state: 'result_submitted',
+      stateRevision: this.execution.stateRevision + 1,
+      currentResultSubmissionId: resultSubmissionId,
+      terminalAt: request.runtimeProvenance.completedAt,
+      fence: {
+        ...this.execution.fence,
+        status: 'fenced',
+        reason: 'result_submitted',
+        fencedAt: request.runtimeProvenance.completedAt
+      },
+      revision: this.execution.revision + 1,
+      updatedAt: TEST_LATER_TIMESTAMP
+    })
+    this.task = taskSchema.parse({
+      ...this.task,
+      status: 'awaiting_review',
+      currentExecutionState: 'result_submitted',
+      revision: this.task.revision + 1,
+      updatedAt: TEST_LATER_TIMESTAMP
+    })
+    return taskResultSubmissionSchema.parse({
+      schemaVersion: 1,
+      type: 'task_result_submission',
+      resultSubmissionId,
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      submittedTaskRevision: request.expectedTaskRevision,
+      submittedExecutionRevision: request.expectedExecutionRevision,
+      submittedByUserId: TEST_IDS.userId,
+      submittedByAgentId: TEST_IDS.agentId,
+      summary: request.summary,
+      runtimeProvenance: request.runtimeProvenance,
+      outputs: request.outputs,
+      recoveryJournalEntryIds: request.recoveryJournalEntryIds,
+      submittedAt: request.runtimeProvenance.completedAt,
+      submissionDigest: request.submissionDigest,
+      revision: 1,
+      createdAt: TEST_LATER_TIMESTAMP,
+      updatedAt: TEST_LATER_TIMESTAMP
+    })
   }
 
   private requireRecoveryJournal(journalEntryId: string) {

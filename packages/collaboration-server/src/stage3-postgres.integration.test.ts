@@ -491,6 +491,109 @@ describe.skipIf(connectionString === undefined).sequential(
         await recovered.close()
       }
     })
+
+    it('creates one Execution when two Devices of the selected Worker User claim concurrently', async () => {
+      assertSafeStage3Database(connectionString!)
+      const at = '2026-08-26T04:00:00.000Z'
+      const expiresAt = '2026-08-26T05:00:00.000Z'
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 4 })
+      await installRoute(pool, 'fresh-v4')
+      await runCollaborationMigrations(pool)
+      const repository = new PostgresCollaborationRepository(pool)
+      try {
+        await seedUserOffer(pool, repository, at, expiresAt)
+        const service = new CollaborationService({ repository, now: () => new Date(at) })
+        const claims = [{
+          agentId: IDS.workerAgent,
+          deviceId: IDS.workerDevice,
+          credentialId: 'cred_stage3_pg_worker_a',
+          requestId: 'req_stage3_pg_concurrent_a',
+          idempotencyKey: 'idem_stage3_pg_concurrent_a'
+        }, {
+          agentId: IDS.secondWorkerAgent,
+          deviceId: IDS.secondWorkerDevice,
+          credentialId: 'cred_stage3_pg_worker_b',
+          requestId: 'req_stage3_pg_concurrent_b',
+          idempotencyKey: 'idem_stage3_pg_concurrent_b'
+        }] as const
+
+        const settled = await Promise.allSettled(claims.map((claim) => service.acceptTaskOffer({
+          kind: 'agent_device',
+          actorKey: `agent-device:${claim.agentId}:${claim.deviceId}`,
+          userId: IDS.workerUser,
+          agentId: claim.agentId,
+          deviceId: claim.deviceId,
+          credentialId: claim.credentialId,
+          credentialGeneration: 1,
+          assurance: 'device'
+        }, {
+          protocolVersion: '1.0',
+          type: 'task.offer.accept',
+          requestId: claim.requestId,
+          idempotencyKey: claim.idempotencyKey,
+          taskOfferId: IDS.offer,
+          taskId: IDS.task,
+          expectedTaskRevision: 2,
+          expectedOfferRevision: 1
+        })))
+
+        const fulfilled = settled.filter((result) => result.status === 'fulfilled')
+        const rejected = settled.filter((result) => result.status === 'rejected')
+        expect(fulfilled).toHaveLength(1)
+        expect(rejected).toHaveLength(1)
+        expect(rejected[0]).toMatchObject({
+          reason: expect.objectContaining({ code: 'revision_conflict' })
+        })
+        const winner = fulfilled[0]!.value
+        expect(winner.execution.assigneeUserId).toBe(IDS.workerUser)
+        expect([
+          [IDS.workerAgent, IDS.workerDevice],
+          [IDS.secondWorkerAgent, IDS.secondWorkerDevice]
+        ]).toContainEqual([
+          winner.execution.assigneeAgentId,
+          winner.execution.assigneeDeviceId
+        ])
+        const executions = await pool.query<{ execution_id: string }>(
+          `SELECT execution_id FROM sciforge_collaboration.task_executions WHERE task_id=$1`,
+          [IDS.task]
+        )
+        expect(executions.rows).toEqual([{ execution_id: winner.execution.executionId }])
+        const winnerIndex = settled.findIndex((result) => result.status === 'fulfilled')
+        const winnerClaim = claims[winnerIndex]!
+        const replayed = await service.acceptTaskOffer({
+          kind: 'agent_device',
+          actorKey: `agent-device:${winnerClaim.agentId}:${winnerClaim.deviceId}`,
+          userId: IDS.workerUser,
+          agentId: winnerClaim.agentId,
+          deviceId: winnerClaim.deviceId,
+          credentialId: winnerClaim.credentialId,
+          credentialGeneration: 1,
+          assurance: 'device'
+        }, {
+          protocolVersion: '1.0',
+          type: 'task.offer.accept',
+          requestId: winnerClaim.requestId,
+          idempotencyKey: winnerClaim.idempotencyKey,
+          taskOfferId: IDS.offer,
+          taskId: IDS.task,
+          expectedTaskRevision: 2,
+          expectedOfferRevision: 1
+        })
+        expect(replayed).toEqual(winner)
+        const replayCounts = await pool.query<{ execution_count: unknown; receipt_count: unknown }>(
+          `SELECT
+             (SELECT count(*) FROM sciforge_collaboration.task_executions
+               WHERE task_id=$1) AS execution_count,
+             (SELECT count(*) FROM sciforge_collaboration.receipts
+               WHERE actor_key=$2 AND idempotency_key=$3) AS receipt_count`,
+          [IDS.task, `agent-device:${winnerClaim.agentId}:${winnerClaim.deviceId}`,
+            winnerClaim.idempotencyKey]
+        )
+        expect(replayCounts.rows[0]).toEqual({ execution_count: '1', receipt_count: '1' })
+      } finally {
+        await repository.close()
+      }
+    })
   }
 )
 
@@ -544,8 +647,10 @@ const IDS = {
   workerUser: 'usr_Stage3PgWorker1',
   ownerDevice: 'dev_Stage3PgOwner01',
   workerDevice: 'dev_Stage3PgWorker1',
+  secondWorkerDevice: 'dev_Stage3PgWorker2',
   coordinator: 'agn_Stage3PgCoord01',
   workerAgent: 'agn_Stage3PgWorker1',
+  secondWorkerAgent: 'agn_Stage3PgWorker2',
   project: 'prj_Stage3PgProject1',
   task: 'tsk_Stage3PgTask001',
   offer: 'tof_Stage3PgOffer01'
@@ -952,7 +1057,8 @@ async function seedUserOffer(
   }
   for (const [deviceId, userId, installationId] of [
     [IDS.ownerDevice, IDS.ownerUser, 'ins_Stage3PgOwner01'],
-    [IDS.workerDevice, IDS.workerUser, 'ins_Stage3PgWorker1']
+    [IDS.workerDevice, IDS.workerUser, 'ins_Stage3PgWorker1'],
+    [IDS.secondWorkerDevice, IDS.workerUser, 'ins_Stage3PgWorker2']
   ] as const) {
     await pool.query(
       `INSERT INTO sciforge_collaboration.devices
@@ -965,7 +1071,8 @@ async function seedUserOffer(
   }
   for (const [agentId, deviceId, userId, displayName] of [
     [IDS.coordinator, IDS.ownerDevice, IDS.ownerUser, 'Stage 3 Coordinator'],
-    [IDS.workerAgent, IDS.workerDevice, IDS.workerUser, 'Stage 3 Worker']
+    [IDS.workerAgent, IDS.workerDevice, IDS.workerUser, 'Stage 3 Worker A'],
+    [IDS.secondWorkerAgent, IDS.secondWorkerDevice, IDS.workerUser, 'Stage 3 Worker B']
   ] as const) {
     await pool.query(
       `INSERT INTO sciforge_collaboration.agent_nodes
@@ -1001,6 +1108,24 @@ async function seedUserOffer(
       agentId: IDS.workerAgent,
       userId: IDS.workerUser,
       deviceId: IDS.workerDevice,
+      agentActive: true,
+      deviceActive: true,
+      connectionStatus: 'online',
+      lastHeartbeatAt: at,
+      runtimeReadiness: 'ready',
+      runtimeCapabilityTags: ['task.execute'],
+      acceptsNewOffers: true,
+      activeTaskCount: 0,
+      observedAt: at,
+      expiresAt,
+      revision: 1,
+      createdAt: at,
+      updatedAt: at
+    }, null)
+    await tx.upsertWorkerAvailability({
+      agentId: IDS.secondWorkerAgent,
+      userId: IDS.workerUser,
+      deviceId: IDS.secondWorkerDevice,
       agentActive: true,
       deviceActive: true,
       connectionStatus: 'online',

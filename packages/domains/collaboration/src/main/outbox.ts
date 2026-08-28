@@ -332,13 +332,25 @@ function assertExpectedWriteResponse(
   if (response.type === 'rest.error') {
     throw new Error(response.error.message)
   }
-  const expected = kind === 'task.offer-decision' && request.type === 'task.offer.accept'
-    ? isExpectedTaskOfferClaimResponse(request, response)
-    : request.type === 'capability.approval.create'
-      ? response.type === 'capability.approval.created'
-      : request.type === 'capability.approval.result' || request.type === 'capability.approval.withdraw'
-        ? response.type === 'rest.entity' && response.entity.type === 'remote_capability_approval'
-        : response.type === 'rest.receipt' || response.type === 'rest.entity'
+  let expected: boolean
+  if (kind === 'task.offer-decision' && request.type === 'task.offer.accept') {
+    expected = isExpectedTaskOfferClaimResponse(request, response)
+  } else if (kind === 'task.progress' && request.type === 'task.execution.start') {
+    expected = isExpectedTaskExecutionStartResponse(request, response, actor)
+  } else if (kind === 'task.failed' && request.type === 'task.execution.fail') {
+    expected = isExpectedTaskExecutionFailureResponse(request, response, actor)
+  } else if (kind === 'task.result' && request.type === 'task.result.submit') {
+    expected = isExpectedTaskResultSubmissionResponse(request, response, actor)
+  } else if (request.type === 'capability.approval.create') {
+    expected = response.type === 'capability.approval.created'
+  } else if (
+    request.type === 'capability.approval.result' ||
+    request.type === 'capability.approval.withdraw'
+  ) {
+    expected = response.type === 'rest.entity' && response.entity.type === 'remote_capability_approval'
+  } else {
+    expected = response.type === 'rest.receipt' || response.type === 'rest.entity'
+  }
   if (!expected) throw new Error(`Cloud write returned unexpected ${response.type}.`)
 }
 
@@ -686,6 +698,121 @@ function isExpectedTaskOfferClaimResponse(
     offer.workerUserId === execution.assigneeUserId &&
     offer.state === 'accepted' &&
     offer.revision === request.expectedOfferRevision + 1
+}
+
+function isExpectedTaskExecutionStartResponse(
+  request: Extract<RestRequest, { type: 'task.execution.start' }>,
+  response: Exclude<RestResponse, { type: 'rest.error' }>,
+  actor: CoordinatorActor
+): boolean {
+  if (
+    response.requestId !== request.requestId ||
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length !== 2
+  ) return false
+  const [task, execution] = response.items
+  return task?.type === 'task' &&
+    execution?.type === 'task_execution' &&
+    task.taskId === request.taskId &&
+    task.revision === request.expectedTaskRevision + 1 &&
+    task.status === 'in_progress' &&
+    task.currentExecutionId === request.executionId &&
+    task.currentExecutionState === 'running' &&
+    execution.taskId === task.taskId &&
+    execution.projectId === task.projectId &&
+    execution.executionId === request.executionId &&
+    execution.assigneeUserId === actor.userId &&
+    execution.assigneeAgentId === actor.agentId &&
+    execution.state === 'running' &&
+    execution.stateRevision === request.expectedExecutionRevision + 1 &&
+    execution.revision === request.expectedExecutionRevision + 1 &&
+    execution.startedAt === request.startedAt &&
+    execution.terminalAt === null &&
+    execution.fence.status === 'open'
+}
+
+function isExpectedTaskExecutionFailureResponse(
+  request: Extract<RestRequest, { type: 'task.execution.fail' }>,
+  response: Exclude<RestResponse, { type: 'rest.error' }>,
+  actor: CoordinatorActor
+): boolean {
+  if (
+    response.requestId !== request.requestId ||
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length !== 2
+  ) return false
+  const [task, execution] = response.items
+  return task?.type === 'task' &&
+    execution?.type === 'task_execution' &&
+    task.taskId === request.taskId &&
+    task.revision === request.expectedTaskRevision + 1 &&
+    task.status === 'failed' &&
+    task.currentExecutionId === request.executionId &&
+    task.currentExecutionState === 'failed' &&
+    task.completedAt === request.failedAt &&
+    execution.taskId === task.taskId &&
+    execution.projectId === task.projectId &&
+    execution.executionId === request.executionId &&
+    execution.assigneeUserId === actor.userId &&
+    execution.assigneeAgentId === actor.agentId &&
+    execution.state === 'failed' &&
+    execution.stateRevision === request.expectedExecutionRevision + 1 &&
+    execution.revision === request.expectedExecutionRevision + 1 &&
+    execution.terminalAt === request.failedAt &&
+    execution.fence.status === 'fenced' &&
+    execution.fence.reason === 'execution_failed' &&
+    execution.fence.fencedAt === request.failedAt
+}
+
+function isExpectedTaskResultSubmissionResponse(
+  request: Extract<RestRequest, { type: 'task.result.submit' }>,
+  response: Exclude<RestResponse, { type: 'rest.error' }>,
+  actor: CoordinatorActor
+): boolean {
+  if (
+    response.requestId !== request.requestId ||
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length !== 3
+  ) return false
+  const [task, execution, submission] = response.items
+  return task?.type === 'task' &&
+    execution?.type === 'task_execution' &&
+    submission?.type === 'task_result_submission' &&
+    task.taskId === request.taskId &&
+    task.revision === request.expectedTaskRevision + 1 &&
+    task.status === 'awaiting_review' &&
+    task.currentExecutionId === request.executionId &&
+    task.currentExecutionState === 'result_submitted' &&
+    execution.taskId === task.taskId &&
+    execution.projectId === task.projectId &&
+    execution.executionId === request.executionId &&
+    execution.assigneeUserId === actor.userId &&
+    execution.assigneeAgentId === actor.agentId &&
+    execution.state === 'result_submitted' &&
+    execution.stateRevision === request.expectedExecutionRevision + 1 &&
+    execution.revision === request.expectedExecutionRevision + 1 &&
+    execution.currentResultSubmissionId === submission.resultSubmissionId &&
+    execution.terminalAt === request.runtimeProvenance.completedAt &&
+    execution.fence.status === 'fenced' &&
+    execution.fence.reason === 'result_submitted' &&
+    execution.fence.fencedAt === request.runtimeProvenance.completedAt &&
+    submission.projectId === task.projectId &&
+    submission.taskId === task.taskId &&
+    submission.executionId === execution.executionId &&
+    submission.submittedByUserId === actor.userId &&
+    submission.submittedByAgentId === actor.agentId &&
+    submission.submittedTaskRevision === request.expectedTaskRevision &&
+    submission.submittedExecutionRevision === request.expectedExecutionRevision &&
+    submission.summary === request.summary &&
+    canonicalJson(submission.runtimeProvenance) === canonicalJson(request.runtimeProvenance) &&
+    canonicalJson(submission.outputs) === canonicalJson(request.outputs) &&
+    canonicalJson(submission.recoveryJournalEntryIds) ===
+      canonicalJson(request.recoveryJournalEntryIds) &&
+    submission.submissionDigest === request.submissionDigest &&
+    submission.revision === 1
 }
 
 function requireOutbox(
