@@ -25,7 +25,6 @@ test('settings parent refresh does not steal focus from its active input', async
   })
   await i18next.use(initReactI18next).init({
     lng: 'en',
-    showSupportNotice: false,
     resources: {
       en: {
         common: {

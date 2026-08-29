@@ -2021,8 +2021,10 @@ export class AgentRuntimeHost {
       )
       if (this.nativeRemoteApprovalDecisions.has(nativeKey)) return 'already_terminal'
       if (native.approval.expiresAt <= new Date().toISOString()) return 'not_pending'
+      const nativeRuntimeId = optionalRuntimeId(native.approval.runtimeId)
+      if (!nativeRuntimeId) return 'not_pending'
       await this.resolveApproval({
-        runtimeId: native.approval.runtimeId,
+        runtimeId: nativeRuntimeId,
         threadId: native.approval.threadId,
         approvalId: native.runtimeApprovalId,
         decision: input.decision === 'allow_once' ? 'allowed' : 'denied',
