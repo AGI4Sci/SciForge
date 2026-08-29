@@ -322,6 +322,7 @@ test('New Project creates only the draft Project before Team/content selection',
   }))
 
   assert.match(markup, /projectCoordinatorCreatorRole/u)
+  assert.match(markup, /projectCoordinatorMemberSelectionAfterCreate/u)
   assert.doesNotMatch(markup, /type="checkbox"|projectCoordinatorContentMode/u)
   assert.doesNotMatch(markup, /type="number"/u)
 })
@@ -1349,6 +1350,92 @@ test('an awaiting-confirmation Plan renders its Owner action as a default-visibl
 
   assert.match(markup, /data-default-visible-card="plan-confirmation"/u)
   assert.match(markup, /projectCoordinatorConfirmPlan/u)
+})
+
+test('Plan confirmation explains missing Provider facts instead of showing an unexplained disabled action', () => {
+  const markup = renderToStaticMarkup(createElement(ProjectCoordinatorPlanSection, {
+    project: {
+      ...awaitingConfirmationProjectFixture(),
+      project: {
+        ...awaitingConfirmationProjectFixture().project,
+        status: 'draft' as const
+      }
+    },
+    draft: null,
+    observedAt: '2026-08-25T01:08:00.000Z',
+    busy: false,
+    onGenerate: () => undefined,
+    onEditDraft: () => undefined,
+    onSubmitDraft: () => undefined,
+    canConfirm: true,
+    currentUserId: 'usr_Owner0000001',
+    providerPrincipalFacts: [],
+    initialContentMode: 'required',
+    initialProviderFactId: '',
+    onInitialContentMode: () => undefined,
+    onInitialProviderFactId: () => undefined,
+    onConfirm: () => undefined
+  }))
+
+  assert.match(markup, /role="status"/u)
+  assert.match(markup, /projectCoordinatorCreateProviderFactsMissing/u)
+  assert.match(markup, /<button[^>]*disabled=""[^>]*>projectCoordinatorConfirmPlan/u)
+})
+
+test('confirmed invitations expose the Worker acceptance action and tell the Owner why dispatch is waiting', () => {
+  const base = awaitingConfirmationProjectFixture()
+  const project = {
+    ...base,
+    plan: {
+      plan: {
+        ...base.plan.plan,
+        state: 'confirmed' as const,
+        revision: 2,
+        confirmedByUserId: base.project.ownerUserId,
+        confirmedAt: base.project.updatedAt
+      }
+    },
+    provisioning: {
+      ...base.provisioning,
+      memberships: base.provisioning.memberships.map((membership) => (
+        membership.userId === 'usr_ProjectMember01'
+          ? {
+              ...membership,
+              state: 'invited' as const,
+              activatedAt: null,
+              revision: 2
+            }
+          : membership
+      ))
+    }
+  } as never
+  const props = {
+    project,
+    plan: null,
+    busy: false,
+    onPrepareWorkflow: () => undefined,
+    onContinueWorkflow: () => undefined,
+    onAddMember: () => undefined,
+    onAcceptInvitation: () => undefined,
+    onRemoveMember: () => undefined,
+    onObserveAndLinkRecovery: () => undefined,
+    onAbandonRecovery: () => undefined
+  }
+  const workerMarkup = renderToStaticMarkup(createElement(
+    ProjectCoordinatorProvisioningSection,
+    { ...props, currentUserId: 'usr_ProjectMember01' }
+  ))
+  const ownerMarkup = renderToStaticMarkup(createElement(
+    ProjectCoordinatorProvisioningSection,
+    { ...props, currentUserId: base.project.ownerUserId }
+  ))
+
+  assert.match(workerMarkup, /data-default-visible-card="project-invitation-action"/u)
+  assert.match(workerMarkup, /projectCoordinatorInvitationRequired/u)
+  assert.match(workerMarkup, /projectCoordinatorAcceptInvitation/u)
+  assert.match(ownerMarkup, /data-default-visible-card="project-workflow-waiting-invitations"/u)
+  assert.match(ownerMarkup, /projectCoordinatorWorkflowWaitingForInvitations/u)
+  assert.doesNotMatch(ownerMarkup, /data-default-visible-card="project-invitation-action"/u)
 })
 
 test('a local Plan draft exposes full content editing before immutable submit', () => {
