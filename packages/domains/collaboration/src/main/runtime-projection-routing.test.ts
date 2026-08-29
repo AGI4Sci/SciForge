@@ -1,13 +1,20 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  agentInboxMessageSchema,
   remoteSessionProjectionSchema,
-  type AgentInboxMessage
+  type AgentInboxMessage,
+  type RestRequest,
+  type RestResponse
 } from '@sciforge/collaboration-contracts'
 import {
+  agentInboxMessageFixture,
   agentNodeFixture,
   humanEndpointBindingFixture,
-  remoteSessionProjectionFixture
+  projectFixture,
+  remoteSessionProjectionFixture,
+  taskFixture,
+  TEST_IDS
 } from '@sciforge/collaboration-contracts/testing'
 import type {
   DomainMainRuntimeLifecycleContext
@@ -99,6 +106,98 @@ test('runtime reserves Project lifecycle and Coordinator feedback for the single
     type: 'human.answer.received',
     answer: { context: { scope: 'worker_execution' } }
   } as AgentInboxMessage['payload']), false)
+})
+
+test('a Worker Task offer hydrates its Project into the public collaboration status', async () => {
+  const backend = new MemoryBackend({
+    ...EMPTY_COLLABORATION_LOCAL_STATE,
+    revision: 1,
+    agents: [agentNodeFixture]
+  })
+  const message = agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    payload: {
+      protocolVersion: '1.0',
+      type: 'task.offered',
+      projectId: projectFixture.projectId,
+      taskId: taskFixture.taskId,
+      taskOfferId: TEST_IDS.taskOfferId,
+      workerUserId: TEST_IDS.userId,
+      currentTaskRevision: taskFixture.revision,
+      offerRevision: 1
+    }
+  })
+  const runtime = new CollaborationRuntime({
+    statePath: 'unused',
+    packageSettings: configuredSettings(),
+    authenticatedCloudTransport: unusedAuthenticatedCloudTransport(),
+    agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: readyAuthority,
+      execute: async (_agentId, request) => workerCloudResponse(request),
+      pullAgentInbox: async ({ afterSequence }) => ({
+        messages: afterSequence < message.sequence ? [message] : [],
+        nextSequence: message.sequence
+      })
+    }),
+    stateBackend: backend
+  })
+  const abortController = new AbortController()
+  const dispose = await runtime.activate(runtimeContext(abortController.signal))
+
+  try {
+    const status = await runtime.status()
+    assert.deepEqual(status.projects.map(({ projectId }) => projectId), [projectFixture.projectId])
+  } finally {
+    abortController.abort()
+    await dispose()
+  }
+})
+
+test('restart hydrates Projects referenced by durable Worker Task journals', async () => {
+  const backend = new MemoryBackend({
+    ...EMPTY_COLLABORATION_LOCAL_STATE,
+    revision: 1,
+    agents: [agentNodeFixture],
+    pendingTaskOffers: [{
+      projectId: projectFixture.projectId,
+      taskId: taskFixture.taskId,
+      taskOfferId: TEST_IDS.taskOfferId,
+      workerUserId: TEST_IDS.userId,
+      currentTaskRevision: taskFixture.revision,
+      offerRevision: 1,
+      recipientAgentId: agentNodeFixture.agentId,
+      receivedAt: agentInboxMessageFixture.createdAt,
+      preflightReasons: [],
+      state: 'closed',
+      updatedAt: agentInboxMessageFixture.createdAt,
+      completedAt: agentInboxMessageFixture.createdAt,
+      error: 'The Task offer timed out.'
+    }]
+  })
+  const runtime = new CollaborationRuntime({
+    statePath: 'unused',
+    packageSettings: configuredSettings(),
+    authenticatedCloudTransport: unusedAuthenticatedCloudTransport(),
+    agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: readyAuthority,
+      execute: async (_agentId, request) => workerCloudResponse(request),
+      pullAgentInbox: async ({ afterSequence }) => ({
+        messages: [],
+        nextSequence: afterSequence
+      })
+    }),
+    stateBackend: backend
+  })
+  const abortController = new AbortController()
+  const dispose = await runtime.activate(runtimeContext(abortController.signal))
+
+  try {
+    const status = await runtime.status()
+    assert.deepEqual(status.projects.map(({ projectId }) => projectId), [projectFixture.projectId])
+  } finally {
+    abortController.abort()
+    await dispose()
+  }
 })
 
 test('the active runtime mirrors completed assistant progress before after-turn finalization', async () => {
@@ -358,6 +457,98 @@ function unusedAuthenticatedCloudTransport(): AuthenticatedCloudTransport {
       throw new Error('Authenticated Cloud transport is not expected in this test.')
     }
   }
+}
+
+function configuredSettings(): DomainMainPackageSettingsHost {
+  return {
+    read: async () => ({
+      revision: 1,
+      value: { schemaVersion: 2, baseUrl: 'https://collaboration.example.test' }
+    }),
+    write: async () => { throw new Error('Settings writes are not expected.') },
+    clear: async () => { throw new Error('Settings writes are not expected.') }
+  }
+}
+
+async function readyAuthority(agentId: string) {
+  return {
+    state: 'ready' as const,
+    agentId,
+    userId: TEST_IDS.userId,
+    deviceId: TEST_IDS.deviceId,
+    generation: agentNodeFixture.credentialVersion,
+    runtimeId: 'codex',
+    capabilityTags: ['agent-runtime.codex', 'model-access.api']
+  }
+}
+
+function workerCloudResponse(request: RestRequest): RestResponse {
+  if (request.type === 'agent.heartbeat') {
+    return {
+      protocolVersion: '1.0',
+      type: 'rest.entity',
+      requestId: request.requestId,
+      entity: {
+        ...agentNodeFixture,
+        connectionStatus: request.connectionStatus,
+        revision: agentNodeFixture.revision + 1
+      }
+    }
+  }
+  if (request.type === 'project.get') {
+    return {
+      protocolVersion: '1.0',
+      type: 'rest.entity',
+      requestId: request.requestId,
+      entity: projectFixture
+    }
+  }
+  if (request.type === 'task.get') {
+    return {
+      protocolVersion: '1.0',
+      type: 'rest.entity',
+      requestId: request.requestId,
+      entity: taskFixture
+    }
+  }
+  return {
+    protocolVersion: '1.0',
+    type: 'rest.entity',
+    requestId: request.requestId,
+    entity: projectFixture
+  }
+}
+
+function runtimeContext(signal: AbortSignal): DomainMainRuntimeLifecycleContext {
+  return {
+    agentExecution: {
+      prepareSession: async () => ({ runtimeId: 'codex', threadId: 'unused-worker-thread' }),
+      run: async () => { throw new Error('The manual Worker offer must not execute an Agent turn.') }
+    },
+    agentThreads: {
+      read: async () => ({
+        runtimeId: 'codex',
+        threadId: 'unused-worker-thread',
+        title: 'Unused Worker Session',
+        updatedAt: '2026-08-21T00:00:00.000Z',
+        watermark: '0',
+        turns: [],
+        artifacts: []
+      }),
+      subscribeMessages: async function* (input: Readonly<{ signal?: AbortSignal }>) {
+        yield* []
+        await waitForAbort(input.signal)
+      },
+      list: async () => [],
+      hasActiveTurns: () => false
+    },
+    turnEvents: {
+      subscribe: () => async () => undefined,
+      subscribeRequiredBeforeTurn: () => async () => undefined,
+      readDurableTurnBoundarySnapshot: async () => ({ issuerEpoch: 'test', boundaries: [] })
+    },
+    signal
+  } as unknown as DomainMainRuntimeLifecycleContext
 }
 
 function canonicalTurn(turnId: string, text: string) {
