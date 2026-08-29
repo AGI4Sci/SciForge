@@ -26,7 +26,7 @@ API key、私钥、长期 token、一次性配对码或数据库连接凭据复�
 | 数据库 | schema version 1、25 张表 | migration 成功且 `readyz` 为 200 |
 | 探针与认证边界 | loopback/public `healthz`、`readyz` 均为 200；未认证 WebSocket 为 401 | 内外网探针与未认证拒绝均不回归 |
 | 备份 | 最近备份 checksum 通过；timer active/enabled；结果 success | 异机复制、隔离恢复演练仍需完成 |
-| 日志 | service/migrate/backup 的敏感模式匹配计数均为 0 | 只看安全摘要，不输出环境或请求头 |
+| 日志 | 主服务/迁移命令/备份的敏感模式匹配计数均为 0 | 只看安全摘要，不输出环境或请求头 |
 | 单用户真实双向闭环 | **已通过**：手机 → 固定桌面 Session → 手机、桌面 → 手机；唯一标记和最终回复各一次 | 继续执行离线、重启、撤销和审批的生产抽测 |
 | 六用户正式验收 | OpenSpec 任务 10.3 **仍未完成** | 必须由六个真实账号、手机和 Agent 完成第 14.2 节 |
 
@@ -338,14 +338,11 @@ test "$(stat --format=%s /etc/sciforge/collaboration-secrets/zulip-api-key)" -le
 
 ## 8. 显式迁移与 systemd
 
-安装 unit：
+只安装主服务 unit。数据库迁移直接从当前不可变 release 运行，不安装独立迁移服务：
 
 ```sh
 install -o root -g root -m 0644 \
   <release>/node_modules/@sciforge/collaboration-server/deploy/sciforge-collaboration.service \
-  /etc/systemd/system/
-install -o root -g root -m 0644 \
-  <release>/node_modules/@sciforge/collaboration-server/deploy/sciforge-collaboration-migrate.service \
   /etc/systemd/system/
 systemctl daemon-reload
 ```
@@ -364,21 +361,23 @@ systemctl start sciforge-collaboration-backup.service
 systemctl stop sciforge-collaboration.service
 ln -sfn "$release_dir" /opt/sciforge-collaboration/current.next
 mv -Tf /opt/sciforge-collaboration/current.next /opt/sciforge-collaboration/current
-systemctl start sciforge-collaboration-migrate.service
+runuser --user sciforge_collab -- \
+  /usr/bin/env NODE_ENV=production \
+  /usr/bin/node --env-file=/etc/sciforge/collaboration-server.env \
+  /opt/sciforge-collaboration/current/node_modules/@sciforge/collaboration-server/dist/cli.js migrate
 systemctl start sciforge-collaboration.service
 systemctl is-active sciforge-collaboration.service
 ```
 
-确认 oneshot 迁移结果与 schema version，再继续公开探针：
+迁移命令必须以零退出；再确认 schema version 后继续公开探针：
 
 ```sh
-systemctl show sciforge-collaboration-migrate.service --property=Result --value
 runuser --user sciforge_collab -- \
   psql sciforge_collaboration --tuples-only --no-align \
   --command='SELECT max(version) FROM sciforge_collaboration.schema_migrations;'
 ```
 
-当前版本预期分别输出 `success` 和 `3`。迁移失败时保持服务停止，先回滚或修复，不能跳过版本检查
+当前版本预期输出 `19`。迁移失败时保持服务停止，先回滚或修复，不能跳过版本检查
 强行启动。服务使用 768 MiB 内存上限、空
 capability set、只读系统目录、受限地址族；provider 出站只通过 HTTPS，数据库只通过本机 socket。
 
@@ -386,7 +385,6 @@ capability set、只读系统目录、受限地址族；provider 出站只通过
 
 ```sh
 journalctl -u sciforge-collaboration.service --since '1 hour ago' --no-pager
-journalctl -u sciforge-collaboration-migrate.service -n 100 --no-pager
 ```
 
 ## 9. Nginx 路径反代
@@ -622,7 +620,7 @@ header、配对码、消息中的真实敏感数据或日志全文。
 | 现象 | 安全检查顺序 | 处置原则 |
 | --- | --- | --- |
 | `healthz` 失败 | unit 状态、restart count、Node 版本、8787 监听、安全日志 | 不 reload Nginx 掩盖进程故障 |
-| `healthz` 成功、`readyz` 失败 | PostgreSQL、peer role、数据库名、migration Result/schema version | 服务保持非 ready，不能跳过 migration |
+| `healthz` 成功、`readyz` 失败 | PostgreSQL、peer role、数据库名、migration 退出状态/schema version | 服务保持非 ready，不能跳过 migration |
 | loopback 成功、公网 404/502 | `nginx -t`、app.d include、strip-prefix、upstream | 配置失败先恢复旧 snippet |
 | REST 可用、WebSocket 失败 | Upgrade/Connection headers、代理超时、未认证是否仍为 401 | 不放宽鉴权或开放 8787 |
 | 手机消息不进桌面 | Bot 订阅、provider degraded 摘要、cursor、locator/projection、Agent 在线、inbox sequence | 保留安全 ID 与时间线，不读取凭据 |

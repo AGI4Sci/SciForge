@@ -176,7 +176,6 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
     if (existing.kind !== kind) {
       throw new Error('Outbox idempotency key belongs to another command kind.')
     }
-    assertOutboxReplayAllowed(existing)
     const request = restRequestSchema.parse(existing.body)
     if (!('idempotencyKey' in request) || request.idempotencyKey !== idempotencyKey) {
       throw new Error('Durable cloud outbox command identity is inconsistent.')
@@ -189,17 +188,9 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
   }
 
   async retry(id?: string): Promise<void> {
-    const blocked = this.options.store.snapshot().outbox.find((entry) => (
-      entry.state === 'failed' &&
-      entry.replayBlockedReason !== undefined &&
-      id !== undefined &&
-      (entry.outboxId === id || entry.idempotencyKey === id)
-    ))
-    if (blocked) assertOutboxReplayAllowed(blocked)
     await this.options.store.transact((draft) => {
       const candidates = draft.outbox.filter((entry) => (
         entry.state === 'failed' &&
-        entry.replayBlockedReason === undefined &&
         (!id || entry.outboxId === id || entry.idempotencyKey === id)
       ))
       const now = this.now().toISOString()
@@ -228,12 +219,10 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
       if (authority.state !== 'ready') return
       const next = this.options.store.snapshot().outbox
         .filter((entry) => (
-          entry.replayBlockedReason === undefined &&
           (entry.state === 'pending' || entry.state === 'reconciling')
         ))
         .sort((left, right) => left.createdAt.localeCompare(right.createdAt))[0]
       if (!next) return
-      assertOutboxReplayAllowed(next)
       const startedAt = this.now().toISOString()
       const request = restRequestSchema.parse(next.body)
       await this.options.store.transact((draft) => {
@@ -364,13 +353,6 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
       }
     )
   }
-}
-
-function assertOutboxReplayAllowed(entry: CollaborationOutboxEntry): void {
-  if (entry.replayBlockedReason === undefined) return
-  throw new Error(
-    `Cloud command replay is permanently blocked: ${entry.replayBlockedReason}.`
-  )
 }
 
 function assertExpectedWriteResponse(

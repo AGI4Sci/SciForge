@@ -14,7 +14,10 @@ import {
 import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts/node'
 import { FakeCollaborationRepository } from '../../../test-fixtures/collaboration/fake-adapters.mjs'
 import type { AgentActor, HumanEndpointActor, UserActor } from './actor.js'
-import { toInboxMessage } from './contracts.js'
+import {
+  toInboxMessage,
+  toProjectContentProvisioningAttestation
+} from './contracts.js'
 import { stableDigest } from './crypto.js'
 import { IdentityService } from './identity-service.js'
 import { CollaborationService } from './service.js'
@@ -3235,14 +3238,27 @@ describe('vNext Cloud application service', () => {
       memberSetDigest: createHash('sha256').update(canonicalProvisionedMemberSetBytes(memberObservations)).digest('hex'),
       observationStartedAt: at.toISOString(), observationCompletedAt: at.toISOString()
     }, signing, owner.deviceId, deviceKeyId, 2)
+    const submittedAttestation = {
+      ...attestation,
+      createdAt: '2026-08-24T07:59:00.000Z',
+      updatedAt: '2026-08-24T07:59:00.000Z'
+    }
     const activated = await service.attestProjectContent(owner.user, {
       protocolVersion: '1.0', type: 'project.content.attest', requestId: 'req_content_attest_01',
       idempotencyKey: 'idem_content_attest_01', projectId: created.project.projectId,
       expectedProjectRevision: launch.accepted.project.revision,
       expectedProvisioningRevision: intent.provisioningRevision,
-      attestation
+      attestation: submittedAttestation
     })
     expect(activated.binding).toMatchObject({ status: 'active', rootLocatorDigest: stableDigest(rootLocator) })
+    expect(activated.attestation).toMatchObject({
+      createdAt: at.toISOString(),
+      updatedAt: at.toISOString()
+    })
+    expect(activated.binding.attestationDigest).toBe(stableDigest(
+      toProjectContentProvisioningAttestation(activated.attestation)
+    ))
+    expect(activated.binding.attestationDigest).not.toBe(stableDigest(submittedAttestation))
     expect(activated.readiness).toHaveLength(2)
     expect(activated.readiness.every(({ state }) => state === 'ready')).toBe(true)
 

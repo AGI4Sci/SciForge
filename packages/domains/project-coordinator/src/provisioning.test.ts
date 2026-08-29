@@ -13,6 +13,7 @@ import type {
 } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import type {
   ExternalOperationRecoveryJournalEntry,
+  ProjectContentProvisioningAttestation,
   RestResponse
 } from '@sciforge/collaboration-contracts'
 
@@ -285,6 +286,27 @@ test('confirmed initial plan journals each Provider operation and submits one De
   for (const forbidden of ['accessToken', 'refreshToken', 'credential', 'connectionId', '/Users/']) {
     assert.equal(serialized.includes(forbidden), false)
   }
+
+  cloud.setAttestationResponse((attestation) => ({
+    ...attestation,
+    rootLocatorDigest: 'f'.repeat(64)
+  }))
+  await assert.rejects(
+    port.continueWorkflow(workflow, 'idem_ProjectProvisioningTamperedFacts'),
+    /exact Device-signed provisioning attestation/u
+  )
+
+  cloud.setAttestationResponse((attestation) => ({
+    ...attestation,
+    deviceSignature: {
+      ...attestation.deviceSignature,
+      signature: 'B'.repeat(86)
+    }
+  }))
+  await assert.rejects(
+    port.continueWorkflow(workflow, 'idem_ProjectProvisioningTamperedSignature'),
+    /exact Device-signed provisioning attestation/u
+  )
 })
 
 test('Owner root authorization loss records unauthorized and stops before every member write', async () => {
@@ -876,13 +898,25 @@ function unusedCapabilities(): DomainMainSystemCapabilityInvoker {
 function cloudHarness(): Readonly<{
   transport: AuthenticatedCloudTransport
   commandTypes: string[]
-  readonly attestation: import('@sciforge/collaboration-contracts').ProjectContentProvisioningAttestation | undefined
+  setAttestationResponse(
+    mapper: (
+      attestation: ProjectContentProvisioningAttestation
+    ) => ProjectContentProvisioningAttestation
+  ): void
+  readonly attestation: ProjectContentProvisioningAttestation | undefined
   readonly rootLossObservation: import('@sciforge/collaboration-contracts').ProjectProviderMembershipObservation | undefined
 }> {
   const commandTypes: string[] = []
   const journals = new Map<string, ExternalOperationRecoveryJournalEntry>()
   let journalOrdinal = 0
-  let attestation: import('@sciforge/collaboration-contracts').ProjectContentProvisioningAttestation | undefined
+  let attestation: ProjectContentProvisioningAttestation | undefined
+  let attestationResponse = (
+    submitted: ProjectContentProvisioningAttestation
+  ): ProjectContentProvisioningAttestation => ({
+    ...submitted,
+    createdAt: '2026-08-26T01:00:01.000Z',
+    updatedAt: '2026-08-26T01:00:01.000Z'
+  })
   let rootLossObservation: import('@sciforge/collaboration-contracts').ProjectProviderMembershipObservation | undefined
   const transport: AuthenticatedCloudTransport = {
     status: () => ({
@@ -968,7 +1002,7 @@ function cloudHarness(): Readonly<{
         attestation = payload.attestation
         return cloudResponse({
           protocolVersion: '1.0', type: 'rest.collection', requestId: payload.requestId,
-          items: [payload.attestation]
+          items: [attestationResponse(payload.attestation)]
         })
       }
       if (payload.type === 'project.content.observation.submit') {
@@ -984,6 +1018,7 @@ function cloudHarness(): Readonly<{
   return Object.freeze({
     transport,
     commandTypes,
+    setAttestationResponse(mapper) { attestationResponse = mapper },
     get attestation() { return attestation },
     get rootLossObservation() { return rootLossObservation }
   })

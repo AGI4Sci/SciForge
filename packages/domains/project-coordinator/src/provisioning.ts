@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 
 import {
   CURRENT_PROTOCOL_VERSION,
+  canonicalProjectContentProvisioningAttestationFactualPayloadBytes,
   canonicalProjectContentProvisioningFactualPayloadBytes,
   canonicalProvisionedMemberSetBytes,
   externalOperationRecoveryJournalEntrySchema,
@@ -736,7 +737,12 @@ async function executeProvisioning(input: Readonly<{
         parsed.data.provisioningAttestationId === attestation.provisioningAttestationId
       ))?.data
     : undefined
-  if (!returned || stableDigest(returned) !== stableDigest(attestation)) {
+  if (
+    !returned ||
+    sha256(canonicalProjectContentProvisioningAttestationFactualPayloadBytes(returned)) !==
+      factualDigest ||
+    stableDigest(returned.deviceSignature) !== stableDigest(attestation.deviceSignature)
+  ) {
     throw new Error('Cloud did not return the exact Device-signed provisioning attestation.')
   }
   return options.workspace.readWorkspace({ projectId: built.project.project.projectId })

@@ -128,10 +128,10 @@ const providerTeamPageSchema = z.object({
 }).passthrough()
 
 const providerTeamUserSchema = z.object({
-  identityId: openContentIdentityIdSchema,
+  userId: openContentIdentityIdSchema,
   userType: openContentTeamUserTypeSchema,
-  displayName: z.string().trim().min(1).max(256).optional()
-}).strict()
+  userName: z.string().trim().max(256).optional()
+}).passthrough()
 
 const providerTeamUserPageSchema = z.object({
   pageNum: z.number().int().min(1).max(100_000).optional(),
@@ -421,9 +421,11 @@ function normalizeTeam(team: z.infer<typeof providerTeamSchema>) {
 
 function normalizeTeamUser(user: z.infer<typeof providerTeamUserSchema>) {
   return openContentTeamUserSchema.parse({
-    identityId: user.identityId,
+    identityId: user.userId,
     userType: user.userType,
-    ...(user.displayName === undefined ? {} : { displayName: user.displayName })
+    ...(user.userName === undefined || user.userName.length === 0
+      ? {}
+      : { displayName: user.userName })
   })
 }
 

@@ -2981,7 +2981,7 @@ export class CollaborationService {
         revision: 1, createdAt: at, updatedAt: at
       }
       await tx.insertProjectContentProvisioningAttestation(attestation)
-      const attestationDigest = stableDigest(attested)
+      const attestationDigest = stableDigest(toProjectContentProvisioningAttestation(attestation))
       const bindingRevision = (currentBinding?.revision ?? 0) + 1
       const binding: StoredProjectContentSpaceBinding = {
         projectContentBindingId: currentBinding?.projectContentBindingId ?? newId('pcb'),

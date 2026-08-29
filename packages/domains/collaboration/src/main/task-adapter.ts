@@ -868,8 +868,7 @@ export class CollaborationTaskAdapter {
     if (
       !entry ||
       entry.kind !== 'task.offer-decision' ||
-      entry.state === 'delivered' ||
-      entry.replayBlockedReason !== undefined
+      entry.state === 'delivered'
     ) return false
     const request = restRequestSchema.safeParse(entry.body)
     return request.success &&

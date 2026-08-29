@@ -459,122 +459,17 @@ export class ProjectCoordinatorStateStore {
 }
 
 function parseState(snapshot: DomainMainPackageSettingsSnapshot): ProjectCoordinatorState {
-  return snapshot.value === null
-    ? EMPTY_STATE
-    : projectCoordinatorStateSchema.parse(migrateState(snapshot.value))
-}
-
-/**
- * State v2 stored the then-canonical v1 file declaration and did not retain
- * the Session/activation identity on a succeeded create intent. Recover that
- * identity only when the intent has one exact Owner/Project binding. All
- * migrated facts remain subject to the strict current schema.
- */
-function migrateState(value: unknown): unknown {
-  if (!isRecord(value) || value.schemaVersion !== 2) return value
-  const bindings = Array.isArray(value.coordinatorSessionBindings)
-    ? value.coordinatorSessionBindings
-    : []
-  const creationMigrations = Array.isArray(value.projectCreateIntents)
-    ? value.projectCreateIntents.map((intent) => migrateProjectCreateIntent(intent, bindings))
-    : null
-  return {
-    ...value,
-    schemaVersion: 3,
-    planDrafts: Array.isArray(value.planDrafts)
-      ? value.planDrafts.map(migratePlanDraft)
-      : value.planDrafts,
-    projectCreateIntents: creationMigrations
-      ? creationMigrations.map(({ intent }) => intent)
-      : value.projectCreateIntents,
-    pendingProjectActivations: creationMigrations
-      ? creationMigrations.flatMap(({ activation }) => activation ? [activation] : [])
-      : []
-  }
-}
-
-function migrateProjectCreateIntent(
-  value: unknown,
-  bindings: readonly unknown[]
-): Readonly<{ intent: unknown; activation: unknown | null }> {
+  if (snapshot.value === null) return EMPTY_STATE
   if (
-    !isRecord(value) ||
-    value.state !== 'succeeded' ||
-    typeof value.createdProjectId !== 'string' ||
-    typeof value.principalUserId !== 'string' ||
-    typeof value.createIntentId !== 'string'
-  ) return { intent: value, activation: null }
-  const matchingBindings = bindings.filter((binding) => (
-    isRecord(binding) &&
-    binding.projectId === value.createdProjectId &&
-    binding.principalUserId === value.principalUserId
-  ))
-  if (matchingBindings.length > 1) {
-    throw new Error('Legacy Project creation has ambiguous Coordinator Session bindings.')
+    typeof snapshot.value !== 'object' ||
+    Array.isArray(snapshot.value) ||
+    snapshot.value.schemaVersion !== 3
+  ) {
+    throw new Error(
+      'Project Coordinator local state is not schema version 3; clear the obsolete local state before reconnecting to Cloud.'
+    )
   }
-  const binding = matchingBindings[0]
-  if (!binding || !isRecord(binding)) return { intent: value, activation: null }
-  const coordinatorSession = {
-    runtimeId: binding.runtimeId,
-    threadId: binding.threadId
-  }
-  const activationRequestId = migratedActivationRequestId(value, binding)
-  return {
-    intent: {
-      ...value,
-      coordinatorSession,
-      activationRequestId
-    },
-    activation: {
-      activationRequestId,
-      projectId: value.createdProjectId,
-      coordinatorSession,
-      requestedAt: binding.boundAt
-    }
-  }
-}
-
-function migratedActivationRequestId(
-  intent: Record<string, unknown>,
-  binding: Record<string, unknown>
-): string {
-  const stableFacts = {
-    createIntentId: intent.createIntentId,
-    principalUserId: intent.principalUserId,
-    projectId: intent.createdProjectId,
-    runtimeId: binding.runtimeId,
-    threadId: binding.threadId
-  }
-  return `pca_${createHash('sha256')
-    .update(stableJson(stableFacts), 'utf8')
-    .digest('hex')
-    .slice(0, 32)}`
-}
-
-function migratePlanDraft(value: unknown): unknown {
-  if (!isRecord(value) || !Array.isArray(value.tasks)) return value
-  return {
-    ...value,
-    tasks: value.tasks.map((task) => {
-      if (!isRecord(task) || !isRecord(task.fileIntent)) return task
-      if (
-        task.fileIntent.schemaVersion !== 1 ||
-        Object.hasOwn(task.fileIntent, 'dependencyInputs')
-      ) return task
-      return {
-        ...task,
-        fileIntent: {
-          ...task.fileIntent,
-          schemaVersion: 2,
-          dependencyInputs: []
-        }
-      }
-    })
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+  return projectCoordinatorStateSchema.parse(snapshot.value)
 }
 
 function projectCreateCommandDigest(input: ProjectCoordinatorProjectCreateInput): string {
