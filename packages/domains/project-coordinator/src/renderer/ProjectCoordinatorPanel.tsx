@@ -59,6 +59,8 @@ import type {
   ProjectCoordinatorPlanDraftEditInput,
   ProjectCoordinatorProjectCreateResult,
   ProjectCoordinatorProject,
+  ProjectCoordinatorSessionBinding,
+  ProjectCoordinatorSessionProjection,
   ProjectCoordinatorWorkflowPlan,
   ProjectCoordinatorResultReviewInput,
   ProjectCoordinatorTaskOfferReassignInput,
@@ -74,6 +76,7 @@ import {
   type ProjectCoordinatorRendererClient
 } from './project-coordinator-capability-client.js'
 import type { ProjectCoordinatorWorkspaceSection } from './workspace-sections.js'
+import { projectCoordinatorSessionBindingForOrdinarySession } from './session-binding.js'
 
 export const PROJECT_COORDINATOR_PANEL_SECTION_IDS = Object.freeze([
   'coordinator',
@@ -151,6 +154,8 @@ export type ProjectCoordinatorAttentionSummary = Readonly<{
   total: number
 }>
 
+type ProjectCoordinatorEffectiveSessionAccess = 'coordinator' | 'worker' | 'read_only'
+
 export type ProjectCoordinatorAgentOperationalState = Readonly<{
   state: 'ready' | 'busy' | 'blocked' | 'offline'
   online: boolean
@@ -216,18 +221,55 @@ export function projectCoordinatorAgentOperationalState(
   })
 }
 
+export function projectCoordinatorCurrentSessionBinding(
+  projection: ProjectCoordinatorSessionProjection,
+  session: DomainWorkbenchRightPanelSession
+): ProjectCoordinatorSessionBinding | null {
+  return projectCoordinatorSessionBindingForOrdinarySession(
+    projection,
+    session.runtimeId,
+    session.id
+  )
+}
+
+export function projectCoordinatorEffectiveSessionAccess(
+  project: ProjectCoordinatorProject,
+  currentUserId: string | null,
+  binding: ProjectCoordinatorSessionBinding | null
+): ProjectCoordinatorEffectiveSessionAccess {
+  if (
+    currentUserId === null ||
+    binding === null ||
+    binding.projectId !== project.project.projectId ||
+    binding.principalUserId !== currentUserId
+  ) return 'read_only'
+  return binding.access
+}
+
 export function projectCoordinatorAttentionSummary(
-  project: ProjectCoordinatorProject
+  project: ProjectCoordinatorProject,
+  currentUserId: string | null,
+  binding: ProjectCoordinatorSessionBinding | null
 ): ProjectCoordinatorAttentionSummary {
-  const planConfirmation = project.plan?.plan.state === 'awaiting_confirmation' ? 1 : 0
-  const humanAnswers = project.pendingHumanNeeded.length
-  const resultReviews = project.reviews.filter(({ decision }) => decision === null).length
-  const recoveryActions = project.provisioning.recoveryActions.filter(({ status }) => (
-    status === 'available'
+  const access = projectCoordinatorEffectiveSessionAccess(project, currentUserId, binding)
+  const canCoordinate = access === 'coordinator'
+  const planConfirmation = canCoordinate &&
+    project.plan?.plan.state === 'awaiting_confirmation' ? 1 : 0
+  const humanAnswers = access === 'read_only' ? 0 : project.pendingHumanNeeded.filter((request) => (
+    request.targetUserId === currentUserId
   )).length
-  const revisionTasks = project.tasks.filter(({ task }) => (
-    task.status === 'revision_requested' || task.status === 'manual_recovery_required'
-  )).length
+  const resultReviews = canCoordinate
+    ? project.reviews.filter(({ decision }) => decision === null).length
+    : 0
+  const recoveryActions = canCoordinate
+    ? project.provisioning.recoveryActions.filter(({ status }) => status === 'available').length
+    : 0
+  const revisionTasks = access === 'worker' && binding?.role === 'worker'
+    ? project.tasks.filter(({ task }) => (
+        task.taskId === binding.taskId &&
+        (task.status === 'revision_requested' || task.status === 'manual_recovery_required')
+      )).length
+    : 0
   return Object.freeze({
     planConfirmation,
     humanAnswers,
@@ -482,6 +524,7 @@ export function ProjectCoordinatorPanel({
 }: ProjectCoordinatorPanelProps): ReactElement {
   const { t } = useTranslation('common')
   const [workspace, setWorkspace] = useState<ProjectCoordinatorWorkspace>()
+  const [sessionBinding, setSessionBinding] = useState<ProjectCoordinatorSessionBinding | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState(initialProjectId ?? '')
   const [loading, setLoading] = useState(true)
   const [backgroundRefreshing, setBackgroundRefreshing] = useState(false)
@@ -544,9 +587,18 @@ export function ProjectCoordinatorPanel({
       setBackgroundRefreshing(true)
     }
     try {
-      const next = await client.readWorkspace(projectId ? { projectId } : {})
+      const [next, projection] = await Promise.all([
+        client.readWorkspace(projectId ? { projectId } : {}),
+        client.readSessionProjection().catch(() => null)
+      ])
       if (signal?.aborted || refreshRequestRef.current !== requestRevision) return
       setWorkspace(next)
+      setSessionBinding(projection
+        ? projectCoordinatorCurrentSessionBinding(projection, {
+            id: session.id,
+            ...(session.runtimeId ? { runtimeId: session.runtimeId } : {})
+          })
+        : null)
       setNowMilliseconds(Date.now())
       const preferred = projectId ?? next.focusedProjectId
       if (preferred && next.projects.some(({ project }) => project.projectId === preferred)) {
@@ -571,7 +623,7 @@ export function ProjectCoordinatorPanel({
         else setBackgroundRefreshing(false)
       }
     }
-  }, [client, t])
+  }, [client, session.id, session.runtimeId, t])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -1093,6 +1145,10 @@ export function ProjectCoordinatorPanel({
                 <>
                   <ProjectOverview
                     project={project}
+                    currentUserId={workspace?.connection.state === 'ready'
+                      ? workspace.connection.userId
+                      : null}
+                    sessionBinding={sessionBinding}
                     observedAt={workspace?.observedAt ?? project.project.updatedAt}
                     nowMilliseconds={nowMilliseconds}
                     onNavigate={navigateWorkspace}
@@ -1198,6 +1254,7 @@ export function ProjectCoordinatorPanel({
                 currentUserId={workspace?.connection.state === 'ready'
                   ? workspace.connection.userId
                   : null}
+                sessionBinding={sessionBinding}
                 busy={Boolean(busyAction && !busyAction.startsWith('plan-'))}
                 onCreateHumanNeeded={createHumanNeeded}
                 onAnswerHumanNeeded={answerHumanNeeded}
@@ -1625,11 +1682,15 @@ function LiveSyncStatus({
 
 function ProjectOverview({
   project,
+  currentUserId,
+  sessionBinding,
   observedAt,
   nowMilliseconds,
   onNavigate
 }: Readonly<{
   project: ProjectCoordinatorProject
+  currentUserId: string | null
+  sessionBinding: ProjectCoordinatorSessionBinding | null
   observedAt: string
   nowMilliseconds: number
   onNavigate(viewId: string): void
@@ -1642,7 +1703,11 @@ function ProjectOverview({
   const coordinator = agents.find(({ projectAvailability }) => (
     projectAvailability.agentId === record.coordinatorAgentId
   ))
-  const attention = projectCoordinatorAttentionSummary(project)
+  const attention = projectCoordinatorAttentionSummary(
+    project,
+    currentUserId,
+    sessionBinding
+  )
   const stages = projectCoordinatorFlowStages(project)
 
   return (
@@ -2729,9 +2794,42 @@ export function projectCoordinatorReassignableTaskOffer(
   )) ?? null
 }
 
+function projectCoordinatorUserDisplayName(
+  project: ProjectCoordinatorProject,
+  userId: string
+): string {
+  return project.memberUsers.find((user) => user.userId === userId)?.displayName ??
+    project.workerGroups.find((group) => group.userId === userId)?.displayName ??
+    shortIdentifier(userId)
+}
+
+function projectCoordinatorAgentDisplayName(
+  project: ProjectCoordinatorProject,
+  agentId: string
+): string {
+  return project.workerGroups.flatMap(({ agents }) => agents).find(({ projectAvailability }) => (
+    projectAvailability.agentId === agentId
+  ))?.displayName ?? shortIdentifier(agentId)
+}
+
+function projectCoordinatorUserRoleMessageKey(
+  project: ProjectCoordinatorProject,
+  userId: string
+): string {
+  if (userId === project.project.ownerUserId) return 'projectCoordinatorCoordinatorShort'
+  if (
+    project.plan?.plan.tasks.some(({ workerUserId }) => workerUserId === userId) ||
+    project.tasks.some(({ executions }) => executions.some(({ assigneeUserId }) => (
+      assigneeUserId === userId
+    )))
+  ) return 'projectCoordinatorWorkerUser'
+  return 'projectCoordinatorMemberUser'
+}
+
 export function ProjectCoordinatorDecisionSection({
   project,
   currentUserId,
+  sessionBinding,
   busy,
   onCreateHumanNeeded,
   onAnswerHumanNeeded,
@@ -2741,6 +2839,7 @@ export function ProjectCoordinatorDecisionSection({
 }: Readonly<{
   project?: ProjectCoordinatorProject
   currentUserId: string | null
+  sessionBinding: ProjectCoordinatorSessionBinding | null
   busy: boolean
   onCreateHumanNeeded(input: ProjectCoordinatorHumanNeededCreateInput): void
   onAnswerHumanNeeded(input: ProjectCoordinatorHumanAnswerInput): void
@@ -2748,8 +2847,14 @@ export function ProjectCoordinatorDecisionSection({
   onReviewResult(input: ProjectCoordinatorResultReviewInput): void
   onComplete(input: ProjectCoordinatorCompleteInput): void
 }>): ReactElement {
-  const { t } = useTranslation('common')
+  const { i18n, t } = useTranslation('common')
   const pendingReviews = project?.reviews.filter(({ decision }) => decision === null) ?? []
+  const decidedReviews = project?.reviews.filter(({ decision }) => decision !== null) ?? []
+  const sessionAccess = project
+    ? projectCoordinatorEffectiveSessionAccess(project, currentUserId, sessionBinding)
+    : 'read_only'
+  const canCoordinate = sessionAccess === 'coordinator'
+  const canActAsMember = sessionAccess !== 'read_only'
   const acceptedCurrentResults = project ? acceptedCurrentResultIds(project) : null
   const targetUsers = project?.memberUsers.filter((user) => (
     user.status === 'active' && project.provisioning.memberships.some((membership) => (
@@ -2762,99 +2867,173 @@ export function ProjectCoordinatorDecisionSection({
     project.pendingHumanNeeded.length === 0 &&
     targetUsers.length > 0
   const completionInput = project ? projectCoordinatorCompletionInput(project, '') : null
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local'
   return (
     <Section id="reviews" title={t('projectCoordinatorReviews')} icon={<ClipboardCheck className="h-4 w-4" />}>
       {!project ? <Empty /> : (
         <div className="space-y-2 text-xs">
           {project.pendingHumanNeeded.map((request) => {
-            const canAnswer = request.targetUserId === currentUserId
-            return <form
+            const targetsCurrentUser = request.targetUserId === currentUserId
+            const canAnswer = targetsCurrentUser && canActAsMember
+            const targetName = projectCoordinatorUserDisplayName(project, request.targetUserId)
+            const requesterName = projectCoordinatorAgentDisplayName(
+              project,
+              request.requestedByAgentId
+            )
+            const answerState = canAnswer
+              ? 'actionable'
+              : targetsCurrentUser
+                ? 'read-only'
+                : 'waiting-other'
+            return <article
               key={request.humanRequestId}
               className="space-y-2 rounded border border-amber-500/40 p-2"
               data-default-visible-card="human-needed"
-              onSubmit={(event) => {
-                event.preventDefault()
-                const values = new FormData(event.currentTarget)
-                const decision = projectCoordinatorSubmitDecision(
-                  (event.nativeEvent as SubmitEvent).submitter
-                )
-                onAnswerHumanNeeded({
-                  projectId: request.projectId,
-                  humanRequestId: request.humanRequestId,
-                  requestRevision: request.revision,
-                  answer: String(values.get('answer') ?? ''),
-                  ...(decision === 'approve' || decision === 'reject' ? { decision } : {})
-                })
-              }}
+              data-human-answer-state={answerState}
+              role={canAnswer ? 'alert' : undefined}
             >
-              <Status value="human_needed" />
-              <p className="whitespace-pre-wrap text-[11px] text-ds-muted">{request.prompt}</p>
-              <textarea required name="answer" disabled={!canAnswer || busy} aria-label={t('projectCoordinatorHumanAnswer')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
-              {request.confirmableAction ? (
-                <div className="flex gap-2">
-                  <button name="decision" value="approve" type="submit" disabled={!canAnswer || busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorApprove')}</button>
-                  <button name="decision" value="reject" type="submit" disabled={!canAnswer || busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorReject')}</button>
+              <div className="flex items-center justify-between gap-2">
+                <Status value="human_needed" />
+                <strong className="text-[11px]">
+                  {canAnswer
+                    ? t('projectCoordinatorWaitingForYourAnswer')
+                    : targetsCurrentUser
+                      ? t('projectCoordinatorAnswerRequiresActiveSession')
+                      : t('projectCoordinatorWaitingForUserAnswer', { name: targetName })}
+                </strong>
+              </div>
+              <dl className="grid gap-1 text-[11px] text-ds-muted">
+                <div className="flex justify-between gap-2">
+                  <dt>{t('projectCoordinatorQuestionFrom')}</dt>
+                  <dd className="text-right">
+                    {requesterName} · {t(request.context.scope === 'worker_execution'
+                      ? 'projectCoordinatorWorkerUser'
+                      : 'projectCoordinatorCoordinatorShort')}
+                  </dd>
                 </div>
-              ) : (
-                <button type="submit" disabled={!canAnswer || busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorSubmitHumanAnswer')}</button>
-              )}
-            </form>
+                <div className="flex justify-between gap-2">
+                  <dt>{t('projectCoordinatorAnswerOwner')}</dt>
+                  <dd className="text-right">
+                    {targetName} · {t(projectCoordinatorUserRoleMessageKey(
+                      project,
+                      request.targetUserId
+                    ))}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt>{t('projectCoordinatorAnswerDeadline')}</dt>
+                  <dd>
+                    <time dateTime={request.expiresAt}>
+                      {formatProjectCoordinatorDateTime(
+                        request.expiresAt,
+                        i18n.resolvedLanguage
+                      )}
+                    </time>
+                  </dd>
+                </div>
+              </dl>
+              <p className="whitespace-pre-wrap text-[11px] text-ds-muted">{request.prompt}</p>
+              {canAnswer ? (
+                <form
+                  className="space-y-2"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    const values = new FormData(event.currentTarget)
+                    const decision = projectCoordinatorSubmitDecision(
+                      (event.nativeEvent as SubmitEvent).submitter
+                    )
+                    onAnswerHumanNeeded({
+                      projectId: request.projectId,
+                      humanRequestId: request.humanRequestId,
+                      requestRevision: request.revision,
+                      answer: String(values.get('answer') ?? ''),
+                      ...(decision === 'approve' || decision === 'reject'
+                        ? { decision }
+                        : {})
+                    })
+                  }}
+                >
+                  <textarea required name="answer" disabled={busy} aria-label={t('projectCoordinatorHumanAnswer')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+                  {request.confirmableAction ? (
+                    <div className="flex gap-2">
+                      <button name="decision" value="approve" type="submit" disabled={busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorApprove')}</button>
+                      <button name="decision" value="reject" type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorReject')}</button>
+                    </div>
+                  ) : (
+                    <button type="submit" disabled={busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorSubmitHumanAnswer')}</button>
+                  )}
+                </form>
+              ) : null}
+            </article>
           })}
           {pendingReviews.map((review) => (
-            <form
+            <article
               key={review.submission.resultSubmissionId}
               className="space-y-2 rounded border border-amber-500/40 p-2"
               data-default-visible-card="result-review"
-              onSubmit={(event) => {
-                event.preventDefault()
-                const values = new FormData(event.currentTarget)
-                const decision = projectCoordinatorSubmitDecision(
-                  (event.nativeEvent as SubmitEvent).submitter
-                )
-                const workerUserId = String(values.get('next-user') ?? '')
-                const input = projectCoordinatorResultReviewInput(
-                  project,
-                  review.submission.resultSubmissionId,
-                  decision === 'accept' ? 'accept' : 'request_revision',
-                  {
-                    instruction: String(values.get('instruction') ?? ''),
-                    nextWorkerUserId: workerUserId,
-                    nextOfferExpiresAt: String(
-                      values.get('offer-expires-at') ?? ''
-                    ).trim() || new Date(
-                      Date.now() + DEFAULT_TASK_OFFER_TTL_MS
-                    ).toISOString(),
-                    nextOutputFileName: String(values.get('next-output-file-name') ?? '')
-                  }
-                )
-                if (input) onReviewResult(input)
-              }}
+              data-result-review-access={canCoordinate ? 'coordinator' : 'read-only'}
+              role={canCoordinate ? 'alert' : undefined}
             >
               <div className="flex items-start justify-between gap-2">
-                <span className="break-all font-mono text-[10px]">{review.submission.taskId}</span>
+                <span>
+                  <strong className="block text-[11px]">
+                    {t('projectCoordinatorWorkerResult')}
+                  </strong>
+                  <span className="break-all font-mono text-[10px]">
+                    {review.submission.taskId}
+                  </span>
+                </span>
                 <Status value="awaiting_review" />
               </div>
+              <dl className="grid gap-1 text-[11px] text-ds-muted">
+                <div className="flex justify-between gap-2">
+                  <dt>{t('projectCoordinatorSubmittedBy')}</dt>
+                  <dd>{projectCoordinatorUserDisplayName(
+                    project,
+                    review.submission.submittedByUserId
+                  )}</dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt>{t('projectCoordinatorSubmittedAt')}</dt>
+                  <dd>
+                    <time dateTime={review.submission.submittedAt}>
+                      {formatProjectCoordinatorDateTime(
+                        review.submission.submittedAt,
+                        i18n.resolvedLanguage
+                      )}
+                    </time>
+                  </dd>
+                </div>
+              </dl>
               <p className="mt-1 whitespace-pre-wrap text-[11px] text-ds-muted">
                 {review.submission.summary}
               </p>
+              {canCoordinate ? (
+                <p className="rounded bg-ds-subtle px-2 py-1.5 text-[11px] font-medium">
+                  {t('projectCoordinatorWaitingForYourReview')}
+                </p>
+              ) : null}
               {review.submission.outputs.length > 0 ? (
                 <div className="space-y-1" data-artifact-review-list="true">
                   {review.submission.outputs.map((output, outputIndex) => (
                     <button
                       key={`${output.locatorDigest}:${outputIndex}`}
                       type="button"
-                      disabled={busy || !onOpenArtifact}
+                      disabled={!canCoordinate || busy || !onOpenArtifact}
                       data-artifact-review-output={outputIndex}
                       className="flex w-full items-center justify-between gap-2 rounded border border-ds-border px-2 py-1.5 text-left disabled:opacity-50"
-                      onClick={() => onOpenArtifact?.({
-                        projectId: review.submission.projectId,
-                        taskId: review.submission.taskId,
-                        executionId: review.submission.executionId,
-                        resultSubmissionId: review.submission.resultSubmissionId,
-                        submissionDigest: review.submission.submissionDigest,
-                        outputIndex,
-                        locatorDigest: output.locatorDigest
-                      })}
+                      onClick={() => {
+                        if (!canCoordinate) return
+                        onOpenArtifact?.({
+                          projectId: review.submission.projectId,
+                          taskId: review.submission.taskId,
+                          executionId: review.submission.executionId,
+                          resultSubmissionId: review.submission.resultSubmissionId,
+                          submissionDigest: review.submission.submissionDigest,
+                          outputIndex,
+                          locatorDigest: output.locatorDigest
+                        })
+                      }}
                     >
                       <span>{t('projectCoordinatorOpenArtifactInContentSpace')}</span>
                       <span className="max-w-[11rem] truncate font-mono text-[10px] text-ds-faint">
@@ -2864,39 +3043,208 @@ export function ProjectCoordinatorDecisionSection({
                   ))}
                 </div>
               ) : null}
-              <textarea required name="instruction" aria-label={t('projectCoordinatorRevisionInstruction')} placeholder={t('projectCoordinatorRevisionInstruction')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
-              <select required name="next-user" defaultValue="" aria-label={t('projectCoordinatorNextWorkerUser')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs">
-                <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
-                {project.workerGroups.map((group) => (
-                  <option key={group.userId} value={group.userId}>
-                    {group.displayName}
-                  </option>
-                ))}
-              </select>
-              <input
-                name="offer-expires-at"
-                aria-label={t('projectCoordinatorOfferExpiresAt')}
-                placeholder={new Date(Date.now() + DEFAULT_TASK_OFFER_TTL_MS).toISOString()}
-                className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
-              />
-              {project.tasks.find(({ task }) => (
-                task.taskId === review.submission.taskId
-              ))?.task.fileIntent ? (
-                <input
-                  required
-                  name="next-output-file-name"
-                  aria-label={t('projectCoordinatorNextOutputFileName')}
-                  placeholder={t('projectCoordinatorNextOutputFileName')}
-                  className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
-                />
-              ) : null}
-              <div className="flex gap-2">
-                <button formNoValidate name="decision" value="accept" type="submit" disabled={busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorAcceptResult')}</button>
-                <button name="decision" value="request_revision" type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorRequestRevision')}</button>
-              </div>
-            </form>
+              {canCoordinate ? (
+                <form
+                  className="space-y-2"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    const values = new FormData(event.currentTarget)
+                    const decision = projectCoordinatorSubmitDecision(
+                      (event.nativeEvent as SubmitEvent).submitter
+                    )
+                    const workerUserId = String(values.get('next-user') ?? '')
+                    const localOfferExpiry = projectCoordinatorIsoFromLocalDateTime(
+                      String(values.get('offer-expires-at') ?? '')
+                    )
+                    const input = projectCoordinatorResultReviewInput(
+                      project,
+                      review.submission.resultSubmissionId,
+                      decision === 'accept' ? 'accept' : 'request_revision',
+                      {
+                        instruction: String(values.get('instruction') ?? ''),
+                        nextWorkerUserId: workerUserId,
+                        nextOfferExpiresAt: localOfferExpiry || new Date(
+                          Date.now() + DEFAULT_TASK_OFFER_TTL_MS
+                        ).toISOString(),
+                        nextOutputFileName: String(
+                          values.get('next-output-file-name') ?? ''
+                        )
+                      }
+                    )
+                    if (input) onReviewResult(input)
+                  }}
+                >
+                  <textarea required name="instruction" aria-label={t('projectCoordinatorRevisionInstruction')} placeholder={t('projectCoordinatorRevisionInstruction')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+                  <select required name="next-user" defaultValue="" aria-label={t('projectCoordinatorNextWorkerUser')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs">
+                    <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
+                    {project.workerGroups.map((group) => (
+                      <option key={group.userId} value={group.userId}>
+                        {group.displayName}
+                      </option>
+                    ))}
+                  </select>
+                  <label className="block space-y-1">
+                    <span className="text-[11px] text-ds-muted">
+                      {t('projectCoordinatorOfferExpiresAtLocal', { timeZone })}
+                    </span>
+                    <input
+                      type="datetime-local"
+                      name="offer-expires-at"
+                      aria-label={t('projectCoordinatorOfferExpiresAtLocal', { timeZone })}
+                      className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+                    />
+                  </label>
+                  {project.tasks.find(({ task }) => (
+                    task.taskId === review.submission.taskId
+                  ))?.task.fileIntent ? (
+                    <input
+                      required
+                      name="next-output-file-name"
+                      aria-label={t('projectCoordinatorNextOutputFileName')}
+                      placeholder={t('projectCoordinatorNextOutputFileName')}
+                      className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+                    />
+                  ) : null}
+                  <div className="flex gap-2">
+                    <button formNoValidate name="decision" value="accept" type="submit" disabled={busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorAcceptResult')}</button>
+                    <button name="decision" value="request_revision" type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorRequestRevision')}</button>
+                  </div>
+                </form>
+              ) : (
+                <p className="rounded bg-ds-subtle px-2 py-1.5 text-[11px] text-ds-muted">
+                  {t('projectCoordinatorWaitingForCoordinatorReview', {
+                    name: projectCoordinatorUserDisplayName(
+                      project,
+                      project.project.ownerUserId
+                    )
+                  })}
+                </p>
+              )}
+            </article>
           ))}
-          {mayAskMember ? (
+          {decidedReviews.length > 0 ? (
+            <section className="space-y-2" data-review-history="true">
+              <strong className="text-xs">{t('projectCoordinatorReviewHistory')}</strong>
+              {decidedReviews.map((review) => {
+                const decision = review.decision!
+                const nextOffer = decision.nextTaskOfferId
+                  ? project.offers.find(({ taskOfferId }) => (
+                      taskOfferId === decision.nextTaskOfferId
+                    ))
+                  : undefined
+                return (
+                  <article
+                    key={decision.reviewDecisionId}
+                    className="space-y-2 rounded border border-ds-border p-2"
+                    data-review-history-decision={decision.decision}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span>
+                        <strong className="block text-[11px]">
+                          {t('projectCoordinatorReviewDecision')}
+                        </strong>
+                        <span className="break-all font-mono text-[10px]">
+                          {review.submission.taskId}
+                        </span>
+                      </span>
+                      <Status value={decision.decision === 'accept'
+                        ? 'accepted'
+                        : 'revision_requested'} />
+                    </div>
+                    <div className="rounded bg-ds-subtle px-2 py-1.5">
+                      <strong className="text-[11px]">
+                        {t('projectCoordinatorWorkerResult')}
+                      </strong>
+                      <p className="mt-1 whitespace-pre-wrap text-[11px] text-ds-muted">
+                        {review.submission.summary}
+                      </p>
+                    </div>
+                    <dl className="grid gap-1 text-[11px] text-ds-muted">
+                      <div className="flex justify-between gap-2">
+                        <dt>{t('projectCoordinatorSubmittedBy')}</dt>
+                        <dd>{projectCoordinatorUserDisplayName(
+                          project,
+                          review.submission.submittedByUserId
+                        )}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt>{t('projectCoordinatorSubmittedAt')}</dt>
+                        <dd>
+                          <time dateTime={review.submission.submittedAt}>
+                            {formatProjectCoordinatorDateTime(
+                              review.submission.submittedAt,
+                              i18n.resolvedLanguage
+                            )}
+                          </time>
+                        </dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt>{t('projectCoordinatorReviewedBy')}</dt>
+                        <dd>
+                          {projectCoordinatorUserDisplayName(
+                            project,
+                            decision.decidedByUserId
+                          )} · {t('projectCoordinatorCoordinatorShort')}
+                        </dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt>{t('projectCoordinatorReviewedAt')}</dt>
+                        <dd>
+                          <time dateTime={decision.decidedAt}>
+                            {formatProjectCoordinatorDateTime(
+                              decision.decidedAt,
+                              i18n.resolvedLanguage
+                            )}
+                          </time>
+                        </dd>
+                      </div>
+                    </dl>
+                    {decision.instruction ? (
+                      <div className="rounded border border-amber-500/30 px-2 py-1.5">
+                        <strong className="text-[11px]">
+                          {t('projectCoordinatorRevisionInstruction')}
+                        </strong>
+                        <p className="mt-1 whitespace-pre-wrap text-[11px] text-ds-muted">
+                          {decision.instruction}
+                        </p>
+                      </div>
+                    ) : null}
+                    {decision.acceptedProjectRecordId ? (
+                      <dl className="text-[11px] text-ds-muted">
+                        <dt>{t('projectCoordinatorAcceptedRecord')}</dt>
+                        <dd className="break-all font-mono text-[10px]">
+                          {decision.acceptedProjectRecordId}
+                        </dd>
+                      </dl>
+                    ) : null}
+                    {nextOffer ? (
+                      <dl className="grid gap-1 text-[11px] text-ds-muted">
+                        <div className="flex justify-between gap-2">
+                          <dt>{t('projectCoordinatorNextWorkerUser')}</dt>
+                          <dd>{projectCoordinatorUserDisplayName(
+                            project,
+                            nextOffer.workerUserId
+                          )}</dd>
+                        </div>
+                        <div className="flex justify-between gap-2">
+                          <dt>{t('projectCoordinatorOfferAcceptanceDeadline')}</dt>
+                          <dd>
+                            <time dateTime={nextOffer.expiresAt}>
+                              {formatProjectCoordinatorDateTime(
+                                nextOffer.expiresAt,
+                                i18n.resolvedLanguage
+                              )}
+                            </time>
+                          </dd>
+                        </div>
+                      </dl>
+                    ) : null}
+                  </article>
+                )
+              })}
+            </section>
+          ) : null}
+          {canCoordinate && mayAskMember ? (
             <form
               className="space-y-2 rounded border border-ds-border p-2"
               data-default-visible-card="human-needed-create"
@@ -2910,7 +3258,9 @@ export function ProjectCoordinatorDecisionSection({
                   expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
                   requiredAssurance: 'verified',
                   prompt: String(values.get('prompt') ?? ''),
-                  expiresAt: String(values.get('expires-at') ?? '')
+                  expiresAt: projectCoordinatorIsoFromLocalDateTime(
+                    String(values.get('expires-at') ?? '')
+                  )
                 })
               }}
             >
@@ -2921,11 +3271,22 @@ export function ProjectCoordinatorDecisionSection({
                 ))}
               </select>
               <textarea required name="prompt" aria-label={t('projectCoordinatorHumanPrompt')} placeholder={t('projectCoordinatorHumanPrompt')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
-              <input required name="expires-at" aria-label={t('projectCoordinatorHumanExpiresAt')} placeholder="2026-08-26T01:08:00.000Z" className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+              <label className="block space-y-1">
+                <span className="text-[11px] text-ds-muted">
+                  {t('projectCoordinatorHumanExpiresAtLocal', { timeZone })}
+                </span>
+                <input
+                  required
+                  type="datetime-local"
+                  name="expires-at"
+                  aria-label={t('projectCoordinatorHumanExpiresAtLocal', { timeZone })}
+                  className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+                />
+              </label>
               <button type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorAskMember')}</button>
             </form>
           ) : null}
-          {completionInput ? (
+          {canCoordinate && completionInput ? (
             <form
               className="space-y-2 rounded border border-emerald-500/40 p-2"
               data-default-visible-card="project-completion"
@@ -2941,13 +3302,37 @@ export function ProjectCoordinatorDecisionSection({
             </form>
           ) : null}
           {project.finalSummary ? (
-            <div className="rounded border border-ds-border p-2" data-default-visible-card="final-summary">
-              <Status value="completed" />
+            <div className="space-y-2 rounded border border-ds-border p-2" data-default-visible-card="final-summary">
+              <div className="flex items-center justify-between gap-2">
+                <strong>{t('projectCoordinatorFinalSummary')}</strong>
+                <Status value="completed" />
+              </div>
               <p className="mt-1 whitespace-pre-wrap text-[11px] text-ds-muted">{project.finalSummary.summary}</p>
+              <dl className="grid gap-1 text-[11px] text-ds-muted">
+                <div className="flex justify-between gap-2">
+                  <dt>{t('projectCoordinatorCompletedBy')}</dt>
+                  <dd>{projectCoordinatorUserDisplayName(
+                    project,
+                    project.finalSummary.createdByUserId
+                  )} · {t('projectCoordinatorCoordinatorShort')}</dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt>{t('projectCoordinatorCompletedAt')}</dt>
+                  <dd>
+                    <time dateTime={project.finalSummary.completedAt}>
+                      {formatProjectCoordinatorDateTime(
+                        project.finalSummary.completedAt,
+                        i18n.resolvedLanguage
+                      )}
+                    </time>
+                  </dd>
+                </div>
+              </dl>
             </div>
           ) : null}
           {project.pendingHumanNeeded.length === 0 && pendingReviews.length === 0 &&
-            !mayAskMember && !completionInput && !project.finalSummary ? (
+            decidedReviews.length === 0 && !(canCoordinate && mayAskMember) &&
+            !(canCoordinate && completionInput) && !project.finalSummary ? (
               <Empty message={t('projectCoordinatorNoReviews')} />
             ) : null}
         </div>
@@ -3561,6 +3946,28 @@ export function formatRelativeTime(
   }).format(value, unit)
 }
 
+export function projectCoordinatorIsoFromLocalDateTime(value: string): string {
+  if (!value.trim()) return ''
+  const date = new Date(value)
+  return Number.isFinite(date.getTime()) ? date.toISOString() : ''
+}
+
+export function formatProjectCoordinatorDateTime(
+  timestamp: string,
+  locale?: string
+): string {
+  const date = new Date(timestamp)
+  if (!Number.isFinite(date.getTime())) return '—'
+  return new Intl.DateTimeFormat(locale, {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short'
+  }).format(date)
+}
+
 function formatAbsoluteTime(timestamp: string): string {
   const date = new Date(timestamp)
   if (!Number.isFinite(date.getTime())) return '—'
@@ -3619,6 +4026,7 @@ function statusMessageKey(value: string): string | undefined {
     case 'active': return 'projectCoordinatorStatusActive'
     case 'paused': return 'projectCoordinatorStatusPaused'
     case 'completed': return 'projectCoordinatorStatusCompleted'
+    case 'accepted': return 'projectCoordinatorStatusAccepted'
     case 'cancelled': return 'projectCoordinatorStatusCancelled'
     case 'confirmed': return 'projectCoordinatorStatusConfirmed'
     case 'awaiting_confirmation': return 'projectCoordinatorStatusAwaitingConfirmation'
