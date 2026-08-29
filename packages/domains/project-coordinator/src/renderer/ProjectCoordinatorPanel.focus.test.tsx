@@ -50,7 +50,7 @@ test('settings parent refresh does not steal focus from its active input', async
     label: 'fixtureConnectionSettings',
     render: () => createElement('input', {
       'aria-label': 'Collaboration service address',
-      defaultValue: 'https://chat.sciforge.cn/collaboration'
+      defaultValue: 'https://cloud-test.sciforge.cn'
     })
   }] as unknown as Parameters<typeof CollaborationSettingsDrawer>[0]['sections']
   const session = { id: 'session-focus-regression' } as Parameters<

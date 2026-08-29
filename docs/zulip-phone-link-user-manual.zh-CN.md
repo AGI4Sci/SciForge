@@ -58,13 +58,16 @@
 向管理员确认：
 
 1. SciForge 桌面版已经安装并能正常打开；
-2. 协作服务地址，例如 `https://chat.sciforge.cn/collaboration`；
+2. 协作服务地址，例如测试环境的 `https://cloud-test.sciforge.cn`；
 3. 你自己的 Zulip 账号可以登录组织；
 4. Zulip 中能找到 SciForge Bot。
 
 不要共用他人的 Zulip 账号。不要把密码、验证码、Token、API Key、私钥或配对指令发给其他人。
 
 ## 3. 连接 SciForge 云端
+
+这里填写的是 SciForge Cloud 地址，不是 Zulip 组织地址：测试环境的 SciForge Cloud 是
+`https://cloud-test.sciforge.cn`，Zulip Web 与手机 App 仍登录 `https://chat.sciforge.cn`。
 
 1. 打开 SciForge，并进入准备与手机绑定的电脑对话。
 2. 点击工具栏中的 **Phone Link**。

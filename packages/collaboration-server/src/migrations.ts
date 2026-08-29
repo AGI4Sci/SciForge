@@ -55,6 +55,12 @@ export const COLLABORATION_V16_CATALOG_FINGERPRINTS = {
   'staging-v9': '39902dbacef236e97375dd7f677c790a1be0d64bd939538abd964bf3dfa34983'
 } as const
 
+export const COLLABORATION_V17_CATALOG_FINGERPRINTS = {
+  'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v17'],
+  'public-v5': 'd9ad3f52d3cc427e984ecdd5d6f9ab772212888e2054c2c2e2686841cb0b7206',
+  'staging-v9': 'a763e02adca74637053a4c23d5d3cfb96da483f9bffd6bea86e44097bcbc1ac2'
+} as const
+
 /**
  * A forward migration file commits independently. These fingerprints admit
  * only the exact public-v5/staging-v9 catalogs that can exist after a process
@@ -92,7 +98,7 @@ export const COLLABORATION_V19_CATALOG_FINGERPRINTS = {
  * Full admitted v20 catalogs. PostgreSQL retains the immutable migration
  * ledger and historical column ordinals, so public-v5 and staging-v9 remain
  * distinguishable audit lineages after converging on the same frozen v15
- * collaboration schema.
+ * collaboration v20 schema.
  */
 export const COLLABORATION_CURRENT_CATALOG_FINGERPRINTS = {
   'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v20'],

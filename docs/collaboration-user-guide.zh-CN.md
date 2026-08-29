@@ -14,7 +14,7 @@
 开始前只向管理员确认三项信息：
 
 1. SciForge 桌面安装包或已安装的桌面应用；
-2. 协作服务地址，例如 `https://chat.sciforge.cn/collaboration`；
+2. 协作服务地址，例如测试环境的 `https://cloud-test.sciforge.cn`；
 3. 自己的 Zulip 账号、Zulip Server 地址以及允许使用的 channel / Topic。
 
 然后完成四步：安装并登录**官方 Zulip 手机 App** → 启动 SciForge 桌面端 → 在桌面“协作”面板连接
@@ -72,8 +72,8 @@ Cloud 才会把同一 Task Offer 通知给该 User 当前可用的所有 Device 
 
 1. 启动新版 SciForge，并打开任意 Session；手机绑定本身不要求先选择 Project。
 2. 点击工具栏的协作个体图标，打开右侧“协作”面板。
-3. 在“协作服务地址”填写管理员提供的地址；当前部署示例为
-   `https://chat.sciforge.cn/collaboration`。点击“保存并连接”。
+3. 在“协作服务地址”填写管理员提供的 Cloud 地址；测试环境示例为
+   `https://cloud-test.sciforge.cn`。点击“保存并连接”。
 4. 状态应从“连接中”变为“已连接”。如果显示“连接异常”，不要反复注册；先看“队列与恢复”的明确错误。
 
 ## 3. 绑定个人手机端点
