@@ -630,6 +630,45 @@ describe('CodexRuntimeService storage fallback', () => {
     })
   })
 
+  it('keeps an explicitly main empty placeholder Codex thread visible without a user message', async () => {
+    const storageRoot = await tempRoot()
+    const client = controllableClient()
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      createClient: () => client
+    })
+
+    const started = await service.startThread({
+      threadId: 'coordinator-session',
+      relation: 'side',
+      threadSource: 'domain-runtime',
+      sidebarVisibility: 'main'
+    })
+    expect(started).toMatchObject({
+      ok: true,
+      thread: {
+        id: 'coordinator-session',
+        title: 'Codex thread',
+        relation: 'side',
+        threadSource: 'domain-runtime',
+        sidebarVisibility: 'main',
+        hasUserMessage: false
+      }
+    })
+    await expect(service.listThreads({ includeArchived: true })).resolves.toMatchObject({
+      ok: true,
+      threads: [{
+        id: 'coordinator-session',
+        title: 'Codex thread',
+        relation: 'side',
+        threadSource: 'domain-runtime',
+        sidebarVisibility: 'main',
+        hasUserMessage: false
+      }]
+    })
+  })
+
   it('bounds huge app-server thread previews before returning list summaries', async () => {
     const storageRoot = await tempRoot()
     const threadStore = new CodexThreadStore({ rootDir: storageRoot })

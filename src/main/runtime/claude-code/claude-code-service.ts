@@ -352,6 +352,9 @@ export class ClaudeCodeRuntimeService {
     threadId?: string
     workspace?: string
     title?: string
+    relation?: AgentRuntimeThread['relation']
+    threadSource?: string
+    sidebarVisibility?: AgentRuntimeThread['sidebarVisibility']
   }): Promise<ClaudeCodeThreadStartResult> {
     try {
       const settings = await this.options.settings()
@@ -363,6 +366,9 @@ export class ClaudeCodeRuntimeService {
         workspace,
         title: payload.title || 'Claude Code thread',
         model,
+        relation: payload.relation,
+        threadSource: payload.threadSource,
+        sidebarVisibility: payload.sidebarVisibility,
         latestTurnStatus: 'queued'
       })
       await this.emit({

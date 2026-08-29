@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.identity-access",
     "displayName": "Identity and Access",
-    "version": "3.0.2",
+    "version": "4.0.0",
     "hostApi": {
       "minimum": "1.6.0",
       "maximumExclusive": "2.0.0"
@@ -20,10 +20,11 @@
     "identity-access.authenticated-cloud-transport": {
       "location": "main.internal-service-descriptor",
       "serviceId": "sciforge.authenticated-cloud-transport",
-      "contractVersion": "2.0.0",
+      "contractVersion": "3.0.0",
       "allowedConsumerModuleIds": [
         "sciforge.collaboration",
-        "sciforge.project-coordinator"
+        "sciforge.project-coordinator",
+        "sciforge.opencontent-connector"
       ]
     },
     "identity-access.device-fact-attestation-signing": {
@@ -75,7 +76,7 @@
         {
           "id": "identity-access.authenticated-cloud-transport",
           "kind": "main.extension",
-          "version": "2.0.0",
+          "version": "3.0.0",
           "priority": 900
         },
         {

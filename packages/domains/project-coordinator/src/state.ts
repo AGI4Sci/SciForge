@@ -13,11 +13,18 @@ import type {
 import {
   projectCoordinatorPlanDraftSchema,
   projectCoordinatorProjectCreateInputSchema,
+  projectCoordinatorProjectCreateReceiptSchema,
   projectCoordinatorCoordinatorSessionBindingRecordSchema,
+  projectCoordinatorActivationRequestIdSchema,
+  projectCoordinatorOrdinarySessionSchema,
+  projectCoordinatorPendingActivationSchema,
   projectCoordinatorTransferFeedbackSchema,
   type ProjectCoordinatorCoordinatorSessionBindingRecord,
+  type ProjectCoordinatorOrdinarySession,
+  type ProjectCoordinatorPendingActivation,
   type ProjectCoordinatorPlanDraft,
   type ProjectCoordinatorProjectCreateInput,
+  type ProjectCoordinatorProjectCreateReceipt,
   type ProjectCoordinatorTransferFeedback
 } from './contract.js'
 
@@ -26,11 +33,13 @@ const projectCreateIntentRecordSchema = z.object({
   principalUserId: userIdSchema,
   commandDigest: z.string().regex(/^[a-f0-9]{64}$/u),
   state: z.enum(['pending', 'succeeded']),
-  createdProjectId: projectIdSchema.nullable()
+  createdProjectId: projectIdSchema.nullable(),
+  coordinatorSession: projectCoordinatorOrdinarySessionSchema.nullable().default(null),
+  activationRequestId: projectCoordinatorActivationRequestIdSchema.nullable().default(null)
 }).strict().readonly()
 
 const projectCoordinatorStateSchema = z.object({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   planDrafts: z.array(projectCoordinatorPlanDraftSchema).max(1_000),
   coordinatorSessionBindings: z.array(
     projectCoordinatorCoordinatorSessionBindingRecordSchema
@@ -40,18 +49,28 @@ const projectCoordinatorStateSchema = z.object({
     .default([]),
   projectCreateIntents: z.array(projectCreateIntentRecordSchema)
     .max(10_000)
+    .default([]),
+  pendingProjectActivations: z.array(projectCoordinatorPendingActivationSchema)
+    .max(10_000)
     .default([])
 }).strict().readonly()
 
 type ProjectCoordinatorState = z.infer<typeof projectCoordinatorStateSchema>
 
 const EMPTY_STATE: ProjectCoordinatorState = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   planDrafts: [],
   coordinatorSessionBindings: [],
   coordinatorTransferFeedback: [],
-  projectCreateIntents: []
+  projectCreateIntents: [],
+  pendingProjectActivations: []
 }
+
+export type ProjectCoordinatorProjectCreationCommit = Readonly<{
+  projectId: string
+  coordinatorSession: ProjectCoordinatorOrdinarySession
+  activationRequestId: string
+}>
 
 export class ProjectCoordinatorStateStore {
   constructor(private readonly settings: DomainMainPackageSettingsHost) {}
@@ -66,6 +85,46 @@ export class ProjectCoordinatorStateStore {
   > {
     const { state } = await this.read()
     return state.coordinatorSessionBindings
+  }
+
+  async readPendingProjectActivations(): Promise<readonly ProjectCoordinatorPendingActivation[]> {
+    const { state } = await this.read()
+    return state.pendingProjectActivations
+  }
+
+  async readProjectCreationCommit(
+    principalUserId: string,
+    rawInput: ProjectCoordinatorProjectCreateInput
+  ): Promise<ProjectCoordinatorProjectCreationCommit | null> {
+    const input = projectCoordinatorProjectCreateInputSchema.parse(rawInput)
+    const owner = userIdSchema.parse(principalUserId)
+    const commandDigest = projectCreateCommandDigest(input)
+    const { state } = await this.read()
+    const intent = state.projectCreateIntents.find(({ createIntentId }) => (
+      createIntentId === input.createIntentId
+    ))
+    if (!intent) return null
+    if (intent.principalUserId !== owner || intent.commandDigest !== commandDigest) {
+      throw new Error('Project create intent was reused for a different Owner or business command.')
+    }
+    if (
+      intent.state !== 'succeeded' ||
+      !intent.createdProjectId ||
+      !intent.coordinatorSession ||
+      !intent.activationRequestId
+    ) return null
+    const binding = state.coordinatorSessionBindings.find((candidate) => (
+      candidate.projectId === intent.createdProjectId &&
+      candidate.principalUserId === owner &&
+      candidate.runtimeId === intent.coordinatorSession!.runtimeId &&
+      candidate.threadId === intent.coordinatorSession!.threadId
+    ))
+    if (!binding) throw new Error('Committed Project creation is missing its Coordinator Session binding.')
+    return Object.freeze({
+      projectId: intent.createdProjectId,
+      coordinatorSession: intent.coordinatorSession,
+      activationRequestId: intent.activationRequestId
+    })
   }
 
   /**
@@ -118,98 +177,33 @@ export class ProjectCoordinatorStateStore {
     throw new Error('Unable to persist the Project create intent.')
   }
 
-  async recordProjectCreateSucceeded(
+  /**
+   * Commits the Cloud receipt, Coordinator Session binding, and pending UI
+   * activation in one package-settings CAS.
+   */
+  async commitProjectCreation(
     principalUserId: string,
     rawInput: ProjectCoordinatorProjectCreateInput,
-    projectId: string
-  ): Promise<void> {
+    rawReceipt: ProjectCoordinatorProjectCreateReceipt,
+    rawBinding: ProjectCoordinatorCoordinatorSessionBindingRecord,
+    rawActivation: ProjectCoordinatorPendingActivation
+  ): Promise<ProjectCoordinatorProjectCreationCommit> {
     const input = projectCoordinatorProjectCreateInputSchema.parse(rawInput)
+    const receipt = projectCoordinatorProjectCreateReceiptSchema.parse(rawReceipt)
+    const binding = projectCoordinatorCoordinatorSessionBindingRecordSchema.parse(rawBinding)
+    const activation = projectCoordinatorPendingActivationSchema.parse(rawActivation)
     const owner = userIdSchema.parse(principalUserId)
-    const createdProjectId = projectIdSchema.parse(projectId)
     const commandDigest = projectCreateCommandDigest(input)
-    let snapshot = await this.settings.read()
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const state = parseState(snapshot)
-      const current = state.projectCreateIntents.find(({ createIntentId }) => (
-        createIntentId === input.createIntentId
-      ))
-      if (!current || current.principalUserId !== owner || current.commandDigest !== commandDigest) {
-        throw new Error('Project create success does not match its durable business intent.')
-      }
-      if (current.state === 'succeeded') {
-        if (current.createdProjectId !== createdProjectId) {
-          throw new Error('Project create intent resolved to a different Cloud Project.')
-        }
-        return
-      }
-      const value = projectCoordinatorStateSchema.parse({
-        ...state,
-        projectCreateIntents: state.projectCreateIntents.map((candidate) => (
-          candidate.createIntentId === input.createIntentId
-            ? { ...candidate, state: 'succeeded', createdProjectId }
-            : candidate
-        ))
-      })
-      try {
-        await this.settings.write(value, snapshot.revision)
-        return
-      } catch (error) {
-        if (attempt >= 2) throw error
-        snapshot = await this.settings.read()
-      }
+    if (
+      receipt.createIntentId !== input.createIntentId ||
+      receipt.createdProjectId !== binding.projectId ||
+      binding.principalUserId !== owner ||
+      activation.projectId !== binding.projectId ||
+      activation.coordinatorSession.runtimeId !== binding.runtimeId ||
+      activation.coordinatorSession.threadId !== binding.threadId
+    ) {
+      throw new Error('Project creation commit facts do not identify one exact Project Session.')
     }
-    throw new Error('Unable to persist the successful Project create intent.')
-  }
-
-  async bindCoordinatorSession(
-    rawBinding: ProjectCoordinatorCoordinatorSessionBindingRecord
-  ): Promise<ProjectCoordinatorCoordinatorSessionBindingRecord> {
-    const binding = projectCoordinatorCoordinatorSessionBindingRecordSchema.parse(rawBinding)
-    let snapshot = await this.settings.read()
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const state = parseState(snapshot)
-      const existing = state.coordinatorSessionBindings.find((candidate) => (
-        candidate.runtimeId === binding.runtimeId &&
-        candidate.threadId === binding.threadId
-      ))
-      if (existing) {
-        if (
-          existing.projectId !== binding.projectId ||
-          existing.principalUserId !== binding.principalUserId ||
-          existing.coordinatorAgentId !== binding.coordinatorAgentId ||
-          existing.coordinatorAuthorityEpoch !== binding.coordinatorAuthorityEpoch
-        ) {
-          throw new Error('The ordinary Session is already bound to different Project authority.')
-        }
-        return existing
-      }
-      const value = projectCoordinatorStateSchema.parse({
-        ...state,
-        coordinatorSessionBindings: [...state.coordinatorSessionBindings, binding]
-      })
-      try {
-        await this.settings.write(value, snapshot.revision)
-        return binding
-      } catch (error) {
-        if (attempt >= 2) throw error
-        snapshot = await this.settings.read()
-      }
-    }
-    throw new Error('Unable to persist the ordinary Coordinator Session binding.')
-  }
-
-  /**
-   * Commits the canonical create receipt and its ordinary Coordinator Session
-   * binding in one package-settings CAS. There is no durable state where the
-   * intent is terminal but the exact Session is still unbound.
-   */
-  async bindCoordinatorSessionForCreatedProject(
-    rawInput: ProjectCoordinatorProjectCreateInput,
-    rawBinding: ProjectCoordinatorCoordinatorSessionBindingRecord
-  ): Promise<ProjectCoordinatorCoordinatorSessionBindingRecord> {
-    const input = projectCoordinatorProjectCreateInputSchema.parse(rawInput)
-    const binding = projectCoordinatorCoordinatorSessionBindingRecordSchema.parse(rawBinding)
-    const commandDigest = projectCreateCommandDigest(input)
     let snapshot = await this.settings.read()
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const state = parseState(snapshot)
@@ -218,13 +212,25 @@ export class ProjectCoordinatorStateStore {
       ))
       if (
         !intent ||
-        intent.principalUserId !== binding.principalUserId ||
+        intent.principalUserId !== owner ||
         intent.commandDigest !== commandDigest
       ) {
         throw new Error('Coordinator Session binding does not match its durable Project create intent.')
       }
       if (intent.createdProjectId !== null && intent.createdProjectId !== binding.projectId) {
         throw new Error('Project create intent resolved to a different Cloud Project.')
+      }
+      if (
+        intent.state === 'succeeded' &&
+        intent.createdProjectId &&
+        intent.coordinatorSession &&
+        intent.activationRequestId
+      ) {
+        return Object.freeze({
+          projectId: intent.createdProjectId,
+          coordinatorSession: intent.coordinatorSession,
+          activationRequestId: intent.activationRequestId
+        })
       }
       const existing = state.coordinatorSessionBindings.find((candidate) => (
         candidate.runtimeId === binding.runtimeId && candidate.threadId === binding.threadId
@@ -237,7 +243,22 @@ export class ProjectCoordinatorStateStore {
       )) {
         throw new Error('The ordinary Session is already bound to different Project authority.')
       }
-      if (existing && intent.state === 'succeeded') return existing
+      const authorityBinding = state.coordinatorSessionBindings.find((candidate) => (
+        candidate.projectId === binding.projectId &&
+        candidate.coordinatorAuthorityEpoch === binding.coordinatorAuthorityEpoch
+      ))
+      if (authorityBinding && (
+        authorityBinding.runtimeId !== binding.runtimeId ||
+        authorityBinding.threadId !== binding.threadId
+      )) {
+        throw new Error('The Project authority already has a Coordinator Session binding.')
+      }
+      const activationConflict = state.pendingProjectActivations.find((candidate) => (
+        candidate.activationRequestId === activation.activationRequestId
+      ))
+      if (activationConflict && JSON.stringify(activationConflict) !== JSON.stringify(activation)) {
+        throw new Error('Project activation request identity conflict.')
+      }
       const value = projectCoordinatorStateSchema.parse({
         ...state,
         coordinatorSessionBindings: existing
@@ -245,19 +266,70 @@ export class ProjectCoordinatorStateStore {
           : [...state.coordinatorSessionBindings, binding],
         projectCreateIntents: state.projectCreateIntents.map((candidate) => (
           candidate.createIntentId === input.createIntentId
-            ? { ...candidate, state: 'succeeded', createdProjectId: binding.projectId }
+            ? {
+                ...candidate,
+                state: 'succeeded',
+                createdProjectId: binding.projectId,
+                coordinatorSession: activation.coordinatorSession,
+                activationRequestId: activation.activationRequestId
+              }
             : candidate
-        ))
+        )),
+        pendingProjectActivations: activationConflict
+          ? state.pendingProjectActivations
+          : [...state.pendingProjectActivations, activation]
       })
       try {
         await this.settings.write(value, snapshot.revision)
-        return existing ?? binding
+        return Object.freeze({
+          projectId: binding.projectId,
+          coordinatorSession: activation.coordinatorSession,
+          activationRequestId: activation.activationRequestId
+        })
       } catch (error) {
         if (attempt >= 2) throw error
         snapshot = await this.settings.read()
       }
     }
-    throw new Error('Unable to atomically bind the created Project Session.')
+    throw new Error('Unable to atomically commit the created Project Session.')
+  }
+
+  async acknowledgeProjectActivation(
+    principalUserId: string,
+    rawActivationRequestId: string
+  ): Promise<void> {
+    const owner = userIdSchema.parse(principalUserId)
+    const activationRequestId = projectCoordinatorActivationRequestIdSchema.parse(
+      rawActivationRequestId
+    )
+    let snapshot = await this.settings.read()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const state = parseState(snapshot)
+      const intent = state.projectCreateIntents.find((candidate) => (
+        candidate.activationRequestId === activationRequestId
+      ))
+      if (!intent) throw new Error('Project activation request is unknown.')
+      if (intent.principalUserId !== owner) {
+        throw new Error('Project activation request belongs to a different Principal.')
+      }
+      if (!state.pendingProjectActivations.some((candidate) => (
+        candidate.activationRequestId === activationRequestId
+      ))) return
+      const value = projectCoordinatorStateSchema.parse({
+        ...state,
+        pendingProjectActivations: state.pendingProjectActivations.filter((candidate) => (
+          candidate.activationRequestId !== activationRequestId
+        ))
+      })
+      try {
+        await this.settings.write(value, snapshot.revision)
+        return
+      } catch (error) {
+        if (attempt >= 2) throw error
+        snapshot = await this.settings.read()
+      }
+    }
+    throw new Error('Unable to acknowledge the Project activation request.')
   }
 
   async writeDraft(
@@ -387,9 +459,17 @@ export class ProjectCoordinatorStateStore {
 }
 
 function parseState(snapshot: DomainMainPackageSettingsSnapshot): ProjectCoordinatorState {
-  return snapshot.value === null
-    ? EMPTY_STATE
-    : projectCoordinatorStateSchema.parse(snapshot.value)
+  if (snapshot.value === null) return EMPTY_STATE
+  if (
+    typeof snapshot.value !== 'object' ||
+    Array.isArray(snapshot.value) ||
+    snapshot.value.schemaVersion !== 3
+  ) {
+    throw new Error(
+      'Project Coordinator local state is not schema version 3; clear the obsolete local state before reconnecting to Cloud.'
+    )
+  }
+  return projectCoordinatorStateSchema.parse(snapshot.value)
 }
 
 function projectCreateCommandDigest(input: ProjectCoordinatorProjectCreateInput): string {

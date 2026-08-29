@@ -6,17 +6,58 @@ import {
   domainExternalNavigationIssueTargetInputSchema
 } from './external-navigation.js'
 import {
+  domainFileTransferLabelSchema,
   domainRendererDownloadSelectionSchema,
   domainRendererPickDownloadDestinationInputSchema,
   domainRendererPickUploadSourceInputSchema,
   domainSystemWorkspaceTransferAuthorizationSchema,
-  domainRendererUploadSelectionSchema
+  domainRendererUploadSelectionSchema,
+  domainWorkspaceRelativePathSchema,
+  portableWorkspacePathComparisonKey
 } from './file-transfer.js'
 
 const transferHandle = `xfer_${'a'.repeat(32)}`
 const portalHandle = `portal_${'b'.repeat(32)}`
 
 describe('Host-owned resource grant contracts', () => {
+  it('rejects Workspace names that cannot be materialized portably', () => {
+    for (const fileName of [
+      'CON',
+      'nul.txt',
+      'report?.md',
+      'report:.md',
+      'report*.md',
+      'report".md',
+      'report<.md',
+      'report>.md',
+      'report|.md',
+      'trailing.',
+      'trailing '
+    ]) {
+      assert.equal(domainFileTransferLabelSchema.safeParse(fileName).success, false, fileName)
+      assert.equal(
+        domainWorkspaceRelativePathSchema.safeParse(`inputs/${fileName}`).success,
+        false,
+        fileName
+      )
+    }
+    assert.equal(
+      domainWorkspaceRelativePathSchema.safeParse('inputs/analysis.v1.md').success,
+      true
+    )
+  })
+
+  it('folds known macOS filesystem aliases to one portable comparison key', () => {
+    assert.equal(
+      portableWorkspacePathComparisonKey('σ.txt'),
+      portableWorkspacePathComparisonKey('ς.txt')
+    )
+    assert.equal(
+      portableWorkspacePathComparisonKey('ß.txt'),
+      portableWorkspacePathComparisonKey('ss.txt')
+    )
+  })
+
   it('bounds renderer picker requests to one safe file name and byte limit', () => {
     assert.deepEqual(domainRendererPickUploadSourceInputSchema.parse({
       title: 'Choose a file',

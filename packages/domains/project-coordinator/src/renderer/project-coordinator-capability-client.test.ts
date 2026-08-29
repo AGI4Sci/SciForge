@@ -16,7 +16,8 @@ test('renderer invocation approvals stay aligned with the main capability defini
   const definitions = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
     defineCapability: (input) => input,
     ports: {} as never,
-    sessions: {} as never
+    sessions: {} as never,
+    projectCreation: {} as never
   }).createDefinitions()
   const invoked: Array<Readonly<{ actionId: string; approval: 'none' | 'confirmation' }>> = []
   const client = createProjectCoordinatorRendererClient({
@@ -35,6 +36,7 @@ test('renderer invocation approvals stay aligned with the main capability defini
 
   await client.readWorkspace(undefined)
   await client.createProject(undefined as never)
+  await client.acknowledgeProjectActivation(undefined as never)
   await client.readSessionProjection()
   await client.readPlanDraft(undefined as never)
   await client.generatePlanDraft(undefined as never)
@@ -43,9 +45,9 @@ test('renderer invocation approvals stay aligned with the main capability defini
   await client.confirmPlan(undefined as never)
   await client.prepareWorkflow(undefined as never)
   await client.continueWorkflow(undefined as never)
+  await client.reassignTaskOffer(undefined as never)
   await client.observeAndLinkRecovery(undefined as never)
   await client.abandonRecovery(undefined as never)
-  await client.retryRecoverySuccessor(undefined as never)
   await client.addMember(undefined as never)
   await client.acceptInvitation(undefined as never)
   await client.removeMember(undefined as never)

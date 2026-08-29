@@ -76,7 +76,7 @@ test('renderer client invokes only typed public collaboration capabilities', asy
   await client.updateWorkerAcceptancePolicy({ agentId: 'agent-a', mode: 'automatic' })
   await client.decideTaskOffer({
     taskOfferId: 'offer-task-1',
-    decision: 'dismiss'
+    decision: 'reject'
   })
 
   assert.deepEqual(calls.map((call) => call.actionId === COLLABORATION_CAPABILITY_IDS.endpointChallengePoll
@@ -115,7 +115,7 @@ test('renderer client invokes only typed public collaboration capabilities', asy
       effect: 'external-write',
       input: {
         taskOfferId: 'offer-task-1',
-        decision: 'dismiss'
+        decision: 'reject'
       },
       options: { approval: { mode: 'confirmation' } }
     }

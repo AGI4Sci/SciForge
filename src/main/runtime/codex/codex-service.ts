@@ -3637,6 +3637,7 @@ function isSideOrChildThread(thread: CodexNormalizedThread): boolean {
 const EMPTY_PLACEHOLDER_THREAD_TITLES = new Set(['Codex thread', 'New Thread', 'New chat', '新会话'])
 
 function isEmptyPlaceholderThread(thread: CodexNormalizedThread): boolean {
+  if (thread.sidebarVisibility === 'main') return false
   const title = thread.title.trim()
   if (thread.latestTurnId?.trim()) return false
   if (thread.preview?.trim()) return false

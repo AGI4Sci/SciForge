@@ -92,6 +92,10 @@ export type AgentCloudRuntime = Readonly<{
   rotateAgent(input: AgentCloudRotateInput): Promise<AgentNode>
   revokeAgent(input: AgentCloudRevokeInput): Promise<AgentNode>
   fenceAgent(agentId: string): Promise<void>
+  /**
+   * Returns the exact strict Cloud response, including a business `rest.error`.
+   * Identity, authority, transport, and response-integrity failures still throw.
+   */
   execute(
     input: Readonly<{ agentId: string; request: RestRequest }>,
     options?: Readonly<{ signal?: AbortSignal }>

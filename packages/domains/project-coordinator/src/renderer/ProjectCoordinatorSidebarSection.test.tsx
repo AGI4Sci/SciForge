@@ -168,7 +168,8 @@ test('sidebar projection strips Principal and authority facts before presentatio
       boundAt: '2026-08-28T00:00:00.000Z',
       access: 'coordinator',
       fenceReason: null
-    }]
+    }],
+    pendingActivations: []
   }), [{
     projectId: 'prj_CurrentProject1',
     runtimeId: 'codex',

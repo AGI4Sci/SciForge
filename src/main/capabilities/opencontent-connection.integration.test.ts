@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { inspect } from 'node:util'
 
+import type { ProviderDirectoryPrincipalFact } from '@sciforge/collaboration-contracts'
 import type { DomainMainHost, DomainMainInternalServiceHost } from '@sciforge/domain-sdk/host'
 import { DomainMainProviderCredentialError } from '@sciforge/domain-sdk/package-storage'
 import type {
@@ -11,6 +12,12 @@ import type {
   DomainMainProviderCredentialAccess,
   DomainMainProviderCredentialStoreHost
 } from '@sciforge/domain-sdk/package-storage'
+import {
+  AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
+  AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+  defineAuthenticatedCloudTransport,
+  type AuthenticatedCloudTransport
+} from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import {
   OPENCONTENT_CONNECTION_CAPABILITY_IDS
 } from '@sciforge/domain-opencontent-connector/contract'
@@ -30,6 +37,7 @@ const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo'
 const ACCOUNT_CANARY = 'account-canary-must-not-be-retained@example.test'
 const PASSWORD_CANARY = 'password-canary-must-not-be-retained'
 const SESSION_TOKEN_CANARY = 'session-token-canary-only-for-encrypted-host-storage'
+const CLOUD_DEVICE_REVISION = 11
 
 const principal = Object.freeze({
   authority: 'sciforge.identity-access',
@@ -45,9 +53,9 @@ const otherPrincipal = Object.freeze({
 })
 const cloudPrincipal = Object.freeze({
   authority: 'sciforge-cloud',
-  subject: 'opencontent-cloud-integration-user',
+  subject: 'usr_OpenContentCloudUser01',
   assurance: 'cloud-authenticated' as const,
-  deviceId: 'opencontent-cloud-device',
+  deviceId: 'dev_OpenContentCloudDevice01',
   identityVersion: 9
 })
 
@@ -168,6 +176,7 @@ describe('OpenContent connection through the Host capability Broker', () => {
     harness.setCurrentPrincipal(otherPrincipal)
     const otherStatus = await harness.broker.invoke(caller, {
       actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
+      invocationId: 'opencontent-other-principal-status',
       input: { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF }
     })
     expect(otherStatus.output).toEqual({
@@ -179,6 +188,7 @@ describe('OpenContent connection through the Host capability Broker', () => {
     harness.setCurrentPrincipal(principal)
     const restoredStatus = await harness.broker.invoke(caller, {
       actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
+      invocationId: 'opencontent-principal-restored-status',
       input: { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF }
     })
     expect(restoredStatus.output).toMatchObject({
@@ -211,12 +221,18 @@ describe('OpenContent connection through the Host capability Broker', () => {
 
     const status = await harness.broker.invoke(caller, {
       actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
+      invocationId: 'opencontent-cloud-principal-disconnected-status',
       input: { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF }
     })
 
     expect(status.output).toEqual({
       outcome: 'success',
       status: { state: 'disconnected' }
+    })
+    expect(harness.authenticatedCloudExecute).toHaveBeenCalledOnce()
+    expect(harness.authenticatedCloudExecute.mock.calls[0]?.[0].payload).toMatchObject({
+      type: 'provider_directory_principal.list',
+      userIds: [cloudPrincipal.subject]
     })
     expect(fetchImplementation).not.toHaveBeenCalled()
   })
@@ -237,6 +253,7 @@ describe('OpenContent connection through the Host capability Broker', () => {
     })
     const restored = await harness.broker.invoke(caller, {
       actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
+      invocationId: 'opencontent-cloud-principal-restored-status',
       input: { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF }
     })
 
@@ -254,7 +271,14 @@ describe('OpenContent connection through the Host capability Broker', () => {
         providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
       }
     })
-    expect(fetchImplementation).toHaveBeenCalledTimes(6)
+    const publication = harness.authenticatedCloudExecute.mock.calls
+      .map(([request]) => request.payload)
+      .find((payload) => payload.type === 'provider_directory_principal.publish')
+    expect(publication).toMatchObject({
+      deviceId: cloudPrincipal.deviceId,
+      expectedDeviceRevision: CLOUD_DEVICE_REVISION
+    })
+    expect(fetchImplementation).toHaveBeenCalledTimes(10)
   })
 
   it('returns a bounded secret-free conflict while another sensitive enrollment is active', async () => {
@@ -434,6 +458,14 @@ function createHarness() {
 function createCloudHostStorageHarness() {
   const userDataDir = mkdtempSync(join(tmpdir(), 'sciforge-opencontent-cloud-storage-'))
   temporaryUserDataDirectories.push(userDataDir)
+  const authenticatedCloud = inMemoryAuthenticatedCloudTransport()
+  const internalServices = inMemoryInternalServices()
+  internalServices.register({
+    serviceId: AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+    contractVersion: AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
+    allowedConsumerModuleIds: ['sciforge.opencontent-connector'],
+    service: authenticatedCloud.transport
+  })
   const storage = createDomainPackageStorageFactory({
     userDataDir,
     encryption: Object.freeze({
@@ -461,7 +493,7 @@ function createCloudHostStorageHarness() {
     defineCapability: (options: unknown) => defineCapability(options as never),
     packageSettings: inMemorySettings(),
     packageSecrets,
-    internalServices: inMemoryInternalServices()
+    internalServices
   })
   const entry = createDomainMainEntry(host)
   const factory: unknown = entry.contributions
@@ -474,7 +506,8 @@ function createCloudHostStorageHarness() {
   return Object.freeze({
     broker: new CapabilityBroker(registry, {
       resolveCurrentPrincipal: () => cloudPrincipal
-    })
+    }),
+    authenticatedCloudExecute: authenticatedCloud.execute
   })
 }
 
@@ -593,6 +626,71 @@ function inMemoryProviderCredentials(
     inspect: () => stored === undefined
       ? undefined
       : Object.freeze({ access: structuredClone(stored.access), secret: stored.secret })
+  })
+}
+
+function inMemoryAuthenticatedCloudTransport(): Readonly<{
+  transport: AuthenticatedCloudTransport
+  execute: ReturnType<typeof vi.fn<AuthenticatedCloudTransport['execute']>>
+}> {
+  let currentFact: ProviderDirectoryPrincipalFact | undefined
+  const execute = vi.fn<AuthenticatedCloudTransport['execute']>(async (request) => {
+    const payload = request.payload
+    if (payload.type === 'provider_directory_principal.list') {
+      return {
+        contractVersion: 1,
+        status: 200,
+        body: {
+          protocolVersion: '1.0',
+          type: 'rest.provider_directory_principal_page',
+          requestId: payload.requestId,
+          items: currentFact === undefined ? [] : [currentFact]
+        }
+      }
+    }
+    if (payload.type === 'provider_directory_principal.publish') {
+      currentFact = {
+        schemaVersion: 1,
+        type: 'provider_directory_principal_fact',
+        providerPrincipalFactId:
+          payload.providerPrincipalFactId ?? 'ppf_OpenContentCloudFact01',
+        userId: cloudPrincipal.subject,
+        providerPrincipal: payload.providerPrincipal,
+        principalIdentityRevision: payload.principalIdentityRevision,
+        providerBindingAttestationDigest: payload.providerBindingAttestationDigest,
+        publishedByDeviceId: payload.deviceId,
+        readiness: payload.readiness,
+        readinessReason: payload.readinessReason,
+        observedAt: payload.observedAt,
+        revision: (payload.expectedFactRevision ?? 0) + 1,
+        createdAt: currentFact?.createdAt ?? payload.observedAt,
+        updatedAt: payload.observedAt
+      }
+      return {
+        contractVersion: 1,
+        status: 200,
+        body: {
+          protocolVersion: '1.0',
+          type: 'rest.entity',
+          requestId: payload.requestId,
+          entity: currentFact
+        }
+      }
+    }
+    throw new Error(`Unexpected authenticated Cloud request: ${payload.type}`)
+  })
+  return Object.freeze({
+    transport: defineAuthenticatedCloudTransport({
+      status: () => ({
+        state: 'ready',
+        baseUrl: 'https://cloud.integration.test',
+        userId: cloudPrincipal.subject,
+        deviceId: cloudPrincipal.deviceId,
+        deviceRevision: CLOUD_DEVICE_REVISION
+      }),
+      execute
+    }),
+    execute
   })
 }
 

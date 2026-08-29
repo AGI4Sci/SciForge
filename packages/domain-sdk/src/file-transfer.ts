@@ -1,5 +1,14 @@
 import { z } from 'zod'
 import { domainPackagePermissionIdSchema } from './contract.js'
+import {
+  isPortableWorkspacePathSegment,
+  portableWorkspacePathComparisonKey
+} from './file-transfer-portability.js'
+
+export {
+  isPortableWorkspacePathSegment,
+  portableWorkspacePathComparisonKey
+} from './file-transfer-portability.js'
 
 export const DOMAIN_FILE_TRANSFER_LIMITS = Object.freeze({
   maxBytes: 1_073_741_824,
@@ -22,6 +31,9 @@ export const domainWorkspaceRelativePathSchema = z.string().min(1).max(4_096)
     segment === '' || segment === '.' || segment === '..'
   )), {
     message: 'The Workspace-relative path contains an unsafe segment.'
+  })
+  .refine((value) => value.split(/[\\/]+/u).every(isPortableWorkspacePathSegment), {
+    message: 'The Workspace-relative path contains a non-portable segment.'
   })
   .refine(isControlFreeText, {
     message: 'The Workspace-relative path must not contain control characters.'
@@ -52,8 +64,8 @@ export const domainFileTransferLabelSchema = z.string().min(1)
   .refine((value) => value !== '.' && value !== '..', {
     message: 'The file label must not be a relative path segment.'
   })
-  .refine(isSafeSuggestedFileName, {
-    message: 'The file label must be one safe file name.'
+  .refine(isPortableWorkspacePathSegment, {
+    message: 'The file label must be one portable file name.'
   })
 
 const domainRendererFilePickerTitleSchema = z.string()
@@ -204,15 +216,6 @@ export type DomainMainFileTransferHost = Readonly<{
     signal?: AbortSignal
   }>): Promise<DomainMainDownloadDestination>
 }>
-
-function isSafeSuggestedFileName(value: string): boolean {
-  if (value.includes('/') || value.includes('\\')) return false
-  for (const character of value) {
-    const codePoint = character.codePointAt(0)!
-    if (codePoint <= 0x1f || codePoint === 0x7f) return false
-  }
-  return true
-}
 
 function isControlFreeText(value: string): boolean {
   for (const character of value) {

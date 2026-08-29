@@ -328,7 +328,7 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     case 'projection.message.publish': {
       const device = requiredAgent(actor)
       await service.publishProjectionMessage(device, command)
-      return receiptResponse(command, device)
+      return persistedOperationReceiptResponse(command, device, service)
     }
     case 'provider_directory_principal.publish': return entityResponse(
       command,
@@ -492,6 +492,10 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
       const result = await service.acceptTaskOffer(requiredAgent(actor), command)
       return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
     }
+    case 'task.offer.reject': {
+      const result = await service.rejectTaskOffer(requiredAgent(actor), command)
+      return collectionResponse(command, [toTask(result.task), toTaskOffer(result.offer)])
+    }
     case 'task.offer.withdraw': {
       const result = await service.withdrawTaskOffer(requiredAgent(actor), command)
       return collectionResponse(command, [toTask(result.task), toTaskOffer(result.offer)])
@@ -572,9 +576,9 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
       const inboxActor = requiredInboxActor(actor)
       const acknowledgement = await service.ackInboxMessage(inboxActor, { inboxMessageId: command.inboxMessageId,
         sequence: command.sequence, idempotencyKey: command.idempotencyKey })
+      const persistedReceipt = await requirePersistedReceipt(service, inboxActor, command.idempotencyKey)
       return response(command, { type: 'rest.receipt', receipt: { schemaVersion: 1, type: 'inbox.receipt',
-        receiptId: `rcp_${stableDigest({ actorKey: inboxActor.actorKey,
-          idempotencyKey: command.idempotencyKey }).slice(0, 24)}`, inboxMessageId: acknowledgement.inboxMessageId,
+        receiptId: persistedReceipt.receiptId, inboxMessageId: acknowledgement.inboxMessageId,
         recipientType: inboxActor.kind === 'agent_device' ? 'agent' : 'user', sequence: command.sequence,
         acknowledgedAt: acknowledgement.acknowledgedAt, createdAt: acknowledgement.acknowledgedAt } })
     }
@@ -610,12 +614,31 @@ function entityResponse(command: RestRequest, entity: RestResponse extends never
 function collectionResponse(command: RestRequest, items: unknown[]): RestResponse {
   return response(command, { type: 'rest.collection', items })
 }
-function receiptResponse(command: Extract<RestRequest, { idempotencyKey: string }>, actor: AuthContext): RestResponse {
+async function requirePersistedReceipt(
+  service: CollaborationService,
+  actor: AuthContext,
+  idempotencyKey: string
+) {
+  const receipt = await service.reconcileReceipt(actor, idempotencyKey)
+  if (!receipt) {
+    throw new CollaborationServiceError(
+      'internal_error',
+      'The committed operation receipt could not be read.',
+      { retryable: true }
+    )
+  }
+  return receipt
+}
+async function persistedOperationReceiptResponse(
+  command: Extract<RestRequest, { idempotencyKey: string }>,
+  actor: AuthContext,
+  service: CollaborationService
+): Promise<RestResponse> {
+  const receipt = await requirePersistedReceipt(service, actor, command.idempotencyKey)
   return response(command, { type: 'rest.receipt', receipt: { schemaVersion: 1, type: 'operation.receipt',
-    receiptId: `rcp_${stableDigest({ actorKey: actor.actorKey, idempotencyKey: command.idempotencyKey }).slice(0, 24)}`,
-    actor: contractActor(actor),
-    idempotencyKey: command.idempotencyKey, requestHash: stableDigest(command), status: 'succeeded',
-    resultHash: stableDigest({ accepted: true }), createdAt: new Date().toISOString() } })
+    receiptId: receipt.receiptId, actor: contractActor(actor), idempotencyKey: receipt.idempotencyKey,
+    requestHash: receipt.requestDigest, status: 'succeeded', resultHash: stableDigest(receipt.response),
+    createdAt: receipt.createdAt } })
 }
 
 function contractActor(actor: AuthContext): Record<string, unknown> {

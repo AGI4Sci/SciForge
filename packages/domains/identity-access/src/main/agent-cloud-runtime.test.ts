@@ -3,12 +3,13 @@ import { EventEmitter } from 'node:events'
 import WebSocket from 'ws'
 import { describe, expect, it, vi } from 'vitest'
 
+import { createCollaborationError, type RestRequest } from '@sciforge/collaboration-contracts'
+
 import {
   agentNodeFixture,
   agentEnsuredResponseFixture,
   webSocketMessageFixture
 } from '@sciforge/collaboration-contracts/testing'
-import type { RestRequest } from '@sciforge/collaboration-contracts'
 
 import {
   createIdentityAgentCloudRuntime,
@@ -165,7 +166,8 @@ describe('Identity Agent Cloud runtime', () => {
           state: 'ready' as const,
           baseUrl: 'https://cloud.example.test',
           userId: agentNodeFixture.ownerUserId,
-          deviceId: agentNodeFixture.deviceId
+          deviceId: agentNodeFixture.deviceId,
+          deviceRevision: 1
         }
       }
     }
@@ -270,6 +272,90 @@ describe('Identity Agent Cloud runtime', () => {
     expect(new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).get('authorization'))
       .toBe(`Bearer ${AUTHORITY}`)
     expect(JSON.stringify(fetchImpl.mock.calls[0]?.[1]?.body)).not.toContain(AUTHORITY)
+  })
+
+  it('returns a strict Cloud business rejection through generic Agent execution', async () => {
+    const vault = memoryVault()
+    await seedAuthority(vault)
+    const request = heartbeatRequest('req_000000000000000000000031')
+    const rejection = {
+      protocolVersion: '1.0' as const,
+      type: 'rest.error' as const,
+      requestId: request.requestId,
+      error: createCollaborationError(
+        'expired',
+        'A Task offer expiry must be in the future.',
+        { requestId: request.requestId }
+      )
+    }
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(rejection), {
+      status: 410,
+      headers: { 'content-type': 'application/json' }
+    }))
+    const service = createTestIdentityAgentCloudRuntime({
+      getRuntime: () => runtimeDouble() as never,
+      vault,
+      fetchImpl: fetchImpl as typeof fetch
+    })
+
+    await expect(service.execute({
+      agentId: agentNodeFixture.agentId,
+      request
+    })).resolves.toEqual(rejection)
+  })
+
+  it('keeps bounded Inbox reads on their existing thrown Cloud failure contract', async () => {
+    const vault = memoryVault()
+    await seedAuthority(vault)
+    const fetchImpl = vi.fn(async (_url: URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as RestRequest
+      return new Response(JSON.stringify({
+        protocolVersion: '1.0',
+        type: 'rest.error',
+        requestId: request.requestId,
+        error: createCollaborationError(
+          'authentication_required',
+          'Agent authority is no longer current.',
+          { requestId: request.requestId }
+        )
+      }), { status: 401, headers: { 'content-type': 'application/json' } })
+    })
+    const service = createTestIdentityAgentCloudRuntime({
+      getRuntime: () => runtimeDouble() as never,
+      vault,
+      fetchImpl: fetchImpl as typeof fetch
+    })
+
+    await expect(service.pullAgentInbox({
+      agentId: agentNodeFixture.agentId,
+      afterSequence: 0,
+      limit: 10
+    })).rejects.toMatchObject({
+      code: 'cloud_unavailable',
+      cloudCode: 'authentication_required'
+    })
+  })
+
+  it('rejects a non-error Agent body paired with a failing HTTP status', async () => {
+    const vault = memoryVault()
+    await seedAuthority(vault)
+    const request = heartbeatRequest('req_000000000000000000000032')
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      protocolVersion: '1.0',
+      type: 'rest.entity',
+      requestId: request.requestId,
+      entity: agentNodeFixture
+    }), { status: 400, headers: { 'content-type': 'application/json' } }))
+    const service = createTestIdentityAgentCloudRuntime({
+      getRuntime: () => runtimeDouble() as never,
+      vault,
+      fetchImpl: fetchImpl as typeof fetch
+    })
+
+    await expect(service.execute({
+      agentId: agentNodeFixture.agentId,
+      request
+    })).rejects.toMatchObject({ code: 'cloud_response_invalid' })
   })
 
   it('synchronously fences future work and aborts an in-flight Agent HTTP request', async () => {
@@ -743,14 +829,16 @@ function runtimeDouble(executeAuthenticatedCloud = vi.fn()) {
       state: 'ready' as const,
       baseUrl: 'https://cloud.example.test',
       userId: agentNodeFixture.ownerUserId,
-      deviceId: agentNodeFixture.deviceId
+      deviceId: agentNodeFixture.deviceId,
+      deviceRevision: 1
     }),
     executeAuthenticatedCloud,
     revalidateCurrentDevice: async () => ({
       state: 'ready' as const,
       baseUrl: 'https://cloud.example.test',
       userId: agentNodeFixture.ownerUserId,
-      deviceId: agentNodeFixture.deviceId
+      deviceId: agentNodeFixture.deviceId,
+      deviceRevision: 1
     })
   }
 }

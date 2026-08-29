@@ -163,6 +163,13 @@ export function createProjectCoordinatorNavigationSectionContribution(
           sessionId: context.session.id,
           payload: { projectId, view }
         })}
+        onActivateProject={(projectId, sessionId) => {
+          context.selectSession(sessionId)
+          openCommand.execute({
+            sessionId,
+            payload: { projectId, view: 'overview' }
+          })
+        }}
       />
     )
   })

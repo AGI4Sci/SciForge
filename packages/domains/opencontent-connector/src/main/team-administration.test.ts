@@ -533,13 +533,12 @@ describe('OpenContent Team administration transport', () => {
             pageSize: 2,
             totalCount: 3,
             teamUser: [{
-              identityId: 9000042,
+              userId: 9000042,
               userType: 1,
-              displayName: 'Creator'
+              userName: 'Creator'
             }, {
-              identityId: 9000041,
-              userType: 3,
-              displayName: 'Member A'
+              userId: 9000041,
+              userType: 3
             }]
           }
         })
@@ -565,8 +564,7 @@ describe('OpenContent Team administration transport', () => {
       totalCount: 3,
       users: [{ identityId: 9000042, userType: 1, displayName: 'Creator' }, {
         identityId: 9000041,
-        userType: 3,
-        displayName: 'Member A'
+        userType: 3
       }],
       nextPage: 2
     })
@@ -602,6 +600,46 @@ describe('OpenContent Team administration transport', () => {
     }])
   })
 
+  it('normalizes the canonical live Team-user response into the public member DTO', async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      result: 0,
+      msg: '',
+      data: {
+        perm: true,
+        creatorName: 'test8',
+        teamUser: [{
+          teamId: 9000019,
+          teamIconTimestamp: '',
+          userId: 9000042,
+          userName: 'test8',
+          userType: 1,
+          userAddTime: '2026-08-29 10:00:00',
+          userStatus: 1,
+          userRole: 1,
+          userAccount: 'test8',
+          canGetUserIcon: true
+        }]
+      }
+    }))
+    const administration = createOpenContentTeamAdministration({
+      baseUrl: 'https://opencontent.invalid',
+      fetch
+    })
+
+    await expect(administration.listTeamUsers({
+      token,
+      teamId: openContentTeamIdSchema.parse(9000019),
+      pageNumber: 1,
+      pageSize: 100
+    })).resolves.toEqual({
+      pageNumber: 1,
+      pageSize: 100,
+      totalCount: 1,
+      users: [{ identityId: 9000042, userType: 1, displayName: 'test8' }]
+    })
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
   it('classifies SaveTeamUserList cancellation after dispatch as outcome_unknown', async () => {
     const controller = new AbortController()
     const fetch = abortAfterDispatch(controller)
@@ -627,7 +665,7 @@ describe('OpenContent Team administration transport', () => {
         pageNum: 1,
         pageSize: 2,
         totalCount: 3,
-        teamUser: [{ identityId: 9000042, userType: 1 }]
+        teamUser: [{ userId: 9000042, userType: 1, userName: 'Creator' }]
       }
     }))
     const administration = createOpenContentTeamAdministration({
@@ -651,9 +689,10 @@ describe('OpenContent Team administration transport', () => {
       data: {
         creatorName: 'Synthetic Owner',
         perm: true,
-        teamUser: [{ identityId: 9000042, userType: 1 }, {
-          identityId: 9000041,
-          userType: 3
+        teamUser: [{ userId: 9000042, userType: 1, userName: 'Creator' }, {
+          userId: 9000041,
+          userType: 3,
+          userName: 'Member A'
         }]
       }
     }))
@@ -676,7 +715,7 @@ describe('OpenContent Team administration transport', () => {
       result: 0,
       msg: '',
       data: {
-        teamUser: [{ identityId: 9000041, userType: 3 }]
+        teamUser: [{ userId: 9000041, userType: 3, userName: 'Member A' }]
       }
     }))
     const administration = createOpenContentTeamAdministration({
@@ -700,7 +739,7 @@ describe('OpenContent Team administration transport', () => {
         result: 0,
         msg: '',
         data: {
-          [collectionKey]: [{ identityId: 9000042, userType: 1 }]
+          [collectionKey]: [{ userId: 9000042, userType: 1, userName: 'Creator' }]
         }
       }))
       const administration = createOpenContentTeamAdministration({
@@ -724,9 +763,10 @@ describe('OpenContent Team administration transport', () => {
       msg: '',
       data: {
         total: 2,
-        teamUser: [{ identityId: 9000042, userType: 1 }, {
-          identityId: 9000041,
-          userType: 3
+        teamUser: [{ userId: 9000042, userType: 1, userName: 'Creator' }, {
+          userId: 9000041,
+          userType: 3,
+          userName: 'Member A'
         }]
       }
     }))
@@ -744,44 +784,31 @@ describe('OpenContent Team administration transport', () => {
     expect(fetch).toHaveBeenCalledOnce()
   })
 
-  it.each([
-    ['userIdentityId', { userIdentityId: 9000042, userType: 1 }],
-    ['userId', { userId: 9000042, userType: 1 }],
-    ['conflicting identity alias', {
-      identityId: 9000042,
-      userIdentityId: 9000041,
-      userType: 1
-    }],
-    ['name', { identityId: 9000042, userType: 1, name: 'Alias' }],
-    ['userName', { identityId: 9000042, userType: 1, userName: 'Alias' }],
-    ['account', { identityId: 9000042, userType: 1, account: 'alias-account' }]
-  ] as const)(
-    'rejects the unverified %s Team-member row field',
-    async (_field, row) => {
-      const fetch = vi.fn(async () => jsonResponse({
-        result: 0,
-        msg: '',
-        data: {
-          pageNum: 1,
-          pageSize: 2,
-          totalCount: 1,
-          teamUser: [row]
-        }
-      }))
-      const administration = createOpenContentTeamAdministration({
-        baseUrl: 'https://opencontent.invalid',
-        fetch
-      })
+  it('does not accept the public identityId field in place of the Provider userId', async () => {
+    const row = { identityId: 9000042, userType: 1, userName: 'Alias' }
+    const fetch = vi.fn(async () => jsonResponse({
+      result: 0,
+      msg: '',
+      data: {
+        pageNum: 1,
+        pageSize: 2,
+        totalCount: 1,
+        teamUser: [row]
+      }
+    }))
+    const administration = createOpenContentTeamAdministration({
+      baseUrl: 'https://opencontent.invalid',
+      fetch
+    })
 
-      await expect(administration.listTeamUsers({
-        token,
-        teamId: openContentTeamIdSchema.parse(9000019),
-        pageNumber: 1,
-        pageSize: 2
-      })).rejects.toMatchObject({ code: 'provider_contract_violation' })
-      expect(fetch).toHaveBeenCalledOnce()
-    }
-  )
+    await expect(administration.listTeamUsers({
+      token,
+      teamId: openContentTeamIdSchema.parse(9000019),
+      pageNumber: 1,
+      pageSize: 2
+    })).rejects.toMatchObject({ code: 'provider_contract_violation' })
+    expect(fetch).toHaveBeenCalledOnce()
+  })
 
   it('resolves a Team root only when the folder readback belongs to that Team', async () => {
     const fetch = vi.fn()

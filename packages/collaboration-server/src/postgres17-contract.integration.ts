@@ -15,7 +15,8 @@ if (!connectionString || !expectedSource) {
 }
 if (![
   'fresh-v4', 'upstream-v4', 'public-v5', 'staging-v9', 'a-v11', 'current-v12',
-  'current-v13', 'current-v14', 'current-v15', 'current-v16', 'current-v17', 'current-v18'
+  'current-v13', 'current-v14', 'current-v15', 'current-v16', 'current-v17', 'current-v18',
+  'current-v19'
 ].includes(expectedSource)) {
   throw new Error('SCIFORGE_A_POSTGRES17_SOURCE names an unsupported forward-upgrade source')
 }
@@ -157,7 +158,7 @@ try {
     await tx.insertTaskOffer({
       taskOfferId: 'ofr_PgOffer000001', executionId, taskId, projectId, workerUserId,
       offeredByCoordinatorAgentId: coordinatorId,
-      state: 'accepted', offeredAt: at, expiresAt, respondedAt: at,
+      state: 'accepted', reassignmentTaskRevision: null, offeredAt: at, expiresAt, respondedAt: at,
       revision: 1, createdAt: at, updatedAt: at
     })
     await tx.updateTask({
@@ -188,7 +189,9 @@ try {
 
   assert.equal((await repository.getProject(projectId))?.executionAuthorityEpoch, 2)
   assert.equal((await repository.getTaskExecution(executionId))?.assigneeDeviceId, workerDeviceId)
-  assert.equal((await repository.listTaskOffers(executionId)).length, 1)
+  const taskOffers = await repository.listTaskOffers(executionId)
+  assert.equal(taskOffers.length, 1)
+  assert.equal(taskOffers[0]?.reassignmentTaskRevision, null)
   assert.deepEqual((await repository.listTaskAuthorities(projectId)).map(({ scope }) => scope).sort(),
     ['file_tasks', 'text_tasks'])
   assert.equal((await repository.getExternalOperationJournalById('crj_PgRecovery0001'))
@@ -208,7 +211,7 @@ try {
   assert.equal((await repository.listHumanRequestsByProject(projectId, 'pending', null, 2)).length, 0)
   assert.equal((await repository.listTaskResultSubmissionsByProject(projectId, null, 2)).length, 0)
   assert.equal((await repository.listTaskResultReviewsByProject(projectId, null, 2)).length, 0)
-  assertions += 16
+  assertions += 17
 
   const currentForDevice = await repository.transaction((tx) => (
     tx.listCurrentTaskExecutionsForDeviceForUpdate(workerDeviceId)
@@ -251,6 +254,6 @@ async function sourceRoute(): Promise<string> {
   if (version === 9 && row.managed === true && row.oidc === true && row.legacy_refs === true) return 'staging-v9'
   if (version === 11) return 'a-v11'
   if (version === 12) return 'current-v12'
-  if (version >= 13 && version <= 18) return `current-v${version}`
+  if (version >= 13 && version <= 19) return `current-v${version}`
   return `unsupported-${String(version)}`
 }

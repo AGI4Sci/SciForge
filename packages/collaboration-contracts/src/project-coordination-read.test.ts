@@ -386,6 +386,7 @@ describe('Project Coordinator authoritative read protocol', () => {
       workerUserId: TEST_IDS.secondUserId,
       offeredByCoordinatorAgentId: TEST_IDS.agentId,
       state: 'accepted',
+      reassignmentTaskRevision: null,
       offeredAt: TEST_TIMESTAMP,
       expiresAt: TEST_LATER_TIMESTAMP,
       respondedAt: TEST_TIMESTAMP,

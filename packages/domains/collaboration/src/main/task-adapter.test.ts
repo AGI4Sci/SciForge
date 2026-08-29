@@ -4,7 +4,10 @@ import { test } from 'node:test'
 import {
   agentInboxMessageSchema,
   cloudResourceRefSchema,
+  createCollaborationError,
   externalOperationRecoveryJournalEntrySchema,
+  restRequestSchema,
+  restResponseSchema,
   taskOfferSchema,
   taskExecutionPreflightSchema,
   taskExecutionSchema,
@@ -32,13 +35,14 @@ import {
   CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT
 } from '@sciforge/domain-content-space/contract'
 import type { CollaborationConnection } from './connection.js'
-import type { DurableCloudOutbox } from './outbox.js'
+import { DurableCloudOutbox } from './outbox.js'
 import {
   CollaborationLocalStore,
   type CollaborationLocalState,
   type CollaborationStateBackend
 } from './store.js'
 import { CollaborationTaskAdapter } from './task-adapter.js'
+import { createTestAgentCloudRuntime } from './test-agent-cloud-runtime.js'
 
 const OFFER_ID = 'ofr_Offer0000001'
 const SUPERSEDING_EXECUTION_ID = 'exe_Exec00000002'
@@ -87,6 +91,82 @@ test('duplicate User offers persist once and a Device dismissal remains local', 
   assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [])
   assert.equal(store.snapshot().pendingTaskOffers[0]?.state, 'dismissed')
   assert.equal(store.snapshot().taskRuns.length, 0)
+})
+
+test('manual rejection closes the User offer globally at the exact Task and Offer revisions', async () => {
+  const cloud = new FakeWorkerCloud()
+  const { adapter, store } = await createRunner(cloud)
+
+  await adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await adapter.waitForIdle()
+  await adapter.decideOffer(OFFER_ID, { decision: 'reject' })
+  await adapter.waitForIdle()
+
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.offer.reject'
+  ])
+  const rejection = cloud.requests.find((request) => request.type === 'task.offer.reject')
+  assert.deepEqual(rejection && 'expectedTaskRevision' in rejection ? {
+    taskOfferId: rejection.taskOfferId,
+    taskId: rejection.taskId,
+    expectedTaskRevision: rejection.expectedTaskRevision,
+    expectedOfferRevision: rejection.expectedOfferRevision
+  } : null, {
+    taskOfferId: OFFER_ID,
+    taskId: TEST_IDS.taskId,
+    expectedTaskRevision: 1,
+    expectedOfferRevision: 1
+  })
+  const rejected = store.snapshot().pendingTaskOffers[0]
+  assert.deepEqual(rejected ? {
+    state: rejected.state,
+    currentTaskRevision: rejected.currentTaskRevision,
+    offerRevision: rejected.offerRevision,
+    error: rejected.error
+  } : null, {
+    state: 'closed',
+    currentTaskRevision: 2,
+    offerRevision: 2,
+    error: 'The Worker User rejected the Task offer.'
+  })
+  assert.equal(cloud.offer.reassignmentTaskRevision, 2)
+})
+
+test('a rejected offer fanout closes the same User offer on another Device', async () => {
+  const cloud = new FakeWorkerCloud()
+  const { adapter, store } = await createRunner(cloud)
+
+  await adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await adapter.waitForIdle()
+  const message = agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    inboxMessageId: 'ibx_OfferRejectedFanout1',
+    sequence: 2,
+    payload: {
+      protocolVersion: '1.0',
+      type: 'task.offer.closed',
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      taskOfferId: OFFER_ID,
+      audience: 'worker',
+      outcome: 'rejected',
+      taskRevision: 2,
+      offerRevision: 2
+    }
+  })
+
+  await adapter.handleInbox(message)
+  await adapter.handleInbox(agentInboxMessageSchema.parse({
+    ...message,
+    inboxMessageId: 'ibx_OfferRejectedFanout2',
+    sequence: 3
+  }))
+
+  assert.equal(store.snapshot().pendingTaskOffers[0]?.state, 'closed')
+  assert.equal(store.snapshot().pendingTaskOffers[0]?.currentTaskRevision, 2)
+  assert.equal(store.snapshot().pendingTaskOffers[0]?.offerRevision, 2)
+  assert.equal(store.snapshot().pendingTaskOffers[0]?.error, 'The Worker User rejected the Task offer.')
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [])
 })
 
 test('manual acceptance uses the same Device preflight and leaves an unavailable offer unclaimed', async () => {
@@ -1013,6 +1093,534 @@ test('restart after accept starts and completes the same execution without accep
   assert.equal(created.store.snapshot().taskRuns[0]?.state, 'completed')
 })
 
+test('a response lost after the Cloud offer claim resumes its durable receipt into the original execution', async () => {
+  const cloud = new FakeWorkerCloud()
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  const backend = new MemoryBackend(initial)
+  const acceptedRequests: RestRequest[] = []
+  let acceptedResponse: RestResponse | undefined
+  let acceptAttempts = 0
+  let businessCommits = 0
+  let loseFirstResponse = true
+  const outboxFactory = (store: CollaborationLocalStore) => new DurableCloudOutbox({
+    store,
+    agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: async (agentId) => ({
+        state: 'ready',
+        agentId,
+        userId: agentNodeFixture.ownerUserId,
+        deviceId: agentNodeFixture.deviceId!,
+        generation: agentNodeFixture.credentialVersion,
+        runtimeId: 'codex',
+        capabilityTags: ['agent-runtime.codex', 'model-access.api']
+      }),
+      execute: async (_agentId, request) => {
+        if (request.type === 'worker.availability.publish') {
+          return entityResponse(request, agentNodeFixture)
+        }
+        if (request.type !== 'task.offer.accept') {
+          return cloud.outbox().enqueueAndWait('task.progress', request)
+        }
+        acceptAttempts += 1
+        acceptedRequests.push(structuredClone(request))
+        if (!acceptedResponse) {
+          acceptedResponse = await cloud.outbox().enqueueAndWait('task.offer-decision', request)
+          businessCommits += 1
+        }
+        if (loseFirstResponse) {
+          loseFirstResponse = false
+          throw new Error('response lost after canonical Cloud claim commit')
+        }
+        return acceptedResponse
+      }
+    }),
+    localAgentId: () => TEST_IDS.agentId,
+    now: () => new Date(TEST_TIMESTAMP)
+  })
+  const interrupted = await createRunner(
+    cloud,
+    neverAgent(),
+    initial,
+    noContentCapabilities(),
+    backend,
+    outboxFactory
+  )
+
+  await interrupted.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await interrupted.adapter.waitForIdle()
+
+  assert.equal(interrupted.store.snapshot().pendingTaskOffers[0]?.state, 'claiming')
+  assert.equal(interrupted.store.snapshot().taskRuns.length, 0)
+  assert.equal(interrupted.store.snapshot().outbox[0]?.state, 'failed')
+  assert.equal(acceptAttempts, 1)
+  assert.equal(businessCommits, 1)
+  await interrupted.adapter.handleInbox(agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    inboxMessageId: 'ibx_SelfClaimAfterLostResponse1',
+    sequence: 2,
+    payload: {
+      protocolVersion: '1.0',
+      type: 'task.offer.claimed',
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      taskOfferId: OFFER_ID,
+      claimedByAgentId: TEST_IDS.agentId,
+      executionId: TEST_IDS.executionId,
+      offerRevision: 2
+    }
+  }))
+  assert.equal(interrupted.store.snapshot().pendingTaskOffers[0]?.state, 'claiming')
+  interrupted.adapter.stop()
+  interrupted.outbox.stop()
+
+  let agentRuns = 0
+  const resumed = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => {
+      agentRuns += 1
+      return {
+        runtimeId: 'codex',
+        threadId: 'worker-claim-response-loss-thread',
+        turnId: 'worker-claim-response-loss-turn',
+        state: 'completed',
+        text: JSON.stringify({
+          schemaVersion: 1,
+          outcome: 'completed',
+          summary: 'Recovered the original accepted execution.'
+        })
+      }
+    }
+  }, initial, noContentCapabilities(), backend, outboxFactory)
+
+  await resumed.adapter.recover()
+  await resumed.adapter.waitForIdle()
+  await resumed.outbox.waitForIdle()
+
+  assert.equal(acceptAttempts, 2)
+  assert.equal(businessCommits, 1)
+  assert.deepEqual(acceptedRequests[1], acceptedRequests[0])
+  assert.equal(agentRuns, 1)
+  assert.equal(resumed.store.snapshot().pendingTaskOffers.length, 0)
+  assert.equal(resumed.store.snapshot().taskRuns.length, 1)
+  assert.equal(resumed.store.snapshot().taskRuns[0]?.offer.executionId, TEST_IDS.executionId)
+  assert.equal(resumed.store.snapshot().taskRuns[0]?.state, 'completed')
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.offer.accept',
+    'task.execution.start',
+    'task.result.submit'
+  ])
+})
+
+test('an offer claim remains resumable when its outbox retry is already reconciling', async () => {
+  const cloud = new FakeWorkerCloud()
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  const outboxFactory = (store: CollaborationLocalStore) => ({
+    enqueueAndWait: async (kind: string, rawRequest: RestRequest): Promise<RestResponse> => {
+      const request = restRequestSchema.parse(rawRequest)
+      assert.equal(kind, 'task.offer-decision')
+      assert.equal(request.type, 'task.offer.accept')
+      if (request.type !== 'task.offer.accept') throw new Error('Invalid claim race fixture.')
+      await store.transact((draft) => {
+        draft.outbox.push({
+          outboxId: 'obx_WorkerClaimReconciling1',
+          idempotencyKey: request.idempotencyKey,
+          kind: 'task.offer-decision',
+          body: request,
+          state: 'reconciling',
+          attempts: 1,
+          createdAt: TEST_TIMESTAMP,
+          updatedAt: TEST_LATER_TIMESTAMP
+        })
+      })
+      throw new Error('response outcome is still being reconciled')
+    }
+  }) as unknown as DurableCloudOutbox
+  const created = await createRunner(
+    cloud,
+    neverAgent(),
+    initial,
+    noContentCapabilities(),
+    new MemoryBackend(initial),
+    outboxFactory
+  )
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+
+  assert.equal(created.store.snapshot().outbox[0]?.state, 'reconciling')
+  assert.equal(created.store.snapshot().pendingTaskOffers[0]?.state, 'claiming')
+  assert.equal(created.store.snapshot().taskRuns.length, 0)
+})
+
+test('a strict Cloud offer-claim conflict is terminal locally and is not retried', async () => {
+  const cloud = new FakeWorkerCloud()
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  let claimAttempts = 0
+  const outboxFactory = (store: CollaborationLocalStore) => new DurableCloudOutbox({
+    store,
+    agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: async (agentId) => ({
+        state: 'ready',
+        agentId,
+        userId: agentNodeFixture.ownerUserId,
+        deviceId: agentNodeFixture.deviceId!,
+        generation: agentNodeFixture.credentialVersion,
+        runtimeId: 'codex',
+        capabilityTags: ['agent-runtime.codex', 'model-access.api']
+      }),
+      execute: async (_agentId, request) => {
+        assert.equal(request.type, 'task.offer.accept')
+        claimAttempts += 1
+        return restResponseSchema.parse({
+          protocolVersion: '1.0',
+          type: 'rest.error',
+          requestId: request.requestId,
+          error: createCollaborationError(
+            'revision_conflict',
+            'Another Device already claimed this User offer.'
+          )
+        })
+      }
+    }),
+    localAgentId: () => TEST_IDS.agentId,
+    now: () => new Date(TEST_TIMESTAMP)
+  })
+  const created = await createRunner(
+    cloud,
+    neverAgent(),
+    initial,
+    noContentCapabilities(),
+    new MemoryBackend(initial),
+    outboxFactory
+  )
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+  await created.adapter.recover()
+  await created.adapter.waitForIdle()
+
+  assert.equal(claimAttempts, 1)
+  assert.equal(created.store.snapshot().pendingTaskOffers[0]?.state, 'failed')
+  assert.equal(created.store.snapshot().taskRuns.length, 0)
+  assert.equal(created.store.snapshot().outbox[0]?.state, 'delivered')
+})
+
+test('restart after a durable offer claim receipt persists and runs the same Cloud execution', async () => {
+  const cloud = new FakeWorkerCloud()
+  const offeredTask = structuredClone(cloud.task)
+  const requestFacts = {
+    taskOfferId: OFFER_ID,
+    taskId: TEST_IDS.taskId,
+    expectedTaskRevision: 1,
+    expectedOfferRevision: 1
+  }
+  const claimRequest = restRequestSchema.parse({
+    protocolVersion: '1.0',
+    requestId: 'req_WorkerClaimCrash01',
+    type: 'task.offer.accept',
+    idempotencyKey: `idem_task.offer.accept.${digestFixture(requestFacts).slice(0, 48)}`,
+    ...requestFacts
+  })
+  if (claimRequest.type !== 'task.offer.accept') throw new Error('Invalid claim fixture.')
+  const claimResponse = await cloud.outbox().enqueueAndWait('task.offer-decision', claimRequest)
+  const initial = emptyState()
+  initial.tasks = [offeredTask]
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  initial.pendingTaskOffers = [{
+    projectId: TEST_IDS.projectId,
+    taskId: TEST_IDS.taskId,
+    taskOfferId: OFFER_ID,
+    workerUserId: TEST_IDS.userId,
+    currentTaskRevision: 1,
+    offerRevision: 1,
+    recipientAgentId: TEST_IDS.agentId,
+    receivedAt: TEST_TIMESTAMP,
+    preflightReasons: [],
+    state: 'claiming',
+    updatedAt: TEST_TIMESTAMP,
+    completedAt: null,
+    error: null
+  }]
+  initial.outbox = [{
+    outboxId: 'obx_WorkerClaimCrash01',
+    idempotencyKey: claimRequest.idempotencyKey,
+    kind: 'task.offer-decision',
+    body: claimRequest,
+    state: 'delivered',
+    attempts: 1,
+    createdAt: TEST_TIMESTAMP,
+    updatedAt: TEST_LATER_TIMESTAMP,
+    deliveredAt: TEST_LATER_TIMESTAMP,
+    response: claimResponse
+  }]
+  const backend = new FailOnceTaskRunBackend(initial)
+  const interrupted = await createRunner(cloud, neverAgent(), initial, noContentCapabilities(), backend)
+
+  await interrupted.adapter.recover()
+  await interrupted.adapter.waitForIdle()
+
+  assert.equal(interrupted.store.snapshot().pendingTaskOffers[0]?.state, 'claiming')
+  assert.equal(interrupted.store.snapshot().taskRuns.length, 0)
+  assert.equal(cloud.commands.filter((type) => type === 'task.offer.accept').length, 1)
+  interrupted.adapter.stop()
+
+  let agentRuns = 0
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => {
+      agentRuns += 1
+      return {
+        runtimeId: 'codex',
+        threadId: 'worker-claim-crash-thread',
+        turnId: 'worker-claim-crash-turn',
+        state: 'completed',
+        text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Recovered claim.' })
+      }
+    }
+  }, initial, noContentCapabilities(), backend)
+
+  await created.adapter.recover()
+  await created.adapter.waitForIdle()
+
+  assert.equal(agentRuns, 1)
+  assert.equal(created.store.snapshot().pendingTaskOffers.length, 0)
+  assert.equal(created.store.snapshot().taskRuns.length, 1)
+  assert.equal(created.store.snapshot().taskRuns[0]?.offer.executionId, TEST_IDS.executionId)
+  assert.equal(created.store.snapshot().taskRuns[0]?.state, 'completed')
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.offer.accept',
+    'task.execution.start',
+    'task.result.submit'
+  ])
+})
+
+test('restart after the delivered execution start restores its Cloud timestamp before result submission', async () => {
+  const cloud = new FakeWorkerCloud('accepted')
+  const initial = emptyState()
+  initial.tasks = [cloud.task]
+  initial.taskRuns = [durableTaskRun(cloud, {
+    state: 'accepting',
+    startedAt: null
+  })]
+  const backend = new FailOnceStartedRunBackend(initial)
+  let startBusinessCommits = 0
+  const outboxFactory = (store: CollaborationLocalStore) => new DurableCloudOutbox({
+    store,
+    agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: async (agentId) => ({
+        state: 'ready',
+        agentId,
+        userId: agentNodeFixture.ownerUserId,
+        deviceId: agentNodeFixture.deviceId!,
+        generation: agentNodeFixture.credentialVersion,
+        runtimeId: 'codex',
+        capabilityTags: ['agent-runtime.codex', 'model-access.api']
+      }),
+      execute: async (_agentId, request) => {
+        if (request.type === 'worker.availability.publish') {
+          return entityResponse(request, agentNodeFixture)
+        }
+        if (request.type === 'task.execution.start') startBusinessCommits += 1
+        return cloud.outbox().enqueueAndWait('task.progress', request)
+      }
+    }),
+    localAgentId: () => TEST_IDS.agentId,
+    now: () => new Date(TEST_TIMESTAMP)
+  })
+  const interrupted = await createRunner(
+    cloud,
+    neverAgent(),
+    initial,
+    noContentCapabilities(),
+    backend,
+    outboxFactory
+  )
+
+  await interrupted.adapter.recover()
+  await interrupted.adapter.waitForIdle()
+  await interrupted.outbox.waitForIdle()
+
+  const interruptedRun = interrupted.store.snapshot().taskRuns[0]
+  assert.equal(interruptedRun?.state, 'accepting')
+  assert.equal(interruptedRun?.startedAt, null)
+  assert.equal(startBusinessCommits, 1)
+  assert.equal(interrupted.store.snapshot().outbox.find(({ kind }) => kind === 'task.progress')?.state, 'delivered')
+  interrupted.adapter.stop()
+  interrupted.outbox.stop()
+
+  let agentRuns = 0
+  const resumed = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => {
+      agentRuns += 1
+      return {
+        runtimeId: 'codex',
+        threadId: 'worker-start-checkpoint-thread',
+        turnId: 'worker-start-checkpoint-turn',
+        state: 'completed',
+        text: JSON.stringify({
+          schemaVersion: 1,
+          outcome: 'completed',
+          summary: 'Completed after restoring the Cloud start provenance.'
+        })
+      }
+    }
+  }, initial, noContentCapabilities(), backend, outboxFactory)
+
+  await resumed.adapter.recover()
+  await resumed.adapter.waitForIdle()
+  await resumed.outbox.waitForIdle()
+
+  const startRequest = cloud.requests.find((request) => request.type === 'task.execution.start')
+  const resultRequest = cloud.requests.find((request) => request.type === 'task.result.submit')
+  assert.equal(startRequest?.type, 'task.execution.start')
+  assert.equal(resultRequest?.type, 'task.result.submit')
+  assert.equal(
+    resultRequest?.type === 'task.result.submit' ? resultRequest.runtimeProvenance.startedAt : null,
+    startRequest?.type === 'task.execution.start' ? startRequest.startedAt : null
+  )
+  assert.equal(startBusinessCommits, 1)
+  assert.equal(agentRuns, 1)
+  assert.equal(resumed.store.snapshot().taskRuns.length, 1)
+  assert.equal(resumed.store.snapshot().taskRuns[0]?.state, 'completed')
+  assert.equal(cloud.commands.includes('task.execution.fail'), false)
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.execution.start',
+    'task.result.submit'
+  ])
+})
+
+test('a lost execution-start response replays one receipt and resumes with the original Cloud start provenance', async () => {
+  const cloud = new FakeWorkerCloud('accepted')
+  const initial = emptyState()
+  initial.tasks = [cloud.task]
+  initial.taskRuns = [durableTaskRun(cloud, {
+    state: 'accepting',
+    startedAt: null
+  })]
+  const backend = new MemoryBackend(initial)
+  const startAttempts: RestRequest[] = []
+  let startResponse: RestResponse | undefined
+  let startBusinessCommits = 0
+  let loseFirstResponse = true
+  const outboxFactory = (store: CollaborationLocalStore) => new DurableCloudOutbox({
+    store,
+    agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: async (agentId) => ({
+        state: 'ready',
+        agentId,
+        userId: agentNodeFixture.ownerUserId,
+        deviceId: agentNodeFixture.deviceId!,
+        generation: agentNodeFixture.credentialVersion,
+        runtimeId: 'codex',
+        capabilityTags: ['agent-runtime.codex', 'model-access.api']
+      }),
+      execute: async (_agentId, request) => {
+        if (request.type === 'worker.availability.publish') {
+          return entityResponse(request, agentNodeFixture)
+        }
+        if (request.type !== 'task.execution.start') {
+          return cloud.outbox().enqueueAndWait('task.result', request)
+        }
+        startAttempts.push(structuredClone(request))
+        if (!startResponse) {
+          startResponse = await cloud.outbox().enqueueAndWait('task.progress', request)
+          startBusinessCommits += 1
+        }
+        if (loseFirstResponse) {
+          loseFirstResponse = false
+          throw new Error('response lost after canonical Cloud execution start')
+        }
+        return startResponse
+      }
+    }),
+    localAgentId: () => TEST_IDS.agentId,
+    now: () => new Date(TEST_TIMESTAMP)
+  })
+  const interrupted = await createRunner(
+    cloud,
+    neverAgent(),
+    initial,
+    noContentCapabilities(),
+    backend,
+    outboxFactory
+  )
+
+  await interrupted.adapter.recover()
+  await interrupted.adapter.waitForIdle()
+
+  const failedStart = interrupted.store.snapshot().outbox.find(({ kind }) => kind === 'task.progress')
+  assert.equal(failedStart?.state, 'failed')
+  assert.equal(interrupted.store.snapshot().taskRuns[0]?.startedAt, null)
+  assert.equal(startBusinessCommits, 1)
+  assert.ok(failedStart)
+  await interrupted.outbox.retry(failedStart.idempotencyKey)
+  await interrupted.outbox.waitForIdle()
+  assert.equal(interrupted.store.snapshot().outbox.find(({ kind }) => kind === 'task.progress')?.state, 'delivered')
+  assert.equal(startAttempts.length, 2)
+  assert.deepEqual(startAttempts[1], startAttempts[0])
+  assert.equal(startBusinessCommits, 1)
+  interrupted.adapter.stop()
+  interrupted.outbox.stop()
+
+  let agentRuns = 0
+  const resumed = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => {
+      agentRuns += 1
+      return {
+        runtimeId: 'codex',
+        threadId: 'worker-start-response-loss-thread',
+        turnId: 'worker-start-response-loss-turn',
+        state: 'completed',
+        text: JSON.stringify({
+          schemaVersion: 1,
+          outcome: 'completed',
+          summary: 'Completed after the execution-start response was recovered.'
+        })
+      }
+    }
+  }, initial, noContentCapabilities(), backend, outboxFactory)
+
+  await resumed.adapter.recover()
+  await resumed.adapter.waitForIdle()
+  await resumed.outbox.waitForIdle()
+
+  const resultRequest = cloud.requests.find((request) => request.type === 'task.result.submit')
+  assert.equal(resultRequest?.type, 'task.result.submit')
+  assert.equal(
+    resultRequest?.type === 'task.result.submit' ? resultRequest.runtimeProvenance.startedAt : null,
+    startAttempts[0]?.type === 'task.execution.start' ? startAttempts[0].startedAt : null
+  )
+  assert.equal(startBusinessCommits, 1)
+  assert.equal(agentRuns, 1)
+  assert.equal(resumed.store.snapshot().taskRuns[0]?.state, 'completed')
+  assert.equal(cloud.commands.includes('task.execution.fail'), false)
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.execution.start',
+    'task.result.submit'
+  ])
+})
+
 test('a terminal execution event aborts the active Runtime and journals its fenced late outcome', async () => {
   const cloud = new FakeWorkerCloud()
   const initial = emptyState()
@@ -1132,6 +1740,10 @@ test('membership removal fences the matching recovered execution before Runtime 
 
 test('restart resumes the same dispatched Agent directive instead of creating another execution', async () => {
   const cloud = new FakeWorkerCloud('running')
+  cloud.execution = taskExecutionSchema.parse({
+    ...cloud.execution,
+    startedAt: TEST_TIMESTAMP
+  })
   const stableDirective = 'collab-worker-stable-restart'
   const initial = emptyState()
   initial.workerAcceptancePolicies = [{
@@ -1180,7 +1792,7 @@ test('restart resumes the same dispatched Agent directive instead of creating an
     recoveryJournalEntryIds: [],
     resultSummary: null,
     lateOutcomes: [],
-    startedAt: TEST_TIMESTAMP,
+    startedAt: cloud.execution.startedAt,
     updatedAt: TEST_TIMESTAMP,
     completedAt: null,
     error: null
@@ -1311,15 +1923,18 @@ async function createRunner(
   cloud: FakeWorkerCloud,
   agentExecution: DomainMainAgentExecutionHost = neverAgent(),
   initial: CollaborationLocalState = emptyState(),
-  capabilities: DomainMainSystemCapabilityInvoker = noContentCapabilities()
+  capabilities: DomainMainSystemCapabilityInvoker = noContentCapabilities(),
+  backend: CollaborationStateBackend = new MemoryBackend(initial),
+  outboxFactory?: (store: CollaborationLocalStore) => DurableCloudOutbox
 ) {
-  const store = new CollaborationLocalStore(new MemoryBackend(initial))
+  const store = new CollaborationLocalStore(backend)
   await store.open()
   cloud.store = store
+  const outbox = outboxFactory?.(store) ?? cloud.outbox()
   const adapter = new CollaborationTaskAdapter({
     store,
     connection: cloud.connection(),
-    outbox: cloud.outbox(),
+    outbox,
     agentExecution: {
       ...agentExecution,
       prepareSession: agentExecution.prepareSession ?? (async (request) => ({
@@ -1332,7 +1947,7 @@ async function createRunner(
     workspaceRootForExecution: (executionId) => `/tmp/sciforge-worker-${executionId}`,
     now: () => new Date(TEST_TIMESTAMP)
   })
-  return { adapter, store }
+  return { adapter, store, outbox }
 }
 
 function manualRecoveryFixture(cloud: FakeWorkerCloud) {
@@ -1622,6 +2237,7 @@ class FakeWorkerCloud {
       workerUserId: TEST_IDS.userId,
       offeredByCoordinatorAgentId: TEST_IDS.secondAgentId,
       state: state === 'offered' ? 'pending' : 'accepted',
+      reassignmentTaskRevision: null,
       offeredAt: TEST_TIMESTAMP,
       expiresAt: TEST_LATER_TIMESTAMP,
       respondedAt: state === 'offered' ? null : TEST_TIMESTAMP,
@@ -1772,6 +2388,29 @@ class FakeWorkerCloud {
       enqueueAndWait: async (_kind: string, request: RestRequest): Promise<RestResponse> => {
         this.requests.push(request)
         this.commands.push(request.type)
+        if (request.type === 'task.offer.reject') {
+          assert.equal(request.taskOfferId, this.offer.taskOfferId)
+          assert.equal(request.expectedTaskRevision, this.task.revision)
+          assert.equal(request.expectedOfferRevision, this.offer.revision)
+          this.task = taskSchema.parse({
+            ...this.task,
+            status: 'revision_requested',
+            currentExecutionId: null,
+            currentExecutionState: null,
+            completedAt: null,
+            revision: this.task.revision + 1,
+            updatedAt: TEST_LATER_TIMESTAMP
+          })
+          this.offer = taskOfferSchema.parse({
+            ...this.offer,
+            state: 'rejected',
+            reassignmentTaskRevision: this.task.revision,
+            respondedAt: TEST_LATER_TIMESTAMP,
+            revision: this.offer.revision + 1,
+            updatedAt: TEST_LATER_TIMESTAMP
+          })
+          return collectionResponse(request, [this.task, this.offer])
+        }
         if (request.type === 'task.offer.accept') {
           assert.equal(request.taskOfferId, this.offer.taskOfferId)
           assert.equal(request.expectedTaskRevision, this.task.revision)
@@ -1795,7 +2434,7 @@ class FakeWorkerCloud {
           return collectionResponse(request, [this.task, this.execution, this.offer])
         }
         if (request.type === 'task.execution.start') {
-          this.advance('running')
+          this.advance('running', request.startedAt)
           return collectionResponse(request, [this.task, this.execution])
         }
         if (request.type === 'task.execution.fail') {
@@ -1885,6 +2524,25 @@ class FakeWorkerCloud {
           return collectionResponse(request, [this.task, this.execution, submitted])
         }
         throw new Error(`Unexpected command ${request.type}.`)
+      },
+      resumeAndWait: async (
+        kind: string,
+        idempotencyKey: string,
+        validateRequest: (request: RestRequest) => void
+      ) => {
+        const entry = this.store?.snapshot().outbox.find((candidate) => (
+          candidate.idempotencyKey === idempotencyKey
+        ))
+        if (!entry) return null
+        assert.equal(entry.kind, kind)
+        assert.equal(entry.state, 'delivered')
+        assert.ok(entry.response)
+        const request = restRequestSchema.parse(entry.body)
+        validateRequest(request)
+        return {
+          request,
+          response: restResponseSchema.parse(entry.response)
+        }
       }
     } as unknown as DurableCloudOutbox
   }
@@ -1966,7 +2624,7 @@ class FakeWorkerCloud {
     this.advance('running')
   }
 
-  private advance(state: FakeWorkerExecutionState): void {
+  private advance(state: FakeWorkerExecutionState, startedAt = TEST_LATER_TIMESTAMP): void {
     const taskRevision = this.task.revision + 1
     const assignmentTaskRevision = this.execution.fence.assignmentTaskRevision
     const terminal = state === 'failed'
@@ -1978,7 +2636,7 @@ class FakeWorkerCloud {
       updatedAt: TEST_LATER_TIMESTAMP,
       acceptedAt: this.execution.acceptedAt,
       startedAt: state === 'running' || state === 'needs_human' || state === 'failed'
-        ? this.execution.startedAt ?? TEST_LATER_TIMESTAMP
+        ? this.execution.startedAt ?? startedAt
         : null,
       terminalAt: terminal ? TEST_LATER_TIMESTAMP : null,
       fence: {
@@ -2447,7 +3105,7 @@ function canonicalFixture(input: unknown): string {
 
 function emptyState(): CollaborationLocalState {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     revision: 0,
     lastInboxSequence: 0,
     endpoints: [],
@@ -2522,4 +3180,37 @@ class MemoryBackend implements CollaborationStateBackend {
   constructor(private value: unknown) {}
   async read(): Promise<unknown> { return structuredClone(this.value) }
   async write(value: CollaborationLocalState): Promise<void> { this.value = structuredClone(value) }
+}
+
+class FailOnceTaskRunBackend implements CollaborationStateBackend {
+  private failed = false
+
+  constructor(private value: unknown) {}
+
+  async read(): Promise<unknown> { return structuredClone(this.value) }
+
+  async write(value: CollaborationLocalState): Promise<void> {
+    if (!this.failed && value.taskRuns.length > 0) {
+      this.failed = true
+      throw new Error('simulated crash before the local TaskRun checkpoint')
+    }
+    this.value = structuredClone(value)
+  }
+}
+
+class FailOnceStartedRunBackend implements CollaborationStateBackend {
+  private failed = false
+
+  constructor(private value: unknown) {}
+
+  async read(): Promise<unknown> { return structuredClone(this.value) }
+
+  async write(value: CollaborationLocalState): Promise<void> {
+    const run = value.taskRuns[0]
+    if (!this.failed && run?.state === 'running' && run.startedAt !== null) {
+      this.failed = true
+      throw new Error('simulated crash before the local execution-start checkpoint')
+    }
+    this.value = structuredClone(value)
+  }
 }

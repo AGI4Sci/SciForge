@@ -51,10 +51,22 @@ test('a closed Topic history does not block outbound mirroring for the active To
   )
 })
 
-test('runtime routes durable exact-output recovery and abandonment to the Worker adapter', () => {
+test('runtime routes Worker recovery and offer-closure fanout only to its exact audience owner', () => {
   for (const type of ['task.recovery.output_linked', 'task.recovery.abandoned'] as const) {
     assert.equal(isWorkerTaskInboxPayload({ type } as AgentInboxMessage['payload']), true)
   }
+  const workerClosure = {
+    type: 'task.offer.closed',
+    audience: 'worker'
+  } as AgentInboxMessage['payload']
+  const coordinatorClosure = {
+    type: 'task.offer.closed',
+    audience: 'coordinator'
+  } as AgentInboxMessage['payload']
+  assert.equal(isWorkerTaskInboxPayload(workerClosure), true)
+  assert.equal(isCoordinatorProjectInboxPayload(workerClosure), false)
+  assert.equal(isWorkerTaskInboxPayload(coordinatorClosure), false)
+  assert.equal(isCoordinatorProjectInboxPayload(coordinatorClosure), true)
   assert.equal(isWorkerTaskInboxPayload({
     type: 'human.answer.received'
   } as AgentInboxMessage['payload']), false)

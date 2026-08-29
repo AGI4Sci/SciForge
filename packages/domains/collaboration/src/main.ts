@@ -177,6 +177,9 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
   }
   const coordinatorCloudCommandService = defineCoordinatorCloudCommandService({
     execute: (command) => requireRuntime().executeCoordinatorCloudCommand(command),
+    resume: (idempotencyKey, validateCommand) => (
+      requireRuntime().resumeCoordinatorCloudCommand(idempotencyKey, validateCommand)
+    ),
     subscribe: (handler) => {
       if (coordinatorInboxHandler) {
         throw new Error('The Coordinator Agent Inbox already has its package owner.')
@@ -297,9 +300,9 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
   const define = (input: Omit<
     CollaborationCapabilityOptions,
     'version' | 'audiences' | 'scope' | 'tags'
-  >): CapabilityDefinition => options.defineCapability({
+  >, version = '1.0.0'): CapabilityDefinition => options.defineCapability({
     ...input,
-    version: '1.0.0',
+    version,
     audiences: ['ui'],
     scope: 'global',
     tags: ['collaboration', 'user', 'device', 'session', 'project']
@@ -311,7 +314,8 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
     effect: CapabilityEffect,
     inputSchema: z.ZodType,
     outputSchema: z.ZodType,
-    handler: CollaborationCapabilityOptions['handler']
+    handler: CollaborationCapabilityOptions['handler'],
+    version = '1.0.0'
   ): CapabilityDefinition => define({
     id,
     title,
@@ -325,7 +329,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
     inputSchema,
     outputSchema,
     handler
-  })
+  }, version)
 
   return Object.freeze({
     moduleId: COLLABORATION_DOMAIN_MODULE_ID,
@@ -343,7 +347,8 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         'read',
         collaborationStatusReadInputSchema,
         collaborationStatusReadResultSchema,
-        async () => ({ output: await options.getRuntime().status() })
+        async () => ({ output: await options.getRuntime().status() }),
+        '1.1.0'
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.connectionConfigure,
@@ -467,7 +472,8 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
               collaborationTaskListInputSchema.parse(raw) as CollaborationTaskListInput
             )
           }
-        })
+        }),
+        '1.1.0'
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate,
@@ -485,7 +491,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
       capability(
         COLLABORATION_CAPABILITY_IDS.taskOfferDecide,
         'Decide a Worker Task offer',
-        'Claims one User-targeted offer or dismisses it only on this exact local Agent Device.',
+        'Claims one User-targeted offer on this Device, rejects it for the Worker User across Devices, or dismisses it only on this Device.',
         'external-write',
         collaborationTaskOfferDecisionInputSchema,
         collaborationTaskOfferDecisionResultSchema,
@@ -494,7 +500,8 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
             collaborationTaskOfferDecisionInputSchema.parse(raw) as CollaborationTaskOfferDecisionInput
           )
           return { output: { accepted: true as const } }
-        }
+        },
+        '1.1.0'
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.managedContainerInspect,

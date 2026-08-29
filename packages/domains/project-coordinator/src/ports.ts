@@ -55,7 +55,7 @@ import type {
 
 import {
   projectCoordinatorProjectCreateInputSchema,
-  projectCoordinatorProjectCreateResultSchema,
+  projectCoordinatorProjectCreateReceiptSchema,
   projectCoordinatorHumanAnswerInputSchema,
   projectCoordinatorHumanNeededCreateInputSchema,
   projectCoordinatorCompleteInputSchema,
@@ -73,7 +73,7 @@ import {
   projectCoordinatorWorkspaceSchema,
   type ProjectCoordinatorProject,
   type ProjectCoordinatorProjectCreateInput,
-  type ProjectCoordinatorProjectCreateResult,
+  type ProjectCoordinatorProjectCreateReceipt,
   type ProjectCoordinatorHumanAnswerInput,
   type ProjectCoordinatorHumanNeededCreateInput,
   type ProjectCoordinatorCompleteInput,
@@ -113,11 +113,7 @@ export type ProjectCoordinatorWorkspacePort = Readonly<{
 }>
 
 export type ProjectCoordinatorCloudWorkspacePort = ProjectCoordinatorWorkspacePort & Readonly<{
-  createProject(input: ProjectCoordinatorProjectCreateInput): Promise<ProjectCoordinatorProjectCreateResult>
-  completeProjectCreate(
-    input: ProjectCoordinatorProjectCreateInput,
-    result: ProjectCoordinatorProjectCreateResult
-  ): Promise<void>
+  createProject(input: ProjectCoordinatorProjectCreateInput): Promise<ProjectCoordinatorProjectCreateReceipt>
 }>
 
 export type ProjectCoordinatorPlanPort = Readonly<{
@@ -200,8 +196,7 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
   readCoordinatorTransferFeedback?: (
     projectId: string
   ) => Promise<ProjectCoordinatorTransferFeedback | null>
-  createIntentState?: Pick<ProjectCoordinatorStateStore,
-    'resolveProjectCreateIntent' | 'recordProjectCreateSucceeded'>
+  createIntentState?: Pick<ProjectCoordinatorStateStore, 'resolveProjectCreateIntent'>
   requestId?: () => `req_${string}`
   now?: () => Date
 }>): ProjectCoordinatorCloudWorkspacePort {
@@ -309,25 +304,11 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
       if (response.project.ownerUserId !== identity.userId) {
         throw new Error('Project create did not preserve the current Agent owner authority.')
       }
-      return projectCoordinatorProjectCreateResultSchema.parse({
+      return projectCoordinatorProjectCreateReceiptSchema.parse({
         createIntentId,
         createdProjectId: response.project.projectId,
         workspace: await readWorkspace({ projectId: response.project.projectId })
       })
-    },
-    completeProjectCreate: async (rawInput, rawResult) => {
-      if (!options.createIntentState) return
-      const input = projectCoordinatorProjectCreateInputSchema.parse(rawInput)
-      const result = projectCoordinatorProjectCreateResultSchema.parse(rawResult)
-      const identity = options.transport.status()
-      if (identity.state !== 'ready') {
-        throw new Error('Project create completion requires the authenticated Owner.')
-      }
-      await options.createIntentState.recordProjectCreateSucceeded(
-        identity.userId,
-        { ...input, createIntentId: result.createIntentId },
-        result.createdProjectId
-      )
     }
   })
 }
@@ -343,6 +324,11 @@ const generatedPlanFileIntentSelectionSchema = z.object({
     destinationName: taskFileDestinationNameSchema,
     expectedSemanticRevision: z.string().trim().min(1).max(256).nullable(),
     expectedMediaType: z.string().trim().min(1).max(256).nullable()
+  }).strict()).max(100),
+  dependencyInputs: z.array(z.object({
+    planItemId: projectPlanTaskDeclarationSchema.shape.planItemId,
+    outputIndex: z.number().int().min(0).max(99),
+    destinationName: taskFileDestinationNameSchema
   }).strict()).max(100),
   output: z.object({
     fileName: taskFileDestinationNameSchema,
@@ -386,7 +372,7 @@ function generatedTaskFileIntent(options: Readonly<{
   }>[]
 }>) {
   return {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     inputs: options.selection.inputs.map((input) => {
       const source = options.fileSourceInputs.find(
         ({ sourceInputIndex }) => sourceInputIndex === input.sourceInputIndex
@@ -402,6 +388,7 @@ function generatedTaskFileIntent(options: Readonly<{
         expectedMediaType: input.expectedMediaType
       }
     }),
+    dependencyInputs: options.selection.dependencyInputs,
     output: {
       kind: 'content-space.output-new' as const,
       target: 'project-binding-root' as const,
@@ -561,8 +548,9 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
             'Every task must contain only planItemId, title, objective, completionCriteria, dependencyPlanItemIds, requiredCapabilityTags, and fileIntent.',
             'Use a unique stable item_* planItemId. Dependencies must reference another item in this same response. Capability tags must describe actual requirements and use the lowercase tag format.',
             'Do not emit id, description, assignee, dependencies, status, or any other convenience fields. Worker User assignment is a later Human decision.',
-            'A fileIntent is a logical Plan declaration only. Never include a bindingRevision; Cloud binds the created Task to the current active Project Content root when its Offer is committed.',
-            'A non-null fileIntent selects existing inputs only by sourceInputIndex from Exact file input choices. Never copy or invent a locator identity. Use an empty inputs array for an output-only task.'
+            'A fileIntent is a logical Plan declaration selection containing only inputs, dependencyInputs, and output; the host materializes schemaVersion 2. Never include a schemaVersion or bindingRevision; Cloud binds the created Task to the current active Project Content root when its Offer is committed.',
+            'A non-null fileIntent selects existing inputs only by sourceInputIndex from Exact file input choices. Never copy or invent a locator identity.',
+            'dependencyInputs must be an array, using [] when none are needed. Each entry selects an outputIndex from a direct dependencyPlanItemId whose fileIntent is non-null. Do not select transitive dependencies. Keep all static and dependency destinationName values unique and use at most 100 total inputs.'
           ].join('\n'),
           outputSchema: generatedPlanOutputJsonSchema(),
           ...(input.modelId ? { model: input.modelId } : {}),
@@ -1129,6 +1117,81 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
           plan.revision < confirmed.revision
         ) return
         await options.continuation.reconcileProject(confirmed.projectId)
+        return
+      }
+      if (message.payload.type === 'task.offer.closed') {
+        const closed = message.payload
+        if (closed.audience !== 'coordinator') {
+          throw new Error('Project Coordinator received a Worker-only Task offer closure.')
+        }
+        const workspace = await options.workspace.readWorkspace({ projectId: closed.projectId })
+        const project = requireReadyProject(workspace, closed.projectId)
+        if (message.recipientAgentId !== project.project.coordinatorAgentId) return
+        const task = project.tasks.find(({ task }) => task.taskId === closed.taskId)?.task
+        const offer = project.offers.find(({ taskOfferId }) => (
+          taskOfferId === closed.taskOfferId
+        ))
+        if (!task || !offer || offer.projectId !== closed.projectId ||
+            offer.taskId !== closed.taskId || offer.state !== closed.outcome ||
+            offer.executionId !== null || offer.revision !== closed.offerRevision ||
+            task.revision < closed.taskRevision ||
+            (task.revision === closed.taskRevision && (
+              task.status !== 'revision_requested' ||
+              task.currentExecutionId !== null ||
+              task.currentExecutionState !== null
+            ))) {
+          throw new Error('Task offer closure does not match fresh Cloud Task facts.')
+        }
+        return
+      }
+      if (message.payload.type === 'task.execution.failed') {
+        const failed = message.payload
+        const workspace = await options.workspace.readWorkspace({ projectId: failed.projectId })
+        const project = requireReadyProject(workspace, failed.projectId)
+        if (message.recipientAgentId !== project.project.coordinatorAgentId) return
+        const taskView = project.tasks.find(({ task }) => task.taskId === failed.taskId)
+        const execution = taskView?.executions.find(({ executionId }) => (
+          executionId === failed.executionId
+        ))
+        if (!taskView || !execution || execution.projectId !== failed.projectId ||
+            execution.taskId !== failed.taskId || execution.state !== 'failed' ||
+            execution.fence.status !== 'fenced' ||
+            execution.fence.reason !== 'execution_failed' ||
+            execution.revision !== failed.executionRevision ||
+            taskView.task.revision < failed.taskRevision ||
+            failed.retryable !== (failed.taskStatus === 'revision_requested') ||
+            (taskView.task.revision === failed.taskRevision && (
+              taskView.task.status !== failed.taskStatus ||
+              taskView.task.currentExecutionId !== failed.executionId ||
+              taskView.task.currentExecutionState !== 'failed' ||
+              (failed.retryable !== (taskView.task.completedAt === null))
+            ))) {
+          throw new Error('Task execution failure does not match fresh fenced Cloud facts.')
+        }
+        return
+      }
+      if (message.payload.type === 'task.execution.started') {
+        const started = message.payload
+        const workspace = await options.workspace.readWorkspace({ projectId: started.projectId })
+        const project = requireReadyProject(workspace, started.projectId)
+        if (message.recipientAgentId !== project.project.coordinatorAgentId) return
+        const taskView = project.tasks.find(({ task }) => task.taskId === started.taskId)
+        const execution = taskView?.executions.find(({ executionId }) => (
+          executionId === started.executionId
+        ))
+        if (!taskView || !execution || execution.projectId !== started.projectId ||
+            execution.taskId !== started.taskId || execution.startedAt === null ||
+            execution.revision < started.executionRevision ||
+            taskView.task.revision < started.taskRevision ||
+            (execution.revision === started.executionRevision && execution.state !== 'running') ||
+            (taskView.task.revision === started.taskRevision && (
+              taskView.task.status !== 'in_progress' ||
+              taskView.task.currentExecutionId !== started.executionId ||
+              taskView.task.currentExecutionState !== 'running'
+            ))) {
+          throw new Error('Task execution start does not match fresh Cloud Task facts.')
+        }
+        await options.continuation.reconcileProject(started.projectId)
         return
       }
       if (message.payload.type === 'task.result.submitted') {

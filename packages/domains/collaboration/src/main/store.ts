@@ -202,7 +202,16 @@ export const collaborationPendingTaskOfferSchema = z.object({
     'content_not_ready',
     'provider_not_ready'
   ])).max(5),
-  state: z.enum(['pending', 'awaiting-manual', 'claiming', 'dismissed', 'claimed_elsewhere', 'closed', 'failed']),
+  state: z.enum([
+    'pending',
+    'awaiting-manual',
+    'claiming',
+    'rejecting',
+    'dismissed',
+    'claimed_elsewhere',
+    'closed',
+    'failed'
+  ]),
   updatedAt: timestampSchema,
   completedAt: timestampSchema.nullable(),
   error: z.string().trim().min(1).max(4_000).nullable()
@@ -419,8 +428,7 @@ export const collaborationLocalRemoteApprovalSchema = z.object({
   updatedAt: timestampSchema
 }).strict()
 
-export const collaborationLocalStateSchema = z.object({
-  schemaVersion: z.literal(2),
+const collaborationLocalStateShape = {
   revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   lastInboxSequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   user: userPrincipalSchema.optional(),
@@ -458,6 +466,11 @@ export const collaborationLocalStateSchema = z.object({
   outbox: z.array(collaborationOutboxEntrySchema).max(100_000),
   diagnostics: z.array(collaborationDiagnosticRecordSchema).max(256),
   remoteApprovals: z.array(collaborationLocalRemoteApprovalSchema).max(10_000).default([])
+} as const
+
+export const collaborationLocalStateSchema = z.object({
+  schemaVersion: z.literal(3),
+  ...collaborationLocalStateShape
 }).strict()
 
 export type CollaborationLocalState = z.infer<typeof collaborationLocalStateSchema>
@@ -479,7 +492,7 @@ export type CollaborationWorkerAcceptancePolicy = z.infer<
 export type CollaborationLocalRemoteApproval = z.infer<typeof collaborationLocalRemoteApprovalSchema>
 
 export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.freeze({
-  schemaVersion: 2,
+  schemaVersion: 3,
   revision: 0,
   lastInboxSequence: 0,
   endpoints: [],
@@ -557,15 +570,17 @@ export class CollaborationLocalStore {
     if (
       stored !== undefined &&
       (!stored || typeof stored !== 'object' || Array.isArray(stored) ||
-        (stored as { schemaVersion?: unknown }).schemaVersion !== 2)
+        (stored as { schemaVersion?: number }).schemaVersion !== 3)
     ) {
       throw new Error(
-        'Collaboration local state is not schema version 2; clear the obsolete local Collaboration state and reconnect to Cloud.'
+        'Collaboration local state is not schema version 3; clear the obsolete local Collaboration state and reconnect to Cloud.'
       )
     }
-    this.state = stored === undefined
-      ? structuredClone(EMPTY_COLLABORATION_LOCAL_STATE)
-      : collaborationLocalStateSchema.parse(stored)
+    if (stored === undefined) {
+      this.state = structuredClone(EMPTY_COLLABORATION_LOCAL_STATE)
+    } else {
+      this.state = collaborationLocalStateSchema.parse(stored)
+    }
     await this.recoverInterruptedWork()
     return this.snapshot()
   }

@@ -21,7 +21,7 @@ type InstalledHumanEndpointProviderEntry = Readonly<{
 
 const installedEntries: readonly InstalledHumanEndpointProviderEntry[] = Object.freeze([
   Object.freeze({
-    definition: Object.freeze({"packageName":"@sciforge/collaboration-provider-zulip","moduleId":"sciforge.human-endpoint.zulip","displayName":"Zulip","version":"0.2.4","provider":"zulip"}),
+    definition: Object.freeze({"packageName":"@sciforge/collaboration-provider-zulip","moduleId":"sciforge.human-endpoint.zulip","displayName":"Zulip","version":"0.2.5","provider":"zulip"}),
     create: createHumanEndpointProvider0
   })
 ])

@@ -37,7 +37,11 @@ import {
   X
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { taskFileDestinationNameSchema } from '@sciforge/collaboration-contracts'
+import {
+  canonicalTaskIdForPlanItem,
+  DEFAULT_TASK_OFFER_TTL_MS,
+  taskFileDestinationNameSchema
+} from '@sciforge/collaboration-contracts'
 import type { DomainWorkbenchRightPanelSession } from '@sciforge/domain-sdk/host'
 
 import type {
@@ -46,7 +50,6 @@ import type {
   ProjectCoordinatorActivationView,
   ProjectCoordinatorContentRecoveryAbandonInput,
   ProjectCoordinatorContentRecoveryObserveLinkInput,
-  ProjectCoordinatorContentRecoveryRetrySuccessorInput,
   ProjectCoordinatorHumanAnswerInput,
   ProjectCoordinatorHumanNeededCreateInput,
   ProjectCoordinatorMembershipAddInput,
@@ -58,11 +61,13 @@ import type {
   ProjectCoordinatorProject,
   ProjectCoordinatorWorkflowPlan,
   ProjectCoordinatorResultReviewInput,
+  ProjectCoordinatorTaskOfferReassignInput,
   ProjectCoordinatorWorkspace
 } from '../contract.js'
 import {
   projectCoordinatorPlanningRuntimeReadiness,
-  projectCoordinatorPlanningTaskReadiness
+  projectCoordinatorPlanningTaskReadiness,
+  projectCoordinatorTaskRequirementReadiness
 } from '../plan-readiness.js'
 import {
   ProjectCoordinatorPlanDraftGenerationClientError,
@@ -895,11 +900,11 @@ export function ProjectCoordinatorPanel({
     ), applyProjectWorkspace)
   }, [applyProjectWorkspace, client, runAction])
 
-  const retryRecoverySuccessor = useCallback((
-    input: ProjectCoordinatorContentRecoveryRetrySuccessorInput
+  const reassignTaskOffer = useCallback((
+    input: ProjectCoordinatorTaskOfferReassignInput
   ) => {
-    void runAction('recovery-retry-successor', () => (
-      client.retryRecoverySuccessor(input)
+    void runAction('task-offer-reassign', () => (
+      client.reassignTaskOffer(input)
     ), applyProjectWorkspace)
   }, [applyProjectWorkspace, client, runAction])
 
@@ -1149,7 +1154,15 @@ export function ProjectCoordinatorPanel({
                   onInitialProviderFactId={setInitialProviderFactId}
                   onConfirm={confirmPlan}
                 />
-                <TasksSection project={project} />
+                <TasksSection
+                  project={project}
+                  observedAt={workspace?.observedAt}
+                  canReassign={workspace?.connection.state === 'ready' &&
+                    workspace.connection.userId === project?.project.ownerUserId &&
+                    project?.project.status === 'active'}
+                  busy={busyAction === 'task-offer-reassign'}
+                  onReassign={reassignTaskOffer}
+                />
                 <ProjectCoordinatorTransferSection
                   project={project}
                   canTransfer={workspace?.connection.state === 'ready' &&
@@ -1175,7 +1188,6 @@ export function ProjectCoordinatorPanel({
                   onRemoveMember={removeMember}
                   onObserveAndLinkRecovery={observeAndLinkRecovery}
                   onAbandonRecovery={abandonRecovery}
-                  onRetryRecoverySuccessor={retryRecoverySuccessor}
                 />
               </>
             ) : null}
@@ -2422,8 +2434,23 @@ export function WorkersSection({
   )
 }
 
-export function TasksSection({ project }: Readonly<{ project?: ProjectCoordinatorProject }>): ReactElement {
+export function TasksSection({
+  project,
+  observedAt,
+  canReassign = false,
+  busy = false,
+  onReassign
+}: Readonly<{
+  project?: ProjectCoordinatorProject
+  observedAt?: string
+  canReassign?: boolean
+  busy?: boolean
+  onReassign?(input: ProjectCoordinatorTaskOfferReassignInput): void
+}>): ReactElement {
   const { t } = useTranslation('common')
+  const defaultOfferExpiresAt = new Date(
+    Date.now() + DEFAULT_TASK_OFFER_TTL_MS
+  ).toISOString()
   const queue = project ? {
     active: project.tasks.filter(({ task }) => (
       task.status === 'offered' || task.status === 'in_progress'
@@ -2479,6 +2506,20 @@ export function TasksSection({ project }: Readonly<{ project?: ProjectCoordinato
                 offer.state === 'accepted' &&
                 offer.executionId === execution.executionId
               )) : undefined
+              const reassignableOffer = projectCoordinatorReassignableTaskOffer(
+                project,
+                taskView
+              )
+              const candidateWorkerGroups = reassignableOffer
+                ? project.workerGroups.filter((group) => group.agents.some((agent) => (
+                    projectCoordinatorTaskRequirementReadiness(
+                      project,
+                      agent.projectAvailability,
+                      task,
+                      observedAt ?? task.updatedAt
+                    ).eligible
+                  )))
+                : []
               const workerUserId = execution?.assigneeUserId ?? pendingOffer?.workerUserId
               const workerUser = workerUserId
                 ? project.memberUsers.find(({ userId }) => userId === workerUserId) ??
@@ -2579,6 +2620,67 @@ export function TasksSection({ project }: Readonly<{ project?: ProjectCoordinato
                       </dl>
                     </div>
                   </details>
+                  {canReassign && onReassign && reassignableOffer ? (
+                    <form
+                      className="space-y-2 rounded border border-amber-500/40 p-2"
+                      data-task-offer-reassignment={task.taskId}
+                      onSubmit={(event) => {
+                        event.preventDefault()
+                        const values = new FormData(event.currentTarget)
+                        onReassign({
+                          projectId: project.project.projectId,
+                          taskId: task.taskId,
+                          previousTaskOfferId: reassignableOffer.taskOfferId,
+                          workerUserId: String(values.get('reassign-worker-user') ?? ''),
+                          offerExpiresAt: String(
+                            values.get('reassign-offer-expires-at') ?? ''
+                          ).trim() || new Date(
+                            Date.now() + DEFAULT_TASK_OFFER_TTL_MS
+                          ).toISOString(),
+                          nextOutputFileName: task.fileIntent === null
+                            ? null
+                            : String(values.get('reassign-output-file-name') ?? '')
+                        })
+                      }}
+                    >
+                      <select
+                        required
+                        name="reassign-worker-user"
+                        defaultValue=""
+                        aria-label={t('projectCoordinatorNextWorkerUser')}
+                        className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+                      >
+                        <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
+                        {candidateWorkerGroups.map((group) => (
+                          <option key={group.userId} value={group.userId}>
+                            {group.displayName}
+                          </option>
+                        ))}
+                      </select>
+                      {task.fileIntent ? (
+                        <input
+                          required
+                          name="reassign-output-file-name"
+                          aria-label={t('projectCoordinatorNextOutputFileName')}
+                          placeholder={t('projectCoordinatorNextOutputFileName')}
+                          className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+                        />
+                      ) : null}
+                      <input
+                        name="reassign-offer-expires-at"
+                        placeholder={defaultOfferExpiresAt}
+                        aria-label={t('projectCoordinatorOfferExpiresAt')}
+                        className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+                      />
+                      <button
+                        type="submit"
+                        disabled={busy || candidateWorkerGroups.length === 0}
+                        className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50"
+                      >
+                        {t('projectCoordinatorReassignTask')}
+                      </button>
+                    </form>
+                  ) : null}
                 </article>
               )
             })}
@@ -2587,6 +2689,36 @@ export function TasksSection({ project }: Readonly<{ project?: ProjectCoordinato
       )}
     </Section>
   )
+}
+
+export function projectCoordinatorReassignableTaskOffer(
+  project: ProjectCoordinatorProject,
+  taskView: ProjectCoordinatorProject['tasks'][number]
+): ProjectCoordinatorProject['offers'][number] | null {
+  const task = taskView.task
+  if (project.project.status !== 'active' ||
+      task.status !== 'revision_requested' ||
+      task.executionCount >= task.maxRetries + 1) return null
+  if (task.currentExecutionId === null) {
+    const currentOffers = project.offers.filter((offer) => (
+      offer.taskId === task.taskId &&
+      offer.executionId === null &&
+      ['rejected', 'withdrawn', 'timed_out'].includes(offer.state) &&
+      offer.reassignmentTaskRevision === task.revision
+    ))
+    return currentOffers.length === 1 ? currentOffers[0]! : null
+  }
+  const execution = taskView.executions.find(({ executionId }) => (
+    executionId === task.currentExecutionId
+  ))
+  if (!execution || task.currentExecutionState !== execution.state ||
+      !['failed', 'cancelled', 'revoked'].includes(execution.state) ||
+      execution.fence.status !== 'fenced') return null
+  return project.offers.find((offer) => (
+    offer.taskId === task.taskId &&
+    offer.executionId === execution.executionId &&
+    offer.state === 'accepted'
+  )) ?? null
 }
 
 export function ProjectCoordinatorDecisionSection({
@@ -2675,7 +2807,11 @@ export function ProjectCoordinatorDecisionSection({
                   {
                     instruction: String(values.get('instruction') ?? ''),
                     nextWorkerUserId: workerUserId,
-                    nextOfferExpiresAt: String(values.get('offer-expires-at') ?? ''),
+                    nextOfferExpiresAt: String(
+                      values.get('offer-expires-at') ?? ''
+                    ).trim() || new Date(
+                      Date.now() + DEFAULT_TASK_OFFER_TTL_MS
+                    ).toISOString(),
                     nextOutputFileName: String(values.get('next-output-file-name') ?? '')
                   }
                 )
@@ -2725,7 +2861,12 @@ export function ProjectCoordinatorDecisionSection({
                   </option>
                 ))}
               </select>
-              <input name="offer-expires-at" aria-label={t('projectCoordinatorOfferExpiresAt')} placeholder="2026-08-26T01:08:00.000Z" className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+              <input
+                name="offer-expires-at"
+                aria-label={t('projectCoordinatorOfferExpiresAt')}
+                placeholder={new Date(Date.now() + DEFAULT_TASK_OFFER_TTL_MS).toISOString()}
+                className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+              />
               {project.tasks.find(({ task }) => (
                 task.taskId === review.submission.taskId
               ))?.task.fileIntent ? (
@@ -2874,8 +3015,7 @@ export function projectCoordinatorCompletionInput(
   if (
     project.project.status !== 'active' ||
     project.finalSummary !== null ||
-    project.plan?.plan.state !== 'confirmed' ||
-    project.tasks.length === 0
+    project.plan?.plan.state !== 'confirmed'
   ) return null
   const acceptedResultSubmissionIds = acceptedCurrentResultIds(project)
   if (
@@ -2900,16 +3040,24 @@ export function projectCoordinatorCompletionInput(
 }
 
 function acceptedCurrentResultIds(project: ProjectCoordinatorProject): string[] | null {
-  if (project.tasks.length === 0) return null
-  const resultSubmissionIds = project.tasks.map(({ task }) => (
-    task.status === 'completed'
-      ? project.reviews.find(({ submission, decision }) => (
-          submission.taskId === task.taskId &&
-          submission.executionId === task.currentExecutionId &&
-          decision?.decision === 'accept'
-        ))?.submission.resultSubmissionId
-      : undefined
+  const plan = project.plan?.plan
+  if (!plan || plan.tasks.length === 0) return null
+  const canonicalTaskIds = plan.tasks.map(({ planItemId }) => (
+    canonicalTaskIdForPlanItem(plan.projectPlanId, planItemId)
   ))
+  if (new Set(canonicalTaskIds).size !== plan.tasks.length) return null
+  const tasksById = new Map(project.tasks.map((taskView) => [taskView.task.taskId, taskView]))
+  const currentPlanTasks = canonicalTaskIds.map((taskId) => tasksById.get(taskId))
+  if (currentPlanTasks.some((taskView) => taskView === undefined)) return null
+  const resultSubmissionIds = currentPlanTasks.map((taskView) => {
+    const task = taskView!.task
+    if (task.status !== 'completed') return undefined
+    return project.reviews.find(({ submission, decision }) => (
+      submission.taskId === task.taskId &&
+      submission.executionId === task.currentExecutionId &&
+      decision?.decision === 'accept'
+    ))?.submission.resultSubmissionId
+  })
   return resultSubmissionIds.some((id) => id === undefined)
     ? null
     : resultSubmissionIds as string[]
@@ -2927,8 +3075,7 @@ export function ProjectCoordinatorProvisioningSection({
   onAcceptInvitation,
   onRemoveMember,
   onObserveAndLinkRecovery,
-  onAbandonRecovery,
-  onRetryRecoverySuccessor
+  onAbandonRecovery
 }: Readonly<{
   project?: ProjectCoordinatorProject
   plan: ProjectCoordinatorWorkflowPlan | null
@@ -2942,7 +3089,6 @@ export function ProjectCoordinatorProvisioningSection({
   onRemoveMember(input: ProjectCoordinatorMembershipRemoveInput): void
   onObserveAndLinkRecovery(input: ProjectCoordinatorContentRecoveryObserveLinkInput): void
   onAbandonRecovery(input: ProjectCoordinatorContentRecoveryAbandonInput): void
-  onRetryRecoverySuccessor(input: ProjectCoordinatorContentRecoveryRetrySuccessorInput): void
 }>): ReactElement {
   const { t } = useTranslation('common')
   const [selectedProviderFactId, setSelectedProviderFactId] = useState('')
@@ -3118,65 +3264,6 @@ export function ProjectCoordinatorProvisioningSection({
               <code className="block break-all text-[10px]">
                 {abandonedTask.task.fileIntent.output.fileName}
               </code>
-              {canManage ? (
-                <form
-                  className="space-y-2"
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    const values = new FormData(event.currentTarget)
-                    onRetryRecoverySuccessor({
-                      projectId: project!.project.projectId,
-                      recoveryActionId: abandonedRecoveryAction.recoveryActionId,
-                      workerUserId: String(values.get('successor-user') ?? ''),
-                      nextOutputFileName: String(
-                        values.get('next-output-file-name') ?? ''
-                      ),
-                      offerExpiresAt: String(values.get('successor-offer-expires-at') ?? '')
-                    })
-                  }}
-                >
-                  <select
-                    required
-                    name="successor-user"
-                    defaultValue=""
-                    aria-label={t('projectCoordinatorNextWorkerUser')}
-                    className="w-full rounded border border-ds-border bg-ds-surface px-2 py-1 text-[10px]"
-                  >
-                    <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
-                    {project!.workerGroups.map((group) => (
-                      <option
-                        key={group.userId}
-                        value={group.userId}
-                      >
-                        {group.displayName}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    required
-                    name="next-output-file-name"
-                    aria-label={t('projectCoordinatorNextOutputFileName')}
-                    placeholder={t('projectCoordinatorNextOutputFileName')}
-                    className="w-full rounded border border-ds-border bg-ds-surface px-2 py-1 text-[10px]"
-                  />
-                  <input
-                    required
-                    name="successor-offer-expires-at"
-                    aria-label={t('projectCoordinatorOfferExpiresAt')}
-                    placeholder="2026-08-27T01:08:00.000Z"
-                    className="w-full rounded border border-ds-border bg-ds-surface px-2 py-1 text-[10px]"
-                  />
-                  <button
-                    type="submit"
-                    disabled={busy}
-                    className="rounded bg-ds-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
-                  >
-                    {busy
-                      ? t('projectCoordinatorWorking')
-                      : t('projectCoordinatorApproveRecoveryRetry')}
-                  </button>
-                </form>
-              ) : null}
             </div>
           ) : null}
 

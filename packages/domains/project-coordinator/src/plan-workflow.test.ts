@@ -93,7 +93,10 @@ test('local Coordinator Runtime creates an editable durable draft with structure
   assert.equal(generated.runtimeProvenance.generatedByCoordinatorAgentId, 'agt_Coordinator01')
   assert.equal(generated.assignments[0]?.workerUserId, null)
   assert.match(prompts[0] ?? '', /Created meeting.*runtimeProfiles.*eligibleTaskScopes.*text_tasks.*capabilityTags.*meeting\.review.*document\.write/su)
-  assert.match(prompts[0] ?? '', /logical Plan declaration only.*Never include a bindingRevision/su)
+  assert.match(
+    prompts[0] ?? '',
+    /logical Plan declaration selection.*Never include a schemaVersion or bindingRevision/su
+  )
   assert.doesNotMatch(prompts[0] ?? '', /declare bindingRevision 1/u)
   assert.doesNotMatch(prompts[0] ?? '', /runtimeCapabilityTags/u)
   assert.match(prompts[0] ?? '', /Do not emit id, description, assignee, dependencies, status/u)
@@ -360,6 +363,7 @@ test('file Plan output selects an exact caller locator without predicting a bind
                   expectedSemanticRevision: 'revision-7',
                   expectedMediaType: 'text/markdown'
                 }],
+                dependencyInputs: [],
                 output: {
                   fileName: 'review.md',
                   mediaType: 'text/markdown',
@@ -388,7 +392,10 @@ test('file Plan output selects an exact caller locator without predicting a bind
 
   assert.equal('bindingRevision' in (draft.tasks[0]?.fileIntent ?? {}), false)
   assert.deepEqual(draft.tasks[0]?.fileIntent?.inputs[0]?.locator, sourceLocator)
-  assert.match(request?.prompt ?? '', /logical Plan declaration only.*Never include a bindingRevision/su)
+  assert.match(
+    request?.prompt ?? '',
+    /logical Plan declaration selection.*Never include a schemaVersion or bindingRevision/su
+  )
   assert.match(request?.prompt ?? '', /Never copy or invent a locator identity/u)
   const outputSchema = JSON.stringify(request?.outputSchema)
   assert.match(outputSchema, /"sourceInputIndex"/u)
@@ -403,6 +410,7 @@ test('Plan confirmation keeps the Project paused until the canonical workflow ac
   const coordinatorCommands: unknown[] = []
   const userCommands: unknown[] = []
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
+    resume: async () => null,
     execute: async (command) => {
       coordinatorCommands.push(command)
       if (command.type === 'project.plan.submit') {
@@ -431,7 +439,8 @@ test('Plan confirmation keeps the Project paused until the canonical workflow ac
       state: 'ready',
       baseUrl: 'https://cloud.run0.invalid/',
       userId: 'usr_Owner0000001',
-      deviceId: 'dev_Device0000001'
+      deviceId: 'dev_Device0000001',
+      deviceRevision: 1
     }),
     execute: async (request) => {
       userCommands.push(request.payload)
@@ -1035,6 +1044,7 @@ function taskOfferResponse(command: Extract<
     workerUserId: planItem.workerUserId,
     offeredByCoordinatorAgentId: 'agt_Coordinator01',
     state: 'pending',
+    reassignmentTaskRevision: null,
     offeredAt: at,
     expiresAt: command.offerExpiresAt,
     respondedAt: null,

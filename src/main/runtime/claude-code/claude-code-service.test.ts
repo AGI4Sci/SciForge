@@ -969,6 +969,53 @@ describe('ClaudeCodeRuntimeService', () => {
     }
   })
 
+  it('lists a fresh empty Coordinator Session with its persisted visibility metadata', async () => {
+    const { sdk, calls } = fakeSdk(() => [])
+    const storageRoot = await serviceRoot()
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      claudeAgentSdk: sdk
+    })
+
+    const started = await service.startThread({
+      threadId: 'coordinator-session',
+      workspace: '/tmp/workspace',
+      relation: 'side',
+      threadSource: 'domain-runtime',
+      sidebarVisibility: 'main'
+    })
+
+    expect(started).toMatchObject({
+      ok: true,
+      thread: {
+        id: 'coordinator-session',
+        title: 'Claude Code thread',
+        relation: 'side',
+        threadSource: 'domain-runtime',
+        sidebarVisibility: 'main',
+        hasUserMessage: false
+      }
+    })
+    const reloadedService = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      claudeAgentSdk: sdk
+    })
+    await expect(reloadedService.listThreads({ includeArchived: true })).resolves.toMatchObject({
+      ok: true,
+      threads: [{
+        id: 'coordinator-session',
+        title: 'Claude Code thread',
+        relation: 'side',
+        threadSource: 'domain-runtime',
+        sidebarVisibility: 'main',
+        hasUserMessage: false
+      }]
+    })
+    expect(calls).toHaveLength(0)
+  })
+
   it('subscribes before replaying stored events and de-duplicates queued live echoes', async () => {
     const { sdk } = fakeSdk(() => [])
     const service = new ClaudeCodeRuntimeService({

@@ -1502,11 +1502,22 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     projectId: string,
     workerUserId?: string
   ): Promise<StoredTaskOffer[]> {
+    await this.sql.query(
+      `SELECT task.task_id FROM sciforge_collaboration.tasks AS task
+       WHERE task.project_id=$1
+         AND EXISTS (
+           SELECT 1 FROM sciforge_collaboration.task_offers AS offer
+           WHERE offer.task_id=task.task_id AND offer.state='pending'
+             AND ($2::text IS NULL OR offer.worker_user_id=$2)
+         )
+       ORDER BY task.task_id FOR UPDATE OF task`,
+      [projectId, workerUserId ?? null]
+    )
     const result = await this.sql.query(
       `SELECT * FROM sciforge_collaboration.task_offers
        WHERE project_id=$1 AND state='pending'
          AND ($2::text IS NULL OR worker_user_id=$2)
-       ORDER BY task_offer_id FOR UPDATE`,
+       ORDER BY task_id,task_offer_id FOR UPDATE`,
       [projectId, workerUserId ?? null]
     )
     return result.rows.map(mapTaskOffer)
@@ -2540,12 +2551,12 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.task_offers
        (task_offer_id,execution_id,task_id,project_id,worker_user_id,
-        offered_by_coordinator_agent_id,state,offered_at,expires_at,responded_at,
-        revision,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        offered_by_coordinator_agent_id,state,reassignment_task_revision,
+        offered_at,expires_at,responded_at,revision,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [offer.taskOfferId, offer.executionId, offer.taskId, offer.projectId, offer.workerUserId,
-        offer.offeredByCoordinatorAgentId, offer.state, offer.offeredAt, offer.expiresAt,
-        offer.respondedAt, offer.revision,
+        offer.offeredByCoordinatorAgentId, offer.state, offer.reassignmentTaskRevision,
+        offer.offeredAt, offer.expiresAt, offer.respondedAt, offer.revision,
         offer.createdAt, offer.updatedAt]
     )
   }
@@ -2553,10 +2564,11 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
   async updateTaskOffer(offer: StoredTaskOffer, expectedRevision: number): Promise<void> {
     const result = await this.sql.query(
       `UPDATE sciforge_collaboration.task_offers
-       SET execution_id=$2,state=$3,responded_at=$4,revision=$5,updated_at=$6
-       WHERE task_offer_id=$1 AND revision=$7 AND $5=$7+1`,
-      [offer.taskOfferId, offer.executionId, offer.state, offer.respondedAt,
-        offer.revision, offer.updatedAt, expectedRevision]
+       SET execution_id=$2,state=$3,reassignment_task_revision=$4,
+           responded_at=$5,revision=$6,updated_at=$7
+       WHERE task_offer_id=$1 AND revision=$8 AND $6=$8+1`,
+      [offer.taskOfferId, offer.executionId, offer.state, offer.reassignmentTaskRevision,
+        offer.respondedAt, offer.revision, offer.updatedAt, expectedRevision]
     )
     expectRevision(result.rowCount)
   }
@@ -2941,7 +2953,11 @@ function mapTaskOffer(row: SqlRow): StoredTaskOffer {
     taskId: string(row, 'task_id'), projectId: string(row, 'project_id'),
     workerUserId: string(row, 'worker_user_id'),
     offeredByCoordinatorAgentId: string(row, 'offered_by_coordinator_agent_id'),
-    state: string(row, 'state') as StoredTaskOffer['state'], offeredAt: iso(row.offered_at),
+    state: string(row, 'state') as StoredTaskOffer['state'],
+    reassignmentTaskRevision: row.reassignment_task_revision == null
+      ? null
+      : number(row.reassignment_task_revision),
+    offeredAt: iso(row.offered_at),
     expiresAt: iso(row.expires_at), respondedAt: optionalIso(row.responded_at) ?? null,
     revision: number(row.revision),
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)

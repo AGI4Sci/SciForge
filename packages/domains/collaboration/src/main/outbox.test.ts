@@ -309,6 +309,36 @@ test('persists and replays a strict Cloud fence error as a delivered command res
   })
 })
 
+test('persists a strict Worker offer-claim conflict instead of retrying it as response loss', async () => {
+  const store = await localStore()
+  const command = restRequestSchema.parse({
+    protocolVersion: '1.0',
+    requestId: TEST_IDS.requestId,
+    idempotencyKey: 'idem_task.offer.accept-conflict-01',
+    type: 'task.offer.accept',
+    taskOfferId: TEST_IDS.taskOfferId,
+    taskId: TEST_IDS.taskId,
+    expectedTaskRevision: 1,
+    expectedOfferRevision: 1
+  })
+  const response = restResponseSchema.parse({
+    protocolVersion: '1.0',
+    type: 'rest.error',
+    requestId: command.requestId,
+    error: createCollaborationError('revision_conflict', 'Another Device already claimed the offer.')
+  })
+  let attempts = 0
+  const outbox = coordinatorOutbox(store, async () => {
+    attempts += 1
+    return response
+  })
+
+  assert.deepEqual(await outbox.enqueueAndWait('task.offer-decision', command), response)
+  assert.deepEqual(await outbox.enqueueAndWait('task.offer-decision', command), response)
+  assert.equal(attempts, 1)
+  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+})
+
 test('rejects a strict Cloud error whose request envelope belongs to another command', async () => {
   const store = await localStore()
   const command = coordinatorWithdrawCommand()
@@ -421,6 +451,21 @@ test('delivers task.offer.create only through its exact canonical collection res
   assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
 })
 
+test('delivers task.offer.reject only through its exact User-level closure response', async () => {
+  const store = await localStore()
+  const command = workerRejectCommand()
+  const response = workerRejectCollection(command)
+  const outbox = coordinatorOutbox(store, async () => response)
+
+  assert.deepEqual(await outbox.enqueueAndWait('task.offer-decision', command), response)
+  assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+  assert.equal(response.type, 'rest.collection')
+  const [task, offer] = response.items
+  assert.equal(task?.type, 'task')
+  assert.equal(offer?.type, 'task_offer')
+  assert.equal(offer?.type === 'task_offer' ? offer.reassignmentTaskRevision : null, task?.revision)
+})
+
 test('delivers task.offer.withdraw only through its exact terminal collection response', async () => {
   const store = await localStore()
   const command = coordinatorWithdrawCommand()
@@ -431,7 +476,7 @@ test('delivers task.offer.withdraw only through its exact terminal collection re
   assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
 })
 
-test('delivers task.offer.reassign only through its exact replacement collection response', async () => {
+test('delivers an exact task.offer.reassign response without conjecturing executionCount', async () => {
   const store = await localStore()
   const command = coordinatorReassignCommand()
   const response = coordinatorReassignCollection(command)
@@ -439,6 +484,62 @@ test('delivers task.offer.reassign only through its exact replacement collection
 
   assert.deepEqual(await outbox.enqueueAndWait('coordinator.command', command), response)
   assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+  assert.equal(response.type, 'rest.collection')
+  const [task, successorOffer] = response.items
+  assert.equal(task?.type, 'task')
+  assert.equal(successorOffer?.type, 'task_offer')
+  assert.deepEqual(task?.type === 'task' ? task.fileIntent : undefined, command.nextFileIntent)
+  assert.equal(task?.type === 'task' ? task.executionCount : undefined, 2)
+  assert.notEqual(
+    successorOffer?.type === 'task_offer' ? successorOffer.taskOfferId : undefined,
+    command.previousTaskOfferId
+  )
+})
+
+test('rejects task.offer.reassign success whose Task file intent drifts from the request', async () => {
+  const store = await localStore()
+  const command = coordinatorReassignCommand()
+  const response = coordinatorReassignCollection(command)
+  assert.equal(response.type, 'rest.collection')
+  const [task, successorOffer] = response.items
+  assert.equal(task?.type, 'task')
+  assert.equal(successorOffer?.type, 'task_offer')
+  const drifted = restResponseSchema.parse({
+    ...response,
+    items: [{ ...task, fileIntent: null }, successorOffer]
+  })
+  const outbox = coordinatorOutbox(store, async () => drifted)
+
+  await assert.rejects(
+    outbox.enqueueAndWait('coordinator.command', command),
+    /unexpected rest\.collection/u
+  )
+  assert.equal(store.snapshot().outbox[0]?.state, 'failed')
+  assert.equal(store.snapshot().outbox[0]?.deliveredAt, undefined)
+  assert.equal(store.snapshot().outbox[0]?.response, undefined)
+})
+
+test('rejects task.offer.reassign success that reuses the previous Task offer identity', async () => {
+  const store = await localStore()
+  const command = coordinatorReassignCommand()
+  const response = coordinatorReassignCollection(command)
+  assert.equal(response.type, 'rest.collection')
+  const [task, successorOffer] = response.items
+  assert.equal(task?.type, 'task')
+  assert.equal(successorOffer?.type, 'task_offer')
+  const drifted = restResponseSchema.parse({
+    ...response,
+    items: [task, { ...successorOffer, taskOfferId: command.previousTaskOfferId }]
+  })
+  const outbox = coordinatorOutbox(store, async () => drifted)
+
+  await assert.rejects(
+    outbox.enqueueAndWait('coordinator.command', command),
+    /unexpected rest\.collection/u
+  )
+  assert.equal(store.snapshot().outbox[0]?.state, 'failed')
+  assert.equal(store.snapshot().outbox[0]?.deliveredAt, undefined)
+  assert.equal(store.snapshot().outbox[0]?.response, undefined)
 })
 
 test('delivers external_operation.observe through its exact canonical recovery collection', async () => {
@@ -508,9 +609,39 @@ test('a repeated idempotent Coordinator command retries its original durable bod
 
   await assert.rejects(outbox.enqueueAndWait('coordinator.command', command))
   assert.equal(store.snapshot().outbox[0]?.state, 'failed')
+  assert.equal(
+    await outbox.resumeAndWait(
+      'coordinator.command',
+      'idem_UnknownCoordinatorReplay001',
+      () => undefined
+    ),
+    null
+  )
+  await assert.rejects(
+    outbox.resumeAndWait(
+      'task.external-operation',
+      command.idempotencyKey,
+      () => undefined
+    ),
+    /another command kind/u
+  )
+  await assert.rejects(
+    outbox.resumeAndWait(
+      'coordinator.command',
+      command.idempotencyKey,
+      () => { throw new Error('replayed input conflict') }
+    ),
+    /replayed input conflict/u
+  )
+  assert.equal(attempts, 1)
+  assert.equal(store.snapshot().outbox[0]?.state, 'failed')
   assert.deepEqual(
-    await outbox.enqueueAndWait('coordinator.command', command),
-    committedResponse
+    await outbox.resumeAndWait(
+      'coordinator.command',
+      command.idempotencyKey,
+      (request) => { assert.deepEqual(request, command) }
+    ),
+    { request: command, response: committedResponse }
   )
   assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
   assert.deepEqual(store.snapshot().outbox[0]?.response, committedResponse)
@@ -1036,6 +1167,7 @@ function coordinatorResultRevisionResponse(request: RestRequest): RestResponse {
       workerUserId: request.nextWorkerUserId,
       offeredByCoordinatorAgentId: TEST_IDS.agentId,
       state: 'pending',
+      reassignmentTaskRevision: null,
       offeredAt: TEST_LATER_TIMESTAMP,
       expiresAt: request.nextOfferExpiresAt,
       respondedAt: null,
@@ -1149,7 +1281,7 @@ function coordinatorFinalSummaryResponse(request: RestRequest): RestResponse {
   })
 }
 
-function coordinatorCreateCommand(): RestRequest {
+function coordinatorCreateCommand(): Extract<RestRequest, { type: 'task.offer.create' }> {
   return {
     protocolVersion: '1.0',
     requestId: TEST_IDS.requestId,
@@ -1166,7 +1298,7 @@ function coordinatorCreateCommand(): RestRequest {
   }
 }
 
-function coordinatorReassignCommand(): RestRequest {
+function coordinatorReassignCommand(): Extract<RestRequest, { type: 'task.offer.reassign' }> {
   return {
     protocolVersion: '1.0',
     requestId: TEST_IDS.requestId,
@@ -1181,7 +1313,23 @@ function coordinatorReassignCommand(): RestRequest {
     expectedExecutionAuthorityEpoch: 1,
     workerUserId: TEST_IDS.secondUserId,
     offerExpiresAt: TEST_LATER_TIMESTAMP,
-    nextFileIntent: null
+    nextFileIntent: reassignedFileIntent()
+  }
+}
+
+function reassignedFileIntent() {
+  return {
+    schemaVersion: 1 as const,
+    inputs: [],
+    output: {
+      kind: 'content-space.output-new' as const,
+      target: 'project-binding-root' as const,
+      mode: 'upload-new' as const,
+      fileName: 'reassigned-analysis.md',
+      mediaType: 'text/markdown',
+      maxBytes: 65_536
+    },
+    bindingRevision: 2
   }
 }
 
@@ -1205,6 +1353,7 @@ function coordinatorOfferCollection(request: RestRequest): RestResponse {
     workerUserId,
     offeredByCoordinatorAgentId: TEST_IDS.agentId,
     state: 'pending',
+    reassignmentTaskRevision: null,
     offeredAt: TEST_TIMESTAMP,
     expiresAt: TEST_LATER_TIMESTAMP,
     respondedAt: null,
@@ -1219,6 +1368,12 @@ function coordinatorOfferCollection(request: RestRequest): RestResponse {
     items: [{
       ...taskFixture,
       taskId,
+      fileIntent: request.type === 'task.offer.reassign'
+        ? request.nextFileIntent
+        : taskFixture.fileIntent,
+      executionCount: request.type === 'task.offer.reassign'
+        ? 2
+        : taskFixture.executionCount,
       revision: taskRevision,
       updatedAt: taskRevision === 1 ? TEST_TIMESTAMP : TEST_LATER_TIMESTAMP
     }, offer]
@@ -1243,11 +1398,63 @@ function coordinatorWithdrawCollection(request: RestRequest): RestResponse {
       {
         ...offer,
         state: 'withdrawn',
+        reassignmentTaskRevision: task.revision + 1,
         respondedAt: TEST_LATER_TIMESTAMP,
         revision: 2,
         updatedAt: TEST_LATER_TIMESTAMP
       }
     ]
+  })
+}
+
+function workerRejectCommand(): Extract<RestRequest, { type: 'task.offer.reject' }> {
+  return {
+    protocolVersion: '1.0',
+    requestId: TEST_IDS.requestId,
+    idempotencyKey: 'idem_task.offer.reject-outbox-01',
+    type: 'task.offer.reject',
+    taskOfferId: TEST_IDS.taskOfferId,
+    taskId: TEST_IDS.taskId,
+    expectedTaskRevision: 1,
+    expectedOfferRevision: 1
+  }
+}
+
+function workerRejectCollection(
+  request: Extract<RestRequest, { type: 'task.offer.reject' }>
+): RestResponse {
+  const taskRevision = request.expectedTaskRevision + 1
+  return restResponseSchema.parse({
+    protocolVersion: '1.0',
+    type: 'rest.collection',
+    requestId: request.requestId,
+    items: [{
+      ...taskFixture,
+      taskId: request.taskId,
+      status: 'revision_requested',
+      currentExecutionId: null,
+      currentExecutionState: null,
+      completedAt: null,
+      revision: taskRevision,
+      updatedAt: TEST_LATER_TIMESTAMP
+    }, {
+      schemaVersion: 1,
+      type: 'task_offer',
+      taskOfferId: request.taskOfferId,
+      projectId: TEST_IDS.projectId,
+      taskId: request.taskId,
+      executionId: null,
+      workerUserId: agentNodeFixture.ownerUserId,
+      offeredByCoordinatorAgentId: TEST_IDS.secondAgentId,
+      state: 'rejected',
+      reassignmentTaskRevision: taskRevision,
+      offeredAt: TEST_TIMESTAMP,
+      expiresAt: TEST_LATER_TIMESTAMP,
+      respondedAt: TEST_LATER_TIMESTAMP,
+      revision: request.expectedOfferRevision + 1,
+      createdAt: TEST_TIMESTAMP,
+      updatedAt: TEST_LATER_TIMESTAMP
+    }]
   })
 }
 

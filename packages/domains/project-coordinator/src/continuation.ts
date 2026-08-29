@@ -1,13 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto'
 
 import {
-  bindTaskFileDeclaration,
   CURRENT_PROTOCOL_VERSION,
+  DEFAULT_TASK_OFFER_TTL_MS,
   type Project,
   type ProjectPlan,
   type ProjectPlanTask,
+  type RestRequest,
   type RestResponse,
   type Task,
+  type TaskFileDeclaration,
+  type TaskFileIntent,
   type TaskOffer
 } from '@sciforge/collaboration-contracts'
 import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts/node'
@@ -31,6 +34,8 @@ export type ProjectCoordinatorContinuationPort = Readonly<{
   reconcileProject(projectId: string): Promise<ProjectCoordinatorWorkspace>
   reconcileVisibleProjects(): Promise<void>
 }>
+
+const MAX_EXPIRED_OFFER_RENEWALS_PER_PLAN_ITEM = 3
 
 /**
  * Pure ready-set derivation. Cloud remains authoritative for every write and
@@ -67,6 +72,8 @@ export function createProjectCoordinatorContinuationPort(options: Readonly<{
     projectId: string
   ): Promise<ProjectCoordinatorWorkspace> => {
     let workspace = await options.workspace.readWorkspace({ projectId })
+    let renewalTaskId: string | null = null
+    let expiredOfferRenewals = 0
     for (let dispatched = 0; ; dispatched += 1) {
       const project = findOwnedProject(workspace, projectId)
       if (!project || project.project.status !== 'active' || project.plan?.plan.state !== 'confirmed') {
@@ -83,12 +90,15 @@ export function createProjectCoordinatorContinuationPort(options: Readonly<{
       if (dispatched >= 1_000) {
         throw new Error('Project continuation exceeded the maximum Plan size without converging.')
       }
-      const offerExpiresAt = new Date(now().getTime() + 15 * 60_000).toISOString()
-      const response = await options.coordinatorCloudCommands.execute({
+      const createdTaskId = canonicalTaskIdForPlanItem(plan.projectPlanId, item.planItemId)
+      if (renewalTaskId !== createdTaskId) {
+        renewalTaskId = createdTaskId
+        expiredOfferRenewals = 0
+      }
+      const offerExpiresAt = new Date(now().getTime() + DEFAULT_TASK_OFFER_TTL_MS).toISOString()
+      const commandBody: TaskOfferCreateBusinessBody = {
         protocolVersion: CURRENT_PROTOCOL_VERSION,
-        requestId: requestId(),
         type: 'task.offer.create',
-        idempotencyKey: continuationIdempotencyKey(project.project, plan, item),
         projectId: project.project.projectId,
         expectedProjectRevision: project.project.revision,
         expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
@@ -97,10 +107,21 @@ export function createProjectCoordinatorContinuationPort(options: Readonly<{
         expectedPlanRevision: plan.revision,
         planItemId: item.planItemId,
         offerExpiresAt
+      }
+      const response = await options.coordinatorCloudCommands.execute({
+        ...commandBody,
+        requestId: requestId(),
+        idempotencyKey: continuationIdempotencyKey(commandBody)
       })
+      if (isExpiredTaskOfferAttempt(response)) {
+        if (expiredOfferRenewals >= MAX_EXPIRED_OFFER_RENEWALS_PER_PLAN_ITEM) {
+          assertCreatedTaskOffer(response, project, plan, item, item.workerUserId, offerExpiresAt)
+        }
+        expiredOfferRenewals += 1
+        continue
+      }
       assertCreatedTaskOffer(response, project, plan, item, item.workerUserId, offerExpiresAt)
       workspace = await options.workspace.readWorkspace({ projectId })
-      const createdTaskId = canonicalTaskIdForPlanItem(plan.projectPlanId, item.planItemId)
       const observedProject = findOwnedProject(workspace, projectId)
       if (!observedProject?.tasks.some(({ task }) => task.taskId === createdTaskId)) {
         throw new Error('Project continuation Task offer was not observed in fresh Cloud facts.')
@@ -139,6 +160,13 @@ export function createProjectCoordinatorContinuationPort(options: Readonly<{
   })
 }
 
+function isExpiredTaskOfferAttempt(
+  response: RestResponse
+): boolean {
+  return response.type === 'rest.error' &&
+    response.error.code === 'expired'
+}
+
 function findOwnedProject(
   workspace: ProjectCoordinatorWorkspace,
   projectId: string
@@ -171,11 +199,11 @@ function assertCreatedTaskOffer(
   const expectedDependencyTaskIds = item.dependencyPlanItemIds.map((planItemId) => (
     canonicalTaskIdForPlanItem(plan.projectPlanId, planItemId)
   ))
-  const expectedFileIntent = item.fileIntent === null
-    ? null
-    : project.provisioning.binding?.status === 'active'
-      ? bindTaskFileDeclaration(item.fileIntent, project.provisioning.binding.revision)
-      : undefined
+  const fileIntentMatches = item.fileIntent === null
+    ? task?.fileIntent === null
+    : task?.fileIntent !== null && task?.fileIntent !== undefined &&
+      project.provisioning.binding?.status === 'active' &&
+      matchesCreatedFileIntent(item.fileIntent, task.fileIntent, project.provisioning.binding.revision)
   if (
     response.items.length !== 2 ||
     tasks.length !== 1 ||
@@ -190,8 +218,7 @@ function assertCreatedTaskOffer(
     stableDigest(task.completionCriteria) !== stableDigest(item.completionCriteria) ||
     stableDigest(task.dependencyTaskIds) !== stableDigest(expectedDependencyTaskIds) ||
     stableDigest(task.requiredCapabilityTags) !== stableDigest(item.requiredCapabilityTags) ||
-    expectedFileIntent === undefined ||
-    stableDigest(task.fileIntent) !== stableDigest(expectedFileIntent) ||
+    !fileIntentMatches ||
     task.currentExecutionId !== null ||
     task.currentExecutionState !== null ||
     task.status !== 'offered' ||
@@ -206,17 +233,32 @@ function assertCreatedTaskOffer(
   }
 }
 
-function continuationIdempotencyKey(
-  project: Project,
-  plan: ProjectPlan,
-  item: ProjectPlanTask
-): string {
-  const digest = stableDigest({
-    projectId: project.projectId,
-    projectPlanId: plan.projectPlanId,
-    planDigest: plan.planDigest,
-    planItemId: item.planItemId
-  })
+function matchesCreatedFileIntent(
+  declaration: TaskFileDeclaration,
+  intent: TaskFileIntent,
+  currentBindingRevision: number
+): boolean {
+  if (
+    intent.bindingRevision !== currentBindingRevision ||
+    intent.inputs.length !== declaration.inputs.length + declaration.dependencyInputs.length ||
+    stableDigest(intent.inputs.slice(0, declaration.inputs.length)) !== stableDigest(declaration.inputs) ||
+    stableDigest(intent.output) !== stableDigest(declaration.output)
+  ) {
+    return false
+  }
+  const dependencyInputs = intent.inputs.slice(declaration.inputs.length)
+  return dependencyInputs.every((input, index) => (
+    input.destinationName === declaration.dependencyInputs[index]?.destinationName
+  ))
+}
+
+type TaskOfferCreateBusinessBody = Omit<
+  Extract<RestRequest, { type: 'task.offer.create' }>,
+  'requestId' | 'idempotencyKey'
+>
+
+function continuationIdempotencyKey(commandBody: TaskOfferCreateBusinessBody): string {
+  const digest = stableDigest(commandBody)
   return `idem_project-continuation.${digest.slice(0, 48)}`
 }
 

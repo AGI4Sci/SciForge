@@ -16,6 +16,7 @@ import {
   type TaskExecution,
   type TaskExecutionPreflight,
   type TaskOffer,
+  type TaskOfferClosedPayload,
   type TaskOfferedPayload,
   type TaskRecoveryAbandonedPayload,
   type TaskRecoveryOutputLinkedPayload,
@@ -69,10 +70,9 @@ export type CollaborationTaskAdapterOptions = Readonly<{
   now?: () => Date
 }>
 
-export type WorkerOfferDecision = Readonly<
-  | { decision: 'accept' }
-  | { decision: 'dismiss' }
->
+export type WorkerOfferDecision = Readonly<{
+  decision: 'accept' | 'dismiss' | 'reject'
+}>
 
 const TERMINAL_RUN_STATES = new Set<CollaborationTaskRun['state']>([
   'completed',
@@ -107,7 +107,9 @@ export class CollaborationTaskAdapter {
   async recover(): Promise<void> {
     this.stopped = false
     for (const offer of this.options.store.snapshot().pendingTaskOffers) {
-      if (offer.state === 'pending' || offer.state === 'claiming') this.schedule(offer.taskOfferId)
+      if (offer.state === 'pending' || offer.state === 'claiming' || offer.state === 'rejecting') {
+        this.schedule(offer.taskOfferId)
+      }
     }
     for (const run of this.options.store.snapshot().taskRuns) {
       if (run.externalJournal.some((entry) => entry.state === 'effect_dispatched')) {
@@ -146,14 +148,14 @@ export class CollaborationTaskAdapter {
   async decideOffer(taskOfferId: string, input: WorkerOfferDecision): Promise<void> {
     const offer = this.requirePendingOffer(taskOfferId)
     if (offer.state !== 'awaiting-manual') {
-      throw new Error('Only an offer awaiting a manual decision can be accepted or dismissed on this Device.')
+      throw new Error('Only an offer awaiting a manual decision can be accepted, rejected, or dismissed on this Device.')
     }
     const decidedAt = this.now().toISOString()
     await this.options.store.transact((draft) => {
       const current = draft.pendingTaskOffers.find((candidate) => candidate.taskOfferId === taskOfferId)
       if (!current) throw new Error('Local pending Task offer was not found.')
-      if (input.decision === 'accept') {
-        current.state = 'claiming'
+      if (input.decision !== 'dismiss') {
+        current.state = input.decision === 'accept' ? 'claiming' : 'rejecting'
         current.completedAt = null
         current.error = null
       } else {
@@ -163,7 +165,7 @@ export class CollaborationTaskAdapter {
       }
       current.updatedAt = decidedAt
     })
-    if (input.decision === 'accept') this.schedule(taskOfferId)
+    if (input.decision !== 'dismiss') this.schedule(taskOfferId)
   }
 
   async handleInbox(message: AgentInboxMessage): Promise<void> {
@@ -177,7 +179,7 @@ export class CollaborationTaskAdapter {
       return
     }
     if (payload.type === 'task.offer.closed') {
-      await this.acceptOfferClosed(payload.taskOfferId, payload.outcome)
+      await this.acceptOfferClosed(payload)
       return
     }
     if (payload.type === 'task.recovery.output_linked') {
@@ -186,6 +188,15 @@ export class CollaborationTaskAdapter {
     }
     if (payload.type === 'task.recovery.abandoned') {
       await this.acceptRecoveryAbandoned(payload, message.recipientAgentId)
+      return
+    }
+    if (payload.type === 'task.execution.fenced') {
+      const run = this.findRun(payload.executionId)
+      if (!run) return
+      if (run.offer.projectId !== payload.projectId || run.offer.taskId !== payload.taskId) {
+        throw new Error('Execution-fenced Inbox identity does not match the local Worker journal.')
+      }
+      await this.markFenced(run, payload.reason)
       return
     }
     if (payload.type === 'human.answer.received') {
@@ -219,7 +230,9 @@ export class CollaborationTaskAdapter {
         existing.projectId !== payload.projectId ||
         existing.workerUserId !== payload.workerUserId
       ) throw new Error('Task offer identity was reused for another Worker User or Task.')
-      if (existing.state === 'pending' || existing.state === 'claiming') this.schedule(payload.taskOfferId)
+      if (existing.state === 'pending' || existing.state === 'claiming' || existing.state === 'rejecting') {
+        this.schedule(payload.taskOfferId)
+      }
       return
     }
 
@@ -256,14 +269,43 @@ export class CollaborationTaskAdapter {
     })
   }
 
-  private async acceptOfferClosed(taskOfferId: string, outcome: 'withdrawn' | 'timed_out'): Promise<void> {
-    const pending = this.findPendingOffer(taskOfferId)
-    if (!pending || ['dismissed', 'claimed_elsewhere', 'closed'].includes(pending.state)) return
+  private async acceptOfferClosed(payload: TaskOfferClosedPayload): Promise<void> {
+    if (payload.audience !== 'worker') {
+      throw new Error('A Coordinator Task-offer closure cannot enter the Worker handler.')
+    }
+    const pending = this.findPendingOffer(payload.taskOfferId)
+    if (!pending || ['dismissed', 'claimed_elsewhere'].includes(pending.state)) return
+    if (
+      pending.projectId !== payload.projectId ||
+      pending.taskId !== payload.taskId
+    ) {
+      throw new Error('Task-offer closure identity does not match the local User offer.')
+    }
+    if (pending.state === 'closed') {
+      if (
+        pending.currentTaskRevision === payload.taskRevision &&
+        pending.offerRevision === payload.offerRevision
+      ) return
+      throw new Error('Task-offer closure revisions conflict with the local terminal journal.')
+    }
+    if (
+      payload.taskRevision !== pending.currentTaskRevision + 1 ||
+      payload.offerRevision !== pending.offerRevision + 1
+    ) {
+      throw new Error('Task-offer closure did not advance the exact Task and Offer revisions.')
+    }
     const completedAt = this.now().toISOString()
-    await this.updatePendingOffer(taskOfferId, {
+    const error = payload.outcome === 'rejected'
+      ? 'The Worker User rejected the Task offer.'
+      : payload.outcome === 'timed_out'
+        ? 'The Task offer timed out.'
+        : 'The Coordinator withdrew the Task offer.'
+    await this.updatePendingOffer(payload.taskOfferId, {
       state: 'closed',
+      currentTaskRevision: payload.taskRevision,
+      offerRevision: payload.offerRevision,
       completedAt,
-      error: outcome === 'timed_out' ? 'The Task offer timed out.' : 'The Coordinator withdrew the Task offer.'
+      error
     })
   }
 
@@ -575,9 +617,13 @@ export class CollaborationTaskAdapter {
     const promise = this.process(identifier).catch(async (error) => {
       const pending = this.findPendingOffer(identifier)
       if (pending && !['dismissed', 'claimed_elsewhere', 'closed', 'failed'].includes(pending.state)) {
+        const recoverableClaimFailure = pending.state === 'claiming' && (
+          error instanceof OfferClaimCheckpointError ||
+          this.hasUncertainDurableClaim(pending)
+        )
         await this.updatePendingOffer(identifier, {
-          state: 'failed',
-          completedAt: this.now().toISOString(),
+          state: recoverableClaimFailure ? 'claiming' : 'failed',
+          completedAt: recoverableClaimFailure ? null : this.now().toISOString(),
           error: safeError(error, this.options.sanitizeText)
         })
         return
@@ -624,6 +670,11 @@ export class CollaborationTaskAdapter {
     let offer = initial
     if (['dismissed', 'claimed_elsewhere', 'closed', 'failed'].includes(offer.state) ||
         offer.state === 'awaiting-manual') return
+    if (offer.state === 'rejecting') {
+      await this.rejectPendingOffer(offer)
+      return
+    }
+    if (offer.state === 'claiming' && await this.resumePendingOfferClaim(offer)) return
     const acceptanceMode = this.policies.read(offer.recipientAgentId)
     const preflight = await this.preflightPendingOffer(offer)
     const preflightReasons = preflight.reason ? [preflight.reason] : []
@@ -772,12 +823,7 @@ export class CollaborationTaskAdapter {
   }
 
   private async claimPendingOffer(pending: CollaborationPendingTaskOffer): Promise<void> {
-    const requestFacts = {
-      taskOfferId: pending.taskOfferId,
-      taskId: pending.taskId,
-      expectedTaskRevision: pending.currentTaskRevision,
-      expectedOfferRevision: pending.offerRevision
-    }
+    const requestFacts = pendingOfferClaimRequestFacts(pending)
     const response = await this.options.outbox.enqueueAndWait('task.offer-decision',
       restRequestSchema.parse({
         protocolVersion: '1.0',
@@ -786,6 +832,58 @@ export class CollaborationTaskAdapter {
         idempotencyKey: idempotencyKey('task.offer.accept', requestFacts),
         ...requestFacts
       }))
+    await this.persistClaimedOffer(pending, response)
+  }
+
+  private async resumePendingOfferClaim(pending: CollaborationPendingTaskOffer): Promise<boolean> {
+    const requestFacts = pendingOfferClaimRequestFacts(pending)
+    const claimIdempotencyKey = idempotencyKey('task.offer.accept', requestFacts)
+    const replay = await this.options.outbox.resumeAndWait(
+      'task.offer-decision',
+      claimIdempotencyKey,
+      (request) => {
+        if (
+          request.type !== 'task.offer.accept' ||
+          request.idempotencyKey !== claimIdempotencyKey ||
+          request.taskOfferId !== requestFacts.taskOfferId ||
+          request.taskId !== requestFacts.taskId ||
+          request.expectedTaskRevision !== requestFacts.expectedTaskRevision ||
+          request.expectedOfferRevision !== requestFacts.expectedOfferRevision
+        ) {
+          throw new Error('Durable Task offer claim does not match the pending User offer.')
+        }
+      }
+    )
+    if (!replay) return false
+    await this.persistClaimedOffer(pending, replay.response)
+    return true
+  }
+
+  private hasUncertainDurableClaim(pending: CollaborationPendingTaskOffer): boolean {
+    const requestFacts = pendingOfferClaimRequestFacts(pending)
+    const claimIdempotencyKey = idempotencyKey('task.offer.accept', requestFacts)
+    const entry = this.options.store.snapshot().outbox.find((candidate) => (
+      candidate.idempotencyKey === claimIdempotencyKey
+    ))
+    if (
+      !entry ||
+      entry.kind !== 'task.offer-decision' ||
+      entry.state === 'delivered'
+    ) return false
+    const request = restRequestSchema.safeParse(entry.body)
+    return request.success &&
+      request.data.type === 'task.offer.accept' &&
+      request.data.idempotencyKey === claimIdempotencyKey &&
+      request.data.taskOfferId === requestFacts.taskOfferId &&
+      request.data.taskId === requestFacts.taskId &&
+      request.data.expectedTaskRevision === requestFacts.expectedTaskRevision &&
+      request.data.expectedOfferRevision === requestFacts.expectedOfferRevision
+  }
+
+  private async persistClaimedOffer(
+    pending: CollaborationPendingTaskOffer,
+    response: RestResponse
+  ): Promise<void> {
     if (response.type === 'rest.error') throw new Error(response.error.message)
     if (response.type !== 'rest.collection') {
       throw new Error(`Task offer claim returned unexpected ${response.type}.`)
@@ -808,55 +906,59 @@ export class CollaborationTaskAdapter {
       throw new Error('Task offer claim did not return this Device\'s exact immutable execution.')
     }
     const workspaceRoot = this.options.workspaceRootForExecution(execution.executionId)
-    await mkdir(workspaceRoot, { recursive: true, mode: 0o700 })
-    await chmod(workspaceRoot, 0o700)
     const acceptedAt = this.now().toISOString()
-    await this.options.store.transact((draft) => {
-      const current = draft.pendingTaskOffers.find((candidate) => candidate.taskOfferId === pending.taskOfferId)
-      if (!current || current.state !== 'claiming') {
-        throw new Error('The local offer claim journal is no longer current.')
-      }
-      draft.pendingTaskOffers = draft.pendingTaskOffers.filter((candidate) => (
-        candidate.taskOfferId !== pending.taskOfferId
-      ))
-      draft.taskRuns.push({
-        offer: {
-          projectId: pending.projectId,
-          taskId: pending.taskId,
-          executionId: execution.executionId,
-          taskOfferId: pending.taskOfferId,
-          currentTaskRevision: task.revision,
-          currentExecutionRevision: execution.revision,
-          offerRevision: offer.revision,
-          recipientAgentId: localAgentId,
-          receivedAt: pending.receivedAt
-        },
-        task,
-        execution,
-        latestPreflight: null,
-        decision: { decision: 'accept', decidedAt: acceptedAt },
-        expectedTaskRevision: task.revision,
-        expectedExecutionRevision: execution.revision,
-        state: 'accepting',
-        workspaceRoot,
-        runtimeId: null,
-        threadId: null,
-        humanRequestId: null,
-        humanAnswer: null,
-        resources: [],
-        agentJournal: [],
-        externalJournal: [],
-        outputs: [],
-        recoveryJournalEntryIds: [],
-        resultSummary: null,
-        lateOutcomes: [],
-        startedAt: null,
-        updatedAt: acceptedAt,
-        completedAt: null,
-        error: null
+    try {
+      await mkdir(workspaceRoot, { recursive: true, mode: 0o700 })
+      await chmod(workspaceRoot, 0o700)
+      await this.options.store.transact((draft) => {
+        const current = draft.pendingTaskOffers.find((candidate) => candidate.taskOfferId === pending.taskOfferId)
+        if (!current || current.state !== 'claiming') {
+          throw new Error('The local offer claim journal is no longer current.')
+        }
+        draft.pendingTaskOffers = draft.pendingTaskOffers.filter((candidate) => (
+          candidate.taskOfferId !== pending.taskOfferId
+        ))
+        draft.taskRuns.push({
+          offer: {
+            projectId: pending.projectId,
+            taskId: pending.taskId,
+            executionId: execution.executionId,
+            taskOfferId: pending.taskOfferId,
+            currentTaskRevision: task.revision,
+            currentExecutionRevision: execution.revision,
+            offerRevision: offer.revision,
+            recipientAgentId: localAgentId,
+            receivedAt: pending.receivedAt
+          },
+          task,
+          execution,
+          latestPreflight: null,
+          decision: { decision: 'accept', decidedAt: acceptedAt },
+          expectedTaskRevision: task.revision,
+          expectedExecutionRevision: execution.revision,
+          state: 'accepting',
+          workspaceRoot,
+          runtimeId: null,
+          threadId: null,
+          humanRequestId: null,
+          humanAnswer: null,
+          resources: [],
+          agentJournal: [],
+          externalJournal: [],
+          outputs: [],
+          recoveryJournalEntryIds: [],
+          resultSummary: null,
+          lateOutcomes: [],
+          startedAt: null,
+          updatedAt: acceptedAt,
+          completedAt: null,
+          error: null
+        })
+        draft.tasks = [...draft.tasks.filter(({ taskId }) => taskId !== task.taskId), task]
       })
-      draft.tasks = [...draft.tasks.filter(({ taskId }) => taskId !== task.taskId), task]
-    })
+    } catch (error) {
+      throw new OfferClaimCheckpointError(error)
+    }
     await this.publishAvailability('online')
     this.schedule(execution.executionId)
   }
@@ -889,6 +991,21 @@ export class CollaborationTaskAdapter {
         expectedExecutionRevision: execution.revision,
         state: 'running', startedAt, error: null
       })
+    }
+    if (execution.state === 'running') {
+      if (!execution.startedAt) {
+        throw new Error('Running Cloud execution is missing its canonical start timestamp.')
+      }
+      if (run.startedAt && run.startedAt !== execution.startedAt) {
+        throw new Error('Local execution start provenance conflicts with the canonical Cloud execution.')
+      }
+      if (run.state === 'accepting' || !run.startedAt) {
+        run = await this.updateRun(run.offer.executionId, {
+          ...(run.state === 'accepting' ? { state: 'running' as const } : {}),
+          startedAt: execution.startedAt,
+          error: null
+        })
+      }
     }
     if (execution.state === 'needs_human') {
       await this.updateRun(run.offer.executionId, { state: 'needs-human' })
@@ -1485,6 +1602,49 @@ export class CollaborationTaskAdapter {
       })
     })
     await this.publishAvailability('online')
+  }
+
+  private async rejectPendingOffer(pending: CollaborationPendingTaskOffer): Promise<void> {
+    const requestFacts = {
+      taskOfferId: pending.taskOfferId,
+      taskId: pending.taskId,
+      expectedTaskRevision: pending.currentTaskRevision,
+      expectedOfferRevision: pending.offerRevision
+    }
+    const response = await this.options.outbox.enqueueAndWait('task.offer-decision',
+      restRequestSchema.parse({
+        protocolVersion: '1.0',
+        requestId: collaborationRequestId(),
+        type: 'task.offer.reject',
+        idempotencyKey: idempotencyKey('task.offer.reject', requestFacts),
+        ...requestFacts
+      }))
+    if (response.type === 'rest.error') throw new Error(response.error.message)
+    if (response.type !== 'rest.collection') {
+      throw new Error(`Task offer rejection returned unexpected ${response.type}.`)
+    }
+    const task = response.items.find((item): item is Task => item.type === 'task')
+    const offer = response.items.find((item): item is TaskOffer => item.type === 'task_offer')
+    if (
+      response.items.length !== 2 || !task || !offer ||
+      task.taskId !== pending.taskId || task.projectId !== pending.projectId ||
+      task.revision !== pending.currentTaskRevision + 1 ||
+      task.status !== 'revision_requested' || task.currentExecutionId !== null ||
+      offer.taskOfferId !== pending.taskOfferId || offer.projectId !== pending.projectId ||
+      offer.taskId !== pending.taskId || offer.workerUserId !== pending.workerUserId ||
+      offer.revision !== pending.offerRevision + 1 || offer.executionId !== null ||
+      offer.state !== 'rejected'
+    ) {
+      throw new Error('Task offer rejection did not return the exact User-level closure.')
+    }
+    const completedAt = this.now().toISOString()
+    await this.updatePendingOffer(pending.taskOfferId, {
+      state: 'closed',
+      currentTaskRevision: task.revision,
+      offerRevision: offer.revision,
+      completedAt,
+      error: 'The Worker User rejected the Task offer.'
+    }, task)
   }
 
   private async observeLateTransferOutcome(
@@ -2441,6 +2601,22 @@ function taskResultRequestFacts(request: Extract<
     runtimeProvenance: request.runtimeProvenance,
     outputs: request.outputs,
     recoveryJournalEntryIds: request.recoveryJournalEntryIds
+  }
+}
+
+function pendingOfferClaimRequestFacts(pending: CollaborationPendingTaskOffer) {
+  return {
+    taskOfferId: pending.taskOfferId,
+    taskId: pending.taskId,
+    expectedTaskRevision: pending.currentTaskRevision,
+    expectedOfferRevision: pending.offerRevision
+  }
+}
+
+class OfferClaimCheckpointError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'The accepted TaskRun checkpoint failed.', { cause })
+    this.name = 'OfferClaimCheckpointError'
   }
 }
 

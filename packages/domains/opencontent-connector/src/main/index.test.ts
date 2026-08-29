@@ -20,6 +20,7 @@ import { createOpenContentCapabilityFactory } from './connection-capabilities.js
 import { createOpenContentContentSpaceFacade } from './facade.js'
 import type { OpenContentConnectionService } from './connection-service.js'
 import { OpenContentPrivateAccountError } from './private-account-runtime.js'
+import type { OpenContentProviderPrincipalPublisher } from './provider-principal-publisher.js'
 import {
   createOpenContentClient,
   type OpenContentClient
@@ -86,7 +87,7 @@ describe('OpenContent connection capabilities', () => {
     const unbind = definitions.find(({ id }) => id === OPENCONTENT_CONNECTION_CAPABILITY_IDS.unbind)
 
     expect(bind).toMatchObject({
-      version: '2.0.0',
+      version: '3.0.0',
       audiences: ['ui'],
       effect: 'external-write',
       concurrency: { revision: 'none', idempotency: 'required' }
@@ -99,13 +100,13 @@ describe('OpenContent connection capabilities', () => {
       token: 'must-not-cross'
     }).success).toBe(false)
     expect(status).toMatchObject({
-      version: '2.0.0',
+      version: '3.0.0',
       audiences: ['ui'],
-      effect: 'read',
-      concurrency: { revision: 'none', idempotency: 'none' }
+      effect: 'external-write',
+      concurrency: { revision: 'none', idempotency: 'required' }
     })
     expect(unbind).toMatchObject({
-      version: '2.0.0',
+      version: '3.0.0',
       audiences: ['ui'],
       effect: 'external-write',
       concurrency: { revision: 'none', idempotency: 'required' }
@@ -172,7 +173,18 @@ describe('OpenContent connection capabilities', () => {
 
   it('admits the current Cloud Principal for UI bind, status, and unbind', async () => {
     const connections = connectionService()
-    const definitions = capabilityDefinitions(connections)
+    vi.mocked(connections.useCurrentSession).mockImplementation(async (_input, operation) => (
+      operation(Object.freeze({
+        token: 'opaque-cloud-principal-token',
+        externalIdentityId: 9000041,
+        bindingAttestation: Object.freeze({
+          ...bindingAttestation,
+          principal: cloudPrincipal
+        })
+      }))
+    ))
+    const providerPrincipalPublisher = principalPublisher()
+    const definitions = capabilityDefinitions(connections, providerPrincipalPublisher)
     const context = {
       caller: { audience: 'ui' as const, principal: cloudPrincipal },
       assertPrincipalCurrent: vi.fn()
@@ -200,7 +212,134 @@ describe('OpenContent connection capabilities', () => {
     expect(connections.unbind).toHaveBeenCalledWith(expect.objectContaining({
       principal: cloudPrincipal
     }))
-    expect(context.assertPrincipalCurrent).toHaveBeenCalledTimes(3)
+    expect(providerPrincipalPublisher.synchronize).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      principal: cloudPrincipal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      status: { state: 'disconnected' }
+    }))
+    expect(providerPrincipalPublisher.synchronize).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      principal: cloudPrincipal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      status: {
+        state: 'connected',
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+      },
+      connected: expect.objectContaining({
+        externalIdentityId: 9000041,
+        bindingAttestation: expect.objectContaining({ principal: cloudPrincipal }),
+        observedAt: expect.any(String)
+      })
+    }))
+    expect(providerPrincipalPublisher.synchronize).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      principal: cloudPrincipal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      status: { state: 'disconnected' }
+    }))
+    expect(context.assertPrincipalCurrent).toHaveBeenCalledTimes(6)
+  })
+
+  it.each(['unauthorized', 'reauthentication_required'] as const)(
+    'degrades the Cloud fact when connected-session observation fails with %s',
+    async (code) => {
+      const connections = connectionService()
+      vi.mocked(connections.status).mockResolvedValueOnce({
+        state: 'connected',
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+      })
+      vi.mocked(connections.useCurrentSession).mockRejectedValueOnce(
+        new OpenContentConnectorError(code, 'the current OpenContent session is no longer valid')
+      )
+      const providerPrincipalPublisher = principalPublisher()
+      const definitions = capabilityDefinitions(connections, providerPrincipalPublisher)
+      const status = definitions.find(({ id }) => (
+        id === OPENCONTENT_CONNECTION_CAPABILITY_IDS.status
+      ))!
+      const assertPrincipalCurrent = vi.fn()
+
+      await expect(status.handler({
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+      }, {
+        caller: { audience: 'ui', principal: cloudPrincipal },
+        assertPrincipalCurrent
+      })).resolves.toEqual({
+        output: {
+          outcome: 'error',
+          error: { code: 'invalid_credentials', action: 'check_credentials' }
+        }
+      })
+
+      expect(providerPrincipalPublisher.synchronize).toHaveBeenCalledOnce()
+      expect(providerPrincipalPublisher.synchronize).toHaveBeenCalledWith(expect.objectContaining({
+        principal: cloudPrincipal,
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        status: {
+          state: 'reauthentication_required',
+          providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+        },
+        assertPrincipalCurrent
+      }))
+      expect(vi.mocked(providerPrincipalPublisher.synchronize).mock.calls[0]?.[0])
+        .not.toHaveProperty('connected')
+    }
+  )
+
+  it('surfaces degraded-publication failure instead of masking it with session unauthorized', async () => {
+    const connections = connectionService()
+    vi.mocked(connections.status).mockResolvedValueOnce({
+      state: 'connected',
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+    })
+    vi.mocked(connections.useCurrentSession).mockRejectedValueOnce(
+      new OpenContentConnectorError('unauthorized', 'the current OpenContent session is invalid')
+    )
+    const providerPrincipalPublisher = principalPublisher()
+    vi.mocked(providerPrincipalPublisher.synchronize).mockRejectedValueOnce(
+      new OpenContentConnectorError(
+        'provider_contract_violation',
+        'the Cloud fact did not match the degraded write'
+      )
+    )
+    const definitions = capabilityDefinitions(connections, providerPrincipalPublisher)
+    const status = definitions.find(({ id }) => (
+      id === OPENCONTENT_CONNECTION_CAPABILITY_IDS.status
+    ))!
+
+    await expect(status.handler({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+    }, {
+      caller: { audience: 'ui', principal: cloudPrincipal },
+      assertPrincipalCurrent: vi.fn()
+    })).resolves.toEqual({
+      output: {
+        outcome: 'error',
+        error: {
+          code: 'provider_contract_violation',
+          action: 'contact_support'
+        }
+      }
+    })
+  })
+
+  it('does not degrade the current fact when replacement enrollment is rejected before storage', async () => {
+    const connections = connectionService()
+    vi.mocked(connections.enroll).mockRejectedValueOnce(
+      new OpenContentConnectorError('unauthorized', 'the replacement credentials are invalid')
+    )
+    const providerPrincipalPublisher = principalPublisher()
+    const definitions = capabilityDefinitions(connections, providerPrincipalPublisher)
+    const bind = definitions.find(({ id }) => id === OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind)!
+
+    await expect(bind.handler(bindInput(), {
+      caller: { audience: 'ui', principal: cloudPrincipal },
+      assertPrincipalCurrent: vi.fn()
+    })).resolves.toEqual({
+      output: {
+        outcome: 'error',
+        error: { code: 'invalid_credentials', action: 'check_credentials' }
+      }
+    })
+
+    expect(providerPrincipalPublisher.synchronize).not.toHaveBeenCalled()
   })
 
   it.each(['agent', 'system'] as const)(
@@ -836,12 +975,22 @@ describe('OpenContent main-only Content Space facade', () => {
   })
 })
 
-function capabilityDefinitions(connections: OpenContentConnectionService) {
+function capabilityDefinitions(
+  connections: OpenContentConnectionService,
+  providerPrincipalPublisher = principalPublisher()
+) {
   return createOpenContentCapabilityFactory({
     defineCapability: (options) => options,
     providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-    connections
+    connections,
+    providerPrincipalPublisher
   }).createDefinitions()
+}
+
+function principalPublisher(): OpenContentProviderPrincipalPublisher {
+  return {
+    synchronize: vi.fn(async () => undefined)
+  }
 }
 
 function bindInput() {

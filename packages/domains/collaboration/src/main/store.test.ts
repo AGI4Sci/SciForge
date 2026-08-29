@@ -15,7 +15,7 @@ import {
 
 test('restart recovery only rewinds safely replayable local and outbox work', async () => {
   const state: CollaborationLocalState = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     revision: 4,
     lastInboxSequence: 8,
     user: userPrincipalFixture,
@@ -76,16 +76,22 @@ test('restart recovery only rewinds safely replayable local and outbox work', as
   assert.equal(recovered.revision, 5)
 })
 
-test('obsolete local Collaboration state fails with an explicit recovery boundary', async () => {
-  const store = new CollaborationLocalStore(new MemoryBackend({ schemaVersion: 1 }))
+test('schema v2 local Collaboration state fails closed without being rewritten', async () => {
+  const backend = new MemoryBackend({ schemaVersion: 2 })
+  const store = new CollaborationLocalStore(backend)
   await assert.rejects(
     store.open(),
-    /not schema version 2; clear the obsolete local Collaboration state and reconnect to Cloud/u
+    /not schema version 3; clear the obsolete local Collaboration state and reconnect to Cloud/u
   )
+  assert.equal(backend.writes, 0)
 })
 
 class MemoryBackend implements CollaborationStateBackend {
+  writes = 0
   constructor(private value: unknown) {}
   async read(): Promise<unknown> { return structuredClone(this.value) }
-  async write(value: CollaborationLocalState): Promise<void> { this.value = structuredClone(value) }
+  async write(value: CollaborationLocalState): Promise<void> {
+    this.value = structuredClone(value)
+    this.writes += 1
+  }
 }
